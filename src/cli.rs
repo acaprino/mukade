@@ -66,7 +66,7 @@ options:
 
 Executable resolution: --<harness>-exe → MUKADE_CLAUDE_EXE / MUKADE_CODEX_EXE /
 MUKADE_OPENCODE_EXE / MUKADE_PI_EXE → PATH → the well-known install locations → the plain
-command name (OpenCode prefers its real binary over the npm shim on PATH). --root selects the
+command name. --root selects the
 source store of a hop; a portable destination needs its store variable set in the environment
 and its --<harness>-exe. A source OpenCode read spawns the binary its own resolution finds
 (MUKADE_OPENCODE_EXE wins).
@@ -448,8 +448,7 @@ impl Flags {
         // The binary to spawn. An explicit override (the harness's flag, or its MUKADE_*_EXE)
         // travels with the write so the resume command names it too; probes resolve the whole
         // chain — PATH, then the well-known install locations — so a default install is found
-        // with no flag at all. For OpenCode an override also avoids the npm shim some Windows
-        // installs put on PATH, which would append a second `--standalone`.
+        // with no flag at all.
         let exe_override = self
             .exe_flag(harness)
             .filter(|v| !v.is_empty())

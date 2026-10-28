@@ -38,11 +38,98 @@ pub fn read_file(path: &Path) -> Result<Session> {
 /// Read records that were already decoded.
 pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
     let on_branch = active_branch(rows);
+    let (views, originals) = apply_context_edits(rows, &on_branch);
     let mut b = Builder::default();
-    for (i, row) in rows.iter().enumerate() {
+    for (i, row) in views.iter().enumerate() {
         b.push(i, row, on_branch[i]);
     }
-    b.finish(source_path)
+    let mut session = b.finish(source_path)?;
+    // The entries were built from the edited view of a record; the record itself is what is kept.
+    for entry in &mut session.entries {
+        for raw in &mut entry.raw {
+            let original = raw
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| originals.get(id));
+            if let Some(original) = original {
+                *raw = original.clone();
+            }
+        }
+    }
+    Ok(session)
+}
+
+/// What the model is shown after Pi's `context_edit` entries (`buildSessionProjection`, Pi
+/// 1.2.0): for each target on the resumed path, the latest edit applies. A message keeps its role
+/// and takes the replacement's content (a string becomes one text block for an assistant message
+/// or a tool result); a null replacement leaves it out. Returns the records as the reader should
+/// interpret them, and the original of each one that changed, by id.
+fn apply_context_edits(
+    rows: &[Value],
+    on_branch: &[bool],
+) -> (Vec<Value>, std::collections::HashMap<String, Value>) {
+    let mut edits: std::collections::HashMap<&str, &Value> = std::collections::HashMap::new();
+    for (row, on) in rows.iter().zip(on_branch) {
+        if *on
+            && row.get("type").and_then(Value::as_str) == Some("context_edit")
+            && let (Some(target), Some(replacement)) = (
+                row.get("targetId").and_then(Value::as_str),
+                row.get("replacement"),
+            )
+        {
+            edits.insert(target, replacement);
+        }
+    }
+    let mut originals = std::collections::HashMap::new();
+    let views = rows
+        .iter()
+        .zip(on_branch)
+        .map(|(row, on)| {
+            let id = row.get("id").and_then(Value::as_str);
+            let Some(replacement) = id.filter(|_| *on).and_then(|id| edits.get(id)) else {
+                return row.clone();
+            };
+            let Some(view) = edited_view(row, replacement) else {
+                return row.clone();
+            };
+            originals.insert(id.unwrap_or_default().to_string(), row.clone());
+            view
+        })
+        .collect();
+    (views, originals)
+}
+
+/// One record as its edit shows it, or `None` when the edit does not apply to this kind of record.
+fn edited_view(row: &Value, replacement: &Value) -> Option<Value> {
+    let kind = row.get("type").and_then(Value::as_str)?;
+    let role = row.pointer("/message/role").and_then(Value::as_str);
+    let editable = match kind {
+        "message" => matches!(role, Some("user" | "assistant" | "toolResult")),
+        "custom_message" => true,
+        _ => false,
+    };
+    if !editable {
+        return None;
+    }
+    // Left out: not a message any more, so the reader keeps it as an internal record.
+    if replacement.is_null() {
+        let mut view = row.clone();
+        view["type"] = Value::String("context_removed".into());
+        return Some(view);
+    }
+    let content = replacement.get("content")?.clone();
+    let content = match (&content, role) {
+        (Value::String(text), Some("assistant" | "toolResult")) => {
+            serde_json::json!([{"type": "text", "text": text}])
+        }
+        _ => content,
+    };
+    let mut view = row.clone();
+    match kind {
+        "message" => view["message"]["content"] = content,
+        _ => view["content"] = content,
+    }
+    Some(view)
 }
 
 /// Pi's own text for a `bashExecution` message (`bashExecutionToText`, pi-coding-agent 1.2.0).

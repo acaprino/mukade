@@ -41,11 +41,6 @@ pub fn resolve(harness: HarnessId, explicit: Option<&str>) -> String {
     let well_known = default_candidates(harness)
         .into_iter()
         .find(|path| path.is_file());
-    // OpenCode's npm package puts an `opencode.cmd` shim on `PATH` that adds its own
-    // `--standalone`; its real binary, a well-known location, is preferred over it.
-    if harness == HarnessId::OpenCode {
-        return pick(explicit, env, well_known, on_path(name), name);
-    }
     pick(explicit, env, on_path(name), well_known, name)
 }
 
@@ -160,8 +155,9 @@ fn default_candidates(harness: HarnessId) -> Vec<PathBuf> {
             }
         }
         HarnessId::OpenCode => {
-            // The real binary of the npm package, not the `opencode.cmd` shim (which would append
-            // a second `--standalone`); the install script's ~/.opencode/bin on Unix.
+            // The real binary of the npm package (the `opencode.cmd` launcher on `PATH` only
+            // forwards its arguments to it, so either works); the install script's
+            // ~/.opencode/bin on Unix.
             if let Some(roaming) = roaming {
                 out.push(
                     roaming

@@ -426,3 +426,97 @@ fn the_file_order_wins_over_timestamps() {
     }
     assert_eq!(texts(&pi::parse(&rows, None).unwrap()), before);
 }
+
+fn pi_assistant(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "message", "message": {
+        "role": "assistant", "content": [{"type": "text", "text": text}],
+        "api": "anthropic-messages", "provider": "h27", "model": "m", "stopReason": "stop", "timestamp": 3}})
+}
+
+fn pi_user(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "message", "message": {"role": "user", "content": text, "timestamp": 2}})
+}
+
+fn context_edit(target: &str, replacement: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"type": "context_edit", "targetId": target, "replacement": replacement})
+}
+
+fn step_texts(s: &Session) -> Vec<String> {
+    s.conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Step { text, .. } => Some(text.join("\n")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A `context_edit` changes what the model is shown, as Pi's own context builder does: the target
+/// keeps its role and takes the replacement's content, or is left out when the replacement is
+/// null. The source record stays verbatim in `raw`.
+#[test]
+fn a_context_edit_changes_what_the_model_sees_and_the_record_stays() {
+    // ex000000 user, ex000001 assistant, ex000002 the edit, ex000003 user
+    let s = rows_with(vec![
+        pi_user("EDIT-Q"),
+        pi_assistant("ORIGINAL-ANSWER"),
+        context_edit("ex000001", serde_json::json!({"content": "EDITED-ANSWER"})),
+        pi_user("AFTER-Q"),
+    ]);
+    let texts = step_texts(&s);
+    assert!(texts.iter().any(|t| t == "EDITED-ANSWER"), "{texts:?}");
+    assert!(
+        !texts.iter().any(|t| t.contains("ORIGINAL-ANSWER")),
+        "{texts:?}"
+    );
+    let kept = s
+        .entries
+        .iter()
+        .flat_map(|e| e.raw.iter())
+        .any(|row| row.to_string().contains("ORIGINAL-ANSWER"));
+    assert!(kept, "the source record is kept verbatim");
+}
+
+#[test]
+fn a_context_edit_with_a_null_replacement_leaves_the_message_out() {
+    let s = rows_with(vec![
+        pi_user("EDIT-Q"),
+        pi_assistant("REMOVED-ANSWER"),
+        context_edit("ex000001", serde_json::Value::Null),
+        pi_user("AFTER-Q"),
+    ]);
+    assert!(
+        !step_texts(&s).iter().any(|t| t.contains("REMOVED-ANSWER")),
+        "{:?}",
+        step_texts(&s)
+    );
+    assert!(
+        s.entries
+            .iter()
+            .flat_map(|e| e.raw.iter())
+            .any(|row| row.to_string().contains("REMOVED-ANSWER"))
+    );
+}
+
+/// The latest edit of a target wins, and a user message takes its replacement's content too.
+#[test]
+fn the_latest_context_edit_wins_and_user_messages_can_be_edited() {
+    let s = rows_with(vec![
+        pi_user("ORIGINAL-QUESTION"),
+        context_edit("ex000000", serde_json::json!({"content": "FIRST-EDIT"})),
+        context_edit("ex000000", serde_json::json!({"content": "SECOND-EDIT"})),
+    ]);
+    let users: Vec<&str> = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(users.contains(&"SECOND-EDIT"), "{users:?}");
+    assert!(
+        !users
+            .iter()
+            .any(|t| t.contains("FIRST-EDIT") || t.contains("ORIGINAL-QUESTION")),
+        "{users:?}"
+    );
+}
