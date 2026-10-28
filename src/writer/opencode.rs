@@ -298,6 +298,15 @@ fn assistant_message(
                 None => Value::Array(Vec::new()),
             },
         );
+        // A failed call needs its `error`, a `Session.StructuredError`: without it OpenCode 2.1.4
+        // refuses the whole import ([V] 2026-10-28, `Bad Request`). `tool.execution` is the type
+        // OpenCode itself records for a tool that failed.
+        if let Some((content, true)) = answer {
+            state.insert(
+                "error".into(),
+                json!({"type": "tool.execution", "message": content.text()}),
+            );
+        }
         state.insert("metadata".into(), json!({"truncated": false}));
         content.push(json!({
             "type": "tool",

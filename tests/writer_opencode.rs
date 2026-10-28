@@ -86,3 +86,36 @@ fn the_document_states_where_the_session_belongs() {
     assert!(users.first().is_some_and(|u| u.starts_with("H27-TOOLS read")), "{users:?}");
     assert!(users.iter().any(|u| u.contains("H27-SUMMARY")), "the source's summary travelled");
 }
+
+/// OpenCode 2.1.4 refuses to import a tool part in state `error` without its `error`, a
+/// `Session.StructuredError` ([V] 2026-10-28: `session import` answers `Bad Request`). OpenCode
+/// itself records a failed call as `tool.execution` with the result's text as the message.
+#[test]
+fn a_failed_call_carries_its_error_text() {
+    let scratch = support::scratch(HarnessId::OpenCode, "writer-opencode-error");
+    let mut session = support::read_source(HarnessId::OpenCode);
+    let failed = session
+        .entries
+        .iter_mut()
+        .find_map(|entry| match &mut entry.kind {
+            mukade::model::Kind::Results { results } => results.first_mut(),
+            _ => None,
+        })
+        .expect("the fixture has a tool result");
+    failed.is_error = true;
+    failed.content = mukade::model::ResultContent::Text("ENOENT: no such file".into());
+    let mut opts = support::opts(HarnessId::OpenCode, &scratch);
+    opts.project_id = Some("project-under-test".into());
+    let mut clock = Clock::new(opts.now.as_deref());
+    let cwd = support::cwd_for(HarnessId::OpenCode);
+    let document = document_for(&session, "ses_test", &cwd, &opts, &mut clock).expect("document");
+    let state = messages(&document)
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .map(|part| &part["state"])
+        .find(|state| state["status"] == "error")
+        .expect("the failed call is a tool part in state error");
+    assert_eq!(state["error"]["type"], "tool.execution", "{state}");
+    assert_eq!(state["error"]["message"], "ENOENT: no such file", "{state}");
+}
