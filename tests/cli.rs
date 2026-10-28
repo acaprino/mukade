@@ -740,3 +740,203 @@ fn an_encrypted_codex_summary_is_never_an_empty_message() {
         "no empty message: {written}"
     );
 }
+
+/// A fake Pi that answers the summary prompt with a fixed text, in the scratch's own `bin`.
+fn summarizing_pi(scratch: &Path, answer: &str) -> String {
+    let windows = format!("echo {answer}");
+    let unix = format!("echo '{answer}'");
+    support::launcher(&scratch.join("bin"), "pi", &windows, &unix)
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Export the summary to a file with `dump`, import it later with `write`.
+#[test]
+fn dump_exports_a_model_summary_and_write_imports_it() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-dump-summary");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    let pi = summarizing_pi(&scratch, "The summary.");
+    let doc_file = scratch.join("summary.json");
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &[
+            "dump",
+            "pi",
+            &id,
+            "--compaction",
+            "summary",
+            "--pi-exe",
+            &pi,
+            "--output",
+            doc_file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(&doc_file).unwrap()).unwrap();
+    let messages = doc["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let text = messages[0]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with(mukade::summary::MODEL_SUMMARY_HANDOFF),
+        "{text}"
+    );
+    assert!(text.contains("The summary."), "{text}");
+
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let (_, printed) = write_document(
+        HarnessId::ClaudeCode,
+        &doc,
+        "cli-write-summary",
+        &["--dest-version", "2.1.312", "--cwd", work.to_str().unwrap()],
+    );
+    assert!(Path::new(printed["location"].as_str().unwrap()).is_file());
+}
+
+#[test]
+fn hop_with_a_model_summary_keeps_the_turns_asked_for() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-hop-summary");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    let pi = summarizing_pi(&scratch, "The summary.");
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "pi",
+            &id,
+            "claude_code",
+            "--compaction",
+            "summary",
+            "--keep-turns",
+            "1",
+            "--pi-exe",
+            &pi,
+            "--dest-version",
+            "2.1.312",
+            "--cwd",
+            work.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(printed["manifest"]["options"]["compaction"], "summary");
+    assert_eq!(printed["manifest"]["options"]["summary"]["harness"], "pi");
+    let written =
+        mukade::reader::claude_code::read_file(Path::new(printed["location"].as_str().unwrap()))
+            .unwrap();
+    let users: Vec<String> = written
+        .conversation()
+        .filter_map(|entry| match &entry.kind {
+            mukade::model::Kind::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users.len(), 2, "the handoff, then one kept turn: {users:?}");
+    assert!(users[0].contains("The summary."), "{users:?}");
+}
+
+#[test]
+fn summary_flags_and_combinations_that_cannot_work_are_refused() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-summary-refused");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    for (args, expected) in [
+        (
+            vec!["hop", "pi", id.as_str(), "claude_code", "--keep-turns", "1"],
+            1,
+        ),
+        (
+            vec![
+                "hop",
+                "pi",
+                id.as_str(),
+                "claude_code",
+                "--summary-model",
+                "x",
+            ],
+            1,
+        ),
+        (vec!["dump", "pi", id.as_str(), "--summary-timeout", "5"], 1),
+        (
+            vec![
+                "hop",
+                "pi",
+                id.as_str(),
+                "claude_code",
+                "--compaction",
+                "summary",
+                "--keep-turns",
+                "x",
+            ],
+            1,
+        ),
+    ] {
+        let (code, _, stderr) = cli_code(&scratch, &args);
+        assert_eq!(code, Some(expected), "{args:?}: {stderr}");
+    }
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &["hop", "pi", &id, "claude_code", "--compaction", "bogus"],
+    );
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("none, portable, summary"), "{stderr}");
+
+    let codex_id = stage_fixture(HarnessId::Codex, &scratch);
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "codex",
+            &codex_id,
+            "pi",
+            "--compaction",
+            "summary",
+            "--all-branches",
+        ],
+    );
+    assert_eq!(code, Some(2), "{stderr}");
+    let claude_file = support::source_path(HarnessId::ClaudeCode);
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "claude_code",
+            "x",
+            "pi",
+            "--compaction",
+            "summary",
+            "--from-file",
+            claude_file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(2), "{stderr}");
+}
+
+#[test]
+fn a_summary_that_fails_writes_nothing() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-summary-fails");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    let pi = support::launcher(&scratch.join("bin"), "pi", "exit /b 3", "exit 3");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "pi",
+            &id,
+            "claude_code",
+            "--compaction",
+            "summary",
+            "--pi-exe",
+            pi.to_str().unwrap(),
+            "--dest-version",
+            "2.1.312",
+        ],
+    );
+    assert_eq!(code, Some(4), "{stdout}{stderr}");
+    assert!(stderr.contains("summary failed"), "{stderr}");
+    assert!(
+        !scratch.join("home").join("projects").exists(),
+        "nothing was written to the destination"
+    );
+}

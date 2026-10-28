@@ -19,6 +19,7 @@ use crate::hop::{
 use crate::model::{HarnessId, Protocol};
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
+use crate::summary::SummarizeOpts;
 use crate::wire;
 use crate::writer::WriteOpts;
 use anyhow::{Context, Result};
@@ -53,7 +54,11 @@ options:
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
   --reasoning <mode>       drop_foreign (default) | as_text | drop
-  --compaction <mode>      none (default) | portable (the source's own summary, then its tail)
+  --compaction <mode>      none (default) | portable (the source's own summary, then its tail) |
+                           summary (the source's model writes one now; dump and hop)
+  --keep-turns <n>         summary: also keep the last n user turns verbatim (default 0)
+  --summary-model <id>     summary: the model to ask (default: the session's own)
+  --summary-timeout <s>    summary: deadline of the summarizing run (default 300)
   --resume-prompt <text>   resume in the destination and keep its reply in the receipt
   --from-file <path>       read the source from a file instead of its store
   --all-branches           dump, hop: carry every branch the source keeps (a Codex thread whose
@@ -106,6 +111,9 @@ pub fn run(args: &[String]) -> Result<()> {
             "--model" => flags.model = Some(next(rest, &mut i)?),
             "--project-id" => flags.project_id = Some(next(rest, &mut i)?),
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
+            "--keep-turns" => flags.keep_turns = Some(next(rest, &mut i)?),
+            "--summary-model" => flags.summary_model = Some(next(rest, &mut i)?),
+            "--summary-timeout" => flags.summary_timeout = Some(next(rest, &mut i)?),
             "--resume-prompt" => flags.resume_prompt = Some(next(rest, &mut i)?),
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--all-branches" => flags.all_branches = true,
@@ -216,6 +224,7 @@ pub fn run(args: &[String]) -> Result<()> {
         "dump" => {
             no_more(operands, 1)?;
             let id = operands.first().context("dump needs a session id")?;
+            let compaction = flags.compaction(harness)?;
             let source = SessionRef::id(harness, *id);
             let session = if flags.all_branches {
                 crate::hop::export_all_branches(&source, &roots)
@@ -223,7 +232,10 @@ pub fn run(args: &[String]) -> Result<()> {
                 crate::hop::export(&source, &roots)
             }
             .map_err(anyhow::Error::new)?;
-            let doc = serde_json::to_string_pretty(&wire::to_document(&session))?;
+            // What `dump` exports is what `hop` would write: `write` imports it later.
+            let (selection, _) =
+                crate::hop::compact(&session, &compaction, &roots).map_err(anyhow::Error::new)?;
+            let doc = serde_json::to_string_pretty(&wire::to_document(&selection))?;
             match flags.output.as_deref() {
                 // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
                 // the console's code page.
@@ -260,6 +272,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 .parse()?;
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
+            let selection = flags.compaction(harness)?;
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
                 (Some(path), false) => crate::hop::export_path(harness, std::path::Path::new(path)),
                 (Some(path), true) => {
@@ -277,14 +290,6 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             .map_err(anyhow::Error::new)?;
             let opts = flags.import_opts(harness, dest, &source, &roots)?;
-            let selection = match flags.compaction.as_deref() {
-                None | Some("none") => Compaction::None,
-                Some("portable") => Compaction::Portable {
-                    summary: SummarySource::SourceRecord,
-                    keep_from: KeepFrom::SourceBoundary,
-                },
-                Some(other) => anyhow::bail!("unknown --compaction {other} (none, portable)"),
-            };
             let result = crate::hop::hop_session(dest, &source, &selection, &opts);
             deliver(result, flags.manifest.as_deref())?;
         }
@@ -366,6 +371,9 @@ struct Flags {
     project_id: Option<String>,
     reasoning: Option<String>,
     compaction: Option<String>,
+    keep_turns: Option<String>,
+    summary_model: Option<String>,
+    summary_timeout: Option<String>,
     resume_prompt: Option<String>,
     from_file: Option<String>,
     all_branches: bool,
@@ -504,6 +512,69 @@ impl Flags {
             now: None,
             exe: exe_override,
         })
+    }
+
+    /// The compaction the flags ask for, refused before anything is read or run when it cannot
+    /// work: a summary stands for the branch the source resumes, and a source outside its store can
+    /// be summarized only by Pi, which forks a session from its file.
+    fn compaction(&self, source: HarnessId) -> Result<Compaction> {
+        let summary = self.compaction.as_deref() == Some("summary");
+        if !summary
+            && (self.keep_turns.is_some()
+                || self.summary_model.is_some()
+                || self.summary_timeout.is_some())
+        {
+            anyhow::bail!(
+                "--keep-turns, --summary-model and --summary-timeout go with --compaction summary"
+            );
+        }
+        match self.compaction.as_deref() {
+            None | Some("none") => Ok(Compaction::None),
+            Some("portable") => Ok(Compaction::Portable {
+                summary: SummarySource::SourceRecord,
+                keep_from: KeepFrom::SourceBoundary,
+            }),
+            Some("summary") => {
+                let keep_turns = match self.keep_turns.as_deref() {
+                    Some(n) => n
+                        .parse::<usize>()
+                        .with_context(|| format!("--keep-turns {n}: not a number of turns"))?,
+                    None => 0,
+                };
+                let timeout = match self.summary_timeout.as_deref() {
+                    Some(s) => match s.parse::<u64>() {
+                        Ok(seconds) if seconds > 0 => std::time::Duration::from_secs(seconds),
+                        _ => anyhow::bail!("--summary-timeout {s}: not a number of seconds"),
+                    },
+                    None => SummarizeOpts::default().timeout,
+                };
+                if self.all_branches {
+                    return Err(HopError::Unsupported(
+                        "--compaction summary with --all-branches: the summary stands for the branch the \
+                         source resumes"
+                            .into(),
+                    )
+                    .into());
+                }
+                if self.from_file.is_some() && source != HarnessId::Pi {
+                    return Err(HopError::Unsupported(format!(
+                        "--compaction summary with --from-file: {} summarizes a session from its own \
+                         store, by id; only Pi forks one from a file",
+                        source.as_str()
+                    ))
+                    .into());
+                }
+                Ok(Compaction::Portable {
+                    summary: SummarySource::SourceModel(SummarizeOpts {
+                        model: self.summary_model.clone(),
+                        timeout,
+                        exe: self.exe_flag(source).map(str::to_owned),
+                    }),
+                    keep_from: KeepFrom::LastTurns(keep_turns),
+                })
+            }
+            Some(other) => anyhow::bail!("unknown --compaction {other} (none, portable, summary)"),
+        }
     }
 
     /// The executable override stated for one harness, if any.
