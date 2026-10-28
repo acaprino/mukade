@@ -9,7 +9,7 @@ use crate::model::{
 };
 use crate::policy::{ReasoningPlan, payload_fits, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
-use crate::writer::WriteOpts;
+use crate::writer::{WriteOpts, media};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -158,6 +158,60 @@ pub fn anthropic_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '-'
 }
 
+/// A user turn's attachments as the destination holds them: the source's own records when the
+/// destination is the source's harness, an image in the destination's own shape otherwise. What no
+/// shape fits (a PDF, a record a document carried without its block) is dropped and counted.
+fn carry_attachments(
+    attachments: &[Attachment],
+    source: HarnessId,
+    dest: HarnessId,
+    counts: &mut Counts,
+) -> Vec<Attachment> {
+    let mut carried = Vec::new();
+    for attachment in attachments {
+        let raw = if attachment.raw.is_null() {
+            None
+        } else if source == dest {
+            Some(attachment.raw.clone())
+        } else {
+            media::image_of(&attachment.raw).map(|image| media::user_block(&image, dest))
+        };
+        match raw {
+            Some(raw) => carried.push(Attachment { raw, ..attachment.clone() }),
+            None => counts.dropped_attachments += 1,
+        }
+    }
+    carried
+}
+
+/// A result's structured blocks as a destination that keeps them (Pi, OpenCode) holds them: an
+/// image in its own shape, text as text, and anything else dropped and counted. Claude Code and
+/// Codex results are flattened to text by their writers, counted where the plan takes them.
+fn carry_result_content(
+    content: &ResultContent,
+    source: HarnessId,
+    dest: HarnessId,
+    counts: &mut Counts,
+) -> ResultContent {
+    let ResultContent::Blocks(blocks) = content else {
+        return content.clone();
+    };
+    if source == dest || matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex) {
+        return content.clone();
+    }
+    let mut carried = Vec::new();
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) == Some("text") {
+            carried.push(block.clone());
+        } else if let Some(image) = media::image_of(block) {
+            carried.push(media::result_block(&image, dest));
+        } else {
+            counts.dropped_result_blocks += 1;
+        }
+    }
+    ResultContent::Blocks(carried)
+}
+
 /// Plan the conversation of a session for a destination.
 pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let dest_protocol = opts
@@ -173,6 +227,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     // of them exist at all (a result whose call is nowhere is an orphan and is dropped).
     let mut last_step_native: Vec<String> = Vec::new();
     let mut last_step_calls: Vec<String> = Vec::new();
+    let source = session.meta.harness;
     let mut ids = CallIds::new(dest_protocol.as_ref() == Some(&Protocol::AnthropicMessages));
 
     for entry in session.conversation() {
@@ -185,7 +240,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 last_step_calls.clear();
                 blocks.push(PlannedBlock::User {
                     text: text.clone(),
-                    attachments: attachments.clone(),
+                    attachments: carry_attachments(attachments, source, dest, &mut counts),
                 });
             }
             Kind::Step {
@@ -292,7 +347,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         }
                         planned.push(PlannedResult::Native {
                             call_id: ids.of(&result.call_id, &mut counts),
-                            content: result.content.clone(),
+                            content: carry_result_content(&result.content, source, dest, &mut counts),
                             is_error: result.is_error,
                         });
                     } else if last_step_calls.contains(&result.call_id) {
@@ -329,14 +384,6 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
 
     move_unanswered_calls_to_text(&mut blocks, &mut counts, dest);
     drop_empty_steps(&mut blocks, &mut counts);
-    if matches!(dest, HarnessId::Codex | HarnessId::OpenCode) {
-        for block in &blocks {
-            if let PlannedBlock::User { attachments, .. } = block {
-                counts.dropped_attachments +=
-                    attachments.iter().filter(|a| a.raw.is_null()).count();
-            }
-        }
-    }
     counts.messages_out = blocks.len();
     Plan { blocks, counts }
 }

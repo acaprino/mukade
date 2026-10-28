@@ -3,6 +3,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod media;
 pub mod opencode;
 pub mod pi;
 pub mod plan;
