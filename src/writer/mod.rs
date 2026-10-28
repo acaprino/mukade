@@ -113,6 +113,10 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
         .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
     std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    // A write killed between creating the file and renaming it leaves `.mukade-*.tmp` here, a
+    // whole copy of a session: the next write in this folder removes it once it is old enough
+    // not to be another write in progress.
+    crate::portable::sweep_stale(parent, ".mukade-", ".tmp", crate::portable::STALE_AFTER);
     let temporary = parent.join(format!(".mukade-{}.tmp", uuid::Uuid::new_v4().simple()));
     let result = (|| -> Result<()> {
         {

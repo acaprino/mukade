@@ -3,11 +3,12 @@
 //! ask costs 50 ms to 500 ms (Pi, a Node program, is the slowest); a hop of a few megabytes costs
 //! less than that.
 //!
-//! One JSON object in `probes.json`, under `MUKADE_CACHE_DIR`, else the platform's cache folder
-//! (`%LOCALAPPDATA%\mukade`, `$XDG_CACHE_HOME/mukade`, `~/.cache/mukade`). A key names the thing
-//! asked about together with what would change the answer (a binary's path, size and modification
-//! time), so a stale entry is simply never looked up again. Reading or writing it can fail:
-//! the cache is then empty, and every caller falls back to asking.
+//! One JSON object in `probes.json`. It lives in `mukade-data/cache` beside the executable in
+//! portable mode, or in the folder `MUKADE_CACHE_DIR` names; with neither there is no cache and
+//! nothing is written (see [`crate::portable`]). A key names the thing asked about together with
+//! what would change the answer (a binary's path, size and modification time), so a stale entry
+//! is simply never looked up again. Reading or writing it can fail: the cache is then empty, and
+//! every caller falls back to asking.
 
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -16,22 +17,9 @@ const FILE: &str = "probes.json";
 /// Past this many entries the file starts over: it is a cache, not a record.
 const MAX_ENTRIES: usize = 256;
 
-/// Where the cache lives, when a folder for it can be named.
+/// Where the cache lives, when it has a home at all: see [`crate::portable::cache_dir`].
 pub fn dir() -> Option<PathBuf> {
-    let named = |var: &str| {
-        std::env::var_os(var)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    if let Some(dir) = named("MUKADE_CACHE_DIR") {
-        return Some(dir);
-    }
-    if cfg!(windows) {
-        return named("LOCALAPPDATA").map(|d| d.join("mukade"));
-    }
-    named("XDG_CACHE_HOME")
-        .or_else(|| named("HOME").map(|home| home.join(".cache")))
-        .map(|d| d.join("mukade"))
+    crate::portable::cache_dir()
 }
 
 fn load(dir: &Path) -> Map<String, Value> {

@@ -18,6 +18,7 @@ pub mod hop;
 pub mod manifest;
 pub mod model;
 pub mod policy;
+pub mod portable;
 pub mod reader;
 pub mod roots;
 pub mod sha256;

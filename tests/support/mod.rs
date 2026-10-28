@@ -54,10 +54,9 @@ pub fn scratch(harness: HarnessId, tag: &str) -> PathBuf {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     static SWEPT: std::sync::Once = std::sync::Once::new();
     let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let area = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("mukade-tests");
+    // Inside the build folder (cargo's own scratch area for integration tests): running the tests
+    // leaves nothing in the user's profile or the system's temporary folder.
+    let area = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mukade-tests");
     SWEPT.call_once(|| sweep(&area));
     let base = area
         .join(harness.as_str())

@@ -307,3 +307,44 @@ fn an_aborted_step_stays_aborted_in_pi() {
         .unwrap();
     assert_eq!(last["message"]["stopReason"], "aborted", "{last}");
 }
+
+/// A session is written beside its destination as `.mukade-*.tmp` and renamed into place; a run
+/// killed in between leaves that file, and the next write in the folder removes it once it is an
+/// hour old. A recent one (a write in progress elsewhere) and every other file stay.
+#[test]
+fn a_temporary_file_a_killed_write_left_behind_is_swept() {
+    let scratch = support::scratch(HarnessId::Pi, "writer-pi-sweep");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let session = support::read_source(HarnessId::ClaudeCode);
+    let first = mukade::writer::for_harness(HarnessId::Pi)
+        .write(&session, &opts)
+        .unwrap();
+    let folder = Path::new(&first.location).parent().unwrap().to_path_buf();
+    let age = |name: &str, seconds: u64| {
+        let path = folder.join(name);
+        std::fs::write(&path, "x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
+            .unwrap();
+        path
+    };
+    let stale = age(".mukade-deadbeef.tmp", 48 * 60 * 60);
+    let fresh = age(".mukade-feedface.tmp", 5);
+    let other = age("notes.tmp", 48 * 60 * 60);
+    mukade::writer::for_harness(HarnessId::Pi)
+        .write(&session, &opts)
+        .unwrap();
+    assert!(
+        !stale.exists(),
+        "a day-old temporary file of ours is removed"
+    );
+    assert!(fresh.exists(), "a recent one may be a write in progress");
+    assert!(other.exists(), "a file that is not ours stays");
+    assert!(
+        Path::new(&first.location).exists(),
+        "the sessions themselves stay"
+    );
+}

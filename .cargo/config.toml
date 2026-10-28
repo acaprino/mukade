@@ -1,0 +1,4 @@
+# On Windows (MSVC) the C runtime is linked into mukade.exe, so it runs on a machine that has no
+# Visual C++ redistributable installed: portable mode means there is nothing to install.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

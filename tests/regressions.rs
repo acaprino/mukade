@@ -368,12 +368,13 @@ fn mock_opencode(
     support::launcher(
         dir,
         "mock-opencode",
+        // Records the store it was given, and the file it was asked to import (`<name>.file`).
         &format!(
-            "echo OPENCODE_DB=%OPENCODE_DB%>\"{}\"\r\n{windows}",
+            "echo OPENCODE_DB=%OPENCODE_DB%>\"{0}\"\r\necho %3>\"{0}.file\"\r\n{windows}",
             capture.display()
         ),
         &format!(
-            "echo \"OPENCODE_DB=$OPENCODE_DB\" > '{}'\n{unix}",
+            "echo \"OPENCODE_DB=$OPENCODE_DB\" > '{0}'\necho \"$3\" > '{0}.file'\n{unix}",
             capture.display()
         ),
     )
@@ -421,12 +422,63 @@ fn opencode_import_cleans_its_document_and_uses_the_requested_root() {
             format!("OPENCODE_DB={}", root.join("custom.db").to_string_lossy()),
             "{tag}"
         );
+        // The import document lives in mukade's own temporary folder (portable mode's
+        // `mukade-data/tmp`, else the system's), not in the OpenCode store, and is gone.
+        let imported = std::fs::read_to_string(format!("{}.file", capture.display())).unwrap();
+        let imported = std::path::PathBuf::from(imported.trim());
         assert_eq!(
-            std::fs::read_dir(&root).unwrap().count(),
-            0,
+            imported.parent(),
+            Some(mukade::portable::temp_dir().as_path()),
+            "{tag}"
+        );
+        assert!(
+            !imported.exists(),
             "{tag}: the temporary import document was removed"
         );
+        assert!(
+            !root.exists() || std::fs::read_dir(&root).unwrap().next().is_none(),
+            "{tag}: nothing was left in the OpenCode store folder"
+        );
     }
+}
+
+/// A file a killed mukade left behind is removed by the next run once it is an hour old; a recent
+/// one, which may belong to a running mukade, and anything not ours stay.
+#[test]
+fn a_stale_import_document_of_a_killed_run_is_swept() {
+    let source = session(Kind::User {
+        text: "hello".into(),
+        attachments: Vec::new(),
+    });
+    let temp = mukade::portable::temp_dir();
+    let name = |tag: &str| temp.join(format!("mukade-import-{tag}-{}.json", std::process::id()));
+    let age = |path: &std::path::Path, seconds: u64| {
+        std::fs::write(path, "{}").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
+            .unwrap();
+    };
+    let (stale, fresh) = (name("stale"), name("fresh"));
+    age(&stale, 48 * 60 * 60);
+    age(&fresh, 5);
+    let scratch = support::scratch(HarnessId::OpenCode, "regression-opencode-sweep");
+    let mut opts = opts(HarnessId::OpenCode, &scratch);
+    let capture = scratch.join("environment.txt");
+    opts.exe = Some(mock_opencode(
+        &scratch.join("bin"),
+        &capture,
+        "echo Imported session: ses_mock",
+        "echo 'Imported session: ses_mock'",
+    ));
+    writer::opencode::Opencode.write(&source, &opts).unwrap();
+    let (stale_left, fresh_left) = (stale.exists(), fresh.exists());
+    let _ = std::fs::remove_file(&stale);
+    let _ = std::fs::remove_file(&fresh);
+    assert!(!stale_left, "a day-old import document is swept");
+    assert!(fresh_left, "a recent one is left alone");
 }
 
 #[test]
