@@ -363,9 +363,11 @@ impl MetaBuilder {
         let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         if row.get("type").and_then(Value::as_str) == Some("session_meta") {
             if self.id.is_none() {
-                // A native rollout states both; a hand-written one may carry only `id`.
-                self.id = str_at(payload, "/session_id")
-                    .or_else(|| str_at(payload, "/id"))
+                // `id` is the rollout's own thread; a subagent's `session_id` names the thread
+                // that spawned it. A hand-written rollout may carry only one of the two.
+                self.id = str_at(payload, "/id")
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| str_at(payload, "/session_id"))
                     .filter(|s| !s.is_empty());
             }
             if self.cwd.is_none() {

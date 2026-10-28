@@ -746,3 +746,33 @@ fn a_chain_of_pages_reads_as_its_latest_version() {
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert_eq!(std::path::Path::new(&listed[0].path), page2.as_path());
 }
+
+/// A subagent's rollout names its own thread in `id` and the thread that spawned it in
+/// `session_id` (Codex Desktop, seen on 971 of 982 rollouts on 2026-10-28; Codex's own
+/// `state_5.sqlite` keys the subagent's thread by `id`). The session is the rollout's own thread.
+#[test]
+fn a_subagent_rollout_is_its_own_thread_not_the_one_that_spawned_it() {
+    let child = "01a164f1-6c9e-7173-8fea-c06263ae5eca";
+    let root = "01a164f0-97a1-7433-b313-b15481e862d4";
+    let header = |payload: serde_json::Value| {
+        vec![
+            serde_json::json!({"timestamp": "2026-10-22T19:48:26.000Z", "ordinal": 0,
+                               "type": "session_meta", "payload": payload}),
+            serde_json::json!({"timestamp": "2026-10-22T19:48:27.000Z", "ordinal": 1,
+                               "type": "response_item", "payload": {"type": "message", "role": "user",
+                               "content": [{"type": "input_text", "text": "task"}]}}),
+        ]
+    };
+    let subagent = header(serde_json::json!({
+        "id": child, "session_id": root, "cwd": r"D:\Projects\daodan", "cli_version": "0.165.0",
+        "thread_source": "subagent",
+        "source": {"subagent": {"thread_spawn": {"parent_thread_id": root, "depth": 1}}},
+    }));
+    assert_eq!(codex::parse(&subagent, None).unwrap().meta.id, child);
+
+    // A hand-written rollout may carry only one of the two.
+    let only_session_id = header(serde_json::json!({"session_id": root, "cwd": r"C:\x"}));
+    assert_eq!(codex::parse(&only_session_id, None).unwrap().meta.id, root);
+    let only_id = header(serde_json::json!({"id": child, "cwd": r"C:\x"}));
+    assert_eq!(codex::parse(&only_id, None).unwrap().meta.id, child);
+}

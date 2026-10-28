@@ -103,7 +103,7 @@ Record kinds in a rollout (`type`, then `payload.type`) [19][22]:
 
 | `type` | payloads seen | role |
 |---|---|---|
-| `session_meta` | `id` (native rollouts also `session_id` [22]), `cwd`, `originator`, `source`, `cli_version`, `model_provider`, `git`, `base_instructions` | thread header; Codex refuses a rollout without `cli_version` [23] |
+| `session_meta` | `id`, the rollout's own thread (native rollouts also `session_id` [22]: the same id, except in a subagent's rollout, where it names the thread that spawned it [26]), `cwd`, `originator`, `source`, `cli_version`, `model_provider`, `git`, `base_instructions` | thread header; Codex refuses a rollout without `cli_version` [23] |
 | `response_item` | `message` (`user`/`assistant`/`developer`), `reasoning` (`summary`, `encrypted_content`), `function_call`/`function_call_output`, `custom_tool_call`/`custom_tool_call_output`, `local_shell_call`, `web_search_call` | the conversation itself |
 | `event_msg` | `task_started`, `task_complete`, `turn_aborted {reason:"interrupted"}`, `thread_settings_applied` | events about the conversation |
 | `turn_context` | `turn_id`, `model`, `cwd` | starts a turn |
@@ -262,7 +262,7 @@ deprecated alias [13].
 | `function_call_output`, `custom_tool_call_output` | string → text; **array (images, MCP content) → structured blocks kept** (`input_text`/`output_text` → `{"type":"text"}`, other items as recorded); `is_error` always `false` | `:399-433,481-489` |
 | `compacted` | `Compaction{summary: message, kept_from: next non-Meta entry, trigger: Unknown, tokens_before: latest_token_usage_record.usage.input_tokens}`; the step of the same `turn_id` that wrote the summary is folded in; `replacement_history` stays in `raw` only. An empty `message` (0.165's encrypted summary) is never written as an empty user message: the plan leaves it out and counts it (`dropped_unreadable_summaries`), and `--compaction portable` is refused, exit 2 | `:271-300,435-455`; `src/writer/plan.rs`, `src/hop.rs` `select` |
 | `event_msg`, `turn_context`, `world_state`, `token_usage_record` | `Meta`, kept raw; models from `event_msg/thread_settings_applied` | `:69-80,195-207` |
-| `session_meta` | id (`session_id`, else `id`), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title and parent always empty** (`session_index.jsonl` not read, forks not linked) | `:149-181,455-470` |
+| `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title and parent always empty** (`session_index.jsonl` not read, forks not linked) | `:149-181,455-470` |
 
 **Writer** (`src/writer/codex.rs`) [23]:
 
@@ -310,7 +310,9 @@ deprecated alias [13].
 ## 9. Sources
 
 [26] Two real Codex Desktop 0.165.0-alpha.1.2 threads of the Daodan project, read on
-2026-10-28 with their `state_5.sqlite` and `thread_history_1.sqlite` rows (read only): thread
+2026-10-28 with their `state_5.sqlite` and `thread_history_1.sqlite` rows (read only), and a
+scan of the 982 rollouts on that machine (971 subagent rollouts, whose `session_id` is the
+spawning thread's and whose `state_5.sqlite` row is keyed by their own `id`): thread
 `01a181e2-…` (17.8 MB, 5 compactions, all with an empty `message`) and thread `01a181df-…` (a base
 file plus one page, `history_base.end_ordinal_exclusive` 511 of 1064). Not in the repository: they
 are the user's own conversations.
