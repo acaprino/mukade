@@ -135,6 +135,16 @@ prefix). The coding agent adds the roles `bashExecution`, `custom`, `branchSumma
   to it, then everything after it [6]. The model receives the system checkpoint, a user message
   `The conversation history before this point was compacted into the following summary:\n\n<summary>\n…\n</summary>`,
   the kept tail and the new prompt [9][26].
+- **Without a terminal** compaction is the RPC `{"type":"compact"}` (`pi --mode rpc --session <id>`); its entry is appended to that session's file [17][26].
+
+### Ephemeral runs
+
+- **`--no-session`** writes no session, but cannot be combined with `--session`, `--continue`,
+  `--resume` or `--fork` [4].
+- **`--fork <path|id> --session-dir <dir>`** copies the session into a new file under `<dir>`; the
+  source file and its folder stay byte-identical [34]. Delete `<dir>` afterwards and nothing is left.
+- **`--no-tools`** offers no tools; a history holding tool calls is accepted (`openrouter`) [34].
+- **Output.** `-p` prints the final assistant text on stdout [4].
 
 ### Built-in tools
 
@@ -325,3 +335,4 @@ repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28.
 31. `src/exe.rs`, `src/roots.rs`, `src/cli.rs`.
 32. `README.md`, `docs/usage.md`.
 33. `src/model/tool.rs` (`CanonicalTool::from_pi`).
+34. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)

@@ -109,6 +109,25 @@ Proprietary; use is subject to Anthropic's Commercial Terms of Service [25]. The
 - **Targeted compaction.** `/rewind` offers "Summarize from here" and "Summarize up to here", which compress part of the conversation; the original messages stay in the transcript [19].
 - **Record on disk** [1]: `system` row `subtype: "compact_boundary"` with `parentUuid: null`, `logicalParentUuid: <old leaf>` and `compactMetadata{trigger: "manual"|"auto", preTokens, postTokens, preservedSegment{headUuid, anchorUuid, tailUuid}, preservedMessages}`; then a `user` row with `isCompactSummary: true`, `isVisibleInTranscriptOnly: true` holding "This session is being continued from a previous conversation … Summary: …"; then the command rows of `/compact` and `attachment` rows for files read earlier. The last assistant reply stays in place and is hung under the summary by `preservedSegment`.
 - **Resume.** Before a compaction the model receives everything, thinking with its signature; after it, only the summary, the preserved tail and later turns. Earlier tools and thinking are not sent; files read earlier return as a system message [1].
+- **Without a terminal**, `claude -p --resume <id> "/compact"` compacts the session it resumes: the rows land in that session's own transcript [1]. Compacting without touching it means forking first (`--fork-session`) **[U]**.
+
+### Ephemeral runs
+
+- **No transcript.** `--no-session-persistence` (print mode only) writes no session file [9]. With
+  `--resume <id>` the resumed transcript stays byte-identical and no file is added to the project
+  folder [27]. Hooks still run: the user's SessionStart hooks rewrote `session-env/<id>/` for the
+  resumed id [27].
+- **Under a new id.** `--fork-session` with `--resume` or `--continue` writes the continuation to a
+  new file and leaves the original as it was [9][19].
+- **No tools.** `--tools ""` offers none. The option takes several values, so it must come before
+  another option: after `--resume` it swallows the prompt and Claude Code answers `Error: No
+  deferred tool marker found in the resumed session …` [27]. A history holding tool calls is
+  accepted with no tools offered (first-party API, `claude-sonnet-5`) [27].
+- **`--bare` is not for subscription logins**: it skips hooks, but authenticates only with
+  `ANTHROPIC_API_KEY` or an `apiKeyHelper`, never OAuth [9].
+- **Output.** `--output-format json` prints one object: `result`, `is_error`, `subtype`
+  (`success`), `session_id`, `total_cost_usd`, `usage`, `modelUsage` [27]. With stdin left open,
+  print mode waits 3 s for it (`Warning: no stdin data received in 3s`) [27].
 
 ### Built-in tools
 
@@ -254,3 +273,4 @@ Web:
 24. Release v2.1.311, https://github.com/anthropics/claude-code/releases/tag/v2.1.311 (commit `08c6a4f5121ae140d3c1b5c96e3e5ae53587b54b`)
 25. License file, https://raw.githubusercontent.com/anthropics/claude-code/main/LICENSE.md
 26. npm registry, https://registry.npmjs.org/@anthropic-ai/claude-code/latest (`version` 2.1.312, `license` "SEE LICENSE IN README.md", `engines.node` ">=22.0.0", `bin.claude` "bin/claude.exe")
+27. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)

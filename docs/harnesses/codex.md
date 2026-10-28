@@ -150,6 +150,22 @@ Record kinds in a rollout (`type`, then `payload.type`) [19][22]:
   seen, `message` is empty and the summary is an item `{type:"compaction", id, encrypted_content}`
   (77 000 to 99 000 characters) at the end of `replacement_history`, after the retained user
   messages. Only OpenAI can read it: there is no summary text to carry to another harness.
+- **Without a terminal**, compaction is the app server's `thread/compact/start`; its `compacted` record is written into the thread it compacts [7][19].
+
+### Ephemeral runs
+
+- **`--ephemeral`** (`exec`, `exec resume`, `exec fork`): "Run without persisting session files to
+  disk" [18]. It stops a *new* rollout only: `exec resume <id> --ephemeral` still appends the turn
+  to the rollout it resumes (11 records, against a mock) [27].
+- **`codex exec fork <id> --ephemeral`** starts from the stored history and leaves `CODEX_HOME`
+  unchanged: rollouts, `session_index.jsonl`, the SQLite files and their WAL [27] (mock). The request
+  carries the whole source conversation, an unanswered last user message included [27].
+- **Output.** `-o, --output-last-message <file>` writes the last agent message to a file; `--json`
+  prints the events [18].
+- **No switch removes the tools** of `exec`; `-c sandbox_mode="read-only"` bounds what a call can
+  do [18][27]. `exec` reads stdin when it is left open (`Reading additional input from stdin...`) [27].
+- **Deleting a session without a terminal** needs `codex delete --force <id>`; without `--force` it
+  answers `cannot confirm session deletion without an interactive terminal` [27].
 
 ### Built-in tools
 
@@ -346,3 +362,4 @@ All accessed 2026-10-28.
 23. Repository: [`src/writer/codex.rs`](../../src/writer/codex.rs), `src/writer/plan.rs`, `src/policy.rs`, `src/tools.rs`, `src/model/tool.rs`, `src/hop.rs`
 24. Repository: [`src/exe.rs`](../../src/exe.rs), [`src/cli.rs`](../../src/cli.rs) (`codex_config_provider`, `top_level_string`, `destination_version`), `src/detect.rs`
 25. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md) §2
+27. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
