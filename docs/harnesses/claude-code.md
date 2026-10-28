@@ -232,6 +232,16 @@ Sources: `src/reader/claude_code.rs`, `src/writer/claude_code.rs`, `src/writer/p
 - On resume of an interrupted last turn Claude Code inserts its synthetic `No response requested.`; the manifest records `interrupted_last_turn`. Run the resume from the session's `cwd`: from elsewhere Claude Code appends rows with the new `cwd` [1].
 - mukade does not create Claude Code's authentication or onboarding configuration [8].
 
+### How mukade summarizes it
+
+With `--compaction summary` and Claude Code as the source, mukade runs
+`claude -p --tools "" --resume <id> --no-session-persistence --output-format json [--model <id>] <prompt>`
+from the session's directory (mukade's own when it is gone), with `CLAUDE_CONFIG_DIR` set to the
+source store, and reads the summary from the JSON `result`; `is_error: true` or a `subtype` other
+than `success` is a failed summary. The transcript is left as it was; the user's SessionStart hooks
+still run [27]. The JSON's `total_cost_usd`, `usage` and `modelUsage` go to the manifest's
+`options.summary.usage` [5][27].
+
 ## 9. Sources
 
 [9] Claude Code 2.1.312's own JavaScript, embedded in `claude.exe`, read on 2026-10-28: the

@@ -87,6 +87,30 @@ add to every request, not the conversation.
   memory or fails is **[U]**. mukade must report either as a failed summary, never write half of one.
 - `--model` / `-m` / `--provider` overrides: the flags exist in each `--help`; no run used them.
 
+## End to end
+
+`target/release/mukade.exe` at `1c38672`, one real hop per source with `--compaction summary` and
+`--resume-prompt "What were we doing"`, each on a new throwaway session (deleted afterwards):
+
+| hop | time | source after | summary | the destination answered |
+|---|---|---|---|---|
+| Claude Code → Pi | 77 s | file byte-identical | 1054 characters, `claude-sonnet-5`, `total_cost_usd` 0.66 | what the task was, the heading found, that nothing was left open |
+| Pi → OpenCode | 38 s | file byte-identical | 903 characters, `moonshotai/kimi-k2.6` | the request and the answer given |
+| OpenCode → Pi | 25 s | every table's row count as before, source rows unchanged, no fork left | 433 characters, `openai/gpt-6.1-terra` | the task, what was done, its status |
+| Codex (mock) → Pi, `--keep-turns 1` | 31 s | `CODEX_HOME` unchanged | `MOCK-SUMMARY`, then the last user turn kept | (the mock's text carries nothing to answer from) |
+
+- The manifest of each said `options.compaction: "summary"`, the harness, version and model that
+  wrote the summary, and one loss line: `the whole history (N entries) travelled as a summary written
+  by <harness>'s model` (`the history before <id> …` with a kept turn).
+- **The first Pi → OpenCode hop wrote the session and then failed its resume (exit 5)**, for a reason
+  outside the summary: the session carries the source's model (`openrouter/moonshotai/kimi-k2.6`),
+  and OpenCode asked OpenRouter for 235 929 output tokens, over that endpoint's 262 144-token
+  context (`This endpoint's maximum context length is 262144 tokens…`). With OpenCode's own default
+  model (`--model-provider openrouter --model openai/gpt-6.1-terra`) the same hop completed.
+- OpenCode's summary mentioned that a handoff summary had been asked for, and Pi's reply then said
+  the user had requested the handoff. The summary describes the session; the request for it is part
+  of what the model saw.
+
 ## Final commands
 
 These are what `src/summary.rs` runs (`<prompt>` is always the last argument; `[…]` only when a

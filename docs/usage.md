@@ -97,6 +97,29 @@ The source must have compacted at least once (a Claude `/compact`, a Pi compacti
 the hop is refused with a reason and nothing is written. The manifest keeps the lines
 `the source's compaction summary travels as one user message` and how many entries were kept.
 
+### Move only a summary, written by the source's own model
+
+*The session is long, it never compacted, or its summary is encrypted (Codex).* `--compaction summary`
+asks the source harness to summarize the session with its own model, its own login and its own
+configuration, in a run that saves nothing in its store; the destination starts from that summary:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --compaction summary
+```
+
+`--keep-turns 2` also keeps the last two user turns verbatim after it; `--summary-model` names a
+cheaper model; `--summary-timeout` (seconds, default 300) bounds the run. To export the summary and
+import it later, or elsewhere:
+
+```powershell
+mukade dump codex YOUR_CODEX_SESSION_ID --compaction summary --output 'C:\work\summary.json'
+mukade write opencode 'C:\work\summary.json' --cwd 'C:\work\my-project'
+```
+
+It costs one model call on the source's account; the manifest's `options.summary` says which model
+wrote it, how long it is and, for Claude Code, what it cost. If the summary cannot be written
+(an error, an empty reply, the deadline) nothing is written and the exit code is 4.
+
 ### Rehearse before touching the real store
 
 *You want to see what a hop would do first.* Point the **destination's** store variable at an empty
@@ -384,7 +407,7 @@ variable and `--<harness>-exe`: see [section 8](#8-stores-and-executables) and t
 | 0 | done |
 | 1 | a command-line mistake (unknown option, a flag without its value, an unexpected argument) |
 | 2 | refused with a reason; nothing was written: the session is not there, the store is not configured, the id is ambiguous, or the request is not supported (a resume prompt starting with `-`, `--compaction portable` on a source that never compacted, …) |
-| 4 | failed and nothing changed: the destination refused the write, or the plan would be refused by a provider |
+| 4 | failed and nothing changed: the destination refused the write, the plan would be refused by a provider, or the source's model could not write the summary (`--compaction summary`) |
 | 5 | failed and recovery is needed: the source exists but could not be read, **or the session was written but the resume failed** — then the receipt is still printed and `--manifest` saved |
 
 ## 8. Stores and executables

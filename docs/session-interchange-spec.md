@@ -93,7 +93,8 @@ pub enum Compaction {
     Portable { summary: SummarySource, keep_from: KeepFrom },  // written by us as one user message + tail
     DestinationNative,                   // refused: the destination's own compaction is the caller's to run
 }
-pub enum SummarySource { SourceRecord, Supplied(String) }      // SourceRecord: the source's native compaction record (L4)
+pub enum SummarySource { SourceRecord, Supplied(String),        // SourceRecord: the source's native compaction record (L4)
+                         SourceModel(SummarizeOpts), Generated(Summary) }  // §4.5: written by the source's model
 pub enum KeepFrom { SourceBoundary, LastTurns(usize), Message(String) }  // LastTurns(0): the handoff alone
 
 pub struct ResumePrompt { pub text: String, pub timeout: Duration }
@@ -123,6 +124,7 @@ pub fn export(src: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError>
 pub fn export_path(harness: HarnessId, path: &Path) -> Result<Session, HopError>;  // a session file
 pub fn import(dest: HarnessId, s: &Session, opts: &ImportOpts) -> Result<Receipt, HopError>;
 pub fn hop_session(dest: HarnessId, s: &Session, c: &Compaction, opts: &ImportOpts) -> Result<Receipt, HopError>;
+pub fn compact(s: &Session, c: &Compaction, roots: &StoreRoots) -> Result<(Cow<Session>, Option<SummaryFacts>), HopError>;  // §4.5
 ```
 
 `HopError` kinds map to the CLI exit codes of technical design 5.5.2: `NotFound` (2: the store is
@@ -487,6 +489,26 @@ losslessly (OC2 [V]); Claude Code (`compact_boundary` + `isCompactSummary` row) 
 entry with `firstKeptEntryId`) are **[U]** for hand-written records. Until a fixture proves one,
 `Portable` writes the user-message form of 4.2.
 
+### 4.5 `Portable` with a summary from the source's model
+
+`SummarySource::SourceModel(SummarizeOpts)` asks the source harness's own model for the summary when
+the session moves (`--compaction summary`, with `--keep-turns N`, `--summary-model`,
+`--summary-timeout`). mukade sends one prompt of its own, the same for the four harnesses and
+versioned (`v1`), not the harness's native `/compact`: that writes into the source's store, and
+Codex's native summary is encrypted. The run goes through the source's binary, credentials and
+configuration, and saves nothing in its store: Claude Code `--no-session-persistence`, Codex
+`exec fork --ephemeral`, Pi `--fork` into a temporary folder, OpenCode a fork deleted afterwards
+[V: `docs/verification/2026-10-28-summary-live.md`; Codex against a mock].
+
+The result is the shape of §4.2 with its own handoff line,
+`[mukade handoff v1] Summary of the earlier conversation, written by the source agent's model when the session was moved:`,
+then the last `N` user turns (none by default). `hop::compact` resolves the summary once, before
+the selection, so `dump --compaction summary` exports the same document `hop` would write, and
+`write` imports it later. The manifest carries `options.summary` (`source: "source_model"`,
+harness, version, model, `prompt: "v1"`, `chars`, `usage`, `left_out`) and one loss line. A failed
+summary (an error, an empty reply, a deadline) is `HopError::SummaryFailed`, exit 4: nothing was
+written. Refused (exit 2): `--all-branches`, and `--from-file` for a source other than Pi.
+
 ## 5. Resume prompt (optional)
 
 [V: every `*/resume/*.capture.jsonl`] For all four destinations the commands of section 2 resume a
@@ -659,6 +681,8 @@ library must pass all criteria above.
 ## 10. Open
 
 - [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
+- [U] §4.5 against Codex's real model (the run was made against a mock), and a session larger than
+  the source model's context window.
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).
 - [U] Codex 0.165: a chain of pages (a page whose base is itself a page) is read by following
   each `history_base` back to the first file, the latest version winning; tested on hand-made files

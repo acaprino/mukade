@@ -325,6 +325,15 @@ deprecated alias [13].
 - **Resume:** keep `CODEX_HOME` set for the resume process and run it from the session's cwd
   [19 §5][25].
 
+### How mukade summarizes it
+
+With `--compaction summary` and Codex as the source, mukade runs
+`codex exec fork <id> --ephemeral --skip-git-repo-check -c sandbox_mode="read-only" -o <file> [-m <id>] <prompt>`
+with `CODEX_HOME` set to the source store, and reads the summary from `<file>`, in a folder of its
+own under `mukade-data/tmp` that is removed afterwards. `exec resume --ephemeral` would append to
+the source's rollout, which is why the fork is used [27]. Checked against a mock only: the real
+model's behaviour is **[U]** [27].
+
 ## 9. Sources
 
 [26] Two real Codex Desktop 0.165.0-alpha.1.2 threads of the Daodan project, read on

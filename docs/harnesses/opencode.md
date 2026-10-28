@@ -322,6 +322,14 @@ each (`PROBE_TIMEOUT`); resume prompt 300 s by default. Past one, the process tr
 - Only 2.1.4 is verified. 2.2.0 (npm `latest` on 2026-10-28) already changes media blobs,
   compaction start and instruction persistence [6][28].
 
+### How mukade summarizes it
+
+With `--compaction summary` and OpenCode as the source, mukade runs
+`opencode run --standalone --session <id> --fork --format json [-m <provider>/<id>] <prompt>`,
+reads the summary from the `text` events and the fork's id from their `sessionID`, then runs
+`opencode session delete <fork id> --standalone`. When that delete fails the hop still completes,
+and its manifest says `the summarizing run left a fork in the source store: run <command>` [37].
+
 ## 9. Sources
 
 All accessed 2026-10-28.

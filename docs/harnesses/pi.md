@@ -297,6 +297,14 @@ elsewhere are not found [31].
   variables; `--no-skills` is needed because Pi reads `~\.agents\skills` whatever `PI_CODING_AGENT_DIR`
   says [26].
 
+### How mukade summarizes it
+
+With `--compaction summary` and Pi as the source, mukade runs
+`pi -p --fork <session file> --session-dir <folder> --no-tools [--provider <p>] [--model <id>] <prompt>`,
+where `<folder>` is its own under `mukade-data/tmp`, removed afterwards, and reads the summary from
+stdout. The provider and the model id go apart, because a model id can hold a slash itself
+(`moonshotai/kimi-k2.6`). A Pi session read from a file (`--from-file`) can be summarized too [34].
+
 ## 9. Sources
 
 `<pkg>` = `C:\Users\alfio\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent` (1.2.0);

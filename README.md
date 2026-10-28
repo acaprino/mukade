@@ -147,7 +147,9 @@ phase by phase on stderr. See the [usage guide](docs/usage.md#5-speed).
 
 A hop can carry the source's own compaction instead of the whole history: `Compaction::Portable`
 writes the handoff line and the source's summary, then the tail from the boundary the source's
-compaction recorded. Reasoning is treated as what it is — a payload only its own provider protocol
+compaction recorded. `--compaction summary` asks the source harness's own model for a
+handoff summary instead, with a prompt of mukade's own and a run that saves nothing in the source's
+store; `dump` exports that summary and `write` imports it later. Reasoning is treated as what it is — a payload only its own provider protocol
 can replay: it is carried natively when the destination's protocol matches and the block still has
 its signature or encrypted payload, written as labelled text, or dropped. Which of the three
 happened is in the manifest.
