@@ -13,8 +13,8 @@
 //! `PI_CODING_AGENT_DIR`), so every run stays inside the scratch home the caller set.
 
 use crate::hop::{
-    Compaction, HopError, HopRequest, ImportOpts, KeepFrom, Receipt, SessionRef, SourceFacts,
-    SummarySource, WriteDetails,
+    Compaction, HopError, ImportOpts, KeepFrom, Receipt, SessionRef, SourceFacts, SummarySource,
+    WriteDetails,
 };
 use crate::model::{HarnessId, Protocol};
 use crate::policy::ReasoningPolicy;
@@ -72,13 +72,26 @@ a source OpenCode read spawns the binary its own resolution finds (MUKADE_OPENCO
 /// Parse and run the command line. `args` excludes the program name.
 pub fn run(args: &[String]) -> Result<()> {
     let (command, rest) = args.split_first().context(USAGE)?;
+    if matches!(command.as_str(), "-h" | "--help" | "help") {
+        print!("{USAGE}");
+        return Ok(());
+    }
     let mut positional: Vec<&str> = Vec::new();
     let mut flags = Flags::default();
     let mut i = 0;
     while i < rest.len() {
         let arg = rest[i].as_str();
         match arg {
-            "--cwd" => flags.cwd = Some(next(rest, &mut i)?),
+            "--cwd" => {
+                // The destination files the session by its directory: a relative one is resolved
+                // against where the command runs.
+                let cwd = next(rest, &mut i)?;
+                flags.cwd = Some(
+                    std::path::absolute(&cwd)
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or(cwd),
+                );
+            }
             "--dest-version" => flags.dest_version = Some(next(rest, &mut i)?),
             "--dest-protocol" => flags.dest_protocol = Some(next(rest, &mut i)?),
             "--dest-shell" => flags.dest_shell = Some(next(rest, &mut i)?),
@@ -175,6 +188,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     match command.as_str() {
         "list" => {
+            no_more(operands, 0)?;
             let reader = crate::reader::for_harness(harness)?;
             for info in reader.list(&roots)? {
                 println!(
@@ -190,6 +204,7 @@ pub fn run(args: &[String]) -> Result<()> {
             }
         }
         "dump" => {
+            no_more(operands, 1)?;
             let id = operands.first().context("dump needs a session id")?;
             let reader = crate::reader::for_harness(harness)?;
             let session = reader.read(id, &roots)?;
@@ -197,6 +212,7 @@ pub fn run(args: &[String]) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&doc)?);
         }
         "write" => {
+            no_more(operands, 1)?;
             let path = operands.first().context("write needs a document file")?;
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
@@ -216,21 +232,21 @@ pub fn run(args: &[String]) -> Result<()> {
             )?;
         }
         "hop" => {
+            no_more(operands, 2)?;
             let dest: HarnessId = operands
                 .get(1)
                 .context("hop needs a destination harness")?
                 .parse()?;
+            // The source is read once, by the same path the library uses: a session that is not
+            // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
             let source = match flags.from_file.as_deref() {
-                Some(path) => crate::hop::export_path(harness, std::path::Path::new(path))
-                    .map_err(anyhow::Error::new)?,
+                Some(path) => crate::hop::export_path(harness, std::path::Path::new(path)),
                 None => {
                     let id = operands.first().context("hop needs a session id")?;
-                    let reader = crate::reader::for_harness(harness)?;
-                    reader
-                        .read(id, &roots)
-                        .map_err(|error| HopError::NotFound(format!("{error:#}")))?
+                    crate::hop::export(&SessionRef::id(harness, *id), &roots)
                 }
-            };
+            }
+            .map_err(anyhow::Error::new)?;
             let opts = flags.import_opts(harness, dest, &source, &roots)?;
             let selection = match flags.compaction.as_deref() {
                 None | Some("none") => Compaction::None,
@@ -240,33 +256,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 },
                 Some(other) => anyhow::bail!("unknown --compaction {other} (none, portable)"),
             };
-            let request = HopRequest {
-                source: SessionRef {
-                    harness,
-                    id: operands.first().copied().unwrap_or_default().to_string(),
-                },
-                dest,
-                cwd: opts.cwd.clone(),
-                compaction: selection.clone(),
-                resume: flags
-                    .resume_prompt
-                    .clone()
-                    .map(crate::hop::ResumePrompt::new),
-                reasoning: opts.reasoning,
-                roots: roots.clone(),
-                write: opts.write.clone(),
-            };
-            let result = match flags.from_file.as_deref() {
-                // A session that came from a file is already in hand: only the write is left.
-                Some(_) => {
-                    let import_opts = crate::hop::ImportOpts {
-                        source_facts: SourceFacts::of(&source),
-                        ..opts.clone()
-                    };
-                    crate::hop::hop_session(dest, &source, &selection, &import_opts)
-                }
-                None => crate::hop::hop(&request),
-            };
+            let result = crate::hop::hop_session(dest, &source, &selection, &opts);
             deliver(result, flags.manifest.as_deref())?;
         }
         other => anyhow::bail!("unknown command {other}\n\n{USAGE}"),
@@ -317,11 +307,23 @@ fn deliver(result: Result<Receipt, HopError>, manifest: Option<&str>) -> Result<
     }
 }
 
+/// The value of the flag at `i`. A value that is itself an option means the flag was given none.
 fn next(rest: &[String], i: &mut usize) -> Result<String> {
     *i += 1;
-    rest.get(*i)
-        .cloned()
-        .with_context(|| format!("{} needs a value", rest[*i - 1]))
+    let flag = &rest[*i - 1];
+    match rest.get(*i) {
+        Some(value) if !value.starts_with("--") => Ok(value.clone()),
+        Some(value) => anyhow::bail!("{flag} needs a value, not the option {value}"),
+        None => anyhow::bail!("{flag} needs a value"),
+    }
+}
+
+/// No positional argument is left unread: a stray one is a mistake, not something to ignore.
+fn no_more(operands: &[&str], expected: usize) -> Result<()> {
+    match operands.get(expected) {
+        Some(extra) => anyhow::bail!("unexpected argument {extra}\n\n{USAGE}"),
+        None => Ok(()),
+    }
 }
 
 #[derive(Default)]
@@ -634,10 +636,48 @@ fn opencode_config_model() -> Option<(String, Option<String>)> {
 fn codex_config_provider() -> Option<String> {
     let home = std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from)?;
     let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
-    text.lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("model_provider"))
-        .and_then(|rest| rest.split_once('='))
-        .map(|(_, value)| value.trim().trim_matches('"').to_string())
-        .filter(|provider| !provider.is_empty())
+    top_level_string(&text, "model_provider")
+}
+
+/// A top-level `key = "value"` of a TOML file: before any `[table]`, the key exactly (not
+/// `model_providers.x`), with a trailing `# comment` left out.
+fn top_level_string(text: &str, key: &str) -> Option<String> {
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            return None;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != key {
+            continue;
+        }
+        let value = value.trim();
+        let value = match value.strip_prefix('"') {
+            Some(quoted) => quoted.split('"').next().unwrap_or_default(),
+            None => value.split('#').next().unwrap_or_default().trim(),
+        };
+        return Some(value.to_string()).filter(|v| !v.is_empty());
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_level_string;
+
+    /// Codex's own provider is the top-level key: not a provider table's field, not a profile's,
+    /// and not the comment after it.
+    #[test]
+    fn the_codex_provider_is_the_top_level_key_only() {
+        let config = "model = \"gpt\"\nmodel_provider = \"azure\" # the work account\n\n[model_providers.azure]\nname = \"Azure\"\n";
+        assert_eq!(
+            top_level_string(config, "model_provider").as_deref(),
+            Some("azure")
+        );
+        let nested = "[profiles.fast]\nmodel_provider = \"openai\"\n";
+        assert_eq!(top_level_string(nested, "model_provider"), None);
+        let dotted = "model_providers.azure.name = \"Azure\"\n";
+        assert_eq!(top_level_string(dotted, "model_provider"), None);
+    }
 }

@@ -522,7 +522,10 @@ impl Reader for Pi {
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
         let Some(sessions) = roots.pi_sessions() else {
-            anyhow::bail!("PI_CODING_AGENT_DIR is not set: no Pi store to list");
+            return Err(super::Lookup::NoStore(
+                "PI_CODING_AGENT_DIR is not set: no Pi store to list".into(),
+            )
+            .into());
         };
         let mut out = Vec::new();
         for file in session_files(&sessions)? {
@@ -538,7 +541,10 @@ impl Reader for Pi {
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         let Some(sessions) = roots.pi_sessions() else {
-            anyhow::bail!("PI_CODING_AGENT_DIR is not set: no Pi store to read");
+            return Err(super::Lookup::NoStore(
+                "PI_CODING_AGENT_DIR is not set: no Pi store to read".into(),
+            )
+            .into());
         };
         let matches: Vec<PathBuf> = session_files(&sessions)?
             .into_iter()
@@ -549,8 +555,16 @@ impl Reader for Pi {
             .collect();
         match matches.as_slice() {
             [one] => read_file(one),
-            [] => anyhow::bail!("no Pi session with id {id:?} under {}", sessions.display()),
-            many => anyhow::bail!("{id:?} matches {} Pi sessions", many.len()),
+            [] => Err(super::Lookup::NotFound(format!(
+                "no Pi session with id {id:?} under {}",
+                sessions.display()
+            ))
+            .into()),
+            many => Err(super::Lookup::Ambiguous(format!(
+                "{id:?} matches {} Pi sessions",
+                many.len()
+            ))
+            .into()),
         }
     }
 }

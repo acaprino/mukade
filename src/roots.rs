@@ -25,7 +25,12 @@ pub struct StoreRoots {
 impl StoreRoots {
     /// The roots the calling process declares through the harnesses' own variables.
     pub fn from_env() -> Self {
-        let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+        // An empty variable is no store: as a path it would put the store beside the cwd.
+        let var = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
         StoreRoots {
             claude_config_dir: var("CLAUDE_CONFIG_DIR"),
             codex_home: var("CODEX_HOME"),

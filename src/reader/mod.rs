@@ -33,6 +33,28 @@ pub trait Reader {
     fn read(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<Session>;
 }
 
+/// A session a reader could not hand back for a reason that is a refusal, not a file it failed to
+/// understand: the store is not configured, the session is not there, or the id names several.
+/// A hop refuses these (exit 2); any other read error means the source could not be read (exit 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lookup {
+    NoStore(String),
+    NotFound(String),
+    Ambiguous(String),
+}
+
+impl std::fmt::Display for Lookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lookup::NoStore(what) | Lookup::NotFound(what) | Lookup::Ambiguous(what) => {
+                f.write_str(what)
+            }
+        }
+    }
+}
+
+impl std::error::Error for Lookup {}
+
 /// The reader for a harness.
 pub fn for_harness(harness: HarnessId) -> anyhow::Result<Box<dyn Reader>> {
     Ok(match harness {

@@ -444,3 +444,86 @@ fn a_written_document_names_its_source_and_has_a_fingerprint() {
     let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     assert_ne!(source["content_sha256"], empty, "{source}");
 }
+
+/// Exit codes (technical design 5.5.2): a session that is not there is refused (2); one that is
+/// there but cannot be read needs recovery (5). Neither writes anything.
+#[test]
+fn a_missing_session_is_refused_and_a_corrupt_one_is_unreadable() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-exit-codes");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let dir = scratch.join("home").join("projects").join("claude-project");
+    std::fs::write(
+        dir.join("deadbeef-0000-4000-8000-000000000000.jsonl"),
+        "{not json\n{\"type\":\"user\"}\n",
+    )
+    .unwrap();
+    let hop = |id: &str| {
+        cli_code(
+            &scratch,
+            &["hop", "claude_code", id, "pi", "--dest-version", "1.2.0"],
+        )
+    };
+    let (code, _, stderr) = hop("ffffffff");
+    assert_eq!(code, Some(2), "{stderr}");
+    let (code, _, stderr) = hop("deadbeef");
+    assert_eq!(code, Some(5), "{stderr}");
+    assert!(
+        !scratch.join("home").join("sessions").exists(),
+        "nothing was written"
+    );
+}
+
+/// A flag without its value does not take the next flag as one, and nothing is left unread.
+#[test]
+fn a_flag_without_its_value_and_a_stray_operand_are_refused() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-parsing");
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            "doc.json",
+            "--manifest",
+            "--dest-version",
+            "1.2.0",
+        ],
+    );
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("needs a value"), "{stderr}");
+    let (code, _, stderr) = cli_code(&scratch, &["dump", "pi", "an-id", "another"]);
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("unexpected"), "{stderr}");
+}
+
+/// `mukade --help` is a request, not an error.
+#[test]
+fn help_prints_the_usage_and_succeeds() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-help");
+    let (code, stdout, _) = cli_code(&scratch, &["--help"]);
+    assert_eq!(code, Some(0));
+    assert!(stdout.contains("mukade hop"), "{stdout}");
+}
+
+/// An empty store variable is not a store: it would put the session beside the current directory.
+#[test]
+fn an_empty_store_variable_is_not_a_store() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-empty-root");
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let file = scratch.join("document.json");
+    std::fs::write(&file, serde_json::to_string(&doc).unwrap()).unwrap();
+    let output = Command::new(BIN)
+        .args([
+            "write",
+            "pi",
+            file.to_str().unwrap(),
+            "--dest-version",
+            "1.2.0",
+        ])
+        .current_dir(&scratch)
+        .env("PI_CODING_AGENT_DIR", "")
+        .env_remove("MUKADE_PI_EXE")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!scratch.join("sessions").exists(), "nothing beside the cwd");
+}

@@ -345,10 +345,13 @@ impl Reader for Opencode {
             anyhow::bail!("opencode session export {id} did not finish within {EXPORT_TIMEOUT:?}");
         };
         if !status.success() {
-            anyhow::bail!(
-                "opencode session export {id} failed ({status}): {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = format!("opencode session export {id} failed ({status}): {stderr}");
+            // OpenCode's own word for an id it does not hold.
+            if stderr.to_ascii_lowercase().contains("not found") {
+                return Err(super::Lookup::NotFound(message).into());
+            }
+            anyhow::bail!(message);
         }
         let text = String::from_utf8_lossy(&output.stdout);
         let doc: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))

@@ -545,7 +545,10 @@ impl Reader for Codex {
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
         let Some(sessions) = roots.codex_sessions() else {
-            anyhow::bail!("CODEX_HOME is not set: no Codex store to list");
+            return Err(super::Lookup::NoStore(
+                "CODEX_HOME is not set: no Codex store to list".into(),
+            )
+            .into());
         };
         let mut seen = HashSet::new();
         let mut out = Vec::new();
@@ -566,7 +569,10 @@ impl Reader for Codex {
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         let Some(sessions) = roots.codex_sessions() else {
-            anyhow::bail!("CODEX_HOME is not set: no Codex store to read");
+            return Err(super::Lookup::NoStore(
+                "CODEX_HOME is not set: no Codex store to read".into(),
+            )
+            .into());
         };
         let matches: Vec<PathBuf> = rollout_files(&sessions)?
             .into_iter()
@@ -574,11 +580,16 @@ impl Reader for Codex {
             .collect();
         match matches.as_slice() {
             [one] => read_file(one),
-            [] => anyhow::bail!(
+            [] => Err(super::Lookup::NotFound(format!(
                 "no Codex rollout with id {id:?} under {}",
                 sessions.display()
-            ),
-            many => anyhow::bail!("{id:?} matches {} Codex rollouts", many.len()),
+            ))
+            .into()),
+            many => Err(super::Lookup::Ambiguous(format!(
+                "{id:?} matches {} Codex rollouts",
+                many.len()
+            ))
+            .into()),
         }
     }
 }

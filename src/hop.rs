@@ -651,10 +651,13 @@ fn check_resume_prompt(prompt: &str, dest: HarnessId, exe: Option<&str>) -> Resu
 /// failure when the harness is configured but what we found is not a session we understand.
 fn classify_read(error: anyhow::Error) -> HopError {
     let message = format!("{error:#}");
-    let missing = message.contains("is not set")
-        || (message.contains("no ")
-            && (message.contains("session") || message.contains("rollout")));
-    if missing {
+    let refused = error.chain().any(|cause| {
+        cause.downcast_ref::<crate::reader::Lookup>().is_some()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    });
+    if refused {
         HopError::NotFound(message)
     } else {
         HopError::VerifyFailed(message)

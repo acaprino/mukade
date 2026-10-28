@@ -736,7 +736,10 @@ impl Reader for ClaudeCode {
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
         let Some(projects) = roots.claude_projects() else {
-            anyhow::bail!("CLAUDE_CONFIG_DIR is not set: no Claude Code store to list");
+            return Err(super::Lookup::NoStore(
+                "CLAUDE_CONFIG_DIR is not set: no Claude Code store to list".into(),
+            )
+            .into());
         };
         let mut out = Vec::new();
         for file in session_files(&projects)? {
@@ -757,7 +760,10 @@ impl Reader for ClaudeCode {
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         let Some(projects) = roots.claude_projects() else {
-            anyhow::bail!("CLAUDE_CONFIG_DIR is not set: no Claude Code store to read");
+            return Err(super::Lookup::NoStore(
+                "CLAUDE_CONFIG_DIR is not set: no Claude Code store to read".into(),
+            )
+            .into());
         };
         let matches: Vec<PathBuf> = session_files(&projects)?
             .into_iter()
@@ -769,11 +775,16 @@ impl Reader for ClaudeCode {
             .collect();
         match matches.as_slice() {
             [one] => read_file(one),
-            [] => anyhow::bail!(
+            [] => Err(super::Lookup::NotFound(format!(
                 "no Claude Code session with id {id:?} under {}",
                 projects.display()
-            ),
-            many => anyhow::bail!("{id:?} matches {} Claude Code sessions", many.len()),
+            ))
+            .into()),
+            many => Err(super::Lookup::Ambiguous(format!(
+                "{id:?} matches {} Claude Code sessions",
+                many.len()
+            ))
+            .into()),
         }
     }
 }
