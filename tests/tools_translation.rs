@@ -243,8 +243,7 @@ fn grep_translates_only_over_the_shared_subset() {
         translate(&with_context, HarnessId::OpenCode, None),
         Translation::Text { .. }
     ));
-    // Pi has a `context` argument, so with grep enabled it keeps the call — and drops the context,
-    // which would need renaming to reach Pi's own tool.
+    // Pi has a `context` argument: with grep enabled the call reaches it, context renamed.
     let pi_with_grep = ToolSet {
         names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
     };
@@ -255,7 +254,7 @@ fn grep_translates_only_over_the_shared_subset() {
             None,
             pi_with_grep
         )),
-        &json!({"pattern": "x"})
+        &json!({"pattern": "x", "context": 3})
     );
 }
 
@@ -452,4 +451,258 @@ fn a_call_without_a_canonical_form_is_text() {
         translate(&raw, HarnessId::ClaudeCode, None),
         Translation::Text { .. }
     ));
+}
+
+const PI_WITH_SEARCH: ToolSet = ToolSet {
+    names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
+};
+
+fn is_text(translation: &Translation) -> bool {
+    matches!(translation, Translation::Text { .. })
+}
+
+/// Tables §1.2: a call that used an argument with no counterpart is not equivalent; it is never
+/// translated with the argument silently left out.
+#[test]
+fn an_argument_with_no_counterpart_makes_the_call_text_form() {
+    let in_workdir = call(
+        CanonicalTool::Bash,
+        "exec_command",
+        json!({"cmd": "ls", "workdir": "C:/w"}),
+    );
+    assert!(is_text(&translate(
+        &in_workdir,
+        HarnessId::ClaudeCode,
+        None
+    )));
+    assert!(is_text(&translate(
+        &in_workdir,
+        HarnessId::Pi,
+        Some(Shell::Posix)
+    )));
+    assert_eq!(
+        input_of(&translate(
+            &in_workdir,
+            HarnessId::OpenCode,
+            Some(Shell::Posix)
+        )),
+        &json!({"command": "ls", "workdir": "C:/w"})
+    );
+    let with_prompt = call(
+        CanonicalTool::WebFetch,
+        "WebFetch",
+        json!({"url": "https://x", "prompt": "sum it up"}),
+    );
+    assert!(is_text(&translate(&with_prompt, HarnessId::OpenCode, None)));
+    let with_domains = call(
+        CanonicalTool::WebSearch,
+        "WebSearch",
+        json!({"query": "q", "allowed_domains": ["a.org"]}),
+    );
+    assert!(is_text(&translate(
+        &with_domains,
+        HarnessId::OpenCode,
+        None
+    )));
+    let hidden = call(
+        CanonicalTool::Glob,
+        "glob",
+        json!({"pattern": "*.rs", "hidden": true}),
+    );
+    assert!(is_text(&translate_with(
+        &hidden,
+        HarnessId::Pi,
+        None,
+        PI_WITH_SEARCH
+    )));
+    let unknown = call(
+        CanonicalTool::Read,
+        "Read",
+        json!({"file_path": "a", "frobnicate": 1}),
+    );
+    assert!(is_text(&translate(&unknown, HarnessId::OpenCode, None)));
+    // An argument with no effect on the recorded result does not block (tables §4.1).
+    let described = call(
+        CanonicalTool::Bash,
+        "exec_command",
+        json!({"cmd": "ls", "yield_time_ms": 1000}),
+    );
+    assert_eq!(
+        name_of(&translate(&described, HarnessId::Pi, Some(Shell::Posix))),
+        "bash"
+    );
+}
+
+/// Each harness's own spelling of a search reaches the others' tools under their names.
+#[test]
+fn every_grep_spelling_maps_to_the_destination_grep() {
+    let claude = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "x", "glob": "*.rs", "-i": true, "head_limit": 5}),
+    );
+    assert_eq!(
+        input_of(&translate_with(
+            &claude,
+            HarnessId::Pi,
+            None,
+            PI_WITH_SEARCH
+        )),
+        &json!({"pattern": "x", "glob": "*.rs", "ignoreCase": true, "limit": 5})
+    );
+    let opencode = call(
+        CanonicalTool::Grep,
+        "grep",
+        json!({"pattern": "x", "include": "*.rs", "literal": true, "caseSensitive": false}),
+    );
+    assert_eq!(
+        input_of(&translate_with(
+            &opencode,
+            HarnessId::Pi,
+            None,
+            PI_WITH_SEARCH
+        )),
+        &json!({"pattern": "x", "glob": "*.rs", "ignoreCase": true, "literal": true})
+    );
+    assert_eq!(
+        input_of(&translate(&opencode, HarnessId::OpenCode, None)),
+        &json!({"pattern": "x", "include": "*.rs", "caseSensitive": false, "literal": true})
+    );
+}
+
+/// Claude Code offers Grep, Glob and WebSearch: canonical calls reach it there (L3).
+#[test]
+fn search_tools_reach_claude_code() {
+    let grep = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "x", "output_mode": "content", "-n": true}),
+    );
+    assert_eq!(
+        name_of(&translate(&grep, HarnessId::ClaudeCode, None)),
+        "Grep"
+    );
+    assert_eq!(
+        input_of(&translate(&grep, HarnessId::ClaudeCode, None)),
+        &grep.input
+    );
+    let from_pi = call(
+        CanonicalTool::Grep,
+        "grep",
+        json!({"pattern": "x", "context": 2, "limit": 9}),
+    );
+    assert_eq!(
+        input_of(&translate(&from_pi, HarnessId::ClaudeCode, None)),
+        &json!({"pattern": "x", "-C": 2, "head_limit": 9, "output_mode": "content", "-n": true})
+    );
+    let glob = call(
+        CanonicalTool::Glob,
+        "glob",
+        json!({"pattern": "*.rs", "path": "src"}),
+    );
+    assert_eq!(
+        name_of(&translate(&glob, HarnessId::ClaudeCode, None)),
+        "Glob"
+    );
+    let search = call(CanonicalTool::WebSearch, "websearch", json!({"query": "q"}));
+    assert_eq!(
+        name_of(&translate(&search, HarnessId::ClaudeCode, None)),
+        "WebSearch"
+    );
+}
+
+/// L13: OpenCode spells "all occurrences" `replaceAll`; a MultiEdit entry can ask for it too.
+#[test]
+fn every_spelling_of_replace_all_is_honoured() {
+    let opencode = call(
+        CanonicalTool::Edit,
+        "edit",
+        json!({"path": "a", "oldString": "x", "newString": "y", "replaceAll": true}),
+    );
+    assert!(is_text(&translate(&opencode, HarnessId::Pi, None)));
+    assert_eq!(
+        input_of(&translate(&opencode, HarnessId::ClaudeCode, None))["replace_all"],
+        true
+    );
+    let multi = call(
+        CanonicalTool::MultiEdit,
+        "MultiEdit",
+        json!({"file_path": "a", "edits": [{"old_string": "x", "new_string": "y", "replace_all": true}]}),
+    );
+    assert!(is_text(&translate(&multi, HarnessId::Pi, None)));
+}
+
+/// OpenCode spells background `background`; Claude's Bash has `run_in_background`.
+#[test]
+fn a_background_shell_call_keeps_running_in_the_background() {
+    let opencode = call(
+        CanonicalTool::Bash,
+        "shell",
+        json!({"command": "serve", "background": true}),
+    );
+    assert_eq!(
+        input_of(&translate(&opencode, HarnessId::ClaudeCode, None)),
+        &json!({"command": "serve", "run_in_background": true})
+    );
+    assert!(is_text(&translate(
+        &opencode,
+        HarnessId::Pi,
+        Some(Shell::Posix)
+    )));
+    assert!(is_text(&translate(
+        &opencode,
+        HarnessId::Codex,
+        Some(Shell::Posix)
+    )));
+}
+
+/// OpenCode and Pi write `path`; a single Pi edit is an ordinary edit everywhere.
+#[test]
+fn path_spellings_and_single_pi_edits_translate() {
+    let write = call(
+        CanonicalTool::Write,
+        "write",
+        json!({"path": "a", "content": "c"}),
+    );
+    assert_eq!(
+        input_of(&translate(&write, HarnessId::ClaudeCode, None)),
+        &json!({"file_path": "a", "content": "c"})
+    );
+    let one = call(
+        CanonicalTool::Edit,
+        "edit",
+        json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}]}),
+    );
+    assert_eq!(
+        input_of(&translate(&one, HarnessId::ClaudeCode, None)),
+        &json!({"file_path": "a", "old_string": "x", "new_string": "y"})
+    );
+    assert_eq!(
+        input_of(&translate(&one, HarnessId::OpenCode, None)),
+        &json!({"path": "a", "oldString": "x", "newString": "y"})
+    );
+    let two = call(
+        CanonicalTool::Edit,
+        "edit",
+        json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"oldText": "p", "newText": "q"}]}),
+    );
+    assert!(is_text(&translate(&two, HarnessId::ClaudeCode, None)));
+    assert_eq!(input_of(&translate(&two, HarnessId::Pi, None)), &two.input);
+}
+
+/// L5: Pi's `edits` entries need both texts; an empty list is not an edit.
+#[test]
+fn a_multi_edit_pi_cannot_hold_is_text_form() {
+    let missing = call(
+        CanonicalTool::MultiEdit,
+        "MultiEdit",
+        json!({"file_path": "a", "edits": [{"new_string": "y"}]}),
+    );
+    assert!(is_text(&translate(&missing, HarnessId::Pi, None)));
+    let empty = call(
+        CanonicalTool::MultiEdit,
+        "MultiEdit",
+        json!({"file_path": "a", "edits": []}),
+    );
+    assert!(is_text(&translate(&empty, HarnessId::Pi, None)));
 }

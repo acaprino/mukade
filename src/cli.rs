@@ -19,7 +19,6 @@ use crate::hop::{
 use crate::model::{HarnessId, Protocol};
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
-use crate::tools::Shell;
 use crate::wire;
 use crate::writer::WriteOpts;
 use anyhow::{Context, Result};
@@ -49,7 +48,7 @@ options:
   --cwd <dir>              the project the destination files the session under
   --dest-version <v>       the destination's own version stamp
   --dest-protocol <p>      anthropic-messages | openai-responses | openai-chat
-  --dest-shell <s>         bash | powershell — the shell the destination runs commands with
+  --dest-shell <s>         bash | sh | zsh | powershell | pwsh — the destination's shell
   --model-provider <id>    the destination's provider id
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
@@ -398,10 +397,11 @@ impl Flags {
             None => crate::policy::destination_protocol(harness),
         };
         let dest_shell = match self.dest_shell.as_deref() {
-            Some(name) => match name.to_ascii_lowercase().as_str() {
-                "bash" | "sh" | "posix" => Some(Shell::Posix),
-                "powershell" | "pwsh" => Some(Shell::PowerShell),
-                other => anyhow::bail!("unknown --dest-shell {other} (bash, powershell)"),
+            Some(name) => match crate::writer::plan::shell_of(name) {
+                Some(shell) => Some(shell),
+                None => {
+                    anyhow::bail!("unknown --dest-shell {name} (bash, sh, zsh, powershell, pwsh)")
+                }
             },
             None => None,
         };
