@@ -16,8 +16,9 @@
 //! - Codex 0.165 may keep one thread over several files (`history_mode: "paginated"`): a later
 //!   page, named `rollout-<ts>-<thread>_<page>.jsonl`, starts with a `session_meta` whose
 //!   `history_base` says it continues the thread from the first `end_ordinal_exclusive` records
-//!   (`end_byte_offset` bytes) of an earlier file. Codex's own state names that page as the
-//!   thread's rollout; the earlier file's records past the cut are a branch the thread left.
+//!   (`end_byte_offset` bytes) of an earlier file, itself a page when the thread was redone more
+//!   than once; ordinals run on across the files. Codex's own state names the latest page as the
+//!   thread's rollout; each earlier file's records past its cut are a branch the thread left.
 
 use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
@@ -38,16 +39,20 @@ pub struct Codex;
 /// Which records of a paginated thread a read carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Branches {
-    /// What Codex resumes: the part of the base the active page continues from, then the page.
-    /// The base's records past that point are left behind and counted (the default).
+    /// The latest version, what Codex resumes: each earlier file up to the point the next one
+    /// continues from, then the latest page. What the earlier files hold past those points is
+    /// left behind and counted (the default).
     #[default]
     Active,
-    /// Everything: the whole base file, its abandoned turns included, then the page.
+    /// Everything: every file of the thread whole, the first one first, abandoned turns included.
     All,
 }
 
+/// A thread redone more often than this is not followed further.
+const MAX_PAGES: usize = 64;
+
 /// Read one Codex rollout file (`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`).
-/// A page of a paginated thread is read with the part of its base file it continues from.
+/// A page of a paginated thread is read with the part of the earlier files it continues from.
 pub fn read_file(path: &Path) -> Result<Session> {
     read_file_with(path, Branches::Active)
 }
@@ -62,20 +67,13 @@ pub fn read_file_with(path: &Path, branches: Branches) -> Result<Session> {
         super::json::keep_unfinished(&mut session, file.unfinished);
         return Ok(session);
     };
-    let mut prefix = base_prefix(path, &base)?;
-    if branches == Branches::All {
-        let whole = std::fs::read(&prefix.file)
-            .with_context(|| format!("read {}", prefix.file.display()))?;
-        let text = String::from_utf8_lossy(&whole);
-        prefix.rows = super::json::rows_from_lines(&text, &prefix.file.display().to_string())?.0;
-        prefix.bytes = whole;
-        prefix.left.clear();
-    }
+    let prefix = base_prefix(path, &base, branches, &mut vec![path.to_path_buf()])?;
     let mut rows = prefix.rows;
     rows.extend(file.rows);
     let _span = crate::timing::span("build entries");
     let mut session = parse_owned(rows, Some(path))?;
-    // The fingerprint is that of the bytes read: the base's prefix, then the page.
+    // The fingerprint is that of the bytes read, in the order they were read: the earlier files
+    // (their prefixes, or all of them), then the page.
     let mut digest = crate::sha256::Sha256::new();
     digest.update(&prefix.bytes);
     digest.update(&std::fs::read(path).with_context(|| format!("read {}", path.display()))?);
@@ -113,16 +111,33 @@ fn history_base(rows: &[Value]) -> Option<HistoryBase> {
     })
 }
 
-/// The records a page continues from, the bytes they were read from, and the base's records past
-/// the cut that are conversation (the branch the thread left).
+/// What a page continues from, through every earlier page down to the thread's first file: the
+/// records to read before the page's own, the bytes they came from, the conversation records the
+/// earlier files hold past their cuts (the branches the thread left), and how many records the
+/// thread's latest version has before the page (equal to `rows.len()` unless `Branches::All`).
 struct BasePrefix {
-    file: PathBuf,
     rows: Vec<Value>,
     bytes: Vec<u8>,
     left: Vec<Value>,
+    active_len: usize,
 }
 
-fn base_prefix(page: &Path, base: &HistoryBase) -> Result<BasePrefix> {
+/// The base a page continues from: the other rollout of its thread whose first `end_byte` bytes
+/// end with record `end_ordinal - 1`, counting the records of the files before it when it is a
+/// page itself. `chain` holds the files already in the chain, the page first.
+fn base_prefix(
+    page: &Path,
+    base: &HistoryBase,
+    branches: Branches,
+    chain: &mut Vec<PathBuf>,
+) -> Result<BasePrefix> {
+    if chain.len() > MAX_PAGES {
+        anyhow::bail!(
+            "{}: thread {} has more than {MAX_PAGES} pages; not followed further",
+            page.display(),
+            base.thread
+        );
+    }
     let sessions = page
         .ancestors()
         .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))
@@ -130,7 +145,7 @@ fn base_prefix(page: &Path, base: &HistoryBase) -> Result<BasePrefix> {
         .unwrap_or(Path::new("."));
     let candidates: Vec<PathBuf> = rollout_files(sessions)?
         .into_iter()
-        .filter(|file| file != page && rollout_id(file) == base.thread)
+        .filter(|file| !chain.contains(file) && rollout_id(file) == base.thread)
         .collect();
     if candidates.is_empty() {
         anyhow::bail!(
@@ -142,6 +157,8 @@ fn base_prefix(page: &Path, base: &HistoryBase) -> Result<BasePrefix> {
             sessions.display()
         );
     }
+    // Why an earlier page could not be followed, should no candidate fit.
+    let mut earlier_failure: Option<anyhow::Error> = None;
     for candidate in &candidates {
         let bytes =
             std::fs::read(candidate).with_context(|| format!("read {}", candidate.display()))?;
@@ -155,33 +172,58 @@ fn base_prefix(page: &Path, base: &HistoryBase) -> Result<BasePrefix> {
             continue;
         };
         let (head, tail) = text.split_at(base.end_byte);
-        let (rows, _) = super::json::rows_from_lines(head, &candidate.display().to_string())?;
+        let (head_rows, _) = super::json::rows_from_lines(head, &candidate.display().to_string())?;
+        // An earlier page: its own records start where the files before it leave off.
+        let earlier = match history_base(&head_rows) {
+            Some(inner) => {
+                chain.push(candidate.clone());
+                match base_prefix(candidate, &inner, branches, chain) {
+                    Ok(earlier) => Some(earlier),
+                    Err(error) => {
+                        chain.pop();
+                        earlier_failure = Some(error);
+                        continue;
+                    }
+                }
+            }
+            None => None,
+        };
         let ordinal = |row: &Value| row.get("ordinal").and_then(Value::as_u64);
-        let fits = rows.len() as u64 == base.end_ordinal
-            && rows.last().and_then(ordinal) == base.end_ordinal.checked_sub(1);
+        let before = earlier.as_ref().map_or(0, |e| e.active_len);
+        let fits = (before + head_rows.len()) as u64 == base.end_ordinal
+            && head_rows.last().and_then(ordinal) == base.end_ordinal.checked_sub(1);
         if !fits {
+            if earlier.is_some() {
+                chain.pop();
+            }
             continue;
         }
-        if history_base(&rows).is_some() {
-            anyhow::bail!(
-                "{}: its base {} is itself a page of the thread; a chain of pages is not read yet",
-                page.display(),
-                candidate.display()
-            );
-        }
-        let (rest, _) = super::json::rows_from_lines(tail, &candidate.display().to_string())?;
-        let left = rest
-            .into_iter()
-            .filter(|row| !matches!(class_of(row), Class::Meta(_)))
-            .collect();
-        return Ok(BasePrefix {
-            file: candidate.clone(),
-            rows,
-            bytes: prefix.to_vec(),
-            left,
+        let (tail_rows, _) = super::json::rows_from_lines(tail, &candidate.display().to_string())?;
+        let mut out = earlier.unwrap_or(BasePrefix {
+            rows: Vec::new(),
+            bytes: Vec::new(),
+            left: Vec::new(),
+            active_len: 0,
         });
+        out.active_len += head_rows.len();
+        out.rows.extend(head_rows);
+        match branches {
+            Branches::Active => {
+                out.bytes.extend_from_slice(prefix);
+                out.left.extend(
+                    tail_rows
+                        .into_iter()
+                        .filter(|row| !matches!(class_of(row), Class::Meta(_))),
+                );
+            }
+            Branches::All => {
+                out.bytes.extend_from_slice(&bytes);
+                out.rows.extend(tail_rows);
+            }
+        }
+        return Ok(out);
     }
-    anyhow::bail!(
+    let message = format!(
         "{}: its history_base end_byte_offset {} does not end record {} of any other rollout of \
          thread {} (looked at {})",
         page.display(),
@@ -193,7 +235,11 @@ fn base_prefix(page: &Path, base: &HistoryBase) -> Result<BasePrefix> {
             .map(|c| c.display().to_string())
             .collect::<Vec<_>>()
             .join(", ")
-    )
+    );
+    Err(match earlier_failure {
+        Some(error) => error.context(message),
+        None => anyhow::anyhow!(message),
+    })
 }
 
 /// Read records that were already decoded.

@@ -250,7 +250,7 @@ deprecated alias [13].
 | source record | read as | lines |
 |---|---|---|
 | store | `list` walks `sessions/` for `*.jsonl`, one entry per thread at its latest file; `read <id>` matches an id **prefix** of the thread uuid in the file name (none → `NotFound`, several threads → `Ambiguous`; several files of **one** thread → its latest page) | `src/reader/codex.rs` `list`, `read_with`, `rollout_id` |
-| paginated thread | a page with `history_base` is read with the base file's first `end_ordinal_exclusive` records (checked against `end_byte_offset`), then its own records; the base's conversation records past the cut become `Meta::OffBranch` and are counted (`dropped_off_branch`). `--all-branches` (`Branches::All`) reads the base file whole instead, then the page. A missing base, an offset that does not fall at the end of that record, or a base that is itself a page → error with the reason. The fingerprint covers the bytes read (the base's prefix, or all of it, then the page) | `read_file_with`, `base_prefix` |
+| paginated thread | the **latest version** is read: the latest page, preceded by the base file's first `end_ordinal_exclusive` records (checked against `end_byte_offset`). When that base is itself a page (a thread redone more than once), its own base is followed the same way, down to the thread's first file, up to 64 files. Each earlier file's conversation records past its cut become `Meta::OffBranch` and are counted (`dropped_off_branch`). `--all-branches` (`Branches::All`) reads every file of the thread whole instead, the first one first. A missing base or an offset that does not fall at the end of that record → error with the reason. The fingerprint covers the bytes read, in order | `read_file_with`, `base_prefix` |
 | line order | file order, never timestamps; a cut-off last line → `Meta::Unfinished`; a bad line elsewhere fails with `file:line` | `src/reader/json.rs:11-40` |
 | user `message` | `User`, unless its text, after leading whitespace, **starts with** `<environment_context>`/`<skills_instructions>` (→ `Meta::SystemPrompt`) or `<turn_aborted>` (→ `Meta::TurnAborted`); a prompt that only mentions a tag stays the user's words | `:87-104` |
 | `developer`/`system` `message` | `Meta::SystemPrompt` | `:81-88` |
@@ -300,8 +300,10 @@ deprecated alias [13].
   `encrypted_content`, which only OpenAI can read: carried, it would tell the destination nothing.
   It reads as `Meta` and is neither carried nor counted. 223 of them were in the 0.165 thread seen
   [26].
-- **A chain of pages** (a page whose base is itself a page) is refused with its reason; only one
-  page over a base file has been seen [26].
+- **A chain of pages** (a page whose base is itself a page) is read by following each
+  `history_base` back to the thread's first file, as decided with the user on 2026-10-28: the
+  latest version wins. That shape is tested on hand-made files only: of the 982 rollouts scanned
+  on 2026-10-28, one was a page, and its base was a plain file [26] **[U]**.
 - **Resume:** keep `CODEX_HOME` set for the resume process and run it from the session's cwd
   [19 §5][25].
 

@@ -638,3 +638,111 @@ fn every_branch_of_a_paginated_thread_reads_with_branches_all() {
     let active = codex::read_with(THREAD, &roots(&home), codex::Branches::Active).unwrap();
     assert_eq!(texts(&active), ["first", "one", "redo", "two"]);
 }
+
+/// A thread redone twice: base → page 1 → page 2, each page continuing from a prefix of the file
+/// before it, with the thread's ordinals running on across files (as the one page seen does).
+/// The latest version is read: the base's prefix, page 1's prefix, then page 2. What each earlier
+/// file holds past its cut is left behind and counted; `Branches::All` carries every file whole.
+#[test]
+fn a_chain_of_pages_reads_as_its_latest_version() {
+    use mukade::reader::Reader;
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("mukade-tests")
+        .join("codex-paginated")
+        .join(format!("chain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let day = home.join("sessions/2026/10/28");
+    std::fs::create_dir_all(&day).unwrap();
+    let meta = serde_json::json!({"id": THREAD, "session_id": THREAD, "cwd": r"D:\Projects\daodan",
+                                  "history_mode": "paginated"});
+    let page_meta = |ordinal: u64, end: u64, bytes: usize| {
+        let mut m = meta.clone();
+        m["history_base"] = serde_json::json!({"thread_id": THREAD, "end_ordinal_exclusive": end,
+                                               "end_byte_offset": bytes});
+        record(ordinal, "session_meta", m)
+    };
+    // base: ordinals 0-4; page 1 continues from its first 3 records.
+    let base_kept = record(0, "session_meta", meta.clone())
+        + &say(1, "user", "first")
+        + &say(2, "assistant", "one");
+    let base_text =
+        base_kept.clone() + &say(3, "user", "abandoned") + &say(4, "assistant", "abandoned reply");
+    // page 1: ordinals 3-7; page 2 continues from the thread's first 6 records (3 of page 1's).
+    let page1_kept =
+        page_meta(3, 3, base_kept.len()) + &say(4, "user", "redo") + &say(5, "assistant", "two");
+    let page1_text = page1_kept.clone()
+        + &say(6, "user", "abandoned again")
+        + &say(7, "assistant", "reply again");
+    // page 2: ordinals 6-8.
+    let page2_text = page_meta(6, 6, page1_kept.len())
+        + &say(7, "user", "again")
+        + &say(8, "assistant", "three");
+    let base = day.join(format!("rollout-2026-10-28T10-38-11-{THREAD}.jsonl"));
+    let page1 = day.join(format!("rollout-2026-10-28T13-29-27-{THREAD}_{PAGE}.jsonl"));
+    let page2 = day.join(format!(
+        "rollout-2026-10-28T15-20-00-{THREAD}_01a1830a-0000-7000-8000-000000000002.jsonl"
+    ));
+    std::fs::write(&base, &base_text).unwrap();
+    std::fs::write(&page1, &page1_text).unwrap();
+    std::fs::write(&page2, &page2_text).unwrap();
+
+    let s = codex::Codex
+        .read(THREAD, &roots(&home))
+        .expect("the thread reads");
+    assert_eq!(texts(&s), ["first", "one", "redo", "two", "again", "three"]);
+    let left: Vec<String> = s
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                Kind::Meta {
+                    kind: MetaKind::OffBranch
+                }
+            )
+        })
+        .map(|e| e.raw[0].to_string())
+        .collect();
+    assert_eq!(left.len(), 4, "{left:?}");
+    let read_bytes = [
+        base_kept.as_bytes(),
+        page1_kept.as_bytes(),
+        page2_text.as_bytes(),
+    ]
+    .concat();
+    assert_eq!(
+        s.meta.source_sha256.as_deref(),
+        Some(mukade::sha256::sha256_hex(&read_bytes).as_str())
+    );
+
+    let all = codex::read_with(THREAD, &roots(&home), codex::Branches::All).unwrap();
+    assert_eq!(
+        texts(&all),
+        [
+            "first",
+            "one",
+            "abandoned",
+            "abandoned reply",
+            "redo",
+            "two",
+            "abandoned again",
+            "reply again",
+            "again",
+            "three"
+        ]
+    );
+    let every_byte = [
+        base_text.as_bytes(),
+        page1_text.as_bytes(),
+        page2_text.as_bytes(),
+    ]
+    .concat();
+    assert_eq!(
+        all.meta.source_sha256.as_deref(),
+        Some(mukade::sha256::sha256_hex(&every_byte).as_str())
+    );
+
+    let listed = codex::Codex.list(&roots(&home)).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(std::path::Path::new(&listed[0].path), page2.as_path());
+}

@@ -148,8 +148,10 @@ history in the destination. They stay in the source untouched, and the manifest 
 entries reach the destination the way Pi shows them to its model.
 
 Codex Desktop 0.165 keeps such a thread over two files: the earlier one, and a page that continues
-from part of it, which is what Codex resumes. mukade reads the thread the same way: the part the
-page continues from, then the page; the earlier file's later turns are left behind and counted. To
+from part of it, which is what Codex resumes (redone again, a thread gets a further page that
+continues from the previous one). mukade reads the latest version, the way Codex resumes it: each
+earlier file up to the point the next one continues from, then the latest page; what the earlier
+files hold past those points is left behind and counted. To
 carry **everything**, the abandoned turns included (in file order, before the active ones), add
 `--all-branches` to `dump` or `hop`:
 

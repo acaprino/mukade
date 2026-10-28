@@ -269,8 +269,9 @@ were redone is kept over two files (`history_mode: "paginated"`): a page
 `rollout-<ts>-<thread>_<page>.jsonl` starts with a `session_meta` carrying
 `history_base: {thread_id, end_ordinal_exclusive, end_byte_offset}`, and continues the thread from
 that prefix of the earlier file; `state_5.sqlite` `threads.rollout_path` names the page. The reader
-reads the prefix, then the page; the earlier file's later records are off-branch (§1.3, counted),
-or carried with `Branches::All` (`--all-branches`). Compaction summaries are encrypted
+reads the latest version: the prefix, then the page, following an earlier page's own base the same
+way; each earlier file's later records are off-branch (§1.3, counted), or carried with
+`Branches::All` (`--all-branches`). Compaction summaries are encrypted
 (`compacted.message` empty; an item `{type:"compaction", encrypted_content}` in
 `replacement_history`): none is written as an empty message (`dropped_unreadable_summaries`), and
 `Portable` from such a record is refused. Subagent messages to the root agent (`agent_message`)
@@ -659,8 +660,9 @@ library must pass all criteria above.
 
 - [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).
-- Codex 0.165: a chain of pages (a page whose base is itself a page) is refused, not read; only
-  one page over a base file has been seen.
+- [U] Codex 0.165: a chain of pages (a page whose base is itself a page) is read by following
+  each `history_base` back to the first file, the latest version winning; tested on hand-made files
+  only, since none has been seen on disk (one page in 982 rollouts, its base a plain file).
 - Not implemented: L10, reading a Codex Desktop code-mode `exec` script as the single
   `tools.exec_command` / `tools.apply_patch` call it wraps. An `exec` call is read as one opaque
   call and travels in text form in every direction; an `apply_patch` call reads as an edit but
