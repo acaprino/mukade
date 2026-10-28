@@ -1,0 +1,24 @@
+[package]
+name = "mukade"
+description = "Move a coding-agent session between Claude Code, Codex CLI, OpenCode and Pi, as one of the destination's own."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/acaprino/mukade"
+readme = "README.md"
+keywords = ["session", "claude-code", "codex", "opencode", "interchange"]
+categories = ["development-tools"]
+
+# The dependency list is closed on purpose: adding one is a decision, not a side effect. It is
+# also why the manifest's content fingerprint is a SHA-256 written by hand in `src/sha256.rs`
+# rather than a hashing crate.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+uuid = { version = "1", features = ["v4", "v7"] }
+
+[[bin]]
+name = "mukade"
+path = "src/bin/mukade.rs"

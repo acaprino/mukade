@@ -1,0 +1,193 @@
+//! The command line, end to end: the real binary over the fixtures, on a scratch store.
+//!
+//! Everything runs with the four store variables pointing inside
+//! scratch directory under the system temporary folder, so no real store is
+//! in reach.
+
+mod support;
+
+use serde_json::Value;
+use mukade::model::HarnessId;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const BIN: &str = env!("CARGO_BIN_EXE_mukade");
+
+/// A process with every harness root pointed at a scratch home.
+fn cli(scratch: &Path, args: &[&str]) -> (bool, String, String) {
+    let home = scratch.join("home");
+    let output = Command::new(BIN)
+        .args(args)
+        .env("CLAUDE_CONFIG_DIR", &home)
+        .env("CODEX_HOME", &home)
+        .env("PI_CODING_AGENT_DIR", &home)
+        .env("OPENCODE_DB", home.join("opencode.db"))
+        .output()
+        .expect("the binary must run");
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// Put a harness's fixture where that harness's reader looks for its sessions.
+fn stage_fixture(harness: HarnessId, scratch: &Path) -> String {
+    let home = scratch.join("home");
+    match harness {
+        HarnessId::ClaudeCode => {
+            let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
+            let dir = home.join("projects").join("claude-project");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("c45db7bc-542c-4201-89de-b590c6fdb797.jsonl"), file).unwrap();
+            "c45db7bc".to_string()
+        }
+        HarnessId::Pi => {
+            let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
+            let dir = home.join("sessions").join("--pi-project--");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"), file)
+                .unwrap();
+            "01a17e17".to_string()
+        }
+        HarnessId::Codex => {
+            let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
+            let dir = home.join("sessions").join("2026").join("10").join("27");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl"),
+                file,
+            )
+            .unwrap();
+            "01a17e07".to_string()
+        }
+        HarnessId::OpenCode => "ses_e82023514ffe02y4T8OoUu99VZ".to_string(),
+    }
+}
+
+fn dump(harness: HarnessId, id: &str) -> (PathBuf, Value) {
+    let scratch = support::scratch(harness, &format!("cli-dump-{}", harness.as_str()));
+    let _ = stage_fixture(harness, &scratch);
+    let (ok, stdout, stderr) = cli(&scratch, &["dump", harness.as_str(), id]);
+    assert!(ok, "dump failed: {stderr}");
+    let doc: Value = serde_json::from_str(&stdout).expect("dump prints one JSON document");
+    (scratch, doc)
+}
+
+fn write_document(dest: HarnessId, doc: &Value, tag: &str, extra: &[&str]) -> (PathBuf, Value) {
+    let scratch = support::scratch(dest, tag);
+    let file = scratch.join("document.json");
+    std::fs::write(&file, serde_json::to_string(doc).unwrap()).unwrap();
+    let mut args = vec!["write", dest.as_str(), file.to_str().unwrap()];
+    args.extend_from_slice(extra);
+    let (ok, stdout, stderr) = cli(&scratch, &args);
+    assert!(ok, "write failed: {stderr}");
+    let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).expect("write prints one JSON line");
+    (scratch, printed)
+}
+
+#[test]
+fn dump_prints_the_conversation_as_one_message_per_step() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    assert_eq!(doc["meta"]["harness"], "claude_code");
+    assert_eq!(doc["meta"]["harness_version"], "2.1.311");
+    let messages = doc["messages"].as_array().expect("messages");
+    let first_assistant = messages
+        .iter()
+        .find(|m| m["role"] == "assistant")
+        .expect("an assistant message");
+    let kinds: Vec<&str> = first_assistant["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["thinking", "text", "tool_use", "tool_use"], "the two parallel calls stay together");
+    assert_eq!(first_assistant["content"][0]["opaque"]["signature"], "h27-mock-signature");
+
+    let first_results = messages
+        .iter()
+        .find(|m| m["content"][0]["type"] == "tool_result")
+        .expect("a results message");
+    assert_eq!(first_results["content"].as_array().unwrap().len(), 2);
+
+    // L4: the source's own compaction summary travels as a user message.
+    let summaries: Vec<&str> = messages
+        .iter()
+        .filter_map(|m| m["content"][0]["text"].as_str())
+        .filter(|t| t.contains("H27-SUMMARY"))
+        .collect();
+    assert!(!summaries.is_empty(), "the source summary is in the document");
+    assert!(messages.iter().any(|m| m["compaction"].is_object()), "and it is marked as a compaction");
+}
+
+#[test]
+fn list_reports_the_session_it_can_read() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-list");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "claude_code"]);
+    assert!(ok, "{stderr}");
+    let line: Value = serde_json::from_str(stdout.lines().next().expect("one line")).unwrap();
+    assert_eq!(line["id"], "c45db7bc-542c-4201-89de-b590c6fdb797");
+    assert!(line["location"].as_str().unwrap().ends_with(".jsonl"));
+}
+
+/// The pair the bench uses: `dump` a source session, `write` it into another harness, read it back.
+#[test]
+fn dump_then_write_produces_a_session_the_destination_reader_understands() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let (scratch, printed) = write_document(
+        HarnessId::Pi,
+        &doc,
+        "cli-write-pi",
+        &["--dest-version", "1.2.0", "--dest-protocol", "anthropic-messages"],
+    );
+    let location = printed["location"].as_str().expect("a location");
+    assert!(location.contains("mukade-tests"), "{location}");
+    assert_eq!(printed["resume"][0], "pi");
+    let _ = scratch;
+
+    let back = mukade::reader::pi::read_file(Path::new(location)).expect("read back");
+    assert_eq!(back.meta.id, printed["id"].as_str().unwrap());
+    let texts: Vec<String> = back
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            mukade::model::Kind::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t.starts_with("H27-TOOLS read")), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("H27-SUMMARY")), "the summary survived the hop");
+    assert!(back.interrupted_last_turn(), "the killed last turn is still a user turn with no reply");
+}
+
+#[test]
+fn write_into_the_same_harness_round_trips_the_conversation() {
+    let (_, doc) = dump(HarnessId::Codex, "01a17e07");
+    let (_, printed) = write_document(
+        HarnessId::Codex,
+        &doc,
+        "cli-write-codex",
+        &["--dest-version", "0.164.0", "--dest-shell", "powershell", "--model-provider", "h27"],
+    );
+    // The dump and the write agree on the conversation: read the written rollout back.
+    let back = mukade::reader::codex::read_file(Path::new(printed["location"].as_str().unwrap()))
+        .expect("read back");
+    let source = mukade::reader::codex::read_file(&support::source_path(HarnessId::Codex)).unwrap();
+    assert_eq!(support::roundtrip_script(&back), support::roundtrip_script(&source));
+    assert_eq!(back.meta.cwd, source.meta.cwd, "the project travels with the session");
+}
+
+#[test]
+fn bad_arguments_fail_loudly() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-bad");
+    let (ok, _, stderr) = cli(&scratch, &["dump", "nonesuch", "x"]);
+    assert!(!ok);
+    assert!(stderr.contains("unknown harness"), "{stderr}");
+    let (ok, _, stderr) = cli(&scratch, &["fly", "pi"]);
+    assert!(!ok);
+    assert!(stderr.contains("unknown command"), "{stderr}");
+    let (ok, _, stderr) = cli(&scratch, &["dump", "claude_code", "c45db7bc"]);
+    assert!(!ok, "nothing is staged in this home");
+    assert!(stderr.contains("no Claude Code session"), "{stderr}");
+}
