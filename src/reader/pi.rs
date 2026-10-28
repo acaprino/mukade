@@ -46,10 +46,7 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// Pi's own text around a branch summary when it shows one to the model
 /// (`BRANCH_SUMMARY_PREFIX` / `BRANCH_SUMMARY_SUFFIX` in pi-coding-agent 1.2.0).
 const BRANCH_SUMMARY_PREFIX: &str =
-    "The following is a summary of a branch that this conversation came back from:
-
-<summary>
-";
+    "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
 const BRANCH_SUMMARY_SUFFIX: &str = "</summary>";
 
 /// Which records belong to the path Pi resumes. Navigating back in Pi's tree starts a new branch

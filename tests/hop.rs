@@ -351,10 +351,8 @@ fn a_resume_returns_once_the_harness_exits_even_if_its_child_holds_the_output() 
     let harness = support::launcher(
         &scratch,
         "harness",
-        "echo answered
-start /b ping -n 6 127.0.0.1",
-        "echo answered
-sleep 5 &",
+        "echo answered\r\nstart /b ping -n 6 127.0.0.1",
+        "echo answered\nsleep 5 &",
     );
     let started = std::time::Instant::now();
     let out = hop::run_resume(
