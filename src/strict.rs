@@ -118,6 +118,7 @@ mod tests {
             name: "read".into(),
             source_name: "Read".into(),
             input: json!({}),
+            source_input: json!({}),
         }
     }
 

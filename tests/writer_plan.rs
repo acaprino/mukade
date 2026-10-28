@@ -432,3 +432,84 @@ fn an_unfinished_last_line_is_counted() {
         "{losses:?}"
     );
 }
+
+/// A step's results may come in more than one group (a document with one result per message, an
+/// internal row between them): they answer the same step and travel as one.
+#[test]
+fn results_split_over_two_groups_answer_the_same_step() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-split-results");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("a"), read_call("b")]),
+        results("e2", &["a"]),
+        results("e3", &["b"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(plan.blocks.len(), 2, "{:?}", plan.blocks);
+    let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert_eq!(results.len(), 2);
+    assert_eq!(plan.counts.dropped_orphan_results, 0);
+    assert_eq!(plan.counts.unanswered_calls, 0);
+}
+
+/// The counts say what was written: a call moved to text because nothing answered it is not
+/// counted as translated, and the source's own record of it is what the text shows.
+#[test]
+fn an_unanswered_call_is_counted_once_and_shown_as_the_source_made_it() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-unanswered-label");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let s = session(vec![step("e1", vec![read_call("c1")])]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.tools_translated, 0);
+    assert_eq!(plan.counts.unanswered_calls, 1);
+    let Some(PlannedBlock::Step(step)) = plan.blocks.first() else {
+        panic!("{:?}", plan.blocks)
+    };
+    let text = step.text.join("\n");
+    assert!(
+        text.contains("Read") && text.contains("file_path"),
+        "{text}"
+    );
+    assert!(!text.contains("not available in"), "{text}");
+}
+
+/// A source message stays a source message in the count, whatever the plan does with it.
+#[test]
+fn a_group_of_orphan_results_still_counts_as_a_source_message() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-orphan-count");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let s = session(vec![step("e1", vec![]), results("e2", &["ghost"])]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.messages_in, 2);
+    assert_eq!(plan.counts.dropped_orphan_results, 1);
+}
+
+/// Reasoning kept as text comes before the answer it led to, as it did in the source.
+#[test]
+fn reasoning_as_text_comes_before_the_answer() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-reasoning-order");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.reasoning = mukade::policy::ReasoningPolicy::AsText;
+    let s = session(vec![Entry {
+        id: "e1".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![mukade::model::Reasoning {
+                text: "THINKING".into(),
+                opaque: None,
+            }],
+            text: vec!["ANSWER".into()],
+            calls: vec![],
+            end: StepEnd::Completed,
+        },
+        raw: vec![],
+    }]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    let Some(PlannedBlock::Step(step)) = plan.blocks.first() else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert!(step.text[0].contains("THINKING"), "{:?}", step.text);
+    assert_eq!(step.text[1], "ANSWER");
+}

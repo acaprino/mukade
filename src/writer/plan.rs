@@ -23,6 +23,8 @@ pub struct PlannedCall {
     /// still say where it came from.
     pub source_name: String,
     pub input: Value,
+    /// The input as the source recorded it, for a call that ends up in text form after all.
+    pub source_input: Value,
 }
 
 /// One result, either native (its call was translated) or text (its call travelled as text).
@@ -253,6 +255,8 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     // of them exist at all (a result whose call is nowhere is an orphan and is dropped).
     let mut last_step_native: Vec<String> = Vec::new();
     let mut last_step_calls: Vec<String> = Vec::new();
+    // The calls of that step already answered, across its result groups.
+    let mut step_answered: Vec<String> = Vec::new();
     let source = session.meta.harness;
     let mut ids = CallIds::new(dest_protocol.as_ref() == Some(&Protocol::AnthropicMessages));
 
@@ -264,6 +268,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 // must not be matched against calls that belong to an earlier step.
                 last_step_native.clear();
                 last_step_calls.clear();
+                step_answered.clear();
                 blocks.push(PlannedBlock::User {
                     text: text.clone(),
                     attachments: carry_attachments(attachments, source, dest, &mut counts),
@@ -283,6 +288,8 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     calls: Vec::new(),
                     end: end.clone(),
                 };
+                // Reasoning kept as text goes before the answer it led to.
+                let mut lead = 0;
                 for r in reasoning {
                     match plan_reasoning(r, dest_protocol.as_ref(), opts.reasoning) {
                         // A4: the payload must have a place in the destination's own format, or
@@ -297,7 +304,8 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         }
                         ReasoningPlan::Text(t) => {
                             planned.reasoning.push(ReasoningPlan::Text(t.clone()));
-                            planned.text.push(t);
+                            planned.text.insert(lead, t);
+                            lead += 1;
                         }
                         ReasoningPlan::Native(_) | ReasoningPlan::Drop => {
                             counts.reasoning_dropped += 1;
@@ -307,6 +315,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 }
                 last_step_calls.clear();
                 last_step_native.clear();
+                step_answered.clear();
                 for call in calls {
                     last_step_calls.push(call.id.clone());
                     match tools::translate_with(call, dest, opts.dest_shell, offered) {
@@ -318,6 +327,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                                 name: name.to_string(),
                                 source_name: call.source_name.clone(),
                                 input,
+                                source_input: call.input.clone(),
                             });
                         }
                         Translation::Text { .. } => {
@@ -352,14 +362,13 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
             }
             Kind::Results { results } => {
                 let mut planned = Vec::new();
-                let mut answered: Vec<&str> = Vec::new();
                 for result in results {
                     // A3: the first answer to a call is the one that travels.
-                    if answered.contains(&result.call_id.as_str()) {
+                    if step_answered.contains(&result.call_id) {
                         counts.dropped_duplicate_results += 1;
                         continue;
                     }
-                    answered.push(&result.call_id);
+                    step_answered.push(result.call_id.clone());
                     if last_step_native.contains(&result.call_id) {
                         if matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex)
                             && let ResultContent::Blocks(blocks) = &result.content
@@ -390,19 +399,31 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     }
                 }
                 if planned.is_empty() {
-                    counts.messages_in -= 1;
                     continue;
                 }
+                // One step's results may come in several groups (a document with one result per
+                // message, an internal row between them): they answer the same step, as one.
+                let results = match blocks.last_mut() {
+                    Some(PlannedBlock::Results { results }) => results,
+                    _ => {
+                        blocks.push(PlannedBlock::Results {
+                            results: Vec::new(),
+                        });
+                        let Some(PlannedBlock::Results { results }) = blocks.last_mut() else {
+                            unreachable!("just pushed")
+                        };
+                        results
+                    }
+                };
+                results.extend(planned);
                 // §6.2 [V]: text between tool results ends the tool flow for Pi, which then answers
                 // the later calls itself and is refused; the native results go first.
-                planned.sort_by_key(|result| matches!(result, PlannedResult::Text(_)));
-                last_step_native.clear();
-                last_step_calls.clear();
-                blocks.push(PlannedBlock::Results { results: planned });
+                results.sort_by_key(|result| matches!(result, PlannedResult::Text(_)));
             }
             Kind::Compaction { summary, .. } => {
                 last_step_native.clear();
                 last_step_calls.clear();
+                step_answered.clear();
                 blocks.push(PlannedBlock::Compaction {
                     summary: summary.clone(),
                 });
@@ -413,7 +434,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
         }
     }
 
-    move_unanswered_calls_to_text(&mut blocks, &mut counts, dest);
+    move_unanswered_calls_to_text(&mut blocks, &mut counts);
     drop_empty_steps(&mut blocks, &mut counts);
     counts.messages_out = blocks.len();
     Plan { blocks, counts }
@@ -422,11 +443,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
 /// §7: every `tool_use` must be answered in the next message. A call the source never answered is
 /// not written as a tool call — the provider would refuse the whole request — but it is not lost
 /// either: it travels in text form, with its call id, and the plan counts it.
-fn move_unanswered_calls_to_text(
-    blocks: &mut [PlannedBlock],
-    counts: &mut Counts,
-    dest: HarnessId,
-) {
+fn move_unanswered_calls_to_text(blocks: &mut [PlannedBlock], counts: &mut Counts) {
     for i in 0..blocks.len() {
         let unanswered: Vec<usize> = match &blocks[i] {
             PlannedBlock::Step(step) => {
@@ -460,9 +477,10 @@ fn move_unanswered_calls_to_text(
                     id: call.id,
                     source_name: call.source_name,
                     canonical: None,
-                    input: call.input,
+                    input: call.source_input,
                 };
-                texts.push(tools::text_form_call(&as_text, dest));
+                texts.push(tools::text_form_unanswered(&as_text));
+                counts.tools_translated -= 1;
             }
             texts.reverse();
             counts.unanswered_calls += texts.len();

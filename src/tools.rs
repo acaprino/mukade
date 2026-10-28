@@ -937,11 +937,19 @@ pub fn uses_only_known_keys(call: &ToolCall, allowed: &[&str]) -> bool {
 
 /// The assistant-text form of a call that has no equivalent (spec §1 policy 4).
 pub fn text_form_call(call: &ToolCall, dest: HarnessId) -> String {
+    text_form(call, &format!("not available in {}", dest.as_str()))
+}
+
+/// The text form of a call the source never answered: the destination may offer the tool, but a
+/// call without its result would be refused (§7, L7).
+pub fn text_form_unanswered(call: &ToolCall) -> String {
+    text_form(call, "no result in the source")
+}
+
+fn text_form(call: &ToolCall, note: &str) -> String {
     let mut out = format!(
-        "[tool call · {} · id {} · not available in {}]\n",
-        call.source_name,
-        call.id,
-        dest.as_str()
+        "[tool call · {} · id {} · {note}]\n",
+        call.source_name, call.id
     );
     match &call.input {
         Value::Object(map) if !map.is_empty() => {
