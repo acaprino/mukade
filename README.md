@@ -120,21 +120,22 @@ through a Windows `.cmd` launcher. A resume prompt that starts with `-`, or one 
 changed (the destination refused the write, or the plan would be refused by a provider), 5 failed and
 recovery needed (the source could not be read, or the resume failed after the write).
 
-## Portable use and speed
+## One executable, nothing to install, and speed
 
-Nothing has to be installed. `scripts/package-portable.ps1` (or `.sh`) builds a folder holding
-`mukade.exe` and an empty `mukade.portable` file; run it from anywhere, a USB stick included. The
-Windows build links the C runtime in, so it needs no redistributable.
+mukade is a single command-line executable: `cargo build --release`, then copy
+`target/release/mukade.exe` anywhere (a USB stick included) and run it. The Windows build links the
+C runtime in, so it needs no redistributable. There is no installer, no configuration file and no
+mode to switch on.
 
-mukade leaves no files scattered about the machine. With `mukade.portable` (or a `mukade-data`
-folder) beside the executable, or `MUKADE_PORTABLE=1`, everything it keeps for itself goes to
-`mukade-data/` there: a small cache of the versions and OpenCode project ids it learned from harness
-binaries (`cache/`), and the temporary document an OpenCode import needs (`tmp/`, removed when the
-import ends, a killed run's leftovers swept an hour later). Outside portable mode there is no cache
-unless `MUKADE_CACHE_DIR` names a folder, and that temporary file is in the system's temporary folder
-and removed as well. Nothing goes to the user profile, the application-data folders or the registry.
-An automated test runs the real binary with all of those pointed at an empty sandbox and asserts it
-stays empty.
+It generates the files it needs in the folder where the executable is, and nowhere else: a
+`mukade-data` folder, made the first time something is written to it, holding a small cache of the
+versions and OpenCode project ids it learned from harness binaries (`cache/`) and the temporary
+document an OpenCode import needs (`tmp/`, removed when the import ends; a killed run's leftovers
+are swept an hour later). Nothing goes to the user profile, the application-data folders, the
+registry or the system's temporary folder; where the folder cannot be made (an executable in a
+read-only place) the cache is simply not kept and an OpenCode import says why it cannot run. Delete
+the executable's folder and nothing is left. An automated test runs the real binary with all of
+those places pointed at an empty sandbox and asserts it stays empty.
 
 A hop is quick: 30–35 ms for a 1 MB session, 185–240 ms for 10 MB, 440–630 ms for 30 MB (it was
 83, 556 and 1657 ms). The harnesses'

@@ -1,7 +1,8 @@
-//! Portable mode, end to end: the real binary, copied into a folder of its own, with every place a
-//! program might leave files (the temporary folder, the home folder, the application-data folders)
-//! pointed at an empty sandbox. Whatever mukade does, the sandbox must stay empty, and everything
-//! mukade keeps must be in `mukade-data` beside the executable.
+//! mukade is portable by construction, end to end: the real binary, copied alone into a folder,
+//! with every place a program might leave files (the temporary folder, the home folder, the
+//! application-data folders) pointed at an empty sandbox. Whatever mukade does, the sandbox must
+//! stay empty, and everything mukade keeps must be in `mukade-data` beside the executable. There
+//! is nothing to switch on: the folder holds the executable and nothing else.
 
 mod support;
 
@@ -22,7 +23,7 @@ struct Bench {
 }
 
 impl Bench {
-    fn new(tag: &str, portable: bool) -> Bench {
+    fn new(tag: &str) -> Bench {
         let scratch = support::scratch(HarnessId::ClaudeCode, tag);
         let bundle = scratch.join("bundle");
         let sandbox = scratch.join("sandbox");
@@ -36,9 +37,6 @@ impl Bench {
             "mukade"
         });
         std::fs::copy(BIN, &exe).unwrap();
-        if portable {
-            std::fs::write(bundle.join("mukade.portable"), "").unwrap();
-        }
         Bench {
             bundle,
             sandbox,
@@ -77,8 +75,6 @@ impl Bench {
             .env("XDG_DATA_HOME", place("xdg-data"))
             .env("XDG_CONFIG_HOME", place("xdg-config"))
             .env("CLAUDE_CONFIG_DIR", &self.store)
-            .env_remove("MUKADE_CACHE_DIR")
-            .env_remove("MUKADE_PORTABLE")
             .env_remove("OPENCODE_DB");
         let output = command.output().expect("mukade runs");
         (
@@ -195,8 +191,8 @@ fn hop_to_opencode(bench: &Bench, opencode: &Path) -> (Option<i32>, String, Stri
 }
 
 #[test]
-fn a_portable_bundle_keeps_every_file_it_makes_beside_its_executable() {
-    let bench = Bench::new("portable-footprint", true);
+fn mukade_keeps_every_file_it_makes_beside_its_executable() {
+    let bench = Bench::new("footprint");
     let count = bench.scratch.join("claude-runs.txt");
     let claude = claude_stand_in(&bench.scratch.join("bin"), &count);
 
@@ -242,7 +238,7 @@ fn a_portable_bundle_keeps_every_file_it_makes_beside_its_executable() {
         Vec::<PathBuf>::new(),
         "nothing reached the temporary folder, the home folder or the application-data folders"
     );
-    // The only things beside the executable that mukade made are in mukade-data.
+    // The only thing beside the executable that mukade made is the folder `mukade-data`.
     let mut made: Vec<String> = std::fs::read_dir(&bench.bundle)
         .unwrap()
         .flatten()
@@ -255,19 +251,18 @@ fn a_portable_bundle_keeps_every_file_it_makes_beside_its_executable() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    assert_eq!(
-        made,
-        [
-            "mukade-data".to_string(),
-            exe_name,
-            "mukade.portable".to_string()
-        ]
-    );
+    assert_eq!(made, ["mukade-data".to_string(), exe_name]);
 }
 
+/// An executable somewhere it cannot make its folder (a read-only install; staged here with a
+/// plain file where `mukade-data` should be): what needs no file still works and keeps no cache,
+/// and what needs one (the OpenCode import document) fails with a reason instead of writing to the
+/// system's temporary folder. Nothing reaches the sandbox either way.
 #[test]
-fn without_portable_mode_nothing_is_kept_and_the_temporary_file_is_removed() {
-    let bench = Bench::new("plain-footprint", false);
+fn an_executable_that_cannot_make_its_folder_fails_where_it_needs_it_and_leaves_nothing() {
+    let bench = Bench::new("blocked");
+    let data = bench.bundle.join("mukade-data");
+    std::fs::write(&data, "a file, not a folder").unwrap();
     let count = bench.scratch.join("claude-runs.txt");
     let claude = claude_stand_in(&bench.scratch.join("bin"), &count);
 
@@ -278,61 +273,18 @@ fn without_portable_mode_nothing_is_kept_and_the_temporary_file_is_removed() {
     assert_eq!(
         runs(&count),
         2,
-        "with no cache folder, the binary is asked each time"
+        "with nowhere to keep a cache, the binary is asked each time"
     );
 
     let seen = bench.scratch.join("imported.txt");
     let opencode = opencode_stand_in(&bench.scratch.join("bin"), &seen);
     let (code, _, stderr) = hop_to_opencode(&bench, &opencode);
-    assert_eq!(code, Some(0), "{stderr}");
-
+    assert_eq!(code, Some(4), "nothing was written: {stderr}");
     assert!(
-        !bench.bundle.join("mukade-data").exists(),
-        "nothing is created beside the executable"
+        stderr.contains("mukade-data"),
+        "the reason names the folder: {stderr}"
     );
-    let imported = imported_from(&seen);
-    assert_eq!(
-        imported.parent(),
-        Some(bench.sandbox.join("temp").as_path()),
-        "the document was made in the system's temporary folder"
-    );
-    assert!(!imported.exists(), "and removed");
-    // The import document was made in the (sandboxed) system temporary folder, and is gone.
+    assert!(!seen.exists(), "opencode was never asked to import");
     assert_eq!(bench.sandbox_files(), Vec::<PathBuf>::new());
-}
-
-/// Asking for a cache folder keeps one, wherever it is, and only there.
-#[test]
-fn a_named_cache_folder_is_the_only_place_a_cache_goes() {
-    let bench = Bench::new("named-cache", false);
-    let count = bench.scratch.join("claude-runs.txt");
-    let claude = claude_stand_in(&bench.scratch.join("bin"), &count);
-    let cache = bench.scratch.join("my-cache");
-    let cwd = bench.scratch.join("work");
-    std::fs::create_dir_all(&cwd).unwrap();
-    let hop = || {
-        let mut command = Command::new(bench.exe());
-        command
-            .args([
-                "hop",
-                "claude_code",
-                "x",
-                "claude_code",
-                "--from-file",
-                &fixture(),
-                "--cwd",
-                cwd.to_str().unwrap(),
-                "--claude-exe",
-                claude.to_str().unwrap(),
-            ])
-            .env("CLAUDE_CONFIG_DIR", &bench.store)
-            .env("MUKADE_CACHE_DIR", &cache)
-            .env_remove("MUKADE_PORTABLE");
-        command.output().unwrap()
-    };
-    assert!(hop().status.success());
-    assert!(hop().status.success());
-    assert_eq!(runs(&count), 1);
-    assert!(cache.join("probes.json").is_file());
-    assert!(!bench.bundle.join("mukade-data").exists());
+    assert!(data.is_file(), "what was there is untouched");
 }

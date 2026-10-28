@@ -148,15 +148,16 @@ session was written; the error carries its receipt and manifest).
 4. **Order is the native order**, never timestamps (OpenCode `seq`, Codex `ordinal`, Claude
    and Pi parent links).
 5. **Every loss is written into the manifest** (§6.3); none is silent.
-6. **No stray files.** mukade's own files are the session it writes (a `.mukade-*.tmp` beside it,
-   renamed into place), what `--output` / `--manifest` name, and, only when portable mode is on
-   (`mukade.portable` or a `mukade-data` folder beside the executable, or `MUKADE_PORTABLE=1`) or
-   `MUKADE_CACHE_DIR` names a folder, a probe cache in `mukade-data/cache/`. The document OpenCode's
-   `session import` needs as a file is made in `mukade-data/tmp/` (else the system's temporary
-   folder) with mode 0600 and removed when the import ends, on failure too; a killed run's leftovers
-   older than an hour are swept by the next run. Nothing goes to the user profile, the
-   application-data folders or the registry [V: `tests/portable.rs` runs the real binary with every
-   such location pointed at an empty sandbox and asserts it stays empty].
+6. **No stray files; one executable.** mukade is a single executable with no mode and no setting.
+   Its own files are the session it writes (a `.mukade-*.tmp` beside it, renamed into place), what
+   `--output` / `--manifest` name, and one folder beside the executable, `mukade-data`: a probe
+   cache in `cache/` and, for OpenCode, the document `session import` needs as a file in `tmp/`
+   (mode 0600, removed when the import ends, on failure too; a killed run's leftovers older than an
+   hour are swept by the next run). Where that folder cannot be made there is no cache and an
+   OpenCode import is refused with a reason; no other place is used. Nothing goes to the user
+   profile, the application-data folders, the registry or the system's temporary folder [V:
+   `tests/portable.rs` runs the real binary alone in a folder with every such location pointed at an
+   empty sandbox and asserts it stays empty].
 
 ## 2. The four harnesses (verified facts the library depends on)
 

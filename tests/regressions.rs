@@ -422,13 +422,13 @@ fn opencode_import_cleans_its_document_and_uses_the_requested_root() {
             format!("OPENCODE_DB={}", root.join("custom.db").to_string_lossy()),
             "{tag}"
         );
-        // The import document lives in mukade's own temporary folder (portable mode's
-        // `mukade-data/tmp`, else the system's), not in the OpenCode store, and is gone.
+        // The import document lives in mukade's own temporary folder (`mukade-data/tmp` beside
+        // the executable), not in the OpenCode store, and is gone.
         let imported = std::fs::read_to_string(format!("{}.file", capture.display())).unwrap();
         let imported = std::path::PathBuf::from(imported.trim());
         assert_eq!(
             imported.parent(),
-            Some(mukade::portable::temp_dir().as_path()),
+            Some(mukade::portable::temp_dir().unwrap().as_path()),
             "{tag}"
         );
         assert!(
@@ -450,7 +450,7 @@ fn a_stale_import_document_of_a_killed_run_is_swept() {
         text: "hello".into(),
         attachments: Vec::new(),
     });
-    let temp = mukade::portable::temp_dir();
+    let temp = mukade::portable::temp_dir().unwrap();
     let name = |tag: &str| temp.join(format!("mukade-import-{tag}-{}.json", std::process::id()));
     let age = |path: &std::path::Path, seconds: u64| {
         std::fs::write(path, "{}").unwrap();

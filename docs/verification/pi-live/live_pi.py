@@ -67,8 +67,7 @@ def env(extra=None):
                 "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_DB", "MUKADE_PI_EXE"):
         e.pop(key, None)
     e.update(PI_CODING_AGENT_DIR=str(W / "pi-home"), PI_OFFLINE="1", PI_SKIP_VERSION_CHECK="1",
-             PI_TELEMETRY="0", HOME=str(W / "home"), USERPROFILE=str(W / "home"),
-             MUKADE_CACHE_DIR=str(W / "mukade-cache"))
+             PI_TELEMETRY="0", HOME=str(W / "home"), USERPROFILE=str(W / "home"))
     e.update(extra or {})
     return e
 

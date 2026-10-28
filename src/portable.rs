@@ -1,69 +1,71 @@
-//! Portable mode: mukade runs from any folder, a USB stick included, and writes nothing anywhere
-//! else.
+//! mukade is portable by construction: it runs from any folder, a USB stick included, and keeps
+//! nothing anywhere else. There is no mode to switch on, no marker file and no setting.
 //!
-//! Portable mode is on when a file named `mukade.portable` or a folder named `mukade-data` sits
-//! next to the executable, or when `MUKADE_PORTABLE` is `1`, `true` or `yes` (`0`, `false` or `no`
-//! turns it off whatever sits next to the executable). Then everything mukade keeps for itself
-//! lives in `mukade-data/` beside the executable: its cache in `mukade-data/cache`, its temporary
-//! files in `mukade-data/tmp`. The folder is created when something is first written to it, never
-//! at start-up. Moving or deleting the folder holding the executable moves or deletes all of it.
+//! Everything mukade keeps for itself lives in one folder, `mukade-data`, beside the executable:
+//! its cache in `mukade-data/cache`, its temporary files in `mukade-data/tmp`. The folder is made
+//! when something is first written to it, never at start-up, and moving or deleting the folder
+//! that holds the executable moves or deletes all of it. What mukade writes outside that folder is
+//! what it was asked to write: the session in the destination harness's store, and the files named
+//! by `--output` and `--manifest`.
 //!
-//! Outside portable mode mukade keeps no cache (unless `MUKADE_CACHE_DIR` names a folder) and its
-//! temporary files go to the system's temporary folder. In both modes a temporary file is removed
-//! when its work is done, and one a killed process left behind is removed by the next run once it
-//! is an hour old ([`sweep_stale`]).
+//! Where the folder cannot be made (an executable in a read-only location) mukade does not look
+//! for another place: the cache is simply not kept, and the one temporary file that must exist,
+//! the document OpenCode's `session import` reads, is an error that says so. The system's
+//! temporary folder, the user profile and the application-data folders are never used. A
+//! temporary file is removed when its work is done, and one a killed process left behind is
+//! removed by the next run once it is an hour old ([`sweep_stale`]).
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-const MARKER_FILE: &str = "mukade.portable";
 const DATA_DIR: &str = "mukade-data";
 
 /// A temporary file this old belongs to a process that is gone.
 pub const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 
-type Env<'a> = &'a dyn Fn(&str) -> Option<OsString>;
-
-/// The data folder of portable mode, when portable mode is on.
+/// The folder beside the executable that holds everything mukade keeps.
 pub fn data_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    data_dir_in(exe.parent(), &|name| std::env::var_os(name))
+    data_dir_in(exe.parent())
 }
 
-/// [`data_dir`] for a given executable folder and environment.
-pub fn data_dir_in(exe_dir: Option<&Path>, env: Env) -> Option<PathBuf> {
-    let flag = env("MUKADE_PORTABLE")
-        .map(|value| value.to_string_lossy().trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty());
-    let beside_exe = exe_dir.map(|dir| dir.join(DATA_DIR));
-    match flag.as_deref() {
-        Some("0" | "false" | "no") => None,
-        Some("1" | "true" | "yes") => beside_exe,
-        _ => {
-            let dir = exe_dir?;
-            (dir.join(MARKER_FILE).is_file() || dir.join(DATA_DIR).is_dir())
-                .then(|| dir.join(DATA_DIR))
-        }
-    }
+/// [`data_dir`] for a given executable folder.
+pub fn data_dir_in(exe_dir: Option<&Path>) -> Option<PathBuf> {
+    exe_dir.map(|dir| dir.join(DATA_DIR))
 }
 
-/// Where the cache of what harness binaries told us lives: `MUKADE_CACHE_DIR` when it names a
-/// folder, else `mukade-data/cache` in portable mode, else nowhere (no cache).
+/// Where the cache of what harness binaries told us lives: `mukade-data/cache`.
 pub fn cache_dir() -> Option<PathBuf> {
-    cache_dir_in(data_dir().as_deref(), &|name| std::env::var_os(name))
+    cache_dir_in(data_dir().as_deref())
 }
 
-pub fn cache_dir_in(data: Option<&Path>, env: Env) -> Option<PathBuf> {
-    env("MUKADE_CACHE_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| data.map(|dir| dir.join("cache")))
+pub fn cache_dir_in(data: Option<&Path>) -> Option<PathBuf> {
+    data.map(|dir| dir.join("cache"))
 }
 
-/// Where mukade's temporary files go: `mukade-data/tmp` in portable mode, else the system's.
-pub fn temp_dir() -> PathBuf {
-    data_dir().map_or_else(std::env::temp_dir, |dir| dir.join("tmp"))
+/// Where mukade's temporary files go: `mukade-data/tmp`, made now. An error, naming the folder,
+/// when it cannot be made.
+pub fn temp_dir() -> std::io::Result<PathBuf> {
+    temp_dir_in(data_dir().as_deref())
+}
+
+pub fn temp_dir_in(data: Option<&Path>) -> std::io::Result<PathBuf> {
+    let Some(data) = data else {
+        return Err(std::io::Error::other(
+            "mukade keeps its temporary files beside its executable, and cannot tell where that is",
+        ));
+    };
+    let dir = data.join("tmp");
+    std::fs::create_dir_all(&dir).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "mukade keeps its temporary files in {} beside its executable and could not make it ({error}): run mukade from a folder you can write to",
+                dir.display()
+            ),
+        )
+    })?;
+    Ok(dir)
 }
 
 /// Remove files in `dir` that mukade left behind: names that start with `prefix` and end with
@@ -104,90 +106,45 @@ mod tests {
         dir
     }
 
-    fn env_of<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
-        move |name| {
-            vars.iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| OsString::from(value))
-        }
-    }
-
-    /// Nothing next to the executable and nothing asked for: not portable, and so nothing is
-    /// created or kept.
+    /// There is no mode to switch on: the folder next to the executable is where mukade keeps
+    /// what it keeps, whatever else sits there and whatever the environment says.
     #[test]
-    fn a_plain_install_is_not_portable() {
-        let exe = scratch("plain");
-        assert_eq!(data_dir_in(Some(&exe), &env_of(&[])), None);
-        assert_eq!(
-            cache_dir_in(None, &env_of(&[])),
-            None,
-            "no cache unless asked for"
-        );
+    fn the_data_folder_is_always_beside_the_executable() {
+        let exe = scratch("always");
+        assert_eq!(data_dir_in(Some(&exe)), Some(exe.join(DATA_DIR)));
+        assert_eq!(data_dir_in(None), None, "an executable with no folder");
         assert!(!exe.join(DATA_DIR).exists(), "looking does not create");
         let _ = std::fs::remove_dir_all(&exe);
     }
 
     #[test]
-    fn a_marker_file_or_an_existing_data_folder_makes_it_portable() {
-        let exe = scratch("marker");
-        std::fs::write(exe.join(MARKER_FILE), "").unwrap();
-        assert_eq!(
-            data_dir_in(Some(&exe), &env_of(&[])),
-            Some(exe.join(DATA_DIR))
-        );
-        std::fs::remove_file(exe.join(MARKER_FILE)).unwrap();
-        std::fs::create_dir_all(exe.join(DATA_DIR)).unwrap();
-        assert_eq!(
-            data_dir_in(Some(&exe), &env_of(&[])),
-            Some(exe.join(DATA_DIR))
-        );
-        let _ = std::fs::remove_dir_all(&exe);
-    }
-
-    #[test]
-    fn the_environment_turns_it_on_or_off_whatever_sits_beside_the_executable() {
-        let exe = scratch("env");
-        assert_eq!(
-            data_dir_in(Some(&exe), &env_of(&[("MUKADE_PORTABLE", "1")])),
-            Some(exe.join(DATA_DIR))
-        );
-        std::fs::write(exe.join(MARKER_FILE), "").unwrap();
-        assert_eq!(
-            data_dir_in(Some(&exe), &env_of(&[("MUKADE_PORTABLE", "0")])),
-            None
-        );
-        assert_eq!(
-            data_dir_in(Some(&exe), &env_of(&[("MUKADE_PORTABLE", "")])),
-            Some(exe.join(DATA_DIR))
-        );
-        assert_eq!(
-            data_dir_in(None, &env_of(&[("MUKADE_PORTABLE", "1")])),
-            None,
-            "no executable folder"
-        );
-        let _ = std::fs::remove_dir_all(&exe);
-    }
-
-    /// An explicit cache folder wins; else the portable one; else none.
-    #[test]
-    fn the_cache_lives_where_it_was_told_to_or_in_the_data_folder() {
+    fn the_cache_is_in_the_data_folder() {
         let data = PathBuf::from("data");
-        assert_eq!(
-            cache_dir_in(Some(&data), &env_of(&[])),
-            Some(data.join("cache"))
-        );
-        assert_eq!(
-            cache_dir_in(Some(&data), &env_of(&[("MUKADE_CACHE_DIR", "elsewhere")])),
-            Some(PathBuf::from("elsewhere"))
-        );
-        assert_eq!(
-            cache_dir_in(None, &env_of(&[("MUKADE_CACHE_DIR", "elsewhere")])),
-            Some(PathBuf::from("elsewhere"))
-        );
-        assert_eq!(
-            cache_dir_in(Some(&data), &env_of(&[("MUKADE_CACHE_DIR", "")])),
-            Some(data.join("cache"))
-        );
+        assert_eq!(cache_dir_in(Some(&data)), Some(data.join("cache")));
+        assert_eq!(cache_dir_in(None), None);
+    }
+
+    /// Temporary files go beside the executable, in a folder made when they are first needed.
+    #[test]
+    fn temporary_files_go_to_the_data_folder() {
+        let exe = scratch("tmp");
+        let data = exe.join(DATA_DIR);
+        assert_eq!(temp_dir_in(Some(&data)).unwrap(), data.join("tmp"));
+        assert!(data.join("tmp").is_dir(), "made when asked for");
+        let _ = std::fs::remove_dir_all(&exe);
+    }
+
+    /// An executable in a place that cannot be written to (a read-only install): the folder cannot
+    /// be made, and mukade says so rather than writing somewhere it was not meant to. A plain file
+    /// where the folder should be is how this is staged without needing a read-only disk.
+    #[test]
+    fn an_unwritable_data_folder_is_an_error_not_a_stray_file() {
+        let exe = scratch("blocked");
+        let data = exe.join(DATA_DIR);
+        std::fs::write(&data, "a file, not a folder").unwrap();
+        assert!(temp_dir_in(Some(&data)).is_err());
+        assert!(temp_dir_in(None).is_err(), "no executable folder either");
+        let _ = std::fs::remove_dir_all(&exe);
     }
 
     /// Only mukade's own, old temporary files go.

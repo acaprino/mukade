@@ -14,28 +14,24 @@ PowerShell; on macOS or Linux use the corresponding paths and `export NAME=value
 
 1. [Get it](#1-get-it) · 2. [Quick start](#2-quick-start) · 3. [Use cases](#3-use-cases) ·
 4. [Reading the receipt and the manifest](#4-reading-the-receipt-and-the-manifest) ·
-5. [Speed](#5-speed) · 6. [Portable use](#6-portable-use) · 7. [Exit codes](#7-exit-codes) ·
+5. [Speed](#5-speed) · 6. [Where its files go](#6-where-its-files-go) · 7. [Exit codes](#7-exit-codes) ·
 8. [Stores and executables](#8-stores-and-executables) · 9. [Per-harness examples](#9-per-harness-examples) ·
 10. [Discover, export, import](#10-discover-export-import) · 11. [Troubleshooting](#11-troubleshooting)
 
 ## 1. Get it
 
-**Portable bundle (nothing to install).** `scripts\package-portable.ps1` (Windows) or
-`scripts/package-portable.sh` (macOS, Linux) builds a folder — and a zip or tarball of it — holding
-`mukade.exe` and an empty `mukade.portable` file. Copy it anywhere, a USB stick included, and run it
-from there:
+mukade is one command-line executable. There is nothing to install and nothing to configure:
 
 ```powershell
-powershell -File scripts\package-portable.ps1          # builds dist\mukade-portable-windows-x64\
-dist\mukade-portable-windows-x64\mukade.exe --help
+cargo build --release                       # target\release\mukade.exe
+Copy-Item target\release\mukade.exe D:\tools\    # anywhere: a folder, a USB stick
+D:\tools\mukade.exe --help
 ```
 
 The Windows executable has the C runtime built in, so it runs on a machine with no Visual C++
-redistributable. In a bundle mukade keeps every file it makes for itself in a `mukade-data` folder
-beside the executable and nowhere else: see [Portable use](#6-portable-use).
-
-**From source.** `cargo build --release`, then use `target\release\mukade.exe` by its full path or
-put `target\release` on `PATH`. (Without `mukade.portable` beside it, mukade keeps no files at all.)
+redistributable. Run it from a shell, by its path or from a folder on `PATH`. The files it needs it
+generates in the folder where the executable is, and nowhere else: see
+[Where its files go](#6-where-its-files-go).
 
 Install and configure the harnesses you intend to use separately: mukade moves sessions, it does
 not install harnesses or transfer their credentials.
@@ -158,9 +154,9 @@ whether the destination exists). See the [README](../README.md#library).
 
 ### Carry mukade itself on a stick
 
-*A machine you do not own, or one you cannot install on.* Use the [portable
-bundle](#6-portable-use): run `mukade.exe` from the stick; when you delete the folder, nothing is
-left on the machine.
+*A machine you do not own, or one you cannot install on.* Copy `mukade.exe` to the stick and run
+it from there: it generates what it needs next to itself ([section 6](#6-where-its-files-go)), so
+deleting the folder leaves nothing on the machine.
 
 ## 4. Reading the receipt and the manifest
 
@@ -265,41 +261,42 @@ What makes it fast, and what you can do:
 - **Starting the destination to ask its version is the real cost for small sessions.** Pi's
   `--version` takes about half a second (it starts Node). mukade therefore reads the version from the
   npm package the launcher starts, without starting anything; for a native binary it asks once and
-  remembers the answer by the binary's path, size and modification time — **only when a cache folder
-  exists** ([portable mode](#6-portable-use), or `MUKADE_CACHE_DIR`). To skip the question entirely,
+  remembers the answer by the binary's path, size and modification time, in `mukade-data/cache`
+  beside the executable ([section 6](#6-where-its-files-go)). To skip the question entirely,
   state the facts: `--dest-version`, and for OpenCode `--project-id`, `--model-provider`, `--model`.
 - A `--resume-prompt` starts the destination harness and a model: that is its time, not mukade's.
 
-## 6. Portable use
+## 6. Where its files go
 
-mukade runs from any folder or USB stick and **leaves nothing on the machine**.
+mukade is portable by construction: there is no installer, no configuration file, no mode and no
+setting. It generates what it needs in **the folder where the executable is**, and nowhere else.
+Everything it keeps for itself is in one folder, `mukade-data`, made the first time something is
+written to it (never at start-up):
 
-**Switching it on.** Portable mode is on when a file named `mukade.portable` or a folder named
-`mukade-data` sits next to the executable (the bundle from [section 1](#1-get-it) has the file), or
-when `MUKADE_PORTABLE` is `1`; `MUKADE_PORTABLE=0` turns it off whatever sits beside the executable.
+| file | what for |
+|---|---|
+| `mukade-data/cache/probes.json` | the versions and OpenCode project ids learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not start the harness to ask again |
+| `mukade-data/tmp/mukade-import-*.json` | the document `opencode session import` needs as a file; private, and removed when the import ends, even when it fails |
+| `.mukade-*.tmp` | beside the session being written, in the destination's store: the session as it is written, renamed into place when complete |
 
-**What it does.** Everything mukade keeps *for itself* lives in `mukade-data` beside the
-executable — the folder is created only when something is first written to it:
+Nothing is written to the user profile, the application-data folders, the registry or the system's
+temporary folder. A temporary file a **killed** run left behind is removed by the next run once it
+is an hour old. The files that *are* yours stay yours: the sessions it writes into the harnesses'
+stores, and what you ask for with `--output` and `--manifest`. To remove mukade, delete the folder
+it is in.
 
-| file | where | what for |
-|---|---|---|
-| `mukade-data/cache/probes.json` | portable mode, or the folder `MUKADE_CACHE_DIR` names | the versions and OpenCode project ids learned from harness binaries, keyed by the binary's path, size and modification time |
-| `mukade-data/tmp/mukade-import-*.json` | portable mode (otherwise the system's temporary folder) | the document `opencode session import` needs as a file; removed when the import ends, even when it fails |
-| `.mukade-*.tmp` | beside the session being written | the session as it is written, renamed into place when complete |
+If the executable is in a place it cannot write to (a read-only install), the folder cannot be made.
+mukade does not look for another place: the cache is not kept (every hop asks the harness, which
+costs time but works), and a hop to OpenCode stops with an error that names the folder, before
+anything is written. Copy `mukade.exe` to a folder you can write to.
 
-Nothing is written to the user profile, the application-data folders, the registry, or the
-system's temporary folder. A temporary file a **killed** run left behind is removed by the next run
-once it is an hour old. Outside portable mode mukade keeps **no cache at all** unless
-`MUKADE_CACHE_DIR` names a folder. The files that *are* yours stay yours: the sessions it writes into
-the harnesses' stores, and what you ask for with `--output` and `--manifest`.
+This is checked by an automated test that runs the real binary alone in a folder, with the
+temporary folder, the home folder and the application-data folders pointed at an empty sandbox, and
+asserts the sandbox stays empty and the folder holds only the executable and `mukade-data`.
 
-To remove mukade, delete the folder. This is checked by an automated test that runs the real
-binary with the temporary folder, the home folder and the application-data folders pointed at an
-empty sandbox and asserts the sandbox stays empty.
-
-**Portable harnesses are separate.** A harness installed in a portable folder is reached with its
-store variable and `--<harness>-exe`: see [section 8](#8-stores-and-executables) and the examples
-in [section 9](#9-per-harness-examples).
+**Harnesses are separate.** A harness installed in its own folder is reached with its store
+variable and `--<harness>-exe`: see [section 8](#8-stores-and-executables) and the examples in
+[section 9](#9-per-harness-examples).
 
 ## 7. Exit codes
 
@@ -513,7 +510,8 @@ the directory's own layout when exactly one harness is recognized. `write` alway
   error names its location. Save the `manifest` field of that receipt instead of running again.
 - **It is slower than the table in [Speed](#5-speed):** run with `--timing`. A large `probe …` line
   is a harness being started to ask its version or project: pass `--dest-version` (and
-  `--project-id`), or use portable mode so the answer is remembered.
+  `--project-id`), so the question is not asked at all. (The answer is remembered after the first
+  time, in `mukade-data/cache`, when the executable's folder can be written to.)
 - **"The paging file is too small" / "memory allocation failed":** the machine ran out of memory
   (a 30 MB session needs about 300 MB). Close other programs and retry; nothing is half-written,
   because a session is written to a temporary file and renamed into place.

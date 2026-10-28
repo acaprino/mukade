@@ -23,7 +23,7 @@ uuid = { version = "1", features = ["v4", "v7"] }
 name = "mukade"
 path = "src/bin/mukade.rs"
 
-# The binary is copied around (portable mode): small and fast matter more than build time.
+# The binary is one file that is copied around: small and fast matter more than build time.
 [profile.release]
 opt-level = 3
 lto = true

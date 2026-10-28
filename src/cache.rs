@@ -3,9 +3,9 @@
 //! ask costs 50 ms to 500 ms (Pi, a Node program, is the slowest); a hop of a few megabytes costs
 //! less than that.
 //!
-//! One JSON object in `probes.json`. It lives in `mukade-data/cache` beside the executable in
-//! portable mode, or in the folder `MUKADE_CACHE_DIR` names; with neither there is no cache and
-//! nothing is written (see [`crate::portable`]). A key names the thing asked about together with
+//! One JSON object in `probes.json`. It lives in `mukade-data/cache` beside the executable, the
+//! one folder mukade keeps anything in (see [`crate::portable`]); where that folder cannot be made
+//! there is no cache and nothing is written. A key names the thing asked about together with
 //! what would change the answer (a binary's path, size and modification time), so a stale entry
 //! is simply never looked up again. Reading or writing it can fail: the cache is then empty, and
 //! every caller falls back to asking.
@@ -17,7 +17,7 @@ const FILE: &str = "probes.json";
 /// Past this many entries the file starts over: it is a cache, not a record.
 const MAX_ENTRIES: usize = 256;
 
-/// Where the cache lives, when it has a home at all: see [`crate::portable::cache_dir`].
+/// Where the cache lives: see [`crate::portable::cache_dir`].
 pub fn dir() -> Option<PathBuf> {
     crate::portable::cache_dir()
 }

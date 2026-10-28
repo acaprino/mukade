@@ -77,11 +77,10 @@ impl Writer for Opencode {
         let mut clock = Clock::new(opts.now.as_deref());
         let document = document_from_plan(session, plan, &id, &cwd, opts, &mut clock)?;
 
-        // The document is mukade's own temporary file: it goes to mukade's temporary folder
-        // (`mukade-data/tmp` in portable mode, else the system's), never into OpenCode's store.
-        // One a killed run left behind is removed here once it is old enough to be nobody's.
-        let temp = crate::portable::temp_dir();
-        std::fs::create_dir_all(&temp).with_context(|| format!("create {}", temp.display()))?;
+        // The document is mukade's own temporary file: it goes to `mukade-data/tmp` beside the
+        // executable, never into OpenCode's store nor the system's temporary folder. One a killed
+        // run left behind is removed here once it is old enough to be nobody's.
+        let temp = crate::portable::temp_dir()?;
         crate::portable::sweep_stale(
             &temp,
             "mukade-import-",
