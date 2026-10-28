@@ -305,7 +305,9 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
     let mut losses = Manifest::losses_for(
         &plan.counts,
         session.interrupted_last_turn(),
-        session.last_compaction().is_some(),
+        plan.blocks
+            .iter()
+            .any(|block| matches!(block, crate::writer::plan::PlannedBlock::Compaction { .. })),
     );
     if let Some(prompt) = opts.resume.as_ref() {
         let cwd = write_opts.cwd.as_deref().map(Path::new);
@@ -392,6 +394,14 @@ fn select<'a>(
                     }
                 },
             };
+            if text.trim().is_empty() {
+                return Err(HopError::Unsupported(
+                    "Compaction::Portable: the source's last compaction summary has no readable text (Codex \
+                     0.165 keeps it encrypted by its provider), so there is nothing to carry; hop the whole \
+                     history instead, or supply a summary"
+                        .into(),
+                ));
+            }
             // §4.2: one user message, the handoff line first, then the tail from the boundary.
             let cut = cut_index(source, keep_from, boundary.as_deref())?;
             let mut entries = vec![Entry {
@@ -683,6 +693,37 @@ fn classify_read(error: anyhow::Error) -> HopError {
 
 /// Read a session straight from a file, for a source that is not in a store (the spec's
 /// `SessionRef` may be "harness + native id (or file path)").
+/// [`export`] with every branch the source keeps: a Codex paginated thread is read whole (its base
+/// file, abandoned turns included, then its active page) instead of only the part Codex resumes.
+/// Only Codex is supported; another harness is refused before anything is read.
+pub fn export_all_branches(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
+    all_branches_supported(source.harness)?;
+    let _span = crate::timing::span("read source");
+    crate::reader::codex::read_with(&source.id, roots, crate::reader::codex::Branches::All)
+        .map_err(classify_read)
+}
+
+/// [`export_path`] with every branch the source keeps (see [`export_all_branches`]).
+pub fn export_path_all_branches(
+    harness: HarnessId,
+    path: &std::path::Path,
+) -> Result<Session, HopError> {
+    all_branches_supported(harness)?;
+    crate::reader::codex::read_file_with(path, crate::reader::codex::Branches::All)
+        .map_err(classify_read)
+}
+
+fn all_branches_supported(harness: HarnessId) -> Result<(), HopError> {
+    if harness == HarnessId::Codex {
+        return Ok(());
+    }
+    Err(HopError::Unsupported(format!(
+        "--all-branches (every branch, abandoned ones included) is read for a Codex paginated \
+         thread only; {} sessions are read as the branch the harness resumes",
+        harness.as_str()
+    )))
+}
+
 pub fn export_path(harness: HarnessId, path: &std::path::Path) -> Result<Session, HopError> {
     let session = match harness {
         HarnessId::ClaudeCode => crate::reader::claude_code::read_file(path),

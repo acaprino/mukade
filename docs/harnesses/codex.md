@@ -93,6 +93,7 @@ unless cited otherwise [19 §2.2].
 | file | what it is |
 |---|---|
 | `sessions/YYYY/MM/DD/rollout-<local ts>-<uuid>.jsonl` | one thread; JSONL lines `{timestamp, ordinal, type, payload[, metadata]}`. A rollout alone resumes by id, even from the wrong date folder |
+| `sessions/YYYY/MM/DD/rollout-<local ts>-<uuid>_<page uuid>.jsonl` | a later **page** of a paginated thread (0.165, below) |
 | `state_5.sqlite` | thread index. **`threads.rollout_path` wins over the file on disk**; a row pointing at a missing file fails with `no rollout found for thread id … (code -32600)` |
 | `thread_history_1.sqlite` | exists, but the model context comes from the rollout, not from here |
 | `session_index.jsonl` | append-only name catalogue `{id, thread_name, updated_at}`; the newest name wins [20]. It was not written in the bench's scratch home [19] |
@@ -113,7 +114,21 @@ Record kinds in a rollout (`type`, then `payload.type`) [19][22]:
   graceful interrupt writes a user message `<turn_aborted>…</turn_aborted>` plus
   `event_msg turn_aborted`; a hard kill just ends the file. `thread/list` hides `exec` threads by default [19].
 - 0.164.0 searches and restores **compressed rollouts** [16], and `codex migrate-rollouts`
-  migrates legacy sessions to "paginated thread history" [18]. The on-disk form of either **[U]**.
+  migrates legacy sessions to "paginated thread history" [18]. The on-disk form of compressed
+  rollouts is **[U]**.
+- **Paginated threads, seen on disk with Codex Desktop 0.165.0-alpha.1.2 (2026-10-28)** [26].
+  `session_meta.history_mode` is `"paginated"`. When the later turns of a thread are redone, Codex
+  starts a new page: a file `rollout-<ts>-<thread>_<page>.jsonl` whose first record is a
+  `session_meta` with `history_base: {thread_id, end_ordinal_exclusive, end_byte_offset}`. The page
+  continues the thread from the first `end_ordinal_exclusive` records of the earlier file (exactly
+  `end_byte_offset` bytes), and its own ordinals carry on from there. `state_5.sqlite`
+  `threads.rollout_path` names the page, so the page is what Codex resumes. The earlier file's
+  records past the cut stay on disk: the branch the thread left. In the thread seen, the base file
+  held 1064 records and the page continued from its first 511.
+- Also seen in 0.165 Desktop rollouts [26]: `response_item` `agent_message` (a subagent's
+  message to the root agent: a plain header, then the payload as `encrypted_content`),
+  `inter_agent_communication_metadata`, `token_usage_record`, `world_state`, and
+  `event_msg/item_completed`.
 
 ### Compaction
 
@@ -131,6 +146,10 @@ Record kinds in a rollout (`type`, then `payload.type`) [19][22]:
   `{message}` still resumes [19].
 - On resume after a compaction, the model receives the base developer message, then
   `replacement_history`, later items and the prompt. No `encrypted_content` is sent [19].
+- **0.165 Desktop keeps the summary encrypted** [26]: in every `compacted` record of the threads
+  seen, `message` is empty and the summary is an item `{type:"compaction", id, encrypted_content}`
+  (77 000 to 99 000 characters) at the end of `replacement_history`, after the retained user
+  messages. Only OpenAI can read it: there is no summary text to carry to another harness.
 
 ### Built-in tools
 
@@ -230,7 +249,8 @@ deprecated alias [13].
 
 | source record | read as | lines |
 |---|---|---|
-| store | `list` walks `sessions/` for `*.jsonl`; `read <id>` matches an id **prefix** of the uuid in the file name (none → `NotFound`, several → `Ambiguous`) | `:546-629` |
+| store | `list` walks `sessions/` for `*.jsonl`, one entry per thread at its latest file; `read <id>` matches an id **prefix** of the thread uuid in the file name (none → `NotFound`, several threads → `Ambiguous`; several files of **one** thread → its latest page) | `src/reader/codex.rs` `list`, `read_with`, `rollout_id` |
+| paginated thread | a page with `history_base` is read with the base file's first `end_ordinal_exclusive` records (checked against `end_byte_offset`), then its own records; the base's conversation records past the cut become `Meta::OffBranch` and are counted (`dropped_off_branch`). `--all-branches` (`Branches::All`) reads the base file whole instead, then the page. A missing base, an offset that does not fall at the end of that record, or a base that is itself a page → error with the reason. The fingerprint covers the bytes read (the base's prefix, or all of it, then the page) | `read_file_with`, `base_prefix` |
 | line order | file order, never timestamps; a cut-off last line → `Meta::Unfinished`; a bad line elsewhere fails with `file:line` | `src/reader/json.rs:11-40` |
 | user `message` | `User`, unless its text, after leading whitespace, **starts with** `<environment_context>`/`<skills_instructions>` (→ `Meta::SystemPrompt`) or `<turn_aborted>` (→ `Meta::TurnAborted`); a prompt that only mentions a tag stays the user's words | `:87-104` |
 | `developer`/`system` `message` | `Meta::SystemPrompt` | `:81-88` |
@@ -240,7 +260,7 @@ deprecated alias [13].
 | `local_shell_call`, `web_search_call` | **read from `action`**: named `local_shell`/`web_search`, input = `action`; a web search's id is its `id` (it has no `call_id`) | `:374-393,476-478` |
 | shell dialect | `exec_command`/`local_shell` → `Bash` or `PowerShell` from the call's `shell`, else the `<shell>` of `<environment_context>`, else `Bash` | `:503-531` |
 | `function_call_output`, `custom_tool_call_output` | string → text; **array (images, MCP content) → structured blocks kept** (`input_text`/`output_text` → `{"type":"text"}`, other items as recorded); `is_error` always `false` | `:399-433,481-489` |
-| `compacted` | `Compaction{summary: message, kept_from: next non-Meta entry, trigger: Unknown, tokens_before: latest_token_usage_record.usage.input_tokens}`; the step of the same `turn_id` that wrote the summary is folded in; `replacement_history` stays in `raw` only | `:271-300,435-455` |
+| `compacted` | `Compaction{summary: message, kept_from: next non-Meta entry, trigger: Unknown, tokens_before: latest_token_usage_record.usage.input_tokens}`; the step of the same `turn_id` that wrote the summary is folded in; `replacement_history` stays in `raw` only. An empty `message` (0.165's encrypted summary) is never written as an empty user message: the plan leaves it out and counts it (`dropped_unreadable_summaries`), and `--compaction portable` is refused, exit 2 | `:271-300,435-455`; `src/writer/plan.rs`, `src/hop.rs` `select` |
 | `event_msg`, `turn_context`, `world_state`, `token_usage_record` | `Meta`, kept raw; models from `event_msg/thread_settings_applied` | `:69-80,195-207` |
 | `session_meta` | id (`session_id`, else `id`), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title and parent always empty** (`session_index.jsonl` not read, forks not linked) | `:149-181,455-470` |
 
@@ -275,10 +295,21 @@ deprecated alias [13].
   fixture [19 §4.4].
 - **Not converted:** subagent threads, forks, names from `session_index.jsonl`, and
   compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].
+- **Subagent messages are not carried.** `agent_message` records (a subagent writing to the root
+  agent; the payload is encrypted) read as `Meta` and are not counted in the manifest. 223 of them
+  were in the 0.165 thread seen [26].
+- **A chain of pages** (a page whose base is itself a page) is refused with its reason; only one
+  page over a base file has been seen [26].
 - **Resume:** keep `CODEX_HOME` set for the resume process and run it from the session's cwd
   [19 §5][25].
 
 ## 9. Sources
+
+[26] Two real Codex Desktop 0.165.0-alpha.1.2 threads of the Daodan project, read on
+2026-10-28 with their `state_5.sqlite` and `thread_history_1.sqlite` rows (read only): thread
+`01a181e2-…` (17.8 MB, 5 compactions, all with an empty `message`) and thread `01a181df-…` (a base
+file plus one page, `history_base.end_ordinal_exclusive` 511 of 1064). Not in the repository: they
+are the user's own conversations.
 
 All accessed 2026-10-28.
 

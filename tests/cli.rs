@@ -605,3 +605,138 @@ fn a_write_the_destination_refuses_exits_4() {
         "no receipt for a write that did not happen"
     );
 }
+
+/// `--all-branches` carries a Codex paginated thread whole; without it only the active part
+/// travels. Another harness refuses the flag before anything is read or written.
+#[test]
+fn all_branches_carries_a_paginated_codex_thread_whole() {
+    let scratch = support::scratch(HarnessId::Codex, "cli-all-branches");
+    let thread = "01a181df-cfb6-79e2-8977-37b2cfde0b79";
+    let day = scratch.join("home/sessions/2026/10/28");
+    std::fs::create_dir_all(&day).unwrap();
+    let line = |ordinal: u64, kind: &str, payload: Value| {
+        serde_json::json!({"timestamp": format!("2026-10-28T10:{ordinal:02}:00.000Z"),
+                           "ordinal": ordinal, "type": kind, "payload": payload})
+        .to_string()
+            + "\n"
+    };
+    let say = |ordinal: u64, text: &str| {
+        line(
+            ordinal,
+            "response_item",
+            serde_json::json!({"type": "message", "role": "user",
+                               "content": [{"type": "input_text", "text": text}]}),
+        )
+    };
+    let meta = serde_json::json!({"id": thread, "session_id": thread, "cwd": "D:/w"});
+    let kept = line(0, "session_meta", meta.clone()) + &say(1, "KEPT-TURN");
+    std::fs::write(
+        day.join(format!("rollout-2026-10-28T10-38-11-{thread}.jsonl")),
+        kept.clone() + &say(2, "ABANDONED-TURN"),
+    )
+    .unwrap();
+    let mut page_meta = meta;
+    page_meta["history_base"] = serde_json::json!({"thread_id": thread,
+        "end_ordinal_exclusive": 2, "end_byte_offset": kept.len()});
+    std::fs::write(
+        day.join(format!(
+            "rollout-2026-10-28T13-29-27-{thread}_01a1827c-9cd7-7180-8a25-b3d7e423149a.jsonl"
+        )),
+        line(2, "session_meta", page_meta) + &say(3, "ACTIVE-TURN"),
+    )
+    .unwrap();
+
+    let (ok, active, stderr) = cli(&scratch, &["dump", "codex", thread]);
+    assert!(ok, "{stderr}");
+    assert!(active.contains("KEPT-TURN") && active.contains("ACTIVE-TURN"));
+    assert!(!active.contains("ABANDONED-TURN"), "{active}");
+    let (ok, all, stderr) = cli(&scratch, &["dump", "codex", thread, "--all-branches"]);
+    assert!(ok, "{stderr}");
+    for turn in ["KEPT-TURN", "ABANDONED-TURN", "ACTIVE-TURN"] {
+        assert!(all.contains(turn), "{turn}: {all}");
+    }
+    let (code, _, stderr) = cli_code(&scratch, &["dump", "claude_code", "x", "--all-branches"]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("--all-branches"), "{stderr}");
+}
+
+/// Codex 0.165 keeps its compaction summary encrypted: `message` is empty and the summary is an
+/// encrypted `compaction` item. A portable hop has nothing to carry and refuses before writing; a
+/// whole-history hop leaves the empty summary out and counts it.
+#[test]
+fn an_encrypted_codex_summary_is_never_an_empty_message() {
+    let scratch = support::scratch(HarnessId::Codex, "cli-encrypted-summary");
+    let thread = "01a181e2-4cd9-7c63-82b8-f75e3d6bb172";
+    let day = scratch.join("home/sessions/2026/10/28");
+    std::fs::create_dir_all(&day).unwrap();
+    let line = |ordinal: u64, kind: &str, payload: Value| {
+        serde_json::json!({"timestamp": format!("2026-10-28T10:{ordinal:02}:00.000Z"),
+                           "ordinal": ordinal, "type": kind, "payload": payload})
+        .to_string()
+            + "\n"
+    };
+    let say = |ordinal: u64, role: &str, text: &str| {
+        let block = if role == "user" {
+            "input_text"
+        } else {
+            "output_text"
+        };
+        line(
+            ordinal,
+            "response_item",
+            serde_json::json!({"type": "message", "role": role,
+                               "content": [{"type": block, "text": text}]}),
+        )
+    };
+    let rollout = line(
+        0,
+        "session_meta",
+        serde_json::json!({"id": thread, "session_id": thread, "cwd": "D:/w"}),
+    ) + &say(1, "user", "BEFORE")
+        + &say(2, "assistant", "REPLY")
+        + &line(
+            3,
+            "compacted",
+            serde_json::json!({"message": "", "replacement_history": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "BEFORE"}]},
+                {"type": "compaction", "id": "cmp_1", "encrypted_content": "gAAAAB-ENCRYPTED"}]}),
+        )
+        + &say(4, "user", "AFTER");
+    std::fs::write(
+        day.join(format!("rollout-2026-10-28T10-40-54-{thread}.jsonl")),
+        rollout,
+    )
+    .unwrap();
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let hop = |extra: &[&str]| {
+        let mut args = vec![
+            "hop",
+            "codex",
+            thread,
+            "pi",
+            "--cwd",
+            work.to_str().unwrap(),
+            "--dest-version",
+            "1.4.0",
+        ];
+        args.extend_from_slice(extra);
+        cli_code(&scratch, &args)
+    };
+
+    let (code, stdout, stderr) = hop(&["--compaction", "portable"]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("no readable text"), "{stderr}");
+
+    let (code, stdout, stderr) = hop(&[]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let receipt: Value = serde_json::from_str(&stdout).unwrap();
+    let losses = receipt["manifest"]["losses"].to_string();
+    assert!(losses.contains("no readable text"), "{losses}");
+    let written = std::fs::read_to_string(receipt["location"].as_str().unwrap()).unwrap();
+    assert!(written.contains("BEFORE") && written.contains("AFTER"));
+    assert!(
+        !written.contains(r#""text":"""#),
+        "no empty message: {written}"
+    );
+}

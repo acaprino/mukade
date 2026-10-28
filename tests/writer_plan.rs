@@ -640,3 +640,53 @@ fn an_aborted_step_written_as_a_reply_is_counted() {
         "Pi keeps the step's end"
     );
 }
+
+/// A compaction whose summary has no readable text (Codex 0.165 keeps it encrypted) is not
+/// written as an empty user message, which a provider may refuse: it is left out and counted.
+#[test]
+fn a_compaction_with_no_readable_summary_is_left_out_and_counted() {
+    use mukade::manifest::Manifest;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-empty-summary");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let user = |id: &str, text: &str| Entry {
+        id: id.into(),
+        kind: Kind::User {
+            text: text.into(),
+            attachments: Vec::new(),
+        },
+        raw: vec![],
+    };
+    let compaction = |id: &str, summary: &str| Entry {
+        id: id.into(),
+        kind: Kind::Compaction {
+            summary: summary.into(),
+            trigger: mukade::model::Trigger::Unknown,
+            tokens_before: None,
+            kept_from: None,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![
+        user("u1", "before"),
+        compaction("c1", ""),
+        compaction("c2", "  \n"),
+        compaction("c3", "a real summary"),
+        user("u2", "after"),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    let summaries: Vec<&str> = plan
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            PlannedBlock::Compaction { summary } => Some(summary.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(summaries, ["a real summary"]);
+    assert_eq!(plan.counts.dropped_unreadable_summaries, 2);
+    let losses = Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|l| l.contains("no readable text")),
+        "{losses:?}"
+    );
+}

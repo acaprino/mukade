@@ -147,6 +147,18 @@ history in the destination. They stay in the source untouched, and the manifest 
 (`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`, `custom_message` and `context_edit`
 entries reach the destination the way Pi shows them to its model.
 
+Codex Desktop 0.165 keeps such a thread over two files: the earlier one, and a page that continues
+from part of it, which is what Codex resumes. mukade reads the thread the same way: the part the
+page continues from, then the page; the earlier file's later turns are left behind and counted. To
+carry **everything**, the abandoned turns included (in file order, before the active ones), add
+`--all-branches` to `dump` or `hop`:
+
+```powershell
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project' --all-branches
+```
+
+`--all-branches` is read for Codex only; for another harness it is refused (exit 2).
+
 ### Use it from a task runner or another program
 
 *A host that already runs these harnesses wants the pipeline in-process.* mukade is a library first:
@@ -180,7 +192,8 @@ into Pi with `--compaction portable`; long paths shortened):
                 "dropped_orphan_results": 0, "dropped_duplicate_results": 0,
                 "rewritten_call_ids": 0, "dropped_off_branch": 0, "dropped_unfinished_lines": 0,
                 "aborted_steps_as_replies": 0, "unanswered_calls": 0, "dropped_empty_steps": 0,
-                "dropped_attachments": 0, "dropped_result_blocks": 0 },
+                "dropped_attachments": 0, "dropped_result_blocks": 0,
+                "dropped_unreadable_summaries": 0 },
     "losses": [
       "interrupted_last_turn",
       "the source's compaction summary travels as one user message",
@@ -211,7 +224,8 @@ What the `losses` lines mean, and what to do:
 | `unanswered tool calls carried as text (n)` | the source never recorded a result for a call (a killed tool); a provider refuses a call without its result, so it travels as text. |
 | `orphan tool results dropped (n)` · `duplicate tool results dropped, the first answer kept (n)` | a result with no call, or a second answer to one call; a provider would refuse either. |
 | `tool call ids rewritten to the destination's id pattern (n)` | Anthropic accepts only `[a-zA-Z0-9_-]` ids; the call and its result were rewritten together. |
-| `records of an abandoned branch … left behind (n)` | a rewind or an edited prompt: only the resumed branch travelled. |
+| `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries a Codex thread whole. |
+| `compaction summaries with no readable text (encrypted by the source's provider), not carried (n)` | Codex 0.165 keeps its compaction summary encrypted: there is no text to write, so it is left out rather than written as an empty message. The history before and after it travels. |
 | `an unfinished last line of the source left unread (n)` | a hard kill cut the last line mid-write; the rest of the session was read. |
 | `steps the source aborted or that failed, written as ordinary replies (n)` | the destination cannot mark a step as aborted (Pi can, and does). |
 | `empty steps dropped (n)` · `user attachments dropped (n)` · `structured tool-result blocks flattened to text (n)` | content the destination cannot hold (a PDF, an image toward a text-only result) is counted, never silently dropped. Images are rewritten into each harness's own shape. |
@@ -461,6 +475,28 @@ executable's `--version`; if that cannot be done or parsed, supply it with `--de
 (your version). Mukade reads `model_provider` from `$env:CODEX_HOME\config.toml` when available;
 `--model-provider` states it explicitly: only the top-level `model_provider` key counts, not a
 profile's or a provider table's. Keep `CODEX_HOME` set for a resume command run later.
+
+**Threads of the Codex Desktop app (0.165).** The id in a `codex://threads/<id>` link is the
+thread id mukade takes:
+
+```powershell
+$env:CODEX_HOME = Join-Path $HOME '.codex'
+$env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude'
+mukade hop codex 01a181e2-4cd9-7c63-82b8-f75e3d6bb172 claude_code --cwd 'D:\Projects\daodan'
+```
+
+What to expect from such a thread:
+
+- A thread kept over two files (a page that redoes its later turns) is read as Codex resumes it;
+  `--all-branches` carries it whole (see [use cases](#a-session-that-was-rewound-or-branched)).
+- Its compaction summaries are encrypted, so `--compaction portable` is refused (exit 2) and a
+  whole-history hop leaves them out, counted. A long thread is therefore carried whole: a 17.8 MB
+  thread became a 4.1 MB Claude Code session of several hundred thousand tokens, which only a
+  model with a very large context can resume.
+- Most of its tool calls are one `exec` script each (Codex's "code mode"); they travel as text,
+  with their script, not as translated calls. Its reasoning is OpenAI's and is dropped toward any
+  other provider, counted.
+- Messages its subagents sent to the main agent are not carried (their content is encrypted).
 
 ### OpenCode
 

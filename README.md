@@ -76,7 +76,7 @@ For complete examples for each harness, including ones kept in a folder of their
 mukade list  <harness>
 mukade dump  <harness> <session-id>          # the interchange document on stdout, or --output <file>
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
-mukade hop   <src-harness> <session-id> <dst-harness> [options]
+mukade hop   <src-harness> <session-id> <dst-harness> [options]   # --all-branches: a Codex thread whole
 mukade detect <dir>                          # which harness stores the directory holds
 ```
 

@@ -118,6 +118,8 @@ pub struct Counts {
     pub dropped_attachments: usize,
     /// Structured blocks flattened by a destination that only accepts text results.
     pub dropped_result_blocks: usize,
+    /// Compaction summaries with no readable text (encrypted by the source's provider).
+    pub dropped_unreadable_summaries: usize,
 }
 
 impl Counts {
@@ -458,9 +460,15 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 last_step_native.clear();
                 last_step_calls.clear();
                 step_answered.clear();
-                blocks.push(PlannedBlock::Compaction {
-                    summary: summary.clone(),
-                });
+                // A summary with no readable text (Codex 0.165 keeps it encrypted) would be an
+                // empty user message, which a provider may refuse: it is left out and counted.
+                if summary.trim().is_empty() {
+                    counts.dropped_unreadable_summaries += 1;
+                } else {
+                    blocks.push(PlannedBlock::Compaction {
+                        summary: summary.clone(),
+                    });
+                }
             }
             Kind::Meta { .. } => {
                 counts.messages_in -= 1;

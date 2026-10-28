@@ -56,6 +56,9 @@ options:
   --compaction <mode>      none (default) | portable (the source's own summary, then its tail)
   --resume-prompt <text>   resume in the destination and keep its reply in the receipt
   --from-file <path>       read the source from a file instead of its store
+  --all-branches           dump, hop: carry every branch the source keeps (a Codex thread whose
+                           later turns were redone: the abandoned turns too); default: only the
+                           branch the harness resumes
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
@@ -105,6 +108,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
             "--resume-prompt" => flags.resume_prompt = Some(next(rest, &mut i)?),
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
+            "--all-branches" => flags.all_branches = true,
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--output" => flags.output = Some(next(rest, &mut i)?),
             "--timing" => crate::timing::enable(),
@@ -212,8 +216,13 @@ pub fn run(args: &[String]) -> Result<()> {
         "dump" => {
             no_more(operands, 1)?;
             let id = operands.first().context("dump needs a session id")?;
-            let session = crate::hop::export(&SessionRef::id(harness, *id), &roots)
-                .map_err(anyhow::Error::new)?;
+            let source = SessionRef::id(harness, *id);
+            let session = if flags.all_branches {
+                crate::hop::export_all_branches(&source, &roots)
+            } else {
+                crate::hop::export(&source, &roots)
+            }
+            .map_err(anyhow::Error::new)?;
             let doc = serde_json::to_string_pretty(&wire::to_document(&session))?;
             match flags.output.as_deref() {
                 // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
@@ -251,11 +260,19 @@ pub fn run(args: &[String]) -> Result<()> {
                 .parse()?;
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
-            let source = match flags.from_file.as_deref() {
-                Some(path) => crate::hop::export_path(harness, std::path::Path::new(path)),
-                None => {
+            let source = match (flags.from_file.as_deref(), flags.all_branches) {
+                (Some(path), false) => crate::hop::export_path(harness, std::path::Path::new(path)),
+                (Some(path), true) => {
+                    crate::hop::export_path_all_branches(harness, std::path::Path::new(path))
+                }
+                (None, all) => {
                     let id = operands.first().context("hop needs a session id")?;
-                    crate::hop::export(&SessionRef::id(harness, *id), &roots)
+                    let source = SessionRef::id(harness, *id);
+                    if all {
+                        crate::hop::export_all_branches(&source, &roots)
+                    } else {
+                        crate::hop::export(&source, &roots)
+                    }
                 }
             }
             .map_err(anyhow::Error::new)?;
@@ -351,6 +368,7 @@ struct Flags {
     compaction: Option<String>,
     resume_prompt: Option<String>,
     from_file: Option<String>,
+    all_branches: bool,
     manifest: Option<String>,
     output: Option<String>,
     root: Option<String>,

@@ -264,6 +264,17 @@ plugins = false   # with plugins on, every process contacts chatgpt.com and gith
 **On resume [V].** Before compaction: full history with `encrypted_content`. After: base
 developer message + `replacement_history` + later items + prompt; no `encrypted_content`.
 
+**Codex Desktop 0.165.0-alpha.1.2 [V: two real threads, 2026-10-28].** A thread whose later turns
+were redone is kept over two files (`history_mode: "paginated"`): a page
+`rollout-<ts>-<thread>_<page>.jsonl` starts with a `session_meta` carrying
+`history_base: {thread_id, end_ordinal_exclusive, end_byte_offset}`, and continues the thread from
+that prefix of the earlier file; `state_5.sqlite` `threads.rollout_path` names the page. The reader
+reads the prefix, then the page; the earlier file's later records are off-branch (§1.3, counted),
+or carried with `Branches::All` (`--all-branches`). Compaction summaries are encrypted
+(`compacted.message` empty; an item `{type:"compaction", encrypted_content}` in
+`replacement_history`): none is written as an empty message (`dropped_unreadable_summaries`), and
+`Portable` from such a record is refused.
+
 ### 2.3 OpenCode 2.1.4
 
 **Isolation [V].** `OPENCODE_DB`, `XDG_DATA_HOME`/`XDG_CONFIG_HOME`/`XDG_STATE_HOME`/`XDG_CACHE_HOME`,
@@ -562,7 +573,8 @@ The counts are `messages_in`, `messages_out`, `tool_calls`, `tools_text_form`,
 call, A3), `rewritten_call_ids` (ids outside Anthropic's `^[a-zA-Z0-9_-]+$`, rewritten for the
 call and its result), `dropped_off_branch` (records of a branch the source left: a rewind, an
 edited prompt, Pi tree navigation), `unanswered_calls`, `dropped_empty_steps`,
-`dropped_attachments` and `dropped_result_blocks`. Every count above zero also has its line in
+`dropped_attachments`, `dropped_result_blocks` and `dropped_unreadable_summaries` (a compaction
+summary with no readable text). Every count above zero also has its line in
 `losses`.
 
 ## 7. Strict check (what a real API would refuse)
@@ -644,6 +656,9 @@ library must pass all criteria above.
 
 - [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).
+- Codex 0.165: a chain of pages (a page whose base is itself a page) is refused, not read; only
+  one page over a base file has been seen. Subagent `agent_message` records are not carried and not
+  counted.
 - Not implemented: L10, reading a Codex Desktop code-mode `exec` script as the single
   `tools.exec_command` / `tools.apply_patch` call it wraps. An `exec` call is read as one opaque
   call and travels in text form in every direction; an `apply_patch` call reads as an edit but

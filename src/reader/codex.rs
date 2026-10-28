@@ -12,7 +12,12 @@
 //! - `compacted` replaces the history: `replacement_history` is the new base, and the assistant
 //!   record that *produced* the summary is the compaction's own turn, not conversation;
 //! - a graceful interrupt writes a user message carrying `<turn_aborted>` plus an
-//!   `event_msg/turn_aborted`; a hard kill leaves the user message and nothing else (L9).
+//!   `event_msg/turn_aborted`; a hard kill leaves the user message and nothing else (L9);
+//! - Codex 0.165 may keep one thread over several files (`history_mode: "paginated"`): a later
+//!   page, named `rollout-<ts>-<thread>_<page>.jsonl`, starts with a `session_meta` whose
+//!   `history_base` says it continues the thread from the first `end_ordinal_exclusive` records
+//!   (`end_byte_offset` bytes) of an earlier file. Codex's own state names that page as the
+//!   thread's rollout; the earlier file's records past the cut are a branch the thread left.
 
 use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
@@ -23,21 +28,172 @@ use crate::model::{
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The Codex CLI reader.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Codex;
 
+/// Which records of a paginated thread a read carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Branches {
+    /// What Codex resumes: the part of the base the active page continues from, then the page.
+    /// The base's records past that point are left behind and counted (the default).
+    #[default]
+    Active,
+    /// Everything: the whole base file, its abandoned turns included, then the page.
+    All,
+}
+
 /// Read one Codex rollout file (`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`).
+/// A page of a paginated thread is read with the part of its base file it continues from.
 pub fn read_file(path: &Path) -> Result<Session> {
+    read_file_with(path, Branches::Active)
+}
+
+/// [`read_file`], choosing which branches of a paginated thread to carry.
+pub fn read_file_with(path: &Path, branches: Branches) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
+    let Some(base) = history_base(&file.rows) else {
+        let _span = crate::timing::span("build entries");
+        let mut session = parse_owned(file.rows, Some(path))?;
+        session.meta.source_sha256 = Some(file.sha256.wait());
+        super::json::keep_unfinished(&mut session, file.unfinished);
+        return Ok(session);
+    };
+    let mut prefix = base_prefix(path, &base)?;
+    if branches == Branches::All {
+        let whole = std::fs::read(&prefix.file)
+            .with_context(|| format!("read {}", prefix.file.display()))?;
+        let text = String::from_utf8_lossy(&whole);
+        prefix.rows = super::json::rows_from_lines(&text, &prefix.file.display().to_string())?.0;
+        prefix.bytes = whole;
+        prefix.left.clear();
+    }
+    let mut rows = prefix.rows;
+    rows.extend(file.rows);
     let _span = crate::timing::span("build entries");
-    let mut session = parse_owned(file.rows, Some(path))?;
-    session.meta.source_sha256 = Some(file.sha256.wait());
+    let mut session = parse_owned(rows, Some(path))?;
+    // The fingerprint is that of the bytes read: the base's prefix, then the page.
+    let mut digest = crate::sha256::Sha256::new();
+    digest.update(&prefix.bytes);
+    digest.update(&std::fs::read(path).with_context(|| format!("read {}", path.display()))?);
+    session.meta.source_sha256 = Some(digest.finalize_hex());
+    for (index, row) in prefix.left.into_iter().enumerate() {
+        session.entries.push(Entry {
+            id: fallback_id("off-branch", index),
+            kind: Kind::Meta {
+                kind: MetaKind::OffBranch,
+            },
+            raw: vec![row],
+        });
+    }
     super::json::keep_unfinished(&mut session, file.unfinished);
     Ok(session)
+}
+
+/// Where a page continues its thread from (`session_meta.payload.history_base`).
+struct HistoryBase {
+    thread: String,
+    end_ordinal: u64,
+    end_byte: usize,
+}
+
+fn history_base(rows: &[Value]) -> Option<HistoryBase> {
+    let first = rows.first()?;
+    if first.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let base = first.pointer("/payload/history_base")?;
+    Some(HistoryBase {
+        thread: base.get("thread_id")?.as_str()?.to_string(),
+        end_ordinal: base.get("end_ordinal_exclusive")?.as_u64()?,
+        end_byte: usize::try_from(base.get("end_byte_offset")?.as_u64()?).ok()?,
+    })
+}
+
+/// The records a page continues from, the bytes they were read from, and the base's records past
+/// the cut that are conversation (the branch the thread left).
+struct BasePrefix {
+    file: PathBuf,
+    rows: Vec<Value>,
+    bytes: Vec<u8>,
+    left: Vec<Value>,
+}
+
+fn base_prefix(page: &Path, base: &HistoryBase) -> Result<BasePrefix> {
+    let sessions = page
+        .ancestors()
+        .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))
+        .or_else(|| page.ancestors().nth(4))
+        .unwrap_or(Path::new("."));
+    let candidates: Vec<PathBuf> = rollout_files(sessions)?
+        .into_iter()
+        .filter(|file| file != page && rollout_id(file) == base.thread)
+        .collect();
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "{}: its history_base continues thread {} from its first {} records, and no other \
+             rollout of that thread is under {}",
+            page.display(),
+            base.thread,
+            base.end_ordinal,
+            sessions.display()
+        );
+    }
+    for candidate in &candidates {
+        let bytes =
+            std::fs::read(candidate).with_context(|| format!("read {}", candidate.display()))?;
+        let Some(prefix) = bytes.get(..base.end_byte) else {
+            continue;
+        };
+        if !(prefix.is_empty() || prefix.ends_with(b"\n")) {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        let (head, tail) = text.split_at(base.end_byte);
+        let (rows, _) = super::json::rows_from_lines(head, &candidate.display().to_string())?;
+        let ordinal = |row: &Value| row.get("ordinal").and_then(Value::as_u64);
+        let fits = rows.len() as u64 == base.end_ordinal
+            && rows.last().and_then(ordinal) == base.end_ordinal.checked_sub(1);
+        if !fits {
+            continue;
+        }
+        if history_base(&rows).is_some() {
+            anyhow::bail!(
+                "{}: its base {} is itself a page of the thread; a chain of pages is not read yet",
+                page.display(),
+                candidate.display()
+            );
+        }
+        let (rest, _) = super::json::rows_from_lines(tail, &candidate.display().to_string())?;
+        let left = rest
+            .into_iter()
+            .filter(|row| !matches!(class_of(row), Class::Meta(_)))
+            .collect();
+        return Ok(BasePrefix {
+            file: candidate.clone(),
+            rows,
+            bytes: prefix.to_vec(),
+            left,
+        });
+    }
+    anyhow::bail!(
+        "{}: its history_base end_byte_offset {} does not end record {} of any other rollout of \
+         thread {} (looked at {})",
+        page.display(),
+        base.end_byte,
+        base.end_ordinal.saturating_sub(1),
+        base.thread,
+        candidates
+            .iter()
+            .map(|c| c.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 /// Read records that were already decoded.
@@ -565,54 +721,85 @@ impl Reader for Codex {
             )
             .into());
         };
-        let mut seen = HashSet::new();
-        let mut out = Vec::new();
+        // One entry per thread, at its latest file: the active page of a paginated thread.
+        let mut latest: HashMap<String, PathBuf> = HashMap::new();
         for file in rollout_files(&sessions)? {
             let id = rollout_id(&file);
-            if id.is_empty() || !seen.insert(id.clone()) {
+            if id.is_empty() {
                 continue;
             }
-            out.push(SessionInfo {
+            match latest.get(&id) {
+                Some(known) if known.file_name() >= file.file_name() => {}
+                _ => {
+                    latest.insert(id, file);
+                }
+            }
+        }
+        let mut out: Vec<SessionInfo> = latest
+            .into_iter()
+            .map(|(id, file)| SessionInfo {
                 id,
                 path: file.to_string_lossy().into_owned(),
                 ..Default::default()
-            });
-        }
+            })
+            .collect();
         out.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(out)
     }
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
-        let Some(sessions) = roots.codex_sessions() else {
-            return Err(super::Lookup::NoStore(
-                "CODEX_HOME is not set: no Codex store to read".into(),
-            )
-            .into());
-        };
-        let matches: Vec<PathBuf> = rollout_files(&sessions)?
-            .into_iter()
-            .filter(|f| rollout_id(f).starts_with(id))
-            .collect();
-        match matches.as_slice() {
-            [one] => read_file(one),
-            [] => Err(super::Lookup::NotFound(format!(
-                "no Codex rollout with id {id:?} under {}",
-                sessions.display()
-            ))
-            .into()),
-            many => Err(super::Lookup::Ambiguous(format!(
-                "{id:?} matches {} Codex rollouts",
-                many.len()
-            ))
-            .into()),
-        }
+        read_with(id, roots, Branches::Active)
     }
 }
 
-/// The uuid a rollout file name ends with: `rollout-<ts>-<uuid>.jsonl`. A uuid is five dash
+/// Read the thread `id` (an unambiguous prefix is enough) from the store, choosing which branches
+/// of a paginated thread to carry.
+pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Session> {
+    let Some(sessions) = roots.codex_sessions() else {
+        return Err(
+            super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to read".into()).into(),
+        );
+    };
+    let matches: Vec<PathBuf> = rollout_files(&sessions)?
+        .into_iter()
+        .filter(|f| rollout_id(f).starts_with(id))
+        .collect();
+    // The pages of one paginated thread share its id: the latest page is the thread.
+    let one_thread = matches
+        .first()
+        .map(|file| rollout_id(file))
+        .is_some_and(|first| matches.iter().all(|f| rollout_id(f) == first));
+    if matches.len() > 1 && one_thread {
+        let latest = matches
+            .iter()
+            .max_by(|a, b| a.file_name().cmp(&b.file_name()))
+            .expect("not empty");
+        return read_file_with(latest, branches);
+    }
+    match matches.as_slice() {
+        [one] => read_file_with(one, branches),
+        [] => Err(super::Lookup::NotFound(format!(
+            "no Codex rollout with id {id:?} under {}",
+            sessions.display()
+        ))
+        .into()),
+        many => Err(super::Lookup::Ambiguous(format!(
+            "{id:?} matches {} Codex rollouts",
+            many.len()
+        ))
+        .into()),
+    }
+}
+
+/// The uuid a rollout file name ends with: `rollout-<ts>-<uuid>.jsonl`, or the thread's uuid for
+/// a page of a paginated thread, `rollout-<ts>-<uuid>_<page uuid>.jsonl`. A uuid is five dash
 /// separated groups, so the id is the last five of the name's parts.
 fn rollout_id(file: &Path) -> String {
-    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = match name.rsplit_once('_') {
+        Some((thread, _page)) if name.starts_with("rollout-") => thread,
+        _ => name,
+    };
     let parts: Vec<&str> = stem.split('-').collect();
     if stem.starts_with("rollout-") && parts.len() >= 5 {
         parts[parts.len() - 5..].join("-")

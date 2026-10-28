@@ -447,3 +447,194 @@ fn the_rollout_order_wins_over_timestamps() {
     }
     assert_eq!(texts(&codex::parse(&rows, None).unwrap()), before);
 }
+
+// --- Paginated threads (Codex 0.165) ---------------------------------------------------------
+
+const THREAD: &str = "01a181df-cfb6-79e2-8977-37b2cfde0b79";
+const PAGE: &str = "01a1827c-9cd7-7180-8a25-b3d7e423149a";
+
+fn record(ordinal: u64, kind: &str, payload: serde_json::Value) -> String {
+    serde_json::json!({
+        "timestamp": format!("2026-10-28T10:{:02}:00.000Z", ordinal), "ordinal": ordinal,
+        "type": kind, "payload": payload,
+    })
+    .to_string()
+        + "\n"
+}
+
+fn say(ordinal: u64, role: &str, text: &str) -> String {
+    let block = if role == "user" {
+        "input_text"
+    } else {
+        "output_text"
+    };
+    record(
+        ordinal,
+        "response_item",
+        serde_json::json!({"type": "message", "role": role, "content": [{"type": block, "text": text}]}),
+    )
+}
+
+/// A Codex home holding one thread over two pages: the base file, then a page that continues the
+/// thread from the base's first three records (`history_base`), as Codex 0.165 writes a thread
+/// whose later turns were redone. Returns the home, the base file and the page file.
+fn paginated_home(tag: &str, offset_shift: i64) -> (PathBuf, PathBuf, PathBuf) {
+    let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("mukade-tests")
+        .join("codex-paginated")
+        .join(format!("{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let day = home.join("sessions/2026/10/28");
+    std::fs::create_dir_all(&day).unwrap();
+    let meta = serde_json::json!({"id": THREAD, "session_id": THREAD, "cwd": r"D:\Projects\daodan",
+                                  "cli_version": "0.165.0-alpha.1.2", "history_mode": "paginated"});
+    let kept = record(0, "session_meta", meta.clone())
+        + &say(1, "user", "first")
+        + &say(2, "assistant", "one");
+    let base_text =
+        kept.clone() + &say(3, "user", "abandoned") + &say(4, "assistant", "abandoned reply");
+    let base = day.join(format!("rollout-2026-10-28T10-38-11-{THREAD}.jsonl"));
+    std::fs::write(&base, &base_text).unwrap();
+    let mut page_meta = meta;
+    page_meta["history_base"] = serde_json::json!({
+        "thread_id": THREAD, "end_ordinal_exclusive": 3,
+        "end_byte_offset": kept.len() as i64 + offset_shift,
+    });
+    let page_text = record(3, "session_meta", page_meta)
+        + &say(4, "user", "redo")
+        + &say(5, "assistant", "two");
+    let page = day.join(format!("rollout-2026-10-28T13-29-27-{THREAD}_{PAGE}.jsonl"));
+    std::fs::write(&page, &page_text).unwrap();
+    (home, base, page)
+}
+
+fn texts(s: &Session) -> Vec<String> {
+    s.conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.clone()),
+            Kind::Step { text, .. } => Some(text.join("")),
+            _ => None,
+        })
+        .collect()
+}
+
+fn roots(home: &std::path::Path) -> mukade::roots::StoreRoots {
+    mukade::roots::StoreRoots {
+        codex_home: Some(home.to_path_buf()),
+        ..Default::default()
+    }
+}
+
+/// Codex 0.165 keeps a thread whose later turns were redone over two files: the active page
+/// starts from the base file's first records (`history_base`) and carries on in its own file,
+/// whose name ends `<thread>_<page>`. The thread is that prefix and that page; the base's records
+/// past the prefix are a branch the thread left, counted, not carried.
+#[test]
+fn a_paginated_thread_is_its_base_prefix_and_its_latest_page() {
+    use mukade::reader::Reader;
+    let (home, base, page) = paginated_home("read", 0);
+    let s = codex::Codex
+        .read(THREAD, &roots(&home))
+        .expect("the thread reads");
+    assert_eq!(texts(&s), ["first", "one", "redo", "two"]);
+    assert_eq!(s.meta.id, THREAD);
+    let off_branch: Vec<String> = s
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                Kind::Meta {
+                    kind: MetaKind::OffBranch
+                }
+            )
+        })
+        .map(|e| e.raw[0].to_string())
+        .collect();
+    assert_eq!(off_branch.len(), 2, "{off_branch:?}");
+    assert!(
+        off_branch.iter().all(|r| r.contains("abandoned")),
+        "{off_branch:?}"
+    );
+    // The fingerprint is that of the bytes read: the base's prefix, then the page.
+    let base_bytes = std::fs::read(&base).unwrap();
+    let page_bytes = std::fs::read(&page).unwrap();
+    let offset = std::str::from_utf8(&base_bytes)
+        .unwrap()
+        .match_indices('\n')
+        .nth(2)
+        .unwrap()
+        .0
+        + 1;
+    let mut read_bytes = base_bytes[..offset].to_vec();
+    read_bytes.extend_from_slice(&page_bytes);
+    assert_eq!(
+        s.meta.source_sha256.as_deref(),
+        Some(mukade::sha256::sha256_hex(&read_bytes).as_str())
+    );
+
+    // The page's own file, read directly, is the same thread.
+    let direct = codex::read_file(&page).expect("the page reads with its base");
+    assert_eq!(texts(&direct), ["first", "one", "redo", "two"]);
+
+    // Listed once, under the thread's id, at its active page.
+    let listed = codex::Codex.list(&roots(&home)).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].id, THREAD);
+    assert_eq!(std::path::Path::new(&listed[0].path), page.as_path());
+}
+
+/// A page whose base is not there, or whose recorded byte offset does not fall where its ordinal
+/// says, is refused with a reason: a guess would carry the wrong history.
+#[test]
+fn a_page_without_its_base_or_with_a_wrong_offset_is_refused() {
+    let (home, base, page) = paginated_home("no-base", 0);
+    std::fs::remove_file(&base).unwrap();
+    let error = codex::read_file(&page).unwrap_err().to_string();
+    assert!(error.contains("history_base"), "{error}");
+    let _ = std::fs::remove_dir_all(&home);
+
+    let (_, _, page) = paginated_home("bad-offset", 5);
+    let error = codex::read_file(&page).unwrap_err().to_string();
+    assert!(error.contains("end_byte_offset"), "{error}");
+}
+
+/// `Branches::All` reads a paginated thread whole: the base file, its abandoned turns included,
+/// then the page's own records. Nothing is left behind, so nothing is counted as off-branch.
+#[test]
+fn every_branch_of_a_paginated_thread_reads_with_branches_all() {
+    let (home, base, page) = paginated_home("all", 0);
+    let s =
+        codex::read_with(THREAD, &roots(&home), codex::Branches::All).expect("the thread reads");
+    assert_eq!(
+        texts(&s),
+        [
+            "first",
+            "one",
+            "abandoned",
+            "abandoned reply",
+            "redo",
+            "two"
+        ]
+    );
+    assert!(
+        !s.entries.iter().any(|e| matches!(
+            e.kind,
+            Kind::Meta {
+                kind: MetaKind::OffBranch
+            }
+        )),
+        "nothing left behind"
+    );
+    let mut read_bytes = std::fs::read(&base).unwrap();
+    read_bytes.extend_from_slice(&std::fs::read(&page).unwrap());
+    assert_eq!(
+        s.meta.source_sha256.as_deref(),
+        Some(mukade::sha256::sha256_hex(&read_bytes).as_str())
+    );
+    let direct = codex::read_file_with(&page, codex::Branches::All).unwrap();
+    assert_eq!(texts(&direct), texts(&s));
+    // The default is the active part only.
+    let active = codex::read_with(THREAD, &roots(&home), codex::Branches::Active).unwrap();
+    assert_eq!(texts(&active), ["first", "one", "redo", "two"]);
+}
