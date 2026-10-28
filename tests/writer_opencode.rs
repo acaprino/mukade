@@ -285,3 +285,79 @@ fn the_import_document_has_the_shape_of_opencodes_own_export() {
     }
     assert_eq!(keys(&their_tool["state"]), keys(&our_tool["state"]));
 }
+
+/// OpenCode keeps a provider's reasoning in that provider's own shape and replays it from there.
+/// Through OpenRouter (OpenCode 2.1.4's OpenAI-compatible route, seen live on 2026-10-28) that is
+/// `native.reasoningDetails`, OpenRouter's `reasoning_details`; a `native.signature` is not
+/// replayed. So toward the `openrouter` provider each block is written as a reasoning detail:
+/// signed text as `reasoning.text` with its signature, an encrypted payload as
+/// `reasoning.encrypted` with its data, the format naming the protocol that made it.
+#[test]
+fn reasoning_toward_openrouter_is_written_as_its_reasoning_details() {
+    use mukade::model::{Entry, Kind, Opaque, Protocol, Reasoning, StepEnd};
+    let scratch = support::scratch(HarnessId::OpenCode, "writer-opencode-details");
+    let mut opts = support::opts(HarnessId::OpenCode, &scratch);
+    opts.project_id = Some("global".into());
+    opts.dest_protocol = Some(Protocol::AnthropicMessages);
+    let reasoning = |text: &str, signature: Option<&str>, encrypted: Option<&str>| Reasoning {
+        text: text.into(),
+        opaque: Some(Opaque {
+            protocol: Protocol::AnthropicMessages,
+            model: Some("anthropic/claude-haiku-5.5".into()),
+            signature: signature.map(str::to_owned),
+            encrypted: encrypted.map(str::to_owned),
+        }),
+    };
+    let mut session = support::read_source(HarnessId::OpenCode);
+    session.entries.push(Entry {
+        id: "thinking-step".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![
+                reasoning("", None, Some("REDACTED-DATA")),
+                reasoning("17 times 23", Some("SIG"), None),
+            ],
+            text: vec!["391".into()],
+            calls: vec![],
+            end: StepEnd::Completed,
+        },
+        raw: vec![],
+    });
+    // The reasoning parts of the step added last (the fixture has its own before it).
+    let parts_of = |doc: &Value| -> Vec<Value> {
+        messages(doc)
+            .into_iter()
+            .rev()
+            .find(|m| m["type"] == "assistant")
+            .and_then(|m| m["content"].as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p["type"] == "reasoning")
+            .collect()
+    };
+
+    opts.model_provider = Some("openrouter".into());
+    opts.model = Some("anthropic/claude-haiku-5.5".into());
+    let mut clock = Clock::new(opts.now.as_deref());
+    let doc = document_for(&session, "ses_t", "D:/w", &opts, &mut clock).unwrap();
+    let parts = parts_of(&doc);
+    assert_eq!(parts.len(), 2, "{parts:?}");
+    assert_eq!(
+        parts[0]["native"],
+        serde_json::json!({"reasoningDetails": [{"type": "reasoning.encrypted",
+            "data": "REDACTED-DATA", "format": "anthropic-claude-v1", "index": 0}]})
+    );
+    assert_eq!(
+        parts[1]["native"],
+        serde_json::json!({"reasoningDetails": [{"type": "reasoning.text",
+            "text": "17 times 23", "signature": "SIG", "format": "anthropic-claude-v1", "index": 1}]})
+    );
+
+    // Toward another provider the shape stays OpenCode's own for Anthropic.
+    opts.model_provider = Some("anthropic".into());
+    opts.model = Some("claude-haiku-5-5".into());
+    let mut clock = Clock::new(opts.now.as_deref());
+    let doc = document_for(&session, "ses_t", "D:/w", &opts, &mut clock).unwrap();
+    let parts = parts_of(&doc);
+    assert_eq!(parts[1]["native"], serde_json::json!({"signature": "SIG"}));
+}

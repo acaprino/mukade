@@ -414,7 +414,7 @@ Tool calls follow [`tool-conversion-tables.md`](tool-conversion-tables.md) (last
 ### 3.3 Reasoning
 
 [V] Every native store keeps the opaque part: Claude `signature`, Codex `encrypted_content`,
-OpenCode `native.signature`, Pi `thinkingSignature`; and every harness sends it back on its own
+OpenCode `native.signature` (through OpenRouter `native.reasoningDetails`), Pi `thinkingSignature`; and every harness sends it back on its own
 resume (all four `capture-gen.jsonl`). Across harnesses the bench saw:
 
 | into | what the model received (full variant) | real API |

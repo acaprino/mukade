@@ -206,18 +206,39 @@ impl Builder {
             .flatten()
         {
             match block.get("type").and_then(Value::as_str).unwrap_or("") {
-                "reasoning" => reasoning.push(Reasoning {
-                    text: str_at(block, "/text").unwrap_or_default(),
-                    opaque: Some(Opaque {
-                        protocol: self
-                            .protocol
-                            .clone()
-                            .unwrap_or(Protocol::Other("unknown".into())),
-                        model: model_id.clone(),
-                        signature: str_at(block, "/native/signature"),
-                        encrypted: str_at(block, "/native/encrypted"),
-                    }),
-                }),
+                "reasoning" => {
+                    // Through OpenRouter the payload is in OpenRouter's own `reasoning_details`.
+                    let detail = block
+                        .pointer("/native/reasoningDetails")
+                        .and_then(Value::as_array)
+                        .and_then(|details| details.first());
+                    let protocol = detail
+                        .and_then(|d| d.get("format"))
+                        .and_then(Value::as_str)
+                        .and_then(|format| match format {
+                            "anthropic-claude-v1" => Some(Protocol::AnthropicMessages),
+                            "openai-responses-v1" => Some(Protocol::OpenaiResponses),
+                            _ => None,
+                        })
+                        .or_else(|| self.protocol.clone())
+                        .unwrap_or(Protocol::Other("unknown".into()));
+                    let (signature, encrypted) = match detail {
+                        Some(d) => (str_at(d, "/signature"), str_at(d, "/data")),
+                        None => (
+                            str_at(block, "/native/signature"),
+                            str_at(block, "/native/encrypted"),
+                        ),
+                    };
+                    reasoning.push(Reasoning {
+                        text: str_at(block, "/text").unwrap_or_default(),
+                        opaque: Some(Opaque {
+                            protocol,
+                            model: model_id.clone(),
+                            signature,
+                            encrypted,
+                        }),
+                    })
+                }
                 "text" => {
                     let t = str_at(block, "/text").unwrap_or_default();
                     if !t.is_empty() {

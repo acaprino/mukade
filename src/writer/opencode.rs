@@ -15,7 +15,7 @@
 
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written};
-use crate::model::{HarnessId, Reasoning, Session, ToolResult};
+use crate::model::{HarnessId, Opaque, Protocol, Reasoning, Session, ToolResult};
 use crate::policy::{Clock, ReasoningPlan};
 use crate::tools::content_blocks;
 use anyhow::{Context, Result};
@@ -285,6 +285,40 @@ fn model_of(session: &Session, opts: &WriteOpts) -> Result<Value> {
     Ok(json!({"id": id, "providerID": provider}))
 }
 
+/// OpenCode's own `native` for a reasoning part: the signature or the encrypted payload.
+fn opencode_native(opaque: &Opaque) -> Map<String, Value> {
+    let mut native = Map::new();
+    if let Some(signature) = opaque.signature.clone() {
+        native.insert("signature".into(), Value::String(signature));
+    }
+    if let Some(encrypted) = opaque.encrypted.clone() {
+        native.insert("encrypted".into(), Value::String(encrypted));
+    }
+    native
+}
+
+/// Through OpenRouter, OpenCode keeps and replays a provider's reasoning as OpenRouter's own
+/// `reasoning_details` (`native.reasoningDetails`, seen in a live export of 2.1.4, 2026-10-28):
+/// signed text is a `reasoning.text` detail with its signature, an encrypted payload a
+/// `reasoning.encrypted` detail with its data; `format` names the protocol that made it.
+fn openrouter_native(text: &str, opaque: &Opaque, index: usize) -> Map<String, Value> {
+    let format = match &opaque.protocol {
+        Protocol::AnthropicMessages => "anthropic-claude-v1",
+        Protocol::OpenaiResponses => "openai-responses-v1",
+        _ => "unknown",
+    };
+    let detail = match (&opaque.signature, &opaque.encrypted) {
+        (Some(signature), _) => json!({"type": "reasoning.text", "text": text,
+                                       "signature": signature, "format": format, "index": index}),
+        (None, Some(data)) => json!({"type": "reasoning.encrypted", "data": data,
+                                     "format": format, "index": index}),
+        (None, None) => return Map::new(),
+    };
+    let mut native = Map::new();
+    native.insert("reasoningDetails".into(), Value::Array(vec![detail]));
+    native
+}
+
 fn assistant_message(
     step: &PlannedStep,
     results: &[PlannedResult],
@@ -295,18 +329,17 @@ fn assistant_message(
     let created = clock.next_millis();
     // L8: one message per step, with every block of that step in one `content` array.
     let mut content: Vec<Value> = Vec::new();
-    for reasoning in &step.reasoning {
+    let through_openrouter = model.get("providerID").and_then(Value::as_str) == Some("openrouter");
+    for (index, reasoning) in step.reasoning.iter().enumerate() {
         if let ReasoningPlan::Native(Reasoning { text, opaque }) = reasoning {
             let mut block = Map::new();
             block.insert("type".into(), Value::String("reasoning".into()));
             block.insert("text".into(), Value::String(text.clone()));
-            let mut native = Map::new();
-            if let Some(signature) = opaque.as_ref().and_then(|o| o.signature.clone()) {
-                native.insert("signature".into(), Value::String(signature));
-            }
-            if let Some(encrypted) = opaque.as_ref().and_then(|o| o.encrypted.clone()) {
-                native.insert("encrypted".into(), Value::String(encrypted));
-            }
+            let native = match opaque {
+                Some(opaque) if through_openrouter => openrouter_native(text, opaque, index),
+                Some(opaque) => opencode_native(opaque),
+                None => Map::new(),
+            };
             if !native.is_empty() {
                 block.insert("native".into(), Value::Object(native));
             }

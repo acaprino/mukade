@@ -255,7 +255,7 @@ message array. `list` is not implemented (no SQLite read); find ids with
 | OpenCode record | mukade entry |
 |---|---|
 | `user` | User, with `files` as attachments |
-| `assistant` | one Step: reasoning with `native.signature`, text, one call per `tool` part plus its result. A part still `pending`/`running` has no result; an `error` part's result is `state.error.message`, marked as an error. No `finish` means killed |
+| `assistant` | one Step: reasoning with `native.signature` / `native.encrypted`, or through OpenRouter `native.reasoningDetails[0]` (`signature` or `data`, protocol from its `format`), text, one call per `tool` part plus its result. A part still `pending`/`running` has no result; an `error` part's result is `state.error.message`, marked as an error. No `finish` means killed |
 | `compaction`, `status:"completed"` | Compaction: `kept_from` = `metadata.keepID`, trigger from `reason` |
 | failed `compaction`, `idle`, unknown types | Meta (not conversation) |
 
@@ -276,7 +276,7 @@ answers `Bad Request` [32][27 §2.3].
 | `info` | `{id, projectID, location:{directory}, time:{created, updated}, cost:0, tokens:{input, output, reasoning, cache:{read, write}}, title?, model:{id, providerID}}`. `projectID`, `cost` and `tokens` are all required together, and `model` must have both fields |
 | user message | `{id, type:"user", time:{created}, text, files:[…]}` |
 | assistant message | `{id, type:"assistant", agent:"build", model:{id, providerID}, content:[…], finish:"stop"\|"tool-calls", rawFinish:"end_turn"\|"tool_use", time:{created, completed}, cost:0}`, with one message per step (L8) |
-| reasoning part | `{type:"reasoning", text, native:{signature?, encrypted?}}`, only when the reasoning policy keeps it as native |
+| reasoning part | `{type:"reasoning", text, native:{signature?, encrypted?}}`, only when the reasoning policy keeps it as native. Toward the `openrouter` provider, OpenRouter's own shape, which OpenCode keeps and replays there: `native:{reasoningDetails:[{type:"reasoning.text", text, signature, format, index}]}` for signed text, `{type:"reasoning.encrypted", data, format, index}` for an encrypted payload, `format` `anthropic-claude-v1` or `openai-responses-v1` from the block's protocol (seen in a live 2.1.4 export; verified live 2026-10-28: a copy with one character of the signature changed is refused by the provider, `Invalid signature in thinking block`) |
 | tool part | `{type:"tool", id, name, executed:false, state:{input, status:"completed"\|"error", content:[…], error?, metadata:{truncated:false}}, time:{created, completed}}` |
 | failed call | `state.error` = `Session.StructuredError` `{"type":"tool.execution", "message":<result text>}`. `tool.execution` is the type OpenCode itself records for a failed tool [32][2] |
 | user image | `Prompt.FileAttachment` `{data, mime, source:{type:"inline"}}` in `files` [32 `media.rs`][2] |

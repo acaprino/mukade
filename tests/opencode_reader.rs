@@ -366,3 +366,44 @@ fn store_rows_are_read_in_seq_order() {
         .collect();
     assert_eq!(after, before);
 }
+
+/// A reasoning part OpenCode stored through OpenRouter keeps its payload in
+/// `native.reasoningDetails` (the shape of a live export, 2026-10-28): its signature or encrypted
+/// data is the block's opaque part, and its format names the protocol.
+#[test]
+fn reasoning_details_are_read_as_the_opaque_payload() {
+    let doc = serde_json::json!({
+        "info": {"id": "ses_x", "directory": "D:/w", "time": {"created": 1, "updated": 2}},
+        "messages": [
+            {"id": "msg_u", "type": "user", "text": "17 times 23?", "time": {"created": 1}},
+            {"id": "msg_a", "type": "assistant", "finish": "stop", "time": {"created": 2},
+             "model": {"id": "anthropic/claude-haiku-5.5", "providerID": "openrouter"},
+             "content": [
+                {"type": "reasoning", "text": "",
+                 "native": {"reasoningDetails": [{"type": "reasoning.text",
+                    "format": "anthropic-claude-v1", "index": 0, "signature": "SIG"}]}},
+                {"type": "reasoning", "text": "",
+                 "native": {"reasoningDetails": [{"type": "reasoning.encrypted",
+                    "format": "anthropic-claude-v1", "index": 1, "data": "DATA"}]}},
+                {"type": "text", "text": "391"}]}
+        ]
+    });
+    let s = mukade::reader::opencode::parse(&doc, None).unwrap();
+    let reasoning = s
+        .conversation()
+        .find_map(|e| match &e.kind {
+            Kind::Step { reasoning, .. } => Some(reasoning.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let signed = reasoning[0].opaque.as_ref().unwrap();
+    assert_eq!(signed.signature.as_deref(), Some("SIG"));
+    assert_eq!(signed.protocol, mukade::model::Protocol::AnthropicMessages);
+    let redacted = reasoning[1].opaque.as_ref().unwrap();
+    assert_eq!(redacted.encrypted.as_deref(), Some("DATA"));
+    assert_eq!(redacted.signature, None);
+    assert_eq!(
+        redacted.protocol,
+        mukade::model::Protocol::AnthropicMessages
+    );
+}
