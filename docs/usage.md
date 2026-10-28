@@ -211,7 +211,7 @@ into Pi with `--compaction portable`; long paths shortened):
     "source": { "harness": "claude_code", "version": "2.1.311",
                 "session_id": "c45db7bc-…", "content_sha256": "df8f8f84d7fd3d21…" },
     "dest":   { "harness": "pi", "version": "1.2.0", "session_id": "a7b29d83-…", "location": "…" },
-    "options": { "compaction": "portable", "reasoning": "drop_foreign", "resume_prompt": false },
+    "options": { "compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": false },
     "counts": { "messages_in": 5, "messages_out": 5, "tool_calls": 0, "tools_text_form": 0,
                 "reasoning_dropped": 0, "reasoning_as_text": 0,
                 "dropped_orphan_results": 0, "dropped_duplicate_results": 0,
@@ -361,11 +361,12 @@ written to it (never at start-up):
 |---|---|
 | `mukade-data/cache/probes.json` | the versions and OpenCode project ids learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not start the harness to ask again |
 | `mukade-data/tmp/mukade-import-*.json` | the document `opencode session import` needs as a file; private, and removed when the import ends, even when it fails |
+| `mukade-data/tmp/summary-*/` | one folder per `--compaction summary` run: the file Codex writes its summary to, the session Pi forks; removed when the run ends, even when it fails |
 | `.mukade-*.tmp` | beside the session being written, in the destination's store: the session as it is written, renamed into place when complete |
 
 Nothing is written to the user profile, the application-data folders, the registry or the system's
-temporary folder. A temporary file a **killed** run left behind is removed by the next run once it
-is an hour old. The files that *are* yours stay yours: the sessions it writes into the harnesses'
+temporary folder. A temporary file or summary folder a **killed** run left behind is removed by the
+next run once it is an hour old. The files that *are* yours stay yours: the sessions it writes into the harnesses'
 stores, and what you ask for with `--output` and `--manifest`. To remove mukade, delete the folder
 it is in.
 
@@ -641,6 +642,12 @@ the directory's own layout when exactly one harness is recognized. `write` alway
   (exit 4, from a hop to OpenCode): the executable is in a folder it cannot write to, or something
   that is not a folder is named `mukade-data` there. Nothing was written. Copy `mukade.exe` to a
   folder you can write to; see [section 6](#6-where-its-files-go).
+- **"summary failed: …"** (exit 4, `--compaction summary`): the source harness could not write the
+  summary, and nothing was written. The message names the command (the prompt shown as
+  `<summary prompt v1>`), its exit status and what it printed: a login or quota problem of the
+  source harness, a model it cannot reach (name another with `--summary-model`), a run longer than
+  `--summary-timeout`, or a model that called a tool instead of summarizing. When OpenCode's fork
+  could not be deleted, the message ends with the command that removes it.
 - **Resume fails after a successful write** (exit 5): the session already exists. Mukade still
   prints its receipt on stdout and saves `--manifest`: use that `id` and `location` instead of
   retrying, which would create another session. A resume that outlives its timeout is stopped,

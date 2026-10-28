@@ -9,8 +9,9 @@
 //! by `--output` and `--manifest`.
 //!
 //! Where the folder cannot be made (an executable in a read-only location) mukade does not look
-//! for another place: the cache is simply not kept, and the one temporary file that must exist,
-//! the document OpenCode's `session import` reads, is an error that says so. The system's
+//! for another place: the cache is simply not kept, and the temporary files that must exist, the
+//! document OpenCode's `session import` reads and the folder of a summarizing run
+//! (`crate::summary`), are an error that says so. The system's
 //! temporary folder, the user profile and the application-data folders are never used. A
 //! temporary file is removed when its work is done, and one a killed process left behind is
 //! removed by the next run once it is an hour old ([`sweep_stale`]).

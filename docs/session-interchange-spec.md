@@ -130,7 +130,8 @@ pub fn compact(s: &Session, c: &Compaction, roots: &StoreRoots) -> Result<(Cow<S
 `HopError` kinds map to the CLI exit codes of technical design 5.5.2: `NotFound` (2: the store is
 not configured, the session is not there or the id is ambiguous — a reader's typed `Lookup`),
 `Unsupported` (2: a pair or option this spec marks blocked), `WriteFailed` (4), `StrictCheckFailed`
-(4, §7), `VerifyFailed` (5: the source is there but could not be read), `ResumeFailed` (5: the
+(4, §7), `SummaryFailed` (4, §4.5: the source's model wrote no usable summary; nothing was written),
+`VerifyFailed` (5: the source is there but could not be read), `ResumeFailed` (5: the
 session was written; the error carries its receipt and manifest).
 
 ### 1.3 Rules that hold for every hop
@@ -589,7 +590,7 @@ each is a rule for our writers (§8.2).
   "source": {"harness": "codex", "version": "0.164.0", "session_id": "…", "content_sha256": "…"},
   "dest":   {"harness": "claude_code", "version": "2.1.311", "session_id": "…", "location": "…"},
   "library": {"name": "shinatama-interchange", "version": "…", "reader": "codex@0.164.0", "writer": "claude_code@2.1.311"},
-  "options": {"compaction": "portable", "reasoning": "drop_foreign", "resume_prompt": true},
+  "options": {"compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": true},
   "counts":  {"messages_in": 18, "messages_out": 9, "tool_calls": 0, "reasoning_dropped": 1},
   "losses":  ["reasoning dropped: made by another provider protocol (1)", "interrupted_last_turn"],
   "strict":  {"checked": true, "violations": []}

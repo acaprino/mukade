@@ -53,11 +53,22 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
 1. **Native compaction records [U].** A portable hop writes the summary as a user message, never
    the destination's own record (Claude `compact_boundary`, Codex `compacted`, Pi `compaction`;
    spec §4.4).
-2. **Summary written by the source's model.** Being built in a parallel session
-   (`docs/superpowers/specs/2026-10-28-source-model-summary-design.md`, plan in
-   `docs/superpowers/plans/`; commits `a559fd7`, `083552e`, `1c38672`). It answers the case of a
-   very large thread whose own compaction summary is encrypted (Codex 0.165), which today can only
-   be carried whole.
+2. **Summary written by the source's model: built** (`--compaction summary`, spec §4.5, live
+   record `docs/verification/2026-10-28-summary-live.md`). Still open:
+   - *Codex's real model [U].* Checked against a mock only (quota). *To settle:* after the reset,
+     `mukade hop codex <thread id> pi --compaction summary --resume-prompt "What were we doing"` on
+     a throwaway thread: the rollout's SHA-256 unchanged, the summary a summary (not a work log:
+     Codex's reply is not checked for tool calls), the destination answering from it.
+   - *A session larger than the source model's window [U].* It must end in `summary failed`, never
+     half a summary.
+   - *Smaller points from the review:* the manifest names the recorded model when OpenCode ran with
+     its default; the summary is paid for before `--keep-turns` is checked against the source's
+     turns; `write` ignores the `--summary-*` flags without a word; `--summary-timeout` with an
+     enormous value panics; the source's own compaction lines are hidden when a kept tail holds it;
+     a summary run's folder name is pid and time (two threads of one library caller could share it),
+     and a run longer than an hour can have it swept by another mukade; the tests sharing
+     `mukade-data/tmp` rely on `cargo test` running binaries one at a time (not nextest); no test
+     covers the fork leftover `dump` prints.
 3. **Not exercised on real sessions:** auto-compaction by threshold, a second compaction, rewind
    or tree navigation in the source, images and attachments toward Claude Code (spec §10).
 4. **Speed of very large sessions.** The 100 MB case was not re-measured after the speed work

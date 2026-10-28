@@ -53,7 +53,9 @@ println!("{}", serde_json::to_string_pretty(&receipt.manifest)?);
 `hop` is the whole pipeline. Its halves are public on their own: `export(&SessionRef, &roots)` reads a
 session (`export_path` reads one from a file), `import(dest, &session, &ImportOpts)` writes one you
 already hold, and `Receipt` carries the destination id, its location, the native resume command, the
-manifest and — when a resume prompt was given — the destination's reply.
+manifest and — when a resume prompt was given — the destination's reply. `compact(&session,
+&Compaction, &roots)` is the step between them: the session a compaction policy hands to the writer,
+with the summary the source's model wrote when one was asked for (`summary::summarize` runs it).
 
 Two helpers cover the harnesses themselves: `exe::resolve(harness, override)` finds the binary to
 spawn (explicit override → `MUKADE_*_EXE` → `PATH` → well-known install locations), and
@@ -129,11 +131,13 @@ mode to switch on.
 
 It generates the files it needs in the folder where the executable is, and nowhere else: a
 `mukade-data` folder, made the first time something is written to it, holding a small cache of the
-versions and OpenCode project ids it learned from harness binaries (`cache/`) and the temporary
-document an OpenCode import needs (`tmp/`, removed when the import ends; a killed run's leftovers
-are swept an hour later). Nothing goes to the user profile, the application-data folders, the
+versions and OpenCode project ids it learned from harness binaries (`cache/`) and its temporary
+files (`tmp/`): the document an OpenCode import needs, and the folder of a `--compaction summary`
+run (Codex's last message, Pi's fork), each removed when its work ends; a killed run's leftovers
+are swept an hour later. Nothing goes to the user profile, the application-data folders, the
 registry or the system's temporary folder; where the folder cannot be made (an executable in a
-read-only place) the cache is simply not kept and an OpenCode import says why it cannot run. Delete
+read-only place) the cache is simply not kept, and an OpenCode import or a summary says why it
+cannot run. Delete
 the executable's folder and nothing is left. An automated test runs the real binary with all of
 those places pointed at an empty sandbox and asserts it stays empty.
 
