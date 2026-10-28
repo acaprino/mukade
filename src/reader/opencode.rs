@@ -19,7 +19,7 @@ use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
     CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    Session, StepEnd, ToolCall, ToolResult, Trigger,
+    ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -112,6 +112,8 @@ fn step_end(finish: Option<&str>) -> StepEnd {
 struct Builder {
     entries: Vec<Entry>,
     model: Option<ModelRef>,
+    /// Every model the session used, in first-seen order.
+    models: Vec<ModelRef>,
     /// The protocol of the model that produced the current row, when the store states it.
     protocol: Option<Protocol>,
 }
@@ -123,8 +125,10 @@ impl Builder {
                 provider: str_at(model, "/providerID"),
                 id: str_at(model, "/id").unwrap_or_default(),
             };
-            if !reference.id.is_empty() && self.model.as_ref().map(|x| &x.id) != Some(&reference.id)
-            {
+            if !reference.id.is_empty() {
+                if !self.models.contains(&reference) {
+                    self.models.push(reference.clone());
+                }
                 self.model = Some(reference);
             }
             self.protocol = str_at(model, "/providerID").map(|p| Protocol::from_provider(&p));
@@ -143,6 +147,17 @@ impl Builder {
                 raw: vec![raw.clone()],
             }),
             "assistant" => self.assistant(index, m, raw),
+            // A compaction OpenCode did not complete (`failed`: the summary did not match its
+            // template) was never applied; it is not the source's compaction.
+            "compaction" if str_at(m, "/status").is_some_and(|status| status != "completed") => {
+                self.entries.push(Entry {
+                    id: id_of(m, index),
+                    kind: Kind::Meta {
+                        kind: MetaKind::Internal,
+                    },
+                    raw: vec![raw.clone()],
+                })
+            }
             "compaction" => self.entries.push(Entry {
                 id: id_of(m, index),
                 kind: Kind::Compaction {
@@ -219,14 +234,24 @@ impl Builder {
                             .unwrap_or(Value::Null),
                     });
                     let status = str_at(block, "/state/status").unwrap_or_default();
+                    // A tool still `pending` or `running` when OpenCode stopped has no result
+                    // (L9): the call stays unanswered.
+                    if status != "completed" && status != "error" {
+                        continue;
+                    }
                     let blocks = block
                         .pointer("/state/content")
                         .and_then(Value::as_array)
                         .cloned()
                         .unwrap_or_default();
+                    // A failed call's message is in `error` (`Session.StructuredError`).
+                    let content = match str_at(block, "/state/error/message") {
+                        Some(message) if blocks.is_empty() => ResultContent::Text(message),
+                        _ => result_content(&blocks),
+                    };
                     results.push(ToolResult {
                         call_id: str_at(block, "/id").unwrap_or_default(),
-                        content: result_content(&blocks),
+                        content,
                         is_error: status == "error",
                         truncated_by_source: block
                             .pointer("/state/metadata/truncated")
@@ -260,12 +285,7 @@ impl Builder {
     }
 
     fn finish(self, session: Value, source_path: Option<&Path>) -> Result<Session> {
-        let models: Vec<ModelRef> = self
-            .model
-            .iter()
-            .filter(|m| !m.id.is_empty())
-            .cloned()
-            .collect();
+        let models = self.models.clone();
         let epoch = |ptr: &str| {
             session
                 .pointer(ptr)

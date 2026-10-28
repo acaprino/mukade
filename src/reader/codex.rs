@@ -79,9 +79,8 @@ fn class_of(row: &Value) -> Class {
             _ => Class::Meta(MetaKind::Internal),
         },
         "response_item" => match item_type {
-            "reasoning" | "function_call" | "custom_tool_call" | "local_shell_call" => {
-                Class::StepPart
-            }
+            "reasoning" | "function_call" | "custom_tool_call" | "local_shell_call"
+            | "web_search_call" => Class::StepPart,
             "function_call_output" | "custom_tool_call_output" => Class::Result,
             "message" => match payload.get("role").and_then(Value::as_str).unwrap_or("") {
                 "assistant" => Class::StepPart,
@@ -349,7 +348,8 @@ impl Builder {
         else {
             return;
         };
-        match payload.get("type").and_then(Value::as_str).unwrap_or("") {
+        let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+        match item_type {
             "reasoning" => reasoning.push(Reasoning {
                 text: payload
                     .get("summary")
@@ -371,11 +371,21 @@ impl Builder {
                     }
                 }
             }
-            "function_call" | "custom_tool_call" | "local_shell_call" => {
-                let name = str_at(payload, "/name").unwrap_or_default();
-                let input = arguments_of(payload);
+            "function_call" | "custom_tool_call" | "local_shell_call" | "web_search_call" => {
+                // `local_shell_call` and `web_search_call` have no name or arguments: what they
+                // did is in `action`, and a web search has no `call_id` (it has no output record).
+                let (name, input) = match item_type {
+                    "local_shell_call" => ("local_shell".to_string(), action_of(payload)),
+                    "web_search_call" => ("web_search".to_string(), action_of(payload)),
+                    _ => (
+                        str_at(payload, "/name").unwrap_or_default(),
+                        arguments_of(payload),
+                    ),
+                };
                 calls.push(ToolCall {
-                    id: str_at(payload, "/call_id").unwrap_or_else(|| id_of(payload, index)),
+                    id: str_at(payload, "/call_id")
+                        .or_else(|| str_at(payload, "/id"))
+                        .unwrap_or_else(|| id_of(payload, index)),
                     canonical: Some(canonical_call(&name, &input, self.env_shell.clone())),
                     source_name: name,
                     input,
@@ -391,6 +401,10 @@ impl Builder {
             call_id: str_at(payload, "/call_id").unwrap_or_default(),
             content: match payload.get("output") {
                 Some(Value::String(s)) => ResultContent::Text(s.clone()),
+                // Content items (an image, an MCP result) stay structured.
+                Some(Value::Array(items)) => {
+                    super::json::result_content(&items.iter().map(output_item).collect::<Vec<_>>())
+                }
                 Some(other) => ResultContent::Text(other.to_string()),
                 None => ResultContent::Text(String::new()),
             },
@@ -455,6 +469,22 @@ impl Builder {
             },
             entries: self.entries,
         })
+    }
+}
+
+/// What a `local_shell_call` or `web_search_call` did.
+fn action_of(payload: &Value) -> Value {
+    payload.get("action").cloned().unwrap_or(Value::Null)
+}
+
+/// A tool output content item, with its text as a plain text block.
+fn output_item(item: &Value) -> Value {
+    match item.get("type").and_then(Value::as_str) {
+        Some("input_text" | "output_text") => serde_json::json!({
+            "type": "text",
+            "text": item.get("text").cloned().unwrap_or(Value::String(String::new())),
+        }),
+        _ => item.clone(),
     }
 }
 

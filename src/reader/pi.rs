@@ -45,6 +45,30 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
     b.finish(source_path)
 }
 
+/// Pi's own text for a `bashExecution` message (`bashExecutionToText`, pi-coding-agent 1.2.0).
+fn bash_execution_text(message: &Value) -> String {
+    let mut text = format!(
+        "Ran `{}`\n",
+        str_at(message, "/command").unwrap_or_default()
+    );
+    match str_at(message, "/output").filter(|output| !output.is_empty()) {
+        Some(output) => text.push_str(&format!("```\n{output}\n```")),
+        None => text.push_str("(no output)"),
+    }
+    let exit_code = message.get("exitCode").and_then(Value::as_i64);
+    if message.get("cancelled") == Some(&Value::Bool(true)) {
+        text.push_str("\n\n(command cancelled)");
+    } else if let Some(code) = exit_code.filter(|code| *code != 0) {
+        text.push_str(&format!("\n\nCommand exited with code {code}"));
+    }
+    if message.get("truncated") == Some(&Value::Bool(true))
+        && let Some(path) = str_at(message, "/fullOutputPath")
+    {
+        text.push_str(&format!("\n\n[Output truncated. Full output: {path}]"));
+    }
+    text
+}
+
 /// Pi's own text around a branch summary when it shows one to the model
 /// (`BRANCH_SUMMARY_PREFIX` / `BRANCH_SUMMARY_SUFFIX` in pi-coding-agent 1.2.0).
 const BRANCH_SUMMARY_PREFIX: &str =
@@ -100,6 +124,8 @@ enum Class {
     Compacted,
     /// `branch_summary`: what the branch the conversation came back from did.
     BranchSummary,
+    /// `custom_message`: an extension's message, which Pi gives the model as a user message.
+    CustomMessage,
     Meta(MetaKind),
     /// The `session` header and anything else with no conversation meaning.
     Header,
@@ -111,6 +137,7 @@ fn class_of(row: &Value) -> Class {
         "branch_summary" => Class::BranchSummary,
         "compaction" => Class::Compacted,
         "model_change" | "thinking_level_change" => Class::Meta(MetaKind::ModelChange),
+        "custom_message" => Class::CustomMessage,
         "session" | "session_start" => Class::Header,
         _ => Class::Header,
     }
@@ -220,6 +247,24 @@ impl Builder {
             return;
         }
         match class {
+            Class::CustomMessage => {
+                self.open_results = None;
+                self.entries.push(Entry {
+                    id: id_of(row, index),
+                    kind: Kind::User {
+                        text: row
+                            .get("content")
+                            .and_then(super::json::text_of_content)
+                            .unwrap_or_default(),
+                        attachments: row
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|blocks| super::json::attachments(blocks))
+                            .unwrap_or_default(),
+                    },
+                    raw: vec![row.clone()],
+                });
+            }
             // Pi shows the model a branch summary as a user message, in its own words.
             Class::BranchSummary => {
                 self.open_results = None;
@@ -277,6 +322,27 @@ impl Builder {
                     self.assistant(row, index);
                 }
                 "toolResult" => self.tool_result(row, index),
+                // `!cmd`: Pi gives the model the command and its output as a user message, unless
+                // `!!` kept it out of the context.
+                "bashExecution" => {
+                    self.open_results = None;
+                    let message = row.get("message").cloned().unwrap_or(Value::Null);
+                    let excluded = message.get("excludeFromContext") == Some(&Value::Bool(true));
+                    self.entries.push(Entry {
+                        id: id_of(row, index),
+                        kind: if excluded {
+                            Kind::Meta {
+                                kind: MetaKind::Internal,
+                            }
+                        } else {
+                            Kind::User {
+                                text: bash_execution_text(&message),
+                                attachments: Vec::new(),
+                            }
+                        },
+                        raw: vec![row.clone()],
+                    });
+                }
                 "system" => self.entries.push(Entry {
                     id: id_of(row, index),
                     kind: Kind::Meta {
@@ -347,10 +413,14 @@ impl Builder {
                     // so the input is normalised here and converted back by the Pi writer. The
                     // record itself stays verbatim in `raw`.
                     if name == "bash"
-                        && let Some(seconds) = input.get("timeout").and_then(Value::as_u64)
+                        && let Some(seconds) = input.get("timeout").and_then(Value::as_f64)
+                        && seconds >= 0.0
                         && let Some(map) = input.as_object_mut()
                     {
-                        map.insert("timeout".into(), Value::from(seconds.saturating_mul(1000)));
+                        map.insert(
+                            "timeout".into(),
+                            Value::from((seconds * 1000.0).round() as u64),
+                        );
                     }
                     calls.push(ToolCall {
                         id: str_at(block, "/id").unwrap_or_default(),

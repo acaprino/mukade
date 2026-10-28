@@ -197,8 +197,8 @@ fn a_row_without_finish_is_a_killed_step_and_the_export_omits_it() {
     assert!(text.is_empty(), "the killed row holds an empty text block");
     assert!(calls.is_empty());
     assert!(
-        !s.interrupted_last_turn(),
-        "the killed row is the last entry, not a user turn"
+        s.interrupted_last_turn(),
+        "L9: a killed step after the last user turn leaves that turn unanswered"
     );
 
     let exported = read_export();
@@ -231,4 +231,120 @@ fn idle_markers_are_meta() {
         })
         .count();
     assert_eq!(idle, 4, "an idle record is a turn marker, not conversation");
+}
+
+fn export_doc() -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(source("session-export.json")).unwrap()).unwrap()
+}
+
+/// The tool parts of the export, mutable, in order.
+fn tool_parts(doc: &mut serde_json::Value) -> Vec<&mut serde_json::Value> {
+    doc["messages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .filter_map(|m| {
+            m.get_mut("content")
+                .and_then(serde_json::Value::as_array_mut)
+        })
+        .flatten()
+        .filter(|part| part["type"] == "tool")
+        .collect()
+}
+
+fn results_of(s: &Session) -> Vec<mukade::model::ToolResult> {
+    s.conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Results { results } => Some(results.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// L9: a tool still `pending` or `running` when OpenCode stopped has no result. The call stays
+/// unanswered instead of "succeeding" with an empty output.
+#[test]
+fn a_tool_that_never_finished_has_no_result() {
+    let mut doc = export_doc();
+    let id = {
+        let mut parts = tool_parts(&mut doc);
+        let part = &mut parts[0];
+        part["state"] =
+            serde_json::json!({"status": "running", "input": part["state"]["input"].clone()});
+        part["id"].as_str().unwrap().to_string()
+    };
+    let s = opencode::parse(&doc, None).unwrap();
+    assert!(
+        !results_of(&s).iter().any(|r| r.call_id == id),
+        "{:?}",
+        results_of(&s)
+    );
+}
+
+/// A failed call keeps OpenCode's error text, which is where OpenCode records it.
+#[test]
+fn a_failed_tool_keeps_its_error_message() {
+    let mut doc = export_doc();
+    let id = {
+        let mut parts = tool_parts(&mut doc);
+        let part = &mut parts[0];
+        part["state"] = serde_json::json!({
+            "status": "error", "input": part["state"]["input"].clone(),
+            "error": {"type": "tool.execution", "message": "ENOENT: no such file"},
+        });
+        part["id"].as_str().unwrap().to_string()
+    };
+    let s = opencode::parse(&doc, None).unwrap();
+    let result = results_of(&s)
+        .into_iter()
+        .find(|r| r.call_id == id)
+        .unwrap();
+    assert!(result.is_error);
+    assert_eq!(
+        result.content,
+        ResultContent::Text("ENOENT: no such file".into())
+    );
+}
+
+/// A compaction OpenCode marked `failed` was never applied: it is not the source's compaction.
+#[test]
+fn a_failed_compaction_is_not_a_compaction() {
+    let mut doc = export_doc();
+    let messages = doc["messages"].as_array_mut().unwrap();
+    let mut failed = messages
+        .iter()
+        .find(|m| m["type"] == "compaction")
+        .unwrap()
+        .clone();
+    failed["id"] = "msg_failed_compaction".into();
+    failed["status"] = "failed".into();
+    failed["summary"] = "Compaction summary did not match the required template".into();
+    messages.push(failed);
+    let s = opencode::parse(&doc, None).unwrap();
+    let last = s.last_compaction().unwrap();
+    assert_ne!(last.id, "msg_failed_compaction");
+    assert_eq!(
+        s.conversation()
+            .filter(|e| matches!(e.kind, Kind::Compaction { .. }))
+            .count(),
+        1
+    );
+}
+
+/// Every model the session used, in first-seen order.
+#[test]
+fn every_model_is_listed_in_first_seen_order() {
+    let mut doc = export_doc();
+    let last_assistant = doc["messages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .rev()
+        .find(|m| m["type"] == "assistant")
+        .unwrap();
+    last_assistant["model"]["id"] = "model-b".into();
+    let s = opencode::parse(&doc, None).unwrap();
+    let ids: Vec<&str> = s.meta.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["h27-mock", "model-b"]);
 }

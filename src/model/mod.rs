@@ -84,15 +84,25 @@ impl Session {
         self.entries.iter().find(|e| e.id == id)
     }
 
-    /// The last turn asked for but never answered: a user entry with no step after it. The
-    /// manifest records it as `interrupted_last_turn` (L9), and every writer carries it as a user
-    /// message without a reply.
+    /// The last turn asked for but never answered: a user entry with no step after it, or only
+    /// steps that were killed or aborted before they answered. The manifest records it as
+    /// `interrupted_last_turn` (L9).
     pub fn interrupted_last_turn(&self) -> bool {
+        let unanswered = |e: &&Entry| {
+            matches!(
+                e.kind,
+                Kind::Step {
+                    end: StepEnd::Killed | StepEnd::Aborted,
+                    ..
+                }
+            )
+        };
         matches!(
             self.entries
                 .iter()
                 .rev()
-                .find(|e| !matches!(e.kind, Kind::Meta { .. })),
+                .filter(|e| !matches!(e.kind, Kind::Meta { .. }))
+                .find(|e| !unanswered(e)),
             Some(Entry {
                 kind: Kind::User { .. },
                 ..

@@ -342,3 +342,83 @@ fn a_prompt_that_mentions_a_marker_tag_is_a_user_turn() {
     };
     assert!(text.contains("LITERAL-USER"), "{text}");
 }
+
+fn rows_with(extra: Vec<serde_json::Value>) -> Session {
+    let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture())
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for payload in extra {
+        rows.push(serde_json::json!({
+            "timestamp": "2026-10-27T16:50:00.000Z", "type": "response_item", "payload": payload,
+        }));
+    }
+    codex::parse(&rows, None).unwrap()
+}
+
+fn calls_of(s: &Session) -> Vec<mukade::model::ToolCall> {
+    s.conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Step { calls, .. } => Some(calls.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// A `local_shell_call` has no `name` or `arguments`: its command is in `action`.
+#[test]
+fn a_local_shell_call_keeps_its_command() {
+    let s = rows_with(vec![serde_json::json!({
+        "type": "local_shell_call", "call_id": "call_ls1", "status": "completed",
+        "action": {"type": "exec", "command": ["ls", "-la"]},
+    })]);
+    let call = calls_of(&s)
+        .into_iter()
+        .find(|c| c.id == "call_ls1")
+        .unwrap();
+    assert_eq!(call.source_name, "local_shell");
+    assert_eq!(call.input["command"], serde_json::json!(["ls", "-la"]));
+}
+
+/// A web search the model ran is part of its step, not an internal record.
+#[test]
+fn a_web_search_call_is_part_of_the_step() {
+    let s = rows_with(vec![serde_json::json!({
+        "type": "web_search_call", "id": "ws_1", "status": "completed",
+        "action": {"type": "search", "query": "WEBSEARCH-QUERY"},
+    })]);
+    let call = calls_of(&s).into_iter().find(|c| c.id == "ws_1").unwrap();
+    assert_eq!(call.source_name, "web_search");
+    assert_eq!(call.input["query"], "WEBSEARCH-QUERY");
+}
+
+/// A tool output given as content items stays structured: text as text, an image as an image.
+#[test]
+fn a_structured_tool_output_stays_structured() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "function_call", "call_id": "call_img", "name": "view_image", "arguments": "{}"}),
+        serde_json::json!({"type": "function_call_output", "call_id": "call_img", "output": [
+            {"type": "input_text", "text": "IMG-CAPTION"},
+            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="},
+        ]}),
+    ]);
+    let result = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Results { results } => Some(results.clone()),
+            _ => None,
+        })
+        .flatten()
+        .find(|r| r.call_id == "call_img")
+        .unwrap();
+    assert_eq!(
+        result.content,
+        ResultContent::Blocks(vec![
+            serde_json::json!({"type": "text", "text": "IMG-CAPTION"}),
+            serde_json::json!({"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="}),
+        ])
+    );
+}

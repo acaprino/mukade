@@ -319,3 +319,78 @@ fn an_abandoned_branch_is_not_conversation_and_its_summary_is() {
         "T2, the compaction, T3 and the killed T4 are off the branch"
     );
 }
+
+fn rows_with(extra: Vec<serde_json::Value>) -> Session {
+    let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture())
+        .unwrap()
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut parent = rows.last().unwrap()["id"].clone();
+    for (n, mut entry) in extra.into_iter().enumerate() {
+        let id = format!("ex{n:06}");
+        entry["id"] = id.clone().into();
+        entry["parentId"] = parent;
+        entry["timestamp"] = "2026-10-27T16:40:00.000Z".into();
+        parent = id.into();
+        rows.push(entry);
+    }
+    pi::parse(&rows, None).unwrap()
+}
+
+/// `!cat file` in Pi stores a `bashExecution` message that Pi gives the model as a user message
+/// (`bashExecutionToText`); `!!` marks one Pi keeps out of the context.
+#[test]
+fn a_bash_execution_reaches_the_conversation_as_pi_shows_it() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "message", "message": {"role": "bashExecution", "command": "cat a.txt",
+            "output": "BASHEXEC-OUTPUT", "exitCode": 2, "cancelled": false, "truncated": false, "timestamp": 1}}),
+        serde_json::json!({"type": "message", "message": {"role": "bashExecution", "command": "secret",
+            "output": "HIDDEN", "exitCode": 0, "excludeFromContext": true, "timestamp": 2}}),
+    ]);
+    let texts: Vec<&str> = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.contains(&"Ran `cat a.txt`\n```\nBASHEXEC-OUTPUT\n```\n\nCommand exited with code 2"),
+        "{texts:?}"
+    );
+    assert!(!texts.iter().any(|t| t.contains("HIDDEN")), "{texts:?}");
+}
+
+/// An extension's `custom_message` is in the model's context as a user message.
+#[test]
+fn a_custom_message_reaches_the_conversation() {
+    let s = rows_with(vec![serde_json::json!({
+        "type": "custom_message", "customType": "reminder", "content": "CUSTOM-CONTENT", "display": true,
+    })]);
+    let Kind::User { text, .. } = &s.conversation().last().unwrap().kind else {
+        panic!("{:?}", s.conversation().last().unwrap().kind)
+    };
+    assert_eq!(text, "CUSTOM-CONTENT");
+}
+
+/// Pi's bash timeout is a number of seconds, fractions included; the canonical unit is ms.
+#[test]
+fn a_fractional_bash_timeout_becomes_milliseconds() {
+    let s = rows_with(vec![serde_json::json!({"type": "message", "message": {
+        "role": "assistant", "content": [{"type": "toolCall", "id": "call_t", "name": "bash",
+            "arguments": {"command": "sleep 1", "timeout": 1.5}}],
+        "api": "anthropic-messages", "provider": "h27", "model": "m", "stopReason": "toolUse", "timestamp": 3}})]);
+    let call = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Step { calls, .. } => Some(calls.clone()),
+            _ => None,
+        })
+        .flatten()
+        .find(|c| c.id == "call_t")
+        .unwrap();
+    assert_eq!(call.input["timeout"], 1500);
+}
