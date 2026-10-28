@@ -125,7 +125,11 @@ struct CallIds {
 
 impl CallIds {
     fn new(rewrite: bool) -> Self {
-        CallIds { rewrite, given: HashMap::new(), used: HashSet::new() }
+        CallIds {
+            rewrite,
+            given: HashMap::new(),
+            used: HashSet::new(),
+        }
     }
 
     fn of(&mut self, id: &str, counts: &mut Counts) -> String {
@@ -139,7 +143,11 @@ impl CallIds {
             .chars()
             .map(|c| if anthropic_id_char(c) { c } else { '_' })
             .collect();
-        let base = if base.is_empty() { "toolu_mukade".to_string() } else { base };
+        let base = if base.is_empty() {
+            "toolu_mukade".to_string()
+        } else {
+            base
+        };
         let mut candidate = base.clone();
         let mut n = 1;
         while self.used.contains(&candidate) {
@@ -179,7 +187,10 @@ fn carry_attachments(
             media::image_of(&attachment.raw).map(|image| media::user_block(&image, dest))
         };
         match raw {
-            Some(raw) => carried.push(Attachment { raw, ..attachment.clone() }),
+            Some(raw) => carried.push(Attachment {
+                raw,
+                ..attachment.clone()
+            }),
             None => counts.dropped_attachments += 1,
         }
     }
@@ -228,7 +239,14 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
         dropped_off_branch: session
             .entries
             .iter()
-            .filter(|entry| matches!(entry.kind, Kind::Meta { kind: MetaKind::OffBranch }))
+            .filter(|entry| {
+                matches!(
+                    entry.kind,
+                    Kind::Meta {
+                        kind: MetaKind::OffBranch
+                    }
+                )
+            })
             .count(),
         ..Counts::default()
     };
@@ -356,7 +374,12 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         }
                         planned.push(PlannedResult::Native {
                             call_id: ids.of(&result.call_id, &mut counts),
-                            content: carry_result_content(&result.content, source, dest, &mut counts),
+                            content: carry_result_content(
+                                &result.content,
+                                source,
+                                dest,
+                                &mut counts,
+                            ),
                             is_error: result.is_error,
                         });
                     } else if last_step_calls.contains(&result.call_id) {

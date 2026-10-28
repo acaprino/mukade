@@ -122,6 +122,9 @@ mod tests {
         let b = records_sha256(&[serde_json::json!({"type": "message", "text": "two"})]);
         assert_ne!(a, b);
         assert_eq!(a.len(), 64);
-        assert_eq!(a, records_sha256(&[serde_json::json!({"type": "message", "text": "one"})]));
+        assert_eq!(
+            a,
+            records_sha256(&[serde_json::json!({"type": "message", "text": "one"})])
+        );
     }
 }

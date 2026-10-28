@@ -68,7 +68,10 @@ impl Writer for Opencode {
         let temporary = ImportDocument(file.clone());
         // The override wins; otherwise the standard resolution (MUKADE_OPENCODE_EXE, PATH, the
         // well-known install locations). The resume command names the binary actually used.
-        let exe = opts.exe.clone().unwrap_or_else(|| crate::exe::resolve(HarnessId::OpenCode, None));
+        let exe = opts
+            .exe
+            .clone()
+            .unwrap_or_else(|| crate::exe::resolve(HarnessId::OpenCode, None));
         let argv = import_command(&exe, &file, &cwd);
         let mut command = Command::new(&argv[0]);
         command.args(&argv[1..]);

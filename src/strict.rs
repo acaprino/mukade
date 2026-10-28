@@ -81,7 +81,8 @@ pub fn check_plan(plan: &Plan, dest_protocol: Option<&Protocol>) -> Vec<String> 
                         PlannedResult::Native { call_id, .. } => {
                             // A3: one call, one answer.
                             if answered.contains(&call_id.as_str()) {
-                                violations.push(format!("block {i}: call {call_id} is answered twice"));
+                                violations
+                                    .push(format!("block {i}: call {call_id} is answered twice"));
                             }
                             answered.push(call_id);
                             if !calls.iter().any(|call| &call.id == call_id) {
@@ -90,7 +91,8 @@ pub fn check_plan(plan: &Plan, dest_protocol: Option<&Protocol>) -> Vec<String> 
                             // §6.2 [V]: Pi reads text between tool results as the end of the tool
                             // flow and answers the later calls itself.
                             if after_text {
-                                violations.push(format!("block {i}: result {call_id} comes after text"));
+                                violations
+                                    .push(format!("block {i}: result {call_id} comes after text"));
                             }
                         }
                         PlannedResult::Text(_) => after_text = true,
@@ -111,7 +113,12 @@ mod tests {
     use serde_json::json;
 
     fn call(id: &str) -> PlannedCall {
-        PlannedCall { id: id.into(), name: "read".into(), source_name: "Read".into(), input: json!({}) }
+        PlannedCall {
+            id: id.into(),
+            name: "read".into(),
+            source_name: "Read".into(),
+            input: json!({}),
+        }
     }
 
     fn step(calls: Vec<PlannedCall>) -> PlannedStep {
@@ -125,7 +132,10 @@ mod tests {
     }
 
     fn plan_of(blocks: Vec<PlannedBlock>) -> Plan {
-        Plan { blocks, counts: Counts::default() }
+        Plan {
+            blocks,
+            counts: Counts::default(),
+        }
     }
 
     /// The gate must catch what the provider would refuse, not just agree with the plan.
@@ -150,8 +160,14 @@ mod tests {
             },
         ]);
         let found = check_plan(&plan, None);
-        assert!(found.iter().any(|v| v.contains("answers no call")), "{found:?}");
-        assert!(found.iter().any(|v| v.contains("no answer")), "both directions are reported: {found:?}");
+        assert!(
+            found.iter().any(|v| v.contains("answers no call")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|v| v.contains("no answer")),
+            "both directions are reported: {found:?}"
+        );
     }
 
     #[test]

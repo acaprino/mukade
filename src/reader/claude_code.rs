@@ -71,8 +71,9 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// subagent rows are left as they are.
 fn active_branch(rows: &[Value]) -> Vec<bool> {
     let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
-    let in_tree =
-        |row: &Value| row.get("uuid").and_then(Value::as_str).is_some() && !truthy(row.get("isSidechain"));
+    let in_tree = |row: &Value| {
+        row.get("uuid").and_then(Value::as_str).is_some() && !truthy(row.get("isSidechain"))
+    };
     let Some(leaf) = rows.iter().rposition(&in_tree) else {
         return vec![true; rows.len()];
     };
@@ -98,7 +99,11 @@ fn active_branch(rows: &[Value]) -> Vec<bool> {
         .iter()
         .zip(&active)
         .filter(|(_, on)| **on)
-        .filter_map(|(row, _)| row.pointer("/message/id").and_then(Value::as_str).map(str::to_owned))
+        .filter_map(|(row, _)| {
+            row.pointer("/message/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .collect();
     for (i, row) in rows.iter().enumerate() {
         if in_tree(row)

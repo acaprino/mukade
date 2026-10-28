@@ -22,12 +22,15 @@ const FIXTURES: &str = "fixtures";
 pub fn source_path(harness: HarnessId) -> PathBuf {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURES);
     match harness {
-        HarnessId::ClaudeCode => base.join("claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl"),
-        HarnessId::Codex => {
-            base.join("codex/source/rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl")
+        HarnessId::ClaudeCode => {
+            base.join("claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl")
         }
+        HarnessId::Codex => base.join(
+            "codex/source/rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl",
+        ),
         HarnessId::OpenCode => base.join("opencode/source/rows.json"),
-        HarnessId::Pi => base.join("pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
+        HarnessId::Pi => base
+            .join("pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
     }
 }
 
@@ -84,7 +87,10 @@ pub fn launcher(dir: &Path, name: &str, windows: &str, unix: &str) -> PathBuf {
 
 /// The working directory a hop files the session under: the destination's own project folder.
 pub fn cwd_for(harness: HarnessId) -> String {
-    std::env::temp_dir().join(format!("mukade-{}-work", harness.as_str())).display().to_string()
+    std::env::temp_dir()
+        .join(format!("mukade-{}-work", harness.as_str()))
+        .display()
+        .to_string()
 }
 
 /// Write options aimed at a scratch root, with the destination's own facts stated.
@@ -146,7 +152,9 @@ pub fn script(session: &Session) -> Vec<String> {
         .conversation()
         .map(|e| match &e.kind {
             Kind::User { text, .. } => format!("user|{text}"),
-            Kind::Step { text, calls, end, .. } => {
+            Kind::Step {
+                text, calls, end, ..
+            } => {
                 let calls: Vec<String> = calls
                     .iter()
                     .map(|c| format!("{}={:?}", c.id, c.canonical))
@@ -170,7 +178,10 @@ pub fn script(session: &Session) -> Vec<String> {
 
 /// The conversation of a session with `Meta` entries removed, for comparisons.
 pub fn conversation_script(session: &Session) -> Vec<String> {
-    script(session).into_iter().filter(|s| s != "meta").collect()
+    script(session)
+        .into_iter()
+        .filter(|s| s != "meta")
+        .collect()
 }
 
 /// The conversation as a round trip must show it: a step that lost **everything** (an assistant
@@ -178,7 +189,10 @@ pub fn conversation_script(session: &Session) -> Vec<String> {
 /// every wire dialect refuses one — so it is not expected back. The plan records it in
 /// `dropped_empty_steps` instead of dropping it silently.
 pub fn roundtrip_script(session: &Session) -> Vec<String> {
-    conversation_script(session).into_iter().filter(|s| !s.starts_with("step|||")).collect()
+    conversation_script(session)
+        .into_iter()
+        .filter(|s| !s.starts_with("step|||"))
+        .collect()
 }
 
 /// Read a whole JSON Lines file into values.

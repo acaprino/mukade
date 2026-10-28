@@ -64,7 +64,12 @@ impl Writer for Codex {
         Ok(Written {
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
-            resume: vec![opts.exe.clone().unwrap_or_else(|| "codex".into()), "exec".into(), "resume".into(), id],
+            resume: vec![
+                opts.exe.clone().unwrap_or_else(|| "codex".into()),
+                "exec".into(),
+                "resume".into(),
+                id,
+            ],
         })
     }
 }

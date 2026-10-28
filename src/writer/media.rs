@@ -24,7 +24,12 @@ pub struct Image {
 
 /// The image a block holds, in whichever harness's shape it was recorded.
 pub fn image_of(block: &Value) -> Option<Image> {
-    let text = |pointer: &str| block.pointer(pointer).and_then(Value::as_str).map(str::to_owned);
+    let text = |pointer: &str| {
+        block
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
     let kind = block.get("type").and_then(Value::as_str);
     match kind {
         Some("image") if text("/source/type").as_deref() == Some("base64") => Some(Image {

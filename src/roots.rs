@@ -34,7 +34,9 @@ impl StoreRoots {
 
     /// Claude Code's `projects/` directory, where one folder per project holds the session files.
     pub fn claude_projects(&self) -> Option<PathBuf> {
-        self.claude_config_dir.as_deref().map(|d| d.join("projects"))
+        self.claude_config_dir
+            .as_deref()
+            .map(|d| d.join("projects"))
     }
 
     /// Codex's `sessions/` directory.

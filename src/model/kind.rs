@@ -63,7 +63,10 @@ pub enum MetaKind {
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// A user turn: the text the user typed, plus anything attached to it.
-    User { text: String, attachments: Vec<Attachment> },
+    User {
+        text: String,
+        attachments: Vec<Attachment>,
+    },
     /// One model response. Parallel tool calls of one response stay together in `calls`.
     Step {
         #[serde(default, skip_serializing_if = "Option::is_none")]

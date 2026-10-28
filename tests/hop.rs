@@ -314,7 +314,8 @@ fn a_resume_prompt_runs_the_command_and_keeps_its_reply() {
         "exit".to_string(),
         "3".to_string(),
     ];
-    let error = hop::run_resume(&failing, None, "x", std::time::Duration::from_secs(30)).unwrap_err();
+    let error =
+        hop::run_resume(&failing, None, "x", std::time::Duration::from_secs(30)).unwrap_err();
     assert!(matches!(error, HopError::ResumeFailed { .. }), "{error:?}");
     assert_eq!(
         error.exit_code(),
@@ -380,7 +381,10 @@ fn a_timed_out_resume_stops_the_harness_behind_its_launcher() {
     let harness = support::launcher(
         &scratch,
         "harness",
-        &format!("ping -n 4 127.0.0.1 >nul\r\necho late>\"{}\"", marker.display()),
+        &format!(
+            "ping -n 4 127.0.0.1 >nul\r\necho late>\"{}\"",
+            marker.display()
+        ),
         "",
     );
     let launcher = support::launcher(
@@ -396,5 +400,8 @@ fn a_timed_out_resume_stops_the_harness_behind_its_launcher() {
         std::time::Duration::from_millis(500),
     );
     std::thread::sleep(std::time::Duration::from_secs(4));
-    assert!(!marker.exists(), "the harness kept running after the timeout");
+    assert!(
+        !marker.exists(),
+        "the harness kept running after the timeout"
+    );
 }

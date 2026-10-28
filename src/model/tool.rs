@@ -36,7 +36,10 @@ impl CanonicalTool {
         if let Some(rest) = name.strip_prefix("mcp__")
             && let Some((server, tool)) = rest.split_once("__")
         {
-            return CanonicalTool::Mcp { server: server.to_string(), tool: tool.to_string() };
+            return CanonicalTool::Mcp {
+                server: server.to_string(),
+                tool: tool.to_string(),
+            };
         }
         match name {
             "Bash" => CanonicalTool::Bash,

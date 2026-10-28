@@ -29,7 +29,10 @@ pub fn detect_store(path: &Path) -> Vec<Detection> {
         return if named_opencode && is_sqlite(path) {
             vec![Detection {
                 harness: HarnessId::OpenCode,
-                evidence: vec![format!("{} is a SQLite database (OpenCode's store)", path.display())],
+                evidence: vec![format!(
+                    "{} is a SQLite database (OpenCode's store)",
+                    path.display()
+                )],
             }]
         } else {
             Vec::new()
@@ -48,25 +51,37 @@ pub fn detect_store(path: &Path) -> Vec<Detection> {
     if projects.is_dir() {
         let sessions = count_files(&projects, 2, &|name| name.ends_with(".jsonl"));
         if sessions > 0 {
-            claude.push(format!("projects/<project>/ holds {sessions} session .jsonl file(s)"));
+            claude.push(format!(
+                "projects/<project>/ holds {sessions} session .jsonl file(s)"
+            ));
         }
     }
     if !claude.is_empty() {
-        out.push(Detection { harness: HarnessId::ClaudeCode, evidence: claude });
+        out.push(Detection {
+            harness: HarnessId::ClaudeCode,
+            evidence: claude,
+        });
     }
 
     // Codex: sessions/YYYY/MM/DD/rollout-*.jsonl, plus the session catalog.
     let mut codex = Vec::new();
     let sessions = path.join("sessions");
-    let rollouts = count_files(&sessions, 4, &|name| name.starts_with("rollout-") && name.ends_with(".jsonl"));
+    let rollouts = count_files(&sessions, 4, &|name| {
+        name.starts_with("rollout-") && name.ends_with(".jsonl")
+    });
     if rollouts > 0 {
-        codex.push(format!("sessions/ holds {rollouts} rollout-*.jsonl file(s)"));
+        codex.push(format!(
+            "sessions/ holds {rollouts} rollout-*.jsonl file(s)"
+        ));
     }
     if path.join("session_index.jsonl").is_file() {
         codex.push("session_index.jsonl (Codex's session catalog)".into());
     }
     if !codex.is_empty() {
-        out.push(Detection { harness: HarnessId::Codex, evidence: codex });
+        out.push(Detection {
+            harness: HarnessId::Codex,
+            evidence: codex,
+        });
     }
 
     // OpenCode: the SQLite database.
@@ -76,20 +91,28 @@ pub fn detect_store(path: &Path) -> Vec<Detection> {
         opencode.push("opencode.db is a SQLite database".into());
     }
     if !opencode.is_empty() {
-        out.push(Detection { harness: HarnessId::OpenCode, evidence: opencode });
+        out.push(Detection {
+            harness: HarnessId::OpenCode,
+            evidence: opencode,
+        });
     }
 
     // Pi: sessions/--<mangled cwd>--/<stamp>_<uuid>.jsonl, plus the provider configuration.
     let mut pi = Vec::new();
     let pi_sessions = count_pi_sessions(&sessions);
     if pi_sessions > 0 {
-        pi.push(format!("sessions/--<project>--/ holds {pi_sessions} session .jsonl file(s)"));
+        pi.push(format!(
+            "sessions/--<project>--/ holds {pi_sessions} session .jsonl file(s)"
+        ));
     }
     if path.join("models.json").is_file() {
         pi.push("models.json (Pi's provider configuration)".into());
     }
     if !pi.is_empty() {
-        out.push(Detection { harness: HarnessId::Pi, evidence: pi });
+        out.push(Detection {
+            harness: HarnessId::Pi,
+            evidence: pi,
+        });
     }
 
     out
@@ -129,7 +152,11 @@ fn count_pi_sessions(sessions: &Path) -> usize {
     if let Ok(entries) = std::fs::read_dir(sessions) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.path().is_dir() && name.starts_with("--") && name.ends_with("--") && name.len() > 4 {
+            if entry.path().is_dir()
+                && name.starts_with("--")
+                && name.ends_with("--")
+                && name.len() > 4
+            {
                 found += count_files(&entry.path(), 1, &|name| name.ends_with(".jsonl"));
             }
         }
@@ -152,7 +179,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mukade-detect-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        let dir = std::env::temp_dir().join(format!(
+            "mukade-detect-{tag}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -165,7 +195,10 @@ mod tests {
     #[test]
     fn a_pi_home_is_recognized() {
         let dir = scratch("pi");
-        touch(&dir.join("sessions/--pi-project--/2026-10-27T16-00-39-689Z_id.jsonl"), b"{}\n");
+        touch(
+            &dir.join("sessions/--pi-project--/2026-10-27T16-00-39-689Z_id.jsonl"),
+            b"{}\n",
+        );
         touch(&dir.join("models.json"), b"{}");
         let found = detect_store(&dir);
         assert_eq!(found.len(), 1);
@@ -176,7 +209,10 @@ mod tests {
     #[test]
     fn a_codex_home_is_recognized_by_its_dated_rollouts() {
         let dir = scratch("codex");
-        touch(&dir.join("sessions/2026/10/27/rollout-2026-10-27T16-43-08-id.jsonl"), b"{}\n");
+        touch(
+            &dir.join("sessions/2026/10/27/rollout-2026-10-27T16-43-08-id.jsonl"),
+            b"{}\n",
+        );
         let found = detect_store(&dir);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].harness, HarnessId::Codex);

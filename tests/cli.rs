@@ -6,8 +6,8 @@
 
 mod support;
 
-use serde_json::Value;
 use mukade::model::HarnessId;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,8 +57,11 @@ fn stage_fixture(harness: HarnessId, scratch: &Path) -> String {
             let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
             let dir = home.join("sessions").join("--pi-project--");
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"), file)
-                .unwrap();
+            std::fs::write(
+                dir.join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
+                file,
+            )
+            .unwrap();
             "01a17e17".to_string()
         }
         HarnessId::Codex => {
@@ -93,7 +96,8 @@ fn write_document(dest: HarnessId, doc: &Value, tag: &str, extra: &[&str]) -> (P
     args.extend_from_slice(extra);
     let (ok, stdout, stderr) = cli(&scratch, &args);
     assert!(ok, "write failed: {stderr}");
-    let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).expect("write prints one JSON line");
+    let printed: Value =
+        serde_json::from_str(stdout.lines().last().unwrap()).expect("write prints one JSON line");
     (scratch, printed)
 }
 
@@ -113,8 +117,15 @@ fn dump_prints_the_conversation_as_one_message_per_step() {
         .iter()
         .map(|b| b["type"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, vec!["thinking", "text", "tool_use", "tool_use"], "the two parallel calls stay together");
-    assert_eq!(first_assistant["content"][0]["opaque"]["signature"], "h27-mock-signature");
+    assert_eq!(
+        kinds,
+        vec!["thinking", "text", "tool_use", "tool_use"],
+        "the two parallel calls stay together"
+    );
+    assert_eq!(
+        first_assistant["content"][0]["opaque"]["signature"],
+        "h27-mock-signature"
+    );
 
     let first_results = messages
         .iter()
@@ -128,8 +139,14 @@ fn dump_prints_the_conversation_as_one_message_per_step() {
         .filter_map(|m| m["content"][0]["text"].as_str())
         .filter(|t| t.contains("H27-SUMMARY"))
         .collect();
-    assert!(!summaries.is_empty(), "the source summary is in the document");
-    assert!(messages.iter().any(|m| m["compaction"].is_object()), "and it is marked as a compaction");
+    assert!(
+        !summaries.is_empty(),
+        "the source summary is in the document"
+    );
+    assert!(
+        messages.iter().any(|m| m["compaction"].is_object()),
+        "and it is marked as a compaction"
+    );
 }
 
 #[test]
@@ -151,7 +168,12 @@ fn dump_then_write_produces_a_session_the_destination_reader_understands() {
         HarnessId::Pi,
         &doc,
         "cli-write-pi",
-        &["--dest-version", "1.2.0", "--dest-protocol", "anthropic-messages"],
+        &[
+            "--dest-version",
+            "1.2.0",
+            "--dest-protocol",
+            "anthropic-messages",
+        ],
     );
     let location = printed["location"].as_str().expect("a location");
     assert!(location.contains("mukade-tests"), "{location}");
@@ -167,9 +189,18 @@ fn dump_then_write_produces_a_session_the_destination_reader_understands() {
             _ => None,
         })
         .collect();
-    assert!(texts.iter().any(|t| t.starts_with("H27-TOOLS read")), "{texts:?}");
-    assert!(texts.iter().any(|t| t.contains("H27-SUMMARY")), "the summary survived the hop");
-    assert!(back.interrupted_last_turn(), "the killed last turn is still a user turn with no reply");
+    assert!(
+        texts.iter().any(|t| t.starts_with("H27-TOOLS read")),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("H27-SUMMARY")),
+        "the summary survived the hop"
+    );
+    assert!(
+        back.interrupted_last_turn(),
+        "the killed last turn is still a user turn with no reply"
+    );
 }
 
 #[test]
@@ -179,14 +210,27 @@ fn write_into_the_same_harness_round_trips_the_conversation() {
         HarnessId::Codex,
         &doc,
         "cli-write-codex",
-        &["--dest-version", "0.164.0", "--dest-shell", "powershell", "--model-provider", "h27"],
+        &[
+            "--dest-version",
+            "0.164.0",
+            "--dest-shell",
+            "powershell",
+            "--model-provider",
+            "h27",
+        ],
     );
     // The dump and the write agree on the conversation: read the written rollout back.
     let back = mukade::reader::codex::read_file(Path::new(printed["location"].as_str().unwrap()))
         .expect("read back");
     let source = mukade::reader::codex::read_file(&support::source_path(HarnessId::Codex)).unwrap();
-    assert_eq!(support::roundtrip_script(&back), support::roundtrip_script(&source));
-    assert_eq!(back.meta.cwd, source.meta.cwd, "the project travels with the session");
+    assert_eq!(
+        support::roundtrip_script(&back),
+        support::roundtrip_script(&source)
+    );
+    assert_eq!(
+        back.meta.cwd, source.meta.cwd,
+        "the project travels with the session"
+    );
 }
 
 #[test]
@@ -240,7 +284,15 @@ fn hop_infers_the_source_harness_from_root() {
     let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
     let (ok, stdout, stderr) = cli(
         &scratch,
-        &["hop", "--root", home.to_str().unwrap(), "c45db7bc", "pi", "--dest-version", "1.2.0"],
+        &[
+            "hop",
+            "--root",
+            home.to_str().unwrap(),
+            "c45db7bc",
+            "pi",
+            "--dest-version",
+            "1.2.0",
+        ],
     );
     assert!(ok, "{stderr}");
     let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
@@ -251,7 +303,11 @@ fn hop_infers_the_source_harness_from_root() {
 #[test]
 fn a_custom_pi_binary_is_named_in_the_resume_command() {
     let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
-    let exe = if cfg!(windows) { "D:\\pi-portable\\bin\\pi.cmd" } else { "/opt/pi-portable/bin/pi" };
+    let exe = if cfg!(windows) {
+        "D:\\pi-portable\\bin\\pi.cmd"
+    } else {
+        "/opt/pi-portable/bin/pi"
+    };
     let (_, printed) = write_document(
         HarnessId::Pi,
         &doc,
@@ -318,8 +374,9 @@ fn a_manifest_that_cannot_be_saved_still_prints_the_written_session() {
         ],
     );
     assert_ne!(code, Some(0), "the manifest was not saved");
-    let printed: Value = serde_json::from_str(stdout.lines().last().expect("the receipt is printed"))
-        .expect("the receipt is one JSON line");
+    let printed: Value =
+        serde_json::from_str(stdout.lines().last().expect("the receipt is printed"))
+            .expect("the receipt is one JSON line");
     assert!(Path::new(printed["location"].as_str().unwrap()).exists());
     assert!(stderr.contains("was written"), "{stderr}");
 }
@@ -354,8 +411,9 @@ fn a_failed_resume_prints_the_written_session_and_saves_its_manifest() {
         ],
     );
     assert_eq!(code, Some(5), "{stderr}");
-    let printed: Value = serde_json::from_str(stdout.lines().last().expect("the receipt is printed"))
-        .expect("the receipt is one JSON line");
+    let printed: Value =
+        serde_json::from_str(stdout.lines().last().expect("the receipt is printed"))
+            .expect("the receipt is one JSON line");
     assert!(Path::new(printed["location"].as_str().unwrap()).exists());
     let saved: Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest).expect("the manifest is saved"))

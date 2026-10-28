@@ -3,12 +3,13 @@
 
 mod support;
 
-use serde_json::json;
 use mukade::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, ResultContent, Session, StepEnd, ToolCall, ToolResult,
+    CanonicalTool, Entry, HarnessId, Kind, Meta, ResultContent, Session, StepEnd, ToolCall,
+    ToolResult,
 };
 use mukade::tools::{self, ToolSet};
 use mukade::writer::plan::{self, PlannedBlock, PlannedResult};
+use serde_json::json;
 
 fn session(entries: Vec<Entry>) -> Session {
     Session {
@@ -30,7 +31,17 @@ fn session(entries: Vec<Entry>) -> Session {
 }
 
 fn step(id: &str, calls: Vec<ToolCall>) -> Entry {
-    Entry { id: id.into(), kind: Kind::Step { model: None, reasoning: vec![], text: vec![], calls, end: StepEnd::ToolUse }, raw: vec![] }
+    Entry {
+        id: id.into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec![],
+            calls,
+            end: StepEnd::ToolUse,
+        },
+        raw: vec![],
+    }
 }
 
 fn results(id: &str, call_ids: &[&str]) -> Entry {
@@ -66,25 +77,39 @@ fn read_call(id: &str) -> ToolCall {
 fn an_unanswered_call_travels_as_text_instead_of_as_a_tool_call() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "plan-unanswered");
     let opts = support::opts(HarnessId::ClaudeCode, &scratch);
-    let s = session(vec![step("e1", vec![read_call("c1"), read_call("c2")]), results("e2", &["c1"])]);
+    let s = session(vec![
+        step("e1", vec![read_call("c1"), read_call("c2")]),
+        results("e2", &["c1"]),
+    ]);
     let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
     assert_eq!(plan.counts.unanswered_calls, 1);
     match &plan.blocks[0] {
         PlannedBlock::Step(step) => {
-            assert_eq!(step.calls.len(), 1, "only the answered call stays a tool call");
+            assert_eq!(
+                step.calls.len(),
+                1,
+                "only the answered call stays a tool call"
+            );
             assert_eq!(step.calls[0].id, "c1");
             assert_eq!(step.text.len(), 1);
-            assert!(step.text[0].contains("id c2"), "the text form names the call: {}", step.text[0]);
+            assert!(
+                step.text[0].contains("id c2"),
+                "the text form names the call: {}",
+                step.text[0]
+            );
         }
         other => panic!("{other:?}"),
     }
     match &plan.blocks[1] {
         PlannedBlock::Results { results } => {
-            assert_eq!(results, &vec![PlannedResult::Native {
-                call_id: "c1".into(),
-                content: ResultContent::Text("out".into()),
-                is_error: false
-            }]);
+            assert_eq!(
+                results,
+                &vec![PlannedResult::Native {
+                    call_id: "c1".into(),
+                    content: ResultContent::Text("out".into()),
+                    is_error: false
+                }]
+            );
         }
         other => panic!("{other:?}"),
     }
@@ -95,7 +120,10 @@ fn an_unanswered_call_travels_as_text_instead_of_as_a_tool_call() {
 fn an_orphan_result_is_dropped_and_counted() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "plan-orphan");
     let opts = support::opts(HarnessId::ClaudeCode, &scratch);
-    let s = session(vec![step("e1", vec![read_call("c1")]), results("e2", &["c1", "ghost"])]);
+    let s = session(vec![
+        step("e1", vec![read_call("c1")]),
+        results("e2", &["c1", "ghost"]),
+    ]);
     let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
     assert_eq!(plan.counts.dropped_orphan_results, 1);
     match &plan.blocks[1] {
@@ -113,12 +141,26 @@ fn a_stray_result_after_a_user_turn_is_not_matched_to_an_earlier_step() {
     let s = session(vec![
         step("e1", vec![read_call("c1")]),
         results("e2", &["c1"]),
-        Entry { id: "e3".into(), kind: Kind::User { text: "hello".into(), attachments: vec![] }, raw: vec![] },
+        Entry {
+            id: "e3".into(),
+            kind: Kind::User {
+                text: "hello".into(),
+                attachments: vec![],
+            },
+            raw: vec![],
+        },
         results("e4", &["c1"]),
     ]);
     let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
-    assert_eq!(plan.counts.dropped_orphan_results, 1, "the stray result has no call left to answer");
-    assert_eq!(plan.blocks.len(), 3, "step, results, user — the stray one is dropped");
+    assert_eq!(
+        plan.counts.dropped_orphan_results, 1,
+        "the stray result has no call left to answer"
+    );
+    assert_eq!(
+        plan.blocks.len(),
+        3,
+        "step, results, user — the stray one is dropped"
+    );
 }
 
 /// Tables §6: the destination's offered set is per configuration, and a caller that knows it can
@@ -135,11 +177,16 @@ fn the_destination_offered_set_decides_translation() {
     let s = session(vec![step("e1", vec![glob.clone()]), results("e2", &["c1"])]);
 
     let pinned = plan::plan(&s, HarnessId::Pi, &support::opts(HarnessId::Pi, &scratch));
-    assert_eq!(pinned.counts.tools_text_form, 1, "Pi's pinned default set has no find");
+    assert_eq!(
+        pinned.counts.tools_text_form, 1,
+        "Pi's pinned default set has no find"
+    );
     assert_eq!(pinned.counts.tools_translated, 0);
 
     let mut wide = support::opts(HarnessId::Pi, &scratch);
-    wide.offered = Some(ToolSet { names: &["read", "bash", "edit", "write", "grep", "find", "ls"] });
+    wide.offered = Some(ToolSet {
+        names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
+    });
     let widened = plan::plan(&s, HarnessId::Pi, &wide);
     assert_eq!(widened.counts.tools_translated, 1);
     assert_eq!(widened.counts.tools_text_form, 0);
@@ -147,7 +194,10 @@ fn the_destination_offered_set_decides_translation() {
         PlannedBlock::Step(step) => assert_eq!(step.calls[0].name, "find"),
         other => panic!("{other:?}"),
     }
-    assert!(!tools::offered(HarnessId::Pi).contains("find"), "the pinned list is the bench's default set");
+    assert!(
+        !tools::offered(HarnessId::Pi).contains("find"),
+        "the pinned list is the bench's default set"
+    );
     assert!(tools::offered(HarnessId::Pi).contains("read"));
 }
 
@@ -188,7 +238,10 @@ fn native_results_come_before_the_text_that_answers_a_text_form_call() {
 fn a_second_result_for_the_same_call_is_dropped_and_counted() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "plan-duplicate-result");
     let opts = support::opts(HarnessId::ClaudeCode, &scratch);
-    let s = session(vec![step("e1", vec![read_call("c1")]), results("e2", &["c1", "c1"])]);
+    let s = session(vec![
+        step("e1", vec![read_call("c1")]),
+        results("e2", &["c1", "c1"]),
+    ]);
     let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
     let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
         panic!("{:?}", plan.blocks)
@@ -196,10 +249,18 @@ fn a_second_result_for_the_same_call_is_dropped_and_counted() {
     assert_eq!(results.len(), 1, "{results:?}");
     assert_eq!(plan.counts.dropped_duplicate_results, 1);
     let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
-    assert!(losses.iter().any(|loss| loss.contains("duplicate")), "{losses:?}");
+    assert!(
+        losses.iter().any(|loss| loss.contains("duplicate")),
+        "{losses:?}"
+    );
 }
 
-fn reasoning_step(id: &str, protocol: mukade::model::Protocol, signature: Option<&str>, encrypted: Option<&str>) -> Entry {
+fn reasoning_step(
+    id: &str,
+    protocol: mukade::model::Protocol,
+    signature: Option<&str>,
+    encrypted: Option<&str>,
+) -> Entry {
     Entry {
         id: id.into(),
         kind: Kind::Step {
@@ -233,7 +294,9 @@ fn redacted_thinking_is_written_back_as_redacted_thinking() {
         None,
         Some("REDACTED-PAYLOAD"),
     )]);
-    let written = mukade::writer::for_harness(HarnessId::ClaudeCode).write(&s, &opts).unwrap();
+    let written = mukade::writer::for_harness(HarnessId::ClaudeCode)
+        .write(&s, &opts)
+        .unwrap();
     let rows: Vec<serde_json::Value> = std::fs::read_to_string(&written.location)
         .unwrap()
         .lines()
@@ -241,14 +304,22 @@ fn redacted_thinking_is_written_back_as_redacted_thinking() {
         .collect();
     let blocks: Vec<&serde_json::Value> = rows
         .iter()
-        .filter_map(|row| row.pointer("/message/content").and_then(serde_json::Value::as_array))
+        .filter_map(|row| {
+            row.pointer("/message/content")
+                .and_then(serde_json::Value::as_array)
+        })
         .flatten()
         .collect();
     assert!(
-        blocks.iter().any(|b| b["type"] == "redacted_thinking" && b["data"] == "REDACTED-PAYLOAD"),
+        blocks
+            .iter()
+            .any(|b| b["type"] == "redacted_thinking" && b["data"] == "REDACTED-PAYLOAD"),
         "{blocks:?}"
     );
-    assert!(!blocks.iter().any(|b| b["type"] == "thinking"), "{blocks:?}");
+    assert!(
+        !blocks.iter().any(|b| b["type"] == "thinking"),
+        "{blocks:?}"
+    );
 }
 
 /// A4: Pi replays thinking from its signature. Reasoning that has only an encrypted payload cannot
@@ -270,7 +341,10 @@ fn reasoning_with_only_an_encrypted_payload_is_dropped_for_pi() {
         panic!("{:?}", plan.blocks)
     };
     assert!(
-        !step.reasoning.iter().any(|r| matches!(r, mukade::policy::ReasoningPlan::Native(_))),
+        !step
+            .reasoning
+            .iter()
+            .any(|r| matches!(r, mukade::policy::ReasoningPlan::Native(_))),
         "{:?}",
         step.reasoning
     );
@@ -283,7 +357,10 @@ fn reasoning_with_only_an_encrypted_payload_is_dropped_for_pi() {
 fn a_call_id_anthropic_refuses_is_rewritten_for_call_and_result() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "plan-call-id");
     let opts = support::opts(HarnessId::ClaudeCode, &scratch);
-    let s = session(vec![step("e1", vec![read_call("call_x|fc_y")]), results("e2", &["call_x|fc_y"])]);
+    let s = session(vec![
+        step("e1", vec![read_call("call_x|fc_y")]),
+        results("e2", &["call_x|fc_y"]),
+    ]);
     let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
     let (Some(PlannedBlock::Step(step)), Some(PlannedBlock::Results { results })) =
         (plan.blocks.first(), plan.blocks.get(1))
@@ -292,14 +369,22 @@ fn a_call_id_anthropic_refuses_is_rewritten_for_call_and_result() {
     };
     let id = &step.calls[0].id;
     assert!(
-        !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
         "{id}"
     );
-    let PlannedResult::Native { call_id, .. } = &results[0] else { panic!("{results:?}") };
+    let PlannedResult::Native { call_id, .. } = &results[0] else {
+        panic!("{results:?}")
+    };
     assert_eq!(call_id, id);
     assert_eq!(plan.counts.rewritten_call_ids, 1);
     let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
-    assert!(losses.iter().any(|loss| loss.contains("ids rewritten")), "{losses:?}");
+    assert!(
+        losses.iter().any(|loss| loss.contains("ids rewritten")),
+        "{losses:?}"
+    );
 }
 
 /// No loss is silent: the records of an abandoned branch (a rewind, an edited prompt) stay in the
@@ -310,12 +395,17 @@ fn records_of_an_abandoned_branch_are_counted() {
     let opts = support::opts(HarnessId::Pi, &scratch);
     let off = Entry {
         id: "old".into(),
-        kind: Kind::Meta { kind: mukade::model::MetaKind::OffBranch },
+        kind: Kind::Meta {
+            kind: mukade::model::MetaKind::OffBranch,
+        },
         raw: vec![],
     };
     let s = session(vec![off.clone(), off, step("e1", vec![])]);
     let plan = plan::plan(&s, HarnessId::Pi, &opts);
     assert_eq!(plan.counts.dropped_off_branch, 2);
     let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
-    assert!(losses.iter().any(|loss| loss.contains("abandoned branch")), "{losses:?}");
+    assert!(
+        losses.iter().any(|loss| loss.contains("abandoned branch")),
+        "{losses:?}"
+    );
 }

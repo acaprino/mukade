@@ -75,7 +75,9 @@ pub struct Entry {
 impl Session {
     /// The entries that are conversation, in order: everything the destination should receive.
     pub fn conversation(&self) -> impl Iterator<Item = &Entry> {
-        self.entries.iter().filter(|e| !matches!(e.kind, Kind::Meta { .. }))
+        self.entries
+            .iter()
+            .filter(|e| !matches!(e.kind, Kind::Meta { .. }))
     }
 
     pub fn entry(&self, id: &str) -> Option<&Entry> {
@@ -87,8 +89,14 @@ impl Session {
     /// message without a reply.
     pub fn interrupted_last_turn(&self) -> bool {
         matches!(
-            self.entries.iter().rev().find(|e| !matches!(e.kind, Kind::Meta { .. })),
-            Some(Entry { kind: Kind::User { .. }, .. })
+            self.entries
+                .iter()
+                .rev()
+                .find(|e| !matches!(e.kind, Kind::Meta { .. })),
+            Some(Entry {
+                kind: Kind::User { .. },
+                ..
+            })
         )
     }
 

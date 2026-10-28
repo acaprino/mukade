@@ -60,7 +60,10 @@ fn attachments_reach_every_writer_in_its_own_image_shape() {
             HarnessId::Codex,
             json!({"type": "input_image", "image_url": format!("data:image/png;base64,{PNG}")}),
         ),
-        (HarnessId::Pi, json!({"type": "image", "data": PNG, "mimeType": "image/png"})),
+        (
+            HarnessId::Pi,
+            json!({"type": "image", "data": PNG, "mimeType": "image/png"}),
+        ),
         (
             HarnessId::OpenCode,
             json!({"data": PNG, "mime": "image/png", "source": {"type": "inline"}}),
@@ -68,7 +71,11 @@ fn attachments_reach_every_writer_in_its_own_image_shape() {
     ] {
         let scratch = support::scratch(dest, "regression-attachments");
         let opts = opts(dest, &scratch);
-        assert_eq!(plan::plan(&source, dest, &opts).counts.dropped_attachments, 0, "{dest:?}");
+        assert_eq!(
+            plan::plan(&source, dest, &opts).counts.dropped_attachments,
+            0,
+            "{dest:?}"
+        );
         if dest == HarnessId::OpenCode {
             let mut clock = mukade::policy::Clock::new(Some("2026-10-28T00:00:00Z"));
             let doc = writer::opencode::document_for(
@@ -99,7 +106,10 @@ fn attachments_reach_every_writer_in_its_own_image_shape() {
             panic!("the user turn did not survive for {dest:?}");
         };
         assert_eq!(attachments.len(), 1, "one attachment carried for {dest:?}");
-        assert_eq!(attachments[0].raw, expected, "the image in {dest:?}'s own shape");
+        assert_eq!(
+            attachments[0].raw, expected,
+            "the image in {dest:?}'s own shape"
+        );
     }
 }
 
@@ -132,7 +142,11 @@ fn an_attachment_the_destination_cannot_hold_is_dropped_and_counted() {
     }
     // The source's own harness keeps its own record; only the one with no record is lost.
     let scratch = support::scratch(HarnessId::ClaudeCode, "regression-attachments-dropped");
-    let plan = plan::plan(&source, HarnessId::ClaudeCode, &opts(HarnessId::ClaudeCode, &scratch));
+    let plan = plan::plan(
+        &source,
+        HarnessId::ClaudeCode,
+        &opts(HarnessId::ClaudeCode, &scratch),
+    );
     assert_eq!(plan.counts.dropped_attachments, 1);
 }
 
@@ -171,7 +185,10 @@ fn an_image_in_a_tool_result_reaches_pi_in_pis_shape() {
     let Some(plan::PlannedBlock::Results { results }) = plan.blocks.last() else {
         panic!("{:?}", plan.blocks)
     };
-    let plan::PlannedResult::Native { content: ResultContent::Blocks(blocks), .. } = &results[0]
+    let plan::PlannedResult::Native {
+        content: ResultContent::Blocks(blocks),
+        ..
+    } = &results[0]
     else {
         panic!("{results:?}")
     };
@@ -179,7 +196,10 @@ fn an_image_in_a_tool_result_reaches_pi_in_pis_shape() {
         blocks,
         &vec![json!({"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"})]
     );
-    assert_eq!(plan.counts.dropped_result_blocks, 1, "the block Pi has no shape for is counted");
+    assert_eq!(
+        plan.counts.dropped_result_blocks, 1,
+        "the block Pi has no shape for is counted"
+    );
 }
 
 #[test]
@@ -425,7 +445,10 @@ fn a_resume_runs_in_the_sessions_working_directory() {
 
     let receipt = hop::import(HarnessId::Pi, &source, &opts).unwrap();
     let output = receipt.resume_output.unwrap();
-    assert!(output.contains("resume-runs-here"), "the resume ran in {output:?}");
+    assert!(
+        output.contains("resume-runs-here"),
+        "the resume ran in {output:?}"
+    );
 }
 
 fn import_opts(

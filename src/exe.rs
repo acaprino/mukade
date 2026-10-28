@@ -30,9 +30,13 @@ pub fn env_var_name(harness: HarnessId) -> &'static str {
 
 /// The executable to spawn for `harness`. `explicit` wins over every other source.
 pub fn resolve(harness: HarnessId, explicit: Option<&str>) -> String {
-    let env = std::env::var(env_var_name(harness)).ok().filter(|value| !value.is_empty());
+    let env = std::env::var(env_var_name(harness))
+        .ok()
+        .filter(|value| !value.is_empty());
     let name = binary_name(harness);
-    let well_known = default_candidates(harness).into_iter().find(|path| path.is_file());
+    let well_known = default_candidates(harness)
+        .into_iter()
+        .find(|path| path.is_file());
     pick(explicit, env, on_path(name), well_known, name)
 }
 
@@ -66,7 +70,13 @@ fn on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     let extensions: Vec<String> = if cfg!(windows) && Path::new(name).extension().is_none() {
         std::env::var("PATHEXT")
-            .map(|value| value.split(';').filter(|ext| !ext.is_empty()).map(str::to_string).collect())
+            .map(|value| {
+                value
+                    .split(';')
+                    .filter(|ext| !ext.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_else(|_| vec![".EXE".into(), ".CMD".into(), ".BAT".into()])
     } else {
         vec![String::new()]
@@ -102,7 +112,14 @@ fn default_candidates(harness: HarnessId) -> Vec<PathBuf> {
         HarnessId::Codex => {
             // The Codex CLI installer: %LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe.
             if let Some(local) = local {
-                out.push(local.join("Programs").join("OpenAI").join("Codex").join("bin").join("codex.exe"));
+                out.push(
+                    local
+                        .join("Programs")
+                        .join("OpenAI")
+                        .join("Codex")
+                        .join("bin")
+                        .join("codex.exe"),
+                );
             }
         }
         HarnessId::OpenCode => {
@@ -145,21 +162,44 @@ mod tests {
         let env = Some("env-pi".to_string());
         let on_path = Some(PathBuf::from("path-pi"));
         let well_known = Some(PathBuf::from("default-pi"));
-        assert_eq!(pick(Some("flag-pi"), env.clone(), on_path.clone(), well_known.clone(), name), "flag-pi");
-        assert_eq!(pick(None, env, on_path.clone(), well_known.clone(), name), "env-pi");
-        assert_eq!(pick(None, None, on_path, well_known.clone(), name), "path-pi");
+        assert_eq!(
+            pick(
+                Some("flag-pi"),
+                env.clone(),
+                on_path.clone(),
+                well_known.clone(),
+                name
+            ),
+            "flag-pi"
+        );
+        assert_eq!(
+            pick(None, env, on_path.clone(), well_known.clone(), name),
+            "env-pi"
+        );
+        assert_eq!(
+            pick(None, None, on_path, well_known.clone(), name),
+            "path-pi"
+        );
         assert_eq!(pick(None, None, None, well_known, name), "default-pi");
         assert_eq!(pick(None, None, None, None, name), "pi");
     }
 
     #[test]
     fn an_empty_override_does_not_hide_the_other_sources() {
-        assert_eq!(pick(Some(""), Some("env-pi".into()), None, None, "pi"), "env-pi");
+        assert_eq!(
+            pick(Some(""), Some("env-pi".into()), None, None, "pi"),
+            "env-pi"
+        );
     }
 
     #[test]
     fn every_harness_has_a_name_and_a_variable() {
-        for harness in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::OpenCode, HarnessId::Pi] {
+        for harness in [
+            HarnessId::ClaudeCode,
+            HarnessId::Codex,
+            HarnessId::OpenCode,
+            HarnessId::Pi,
+        ] {
             assert!(!binary_name(harness).is_empty());
             assert!(env_var_name(harness).starts_with("MUKADE_"));
             assert!(env_var_name(harness).ends_with("_EXE"));

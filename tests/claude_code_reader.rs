@@ -1,4 +1,4 @@
-﻿//! Conformance tests for the Claude Code 2.1.311 reader.
+//! Conformance tests for the Claude Code 2.1.311 reader.
 //!
 //! The bench is the test (docs/session-interchange-spec.md Â§9): the fixture is the native session
 //! A real Claude Code session, kept verbatim as a fixture.
@@ -11,7 +11,8 @@
 //! T3 after it, then T4 killed while hanging.
 
 use mukade::model::{
-    CanonicalTool, Entry, HarnessId, Kind, MetaKind, Protocol, ResultContent, Session, StepEnd, Trigger,
+    CanonicalTool, Entry, HarnessId, Kind, MetaKind, Protocol, ResultContent, Session, StepEnd,
+    Trigger,
 };
 use mukade::reader::claude_code;
 use std::path::PathBuf;
@@ -57,7 +58,10 @@ fn meta_comes_from_the_session_records() {
     assert_eq!(s.meta.models[0].id, "claude-opus-5-5");
     assert_eq!(s.meta.created.as_deref(), Some("2026-10-27T15:29:05.240Z"));
     assert_eq!(s.meta.updated.as_deref(), Some("2026-10-27T15:29:09.868Z"));
-    assert!(s.meta.source_path.is_some(), "the reader records where it read from");
+    assert!(
+        s.meta.source_path.is_some(),
+        "the reader records where it read from"
+    );
 }
 
 /// Nothing is lost by reading: every source record stays verbatim in exactly one entry, in file
@@ -81,13 +85,20 @@ fn raw_rows_partition_the_source_file_in_order() {
     ids.sort_unstable();
     let n = ids.len();
     ids.dedup();
-    assert_eq!(ids.len(), n, "entry ids are unique, so the compaction can point at one");
+    assert_eq!(
+        ids.len(),
+        n,
+        "entry ids are unique, so the compaction can point at one"
+    );
 }
 
 #[test]
 fn conversation_is_the_expected_entry_sequence() {
     let s = read();
-    let kinds: Vec<&str> = conversation(&s).iter().map(|e| kind_name(&e.kind)).collect();
+    let kinds: Vec<&str> = conversation(&s)
+        .iter()
+        .map(|e| kind_name(&e.kind))
+        .collect();
     assert_eq!(
         kinds,
         vec![
@@ -111,7 +122,14 @@ fn conversation_is_the_expected_entry_sequence() {
 fn parallel_calls_stay_in_one_step() {
     let s = read();
     let conv = conversation(&s);
-    let Kind::Step { reasoning, text, calls, end, model } = &conv[1].kind else {
+    let Kind::Step {
+        reasoning,
+        text,
+        calls,
+        end,
+        model,
+    } = &conv[1].kind
+    else {
         panic!("expected a Step, got {}", kind_name(&conv[1].kind))
     };
     assert_eq!(reasoning.len(), 1);
@@ -122,12 +140,17 @@ fn parallel_calls_stay_in_one_step() {
     assert_eq!(calls[0].canonical, Some(CanonicalTool::Read));
     assert_eq!(
         calls[0].input["file_path"],
-        serde_json::json!(r"C:\Users\alfio\AppData\Local\shinatama-verify\H27\claude_code\work\alpha.txt")
+        serde_json::json!(
+            r"C:\Users\alfio\AppData\Local\shinatama-verify\H27\claude_code\work\alpha.txt"
+        )
     );
     assert_eq!(calls[1].id, "toolu_h27call2x1");
     assert_eq!(calls[1].source_name, "Read");
     assert_eq!(*end, StepEnd::ToolUse);
-    assert_eq!(model.as_ref().map(|m| m.id.as_str()), Some("claude-opus-5-5"));
+    assert_eq!(
+        model.as_ref().map(|m| m.id.as_str()),
+        Some("claude-opus-5-5")
+    );
 }
 
 /// L6: the signed reasoning part is kept, with the protocol it came from and its model.
@@ -135,10 +158,18 @@ fn parallel_calls_stay_in_one_step() {
 fn reasoning_keeps_its_opaque_payload() {
     let s = read();
     let conv = conversation(&s);
-    let Kind::Step { reasoning, .. } = &conv[1].kind else { panic!() };
+    let Kind::Step { reasoning, .. } = &conv[1].kind else {
+        panic!()
+    };
     let r = &reasoning[0];
-    assert_eq!(r.text, "H27-REASONING: the user wants two files; read them in parallel.");
-    let o = r.opaque.as_ref().expect("Claude stores the thinking signature");
+    assert_eq!(
+        r.text,
+        "H27-REASONING: the user wants two files; read them in parallel."
+    );
+    let o = r
+        .opaque
+        .as_ref()
+        .expect("Claude stores the thinking signature");
     assert_eq!(o.protocol, Protocol::AnthropicMessages);
     assert_eq!(o.model.as_deref(), Some("claude-opus-5-5"));
     assert_eq!(o.signature.as_deref(), Some("h27-mock-signature"));
@@ -151,17 +182,35 @@ fn reasoning_keeps_its_opaque_payload() {
 fn results_are_paired_by_tool_use_id_not_by_parent_chain() {
     let s = read();
     let conv = conversation(&s);
-    let Kind::Results { results } = &conv[2].kind else { panic!("expected Results") };
+    let Kind::Results { results } = &conv[2].kind else {
+        panic!("expected Results")
+    };
     let ids: Vec<&str> = results.iter().map(|r| r.call_id.as_str()).collect();
-    assert_eq!(ids, vec!["toolu_h27call2x1", "toolu_h27call2x0"], "completion order is kept");
+    assert_eq!(
+        ids,
+        vec!["toolu_h27call2x1", "toolu_h27call2x0"],
+        "completion order is kept"
+    );
     assert!(results.iter().all(|r| !r.is_error));
-    assert_eq!(results[0].content, ResultContent::Text("1\tBETA-CONTENT-17".into()));
-    assert_eq!(results[1].content, ResultContent::Text("1\tALPHA-CONTENT-42".into()));
+    assert_eq!(
+        results[0].content,
+        ResultContent::Text("1\tBETA-CONTENT-17".into())
+    );
+    assert_eq!(
+        results[1].content,
+        ResultContent::Text("1\tALPHA-CONTENT-42".into())
+    );
 
     // ...and every result answers a call of the step before it, with none left over.
-    let Kind::Step { calls, .. } = &conv[1].kind else { panic!() };
+    let Kind::Step { calls, .. } = &conv[1].kind else {
+        panic!()
+    };
     for r in results {
-        assert!(calls.iter().any(|c| c.id == r.call_id), "{} has its call", r.call_id);
+        assert!(
+            calls.iter().any(|c| c.id == r.call_id),
+            "{} has its call",
+            r.call_id
+        );
     }
     assert_eq!(calls.len(), results.len(), "no call is left unanswered");
 }
@@ -171,10 +220,19 @@ fn results_are_paired_by_tool_use_id_not_by_parent_chain() {
 fn native_compaction_becomes_one_compaction_entry() {
     let s = read();
     let conv = conversation(&s);
-    let Kind::Compaction { summary, kept_from, trigger, tokens_before } = &conv[6].kind else {
+    let Kind::Compaction {
+        summary,
+        kept_from,
+        trigger,
+        tokens_before,
+    } = &conv[6].kind
+    else {
         panic!("expected the Compaction entry at index 6")
     };
-    assert!(summary.contains("H27-SUMMARY: the user asked to read alpha.txt"), "{summary}");
+    assert!(
+        summary.contains("H27-SUMMARY: the user asked to read alpha.txt"),
+        "{summary}"
+    );
     assert!(summary.contains("This session is being continued from a previous conversation"));
     assert_eq!(*trigger, Trigger::Manual);
     assert_eq!(*tokens_before, Some(120));
@@ -199,7 +257,11 @@ fn transcript_only_and_internal_rows_are_meta() {
         })
         .collect();
     let count = |k: MetaKind| metas.iter().filter(|m| **m == k).count();
-    assert_eq!(count(MetaKind::Command), 3, "caveat, <command-name> and <local-command-stdout>");
+    assert_eq!(
+        count(MetaKind::Command),
+        3,
+        "caveat, <command-name> and <local-command-stdout>"
+    );
     assert_eq!(count(MetaKind::Attachment), 27);
     assert_eq!(
         count(MetaKind::Internal),
@@ -209,8 +271,14 @@ fn transcript_only_and_internal_rows_are_meta() {
     // No `/compact` row or command output leaked into the conversation.
     for e in conversation(&s) {
         if let Kind::User { text, .. } = &e.kind {
-            assert!(!text.contains("<command-name>"), "command rows are not conversation");
-            assert!(!text.contains("<local-command-"), "command rows are not conversation");
+            assert!(
+                !text.contains("<command-name>"),
+                "command rows are not conversation"
+            );
+            assert!(
+                !text.contains("<local-command-"),
+                "command rows are not conversation"
+            );
         }
     }
     // 92 source rows become 87 entries: 4 rows of one step, 2 result rows and the
@@ -225,10 +293,14 @@ fn killed_last_turn_is_a_user_entry_with_no_reply() {
     let s = read();
     assert!(s.interrupted_last_turn());
     let last = conversation(&s).last().copied().expect("a last entry");
-    let Kind::User { text, .. } = &last.kind else { panic!("expected the killed user turn last") };
+    let Kind::User { text, .. } = &last.kind else {
+        panic!("expected the killed user turn last")
+    };
     assert_eq!(text, "H27-HANG");
     assert!(
-        !s.entries.iter().any(|e| matches!(&e.kind, Kind::Step { text, .. }
+        !s.entries
+            .iter()
+            .any(|e| matches!(&e.kind, Kind::Step { text, .. }
             if text.iter().any(|t| t.as_str() == "No response requested."))),
         "the killed process wrote no reply"
     );
@@ -246,10 +318,14 @@ fn completed_steps_report_their_end() {
         .collect();
     assert_eq!(
         ends,
-        vec![StepEnd::ToolUse, StepEnd::Completed, StepEnd::Completed, StepEnd::Completed]
+        vec![
+            StepEnd::ToolUse,
+            StepEnd::Completed,
+            StepEnd::Completed,
+            StepEnd::Completed
+        ]
     );
 }
-
 
 /// L9: on the next load of a killed session Claude Code writes a `<synthetic>` assistant row
 /// ("No response requested.", or an API error). It is not the model's reply: it is `Meta`, and the
@@ -279,10 +355,18 @@ fn a_synthetic_reply_is_meta_and_the_turn_stays_unanswered() {
         },
     }));
     let s = claude_code::parse(&rows, None).unwrap();
-    assert!(s.interrupted_last_turn(), "the synthetic row is not an answer");
+    assert!(
+        s.interrupted_last_turn(),
+        "the synthetic row is not an answer"
+    );
     let last = s.entries.last().unwrap();
     assert!(
-        matches!(last.kind, Kind::Meta { kind: MetaKind::Synthetic }),
+        matches!(
+            last.kind,
+            Kind::Meta {
+                kind: MetaKind::Synthetic
+            }
+        ),
         "{:?}",
         last.kind
     );
@@ -309,7 +393,8 @@ fn an_abandoned_branch_is_not_conversation() {
     let t1_reply = rows
         .iter()
         .find(|row| {
-            row.pointer("/message/content/0/text").and_then(serde_json::Value::as_str)
+            row.pointer("/message/content/0/text")
+                .and_then(serde_json::Value::as_str)
                 == Some("H27-FINAL: both files were read.")
         })
         .and_then(|row| row["uuid"].as_str())
@@ -338,7 +423,10 @@ fn an_abandoned_branch_is_not_conversation() {
     assert_eq!(users.len(), 2, "{users:?}");
     assert!(users[0].starts_with("H27-TOOLS"), "{users:?}");
     assert_eq!(users[1], "H27-EDITED");
-    assert!(!s.conversation().any(|e| matches!(e.kind, Kind::Compaction { .. })));
+    assert!(
+        !s.conversation()
+            .any(|e| matches!(e.kind, Kind::Compaction { .. }))
+    );
     assert!(!s.interrupted_last_turn());
 
     let calls: usize = s
@@ -355,12 +443,26 @@ fn an_abandoned_branch_is_not_conversation() {
             _ => 0,
         })
         .sum();
-    assert_eq!((calls, results), (2, 2), "both parallel calls and both results stay");
+    assert_eq!(
+        (calls, results),
+        (2, 2),
+        "both parallel calls and both results stay"
+    );
 
     let off = s
         .entries
         .iter()
-        .filter(|e| matches!(e.kind, Kind::Meta { kind: MetaKind::OffBranch }))
+        .filter(|e| {
+            matches!(
+                e.kind,
+                Kind::Meta {
+                    kind: MetaKind::OffBranch
+                }
+            )
+        })
         .count();
-    assert!(off >= 4, "T2, the compaction, T3 and T4 are off the branch: {off}");
+    assert!(
+        off >= 4,
+        "T2, the compaction, T3 and T4 are off the branch: {off}"
+    );
 }

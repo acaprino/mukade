@@ -628,7 +628,9 @@ fn drain(mut pipe: impl Read + Send + 'static) -> Drained {
             if n == 0 {
                 break;
             }
-            sink.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]);
+            sink.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend_from_slice(&chunk[..n]);
         }
     });
     Drained { bytes, reader }

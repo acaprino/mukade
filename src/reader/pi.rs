@@ -56,7 +56,10 @@ const BRANCH_SUMMARY_SUFFIX: &str = "</summary>";
 fn active_branch(rows: &[Value]) -> Vec<bool> {
     let in_tree = |row: &Value| {
         row.get("id").and_then(Value::as_str).is_some()
-            && !matches!(row.get("type").and_then(Value::as_str), Some("session" | "session_start"))
+            && !matches!(
+                row.get("type").and_then(Value::as_str),
+                Some("session" | "session_start")
+            )
     };
     let Some(leaf) = rows.iter().rposition(&in_tree) else {
         return vec![true; rows.len()];
@@ -227,7 +230,9 @@ impl Builder {
                         }
                     } else {
                         Kind::User {
-                            text: format!("{BRANCH_SUMMARY_PREFIX}{summary}{BRANCH_SUMMARY_SUFFIX}"),
+                            text: format!(
+                                "{BRANCH_SUMMARY_PREFIX}{summary}{BRANCH_SUMMARY_SUFFIX}"
+                            ),
                             attachments: Vec::new(),
                         }
                     },

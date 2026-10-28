@@ -40,7 +40,9 @@ impl std::str::FromStr for HarnessId {
         Self::ALL
             .into_iter()
             .find(|h| h.as_str() == s)
-            .ok_or_else(|| anyhow::anyhow!("unknown harness {s:?} (claude_code, codex, opencode, pi)"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("unknown harness {s:?} (claude_code, codex, opencode, pi)")
+            })
     }
 }
 
@@ -62,7 +64,9 @@ impl Protocol {
         match provider.to_ascii_lowercase().as_str() {
             "anthropic" | "anthropic-messages" | "claude" => Protocol::AnthropicMessages,
             "openai" | "openai-responses" | "responses" | "codex" => Protocol::OpenaiResponses,
-            "openai-chat" | "chat" | "chat-completions" | "openai-completions" => Protocol::OpenaiChat,
+            "openai-chat" | "chat" | "chat-completions" | "openai-completions" => {
+                Protocol::OpenaiChat
+            }
             other => Protocol::Other(other.to_string()),
         }
     }

@@ -56,7 +56,11 @@ pub enum ReasoningPlan {
 }
 
 /// Apply the policy to one reasoning block.
-pub fn plan_reasoning(reasoning: &Reasoning, dest: Option<&Protocol>, policy: ReasoningPolicy) -> ReasoningPlan {
+pub fn plan_reasoning(
+    reasoning: &Reasoning,
+    dest: Option<&Protocol>,
+    policy: ReasoningPolicy,
+) -> ReasoningPlan {
     match policy {
         ReasoningPolicy::Drop => ReasoningPlan::Drop,
         ReasoningPolicy::AsText => {
@@ -68,7 +72,8 @@ pub fn plan_reasoning(reasoning: &Reasoning, dest: Option<&Protocol>, policy: Re
         }
         ReasoningPolicy::DropForeign => match (&reasoning.opaque, dest) {
             (Some(opaque), Some(dest))
-                if opaque.protocol == *dest && (opaque.signature.is_some() || opaque.encrypted.is_some()) =>
+                if opaque.protocol == *dest
+                    && (opaque.signature.is_some() || opaque.encrypted.is_some()) =>
             {
                 ReasoningPlan::Native(reasoning.clone())
             }
@@ -139,13 +144,29 @@ mod tests {
     fn drop_foreign_keeps_only_the_same_protocol_with_its_payload() {
         let anthropic = Protocol::AnthropicMessages;
         let responses = Protocol::OpenaiResponses;
-        let keep = plan_reasoning(&reasoning(anthropic.clone(), Some("sig")), Some(&anthropic), ReasoningPolicy::DropForeign);
+        let keep = plan_reasoning(
+            &reasoning(anthropic.clone(), Some("sig")),
+            Some(&anthropic),
+            ReasoningPolicy::DropForeign,
+        );
         assert!(matches!(keep, ReasoningPlan::Native(_)));
-        let drop = plan_reasoning(&reasoning(responses, Some("sig")), Some(&anthropic), ReasoningPolicy::DropForeign);
+        let drop = plan_reasoning(
+            &reasoning(responses, Some("sig")),
+            Some(&anthropic),
+            ReasoningPolicy::DropForeign,
+        );
         assert_eq!(drop, ReasoningPlan::Drop);
-        let unsigned = plan_reasoning(&reasoning(anthropic.clone(), None), Some(&anthropic), ReasoningPolicy::DropForeign);
+        let unsigned = plan_reasoning(
+            &reasoning(anthropic.clone(), None),
+            Some(&anthropic),
+            ReasoningPolicy::DropForeign,
+        );
         assert_eq!(unsigned, ReasoningPlan::Drop);
-        let unknown = plan_reasoning(&reasoning(anthropic, Some("sig")), None, ReasoningPolicy::DropForeign);
+        let unknown = plan_reasoning(
+            &reasoning(anthropic, Some("sig")),
+            None,
+            ReasoningPolicy::DropForeign,
+        );
         assert_eq!(unknown, ReasoningPlan::Drop);
     }
 
@@ -153,7 +174,13 @@ mod tests {
     fn as_text_labels_and_drop_never_carries() {
         let r = reasoning(Protocol::AnthropicMessages, Some("sig"));
         let text = plan_reasoning(&r, None, ReasoningPolicy::AsText);
-        assert_eq!(text, ReasoningPlan::Text(format!("{REASONING_AS_TEXT_LABEL}\nwhy")));
-        assert_eq!(plan_reasoning(&r, None, ReasoningPolicy::Drop), ReasoningPlan::Drop);
+        assert_eq!(
+            text,
+            ReasoningPlan::Text(format!("{REASONING_AS_TEXT_LABEL}\nwhy"))
+        );
+        assert_eq!(
+            plan_reasoning(&r, None, ReasoningPolicy::Drop),
+            ReasoningPlan::Drop
+        );
     }
 }

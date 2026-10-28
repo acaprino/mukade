@@ -1,4 +1,4 @@
-﻿//! Conformance tests for the OpenCode 2.1.4 reader (docs/session-interchange-spec.md Â§9).
+//! Conformance tests for the OpenCode 2.1.4 reader (docs/session-interchange-spec.md Â§9).
 //!
 //! Requirements exercised: L4 (`compaction` + `metadata.keepID`), L5/L8 (one assistant row is one
 //! step, holding reasoning, text and both parallel calls with their results), L6 (`native.signature`),
@@ -61,11 +61,17 @@ fn meta_comes_from_the_session_record() {
 
 #[test]
 fn every_store_row_is_kept_exactly_once() {
-    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(source("rows.json")).unwrap()).unwrap();
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(source("rows.json")).unwrap()).unwrap();
     let rows = doc["session_message"].as_array().unwrap();
     let s = read_rows();
     let mut source: Vec<String> = rows.iter().map(|r| r.to_string()).collect();
-    let mut kept: Vec<String> = s.entries.iter().flat_map(|e| e.raw.iter()).map(|r| r.to_string()).collect();
+    let mut kept: Vec<String> = s
+        .entries
+        .iter()
+        .flat_map(|e| e.raw.iter())
+        .map(|r| r.to_string())
+        .collect();
     source.sort();
     kept.sort();
     assert_eq!(kept, source, "every row is kept verbatim, and only once");
@@ -74,46 +80,72 @@ fn every_store_row_is_kept_exactly_once() {
 #[test]
 fn conversation_is_the_expected_entry_sequence() {
     let s = read_rows();
-    let kinds: Vec<&str> = conversation(&s).iter().map(|e| kind_name(&e.kind)).collect();
+    let kinds: Vec<&str> = conversation(&s)
+        .iter()
+        .map(|e| kind_name(&e.kind))
+        .collect();
     assert_eq!(
         kinds,
         vec![
-            "user",       // T1
-            "step",       // reasoning + text + two parallel read calls, results in the same row
-            "results",    // derived from that row
-            "step",       // H27-FINAL
-            "user",       // T2
-            "step",       // H27-REPLY
+            "user",    // T1
+            "step",    // reasoning + text + two parallel read calls, results in the same row
+            "results", // derived from that row
+            "step",    // H27-FINAL
+            "user",    // T2
+            "step",    // H27-REPLY
             "compaction",
-            "user",       // T3
-            "step",       // T3 reply
-            "user",       // T4
-            "step",       // killed: empty text, no finish
+            "user", // T3
+            "step", // T3 reply
+            "user", // T4
+            "step", // killed: empty text, no finish
         ]
     );
-    assert_eq!(s.entries.len(), 15, "14 rows become 15 entries (one row holds a step and its results)");
+    assert_eq!(
+        s.entries.len(),
+        15,
+        "14 rows become 15 entries (one row holds a step and its results)"
+    );
 }
 
 #[test]
 fn one_assistant_row_is_one_step_with_both_calls() {
     let s = read_rows();
     let conv = conversation(&s);
-    let Kind::Step { model, reasoning, text, calls, end } = &conv[1].kind else { panic!("expected a Step") };
+    let Kind::Step {
+        model,
+        reasoning,
+        text,
+        calls,
+        end,
+    } = &conv[1].kind
+    else {
+        panic!("expected a Step")
+    };
     assert_eq!(model.as_ref().map(|m| m.id.as_str()), Some("h27-mock"));
     assert_eq!(text, &vec!["H27-PRE: reading the files.".to_string()]);
     assert_eq!(calls.len(), 2, "both parallel calls stay in one step");
     assert_eq!(calls[0].id, "toolu_h27call1x0");
     assert_eq!(calls[0].source_name, "read");
     assert_eq!(calls[0].canonical, Some(CanonicalTool::Read));
-    assert!(calls[0].input["path"].as_str().unwrap_or_default().ends_with("alpha.txt"));
+    assert!(
+        calls[0].input["path"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("alpha.txt")
+    );
     assert_eq!(*end, StepEnd::ToolUse);
 
-    let o = reasoning[0].opaque.as_ref().expect("OpenCode stores native.signature");
+    let o = reasoning[0]
+        .opaque
+        .as_ref()
+        .expect("OpenCode stores native.signature");
     assert_eq!(o.protocol, Protocol::AnthropicMessages);
     assert_eq!(o.signature.as_deref(), Some("h27-mock-signature"));
     assert_eq!(o.model.as_deref(), Some("h27-mock"));
 
-    let Kind::Results { results } = &conv[2].kind else { panic!("expected Results") };
+    let Kind::Results { results } = &conv[2].kind else {
+        panic!("expected Results")
+    };
     assert_eq!(results.len(), 2, "the row's tool parts carry both results");
     assert_eq!(results[0].call_id, calls[0].id);
     assert_eq!(results[1].call_id, calls[1].id);
@@ -128,7 +160,13 @@ fn one_assistant_row_is_one_step_with_both_calls() {
 fn compaction_keeps_the_summary_and_the_native_boundary() {
     let s = read_rows();
     let conv = conversation(&s);
-    let Kind::Compaction { summary, kept_from, trigger, tokens_before } = &conv[6].kind else {
+    let Kind::Compaction {
+        summary,
+        kept_from,
+        trigger,
+        tokens_before,
+    } = &conv[6].kind
+    else {
         panic!("expected the Compaction entry at index 6")
     };
     assert!(summary.starts_with("## Objective"), "{summary}");
@@ -149,16 +187,30 @@ fn a_row_without_finish_is_a_killed_step_and_the_export_omits_it() {
     let s = read_rows();
     let conv = conversation(&s);
     let last = conv.last().copied().unwrap();
-    let Kind::Step { text, calls, end, .. } = &last.kind else { panic!("expected the killed assistant row last") };
+    let Kind::Step {
+        text, calls, end, ..
+    } = &last.kind
+    else {
+        panic!("expected the killed assistant row last")
+    };
     assert_eq!(*end, StepEnd::Killed);
     assert!(text.is_empty(), "the killed row holds an empty text block");
     assert!(calls.is_empty());
-    assert!(!s.interrupted_last_turn(), "the killed row is the last entry, not a user turn");
+    assert!(
+        !s.interrupted_last_turn(),
+        "the killed row is the last entry, not a user turn"
+    );
 
     let exported = read_export();
-    assert_eq!(exported.entries.len(), 14, "the export omits the killed row");
+    assert_eq!(
+        exported.entries.len(),
+        14,
+        "the export omits the killed row"
+    );
     let last = conversation(&exported).last().copied().unwrap();
-    let Kind::User { text, .. } = &last.kind else { panic!("expected the T4 user turn last") };
+    let Kind::User { text, .. } = &last.kind else {
+        panic!("expected the T4 user turn last")
+    };
     assert_eq!(text, "H27-HANG");
     assert!(exported.interrupted_last_turn());
 }
@@ -169,8 +221,14 @@ fn idle_markers_are_meta() {
     let idle = s
         .entries
         .iter()
-        .filter(|e| matches!(e.kind, Kind::Meta { kind: MetaKind::Idle }))
+        .filter(|e| {
+            matches!(
+                e.kind,
+                Kind::Meta {
+                    kind: MetaKind::Idle
+                }
+            )
+        })
         .count();
     assert_eq!(idle, 4, "an idle record is a turn marker, not conversation");
 }
-

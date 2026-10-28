@@ -121,7 +121,11 @@ pub fn run(args: &[String]) -> Result<()> {
     }
 
     // An empty root would turn every store path into a relative one, writing beside the cwd.
-    if flags.root.as_deref().is_some_and(|root| root.trim().is_empty()) {
+    if flags
+        .root
+        .as_deref()
+        .is_some_and(|root| root.trim().is_empty())
+    {
         anyhow::bail!("--root needs a non-empty directory");
     }
 
@@ -138,7 +142,11 @@ pub fn run(args: &[String]) -> Result<()> {
         None if inferred_allowed => None,
         None => return Err(anyhow::anyhow!(USAGE)),
     };
-    let operands: &[&str] = if explicit.is_some() { &positional[1..] } else { &positional };
+    let operands: &[&str] = if explicit.is_some() {
+        &positional[1..]
+    } else {
+        &positional
+    };
     let mut roots = StoreRoots::from_env();
     let harness = match explicit {
         Some(harness) => harness,
@@ -146,11 +154,17 @@ pub fn run(args: &[String]) -> Result<()> {
             let root = flags.root.as_deref().expect("inference needs --root");
             let found = crate::detect::detect_store(std::path::Path::new(root));
             match found.len() {
-                0 => anyhow::bail!("no harness store recognized in {root}: state the harness explicitly"),
+                0 => anyhow::bail!(
+                    "no harness store recognized in {root}: state the harness explicitly"
+                ),
                 1 => found[0].harness,
                 _ => anyhow::bail!(
                     "{root} holds more than one harness's store ({}): state the harness explicitly",
-                    found.iter().map(|d| d.harness.as_str()).collect::<Vec<_>>().join(", ")
+                    found
+                        .iter()
+                        .map(|d| d.harness.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             }
         }
@@ -416,7 +430,11 @@ impl Flags {
             .exe_flag(harness)
             .filter(|v| !v.is_empty())
             .map(str::to_string)
-            .or_else(|| std::env::var(crate::exe::env_var_name(harness)).ok().filter(|v| !v.is_empty()));
+            .or_else(|| {
+                std::env::var(crate::exe::env_var_name(harness))
+                    .ok()
+                    .filter(|v| !v.is_empty())
+            });
         let resolved_exe = crate::exe::resolve(harness, self.exe_flag(harness));
         // The destination's own version stamp, when the caller did not state it: L7 wants the
         // destination's `cli_version`, and Codex refuses a rollout without one.
@@ -470,7 +488,11 @@ fn apply_root(roots: &mut StoreRoots, harness: HarnessId, root: &std::path::Path
         HarnessId::ClaudeCode => roots.claude_config_dir = Some(root),
         HarnessId::Codex => roots.codex_home = Some(root),
         HarnessId::OpenCode => {
-            roots.opencode_db = Some(if root.is_dir() { root.join("opencode.db") } else { root })
+            roots.opencode_db = Some(if root.is_dir() {
+                root.join("opencode.db")
+            } else {
+                root
+            })
         }
         HarnessId::Pi => roots.pi_agent_dir = Some(root),
     }
