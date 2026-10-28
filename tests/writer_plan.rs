@@ -150,3 +150,34 @@ fn the_destination_offered_set_decides_translation() {
     assert!(!tools::offered(HarnessId::Pi).contains("find"), "the pinned list is the bench's default set");
     assert!(tools::offered(HarnessId::Pi).contains("read"));
 }
+
+/// §6.2 [V]: Pi reads a user message between tool results as the end of the tool flow, answers the
+/// later calls with `No result provided` and then sends their real results too, which the provider
+/// refuses. Native results come first, then the text that answers calls carried as text.
+#[test]
+fn native_results_come_before_the_text_that_answers_a_text_form_call() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-results-order");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let unknown = ToolCall {
+        id: "f1".into(),
+        source_name: "Frobnicate".into(),
+        canonical: None,
+        input: json!({}),
+    };
+    let s = session(vec![
+        step("e1", vec![read_call("r1"), unknown, read_call("r2")]),
+        results("e2", &["r1", "f1", "r2"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
+        panic!("{:?}", plan.blocks)
+    };
+    let order: Vec<&str> = results
+        .iter()
+        .map(|result| match result {
+            PlannedResult::Native { call_id, .. } => call_id.as_str(),
+            PlannedResult::Text(_) => "text",
+        })
+        .collect();
+    assert_eq!(order, ["r1", "r2", "text"]);
+}

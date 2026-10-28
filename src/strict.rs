@@ -66,11 +66,20 @@ pub fn check_plan(plan: &Plan, dest_protocol: Option<&Protocol>) -> Vec<String> 
                         continue;
                     }
                 };
+                let mut after_text = false;
                 for result in results {
-                    if let PlannedResult::Native { call_id, .. } = result
-                        && !calls.iter().any(|call| &call.id == call_id)
-                    {
-                        violations.push(format!("block {i}: result {call_id} answers no call of the step before it"));
+                    match result {
+                        PlannedResult::Native { call_id, .. } => {
+                            if !calls.iter().any(|call| &call.id == call_id) {
+                                violations.push(format!("block {i}: result {call_id} answers no call of the step before it"));
+                            }
+                            // §6.2 [V]: Pi reads text between tool results as the end of the tool
+                            // flow and answers the later calls itself.
+                            if after_text {
+                                violations.push(format!("block {i}: result {call_id} comes after text"));
+                            }
+                        }
+                        PlannedResult::Text(_) => after_text = true,
                     }
                 }
             }
@@ -144,6 +153,25 @@ mod tests {
             },
         ]);
         assert!(check_plan(&plan, None).is_empty());
+    }
+
+    /// §6.2 [V]: text between tool results ends the tool flow for Pi, which then refuses the rest.
+    #[test]
+    fn a_native_result_after_text_is_a_violation() {
+        let native = |id: &str| PlannedResult::Native {
+            call_id: id.into(),
+            content: ResultContent::Text("x".into()),
+            is_error: false,
+        };
+        let plan = plan_of(vec![
+            PlannedBlock::Step(step(vec![call("c1"), call("c2")])),
+            PlannedBlock::Results {
+                results: vec![native("c1"), PlannedResult::Text("t".into()), native("c2")],
+            },
+        ]);
+        let found = check_plan(&plan, None);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("after text"), "{found:?}");
     }
 
     #[test]

@@ -241,6 +241,9 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     counts.messages_in -= 1;
                     continue;
                 }
+                // §6.2 [V]: text between tool results ends the tool flow for Pi, which then answers
+                // the later calls itself and is refused; the native results go first.
+                planned.sort_by_key(|result| matches!(result, PlannedResult::Text(_)));
                 last_step_native.clear();
                 last_step_calls.clear();
                 blocks.push(PlannedBlock::Results { results: planned });
