@@ -1,22 +1,42 @@
 //! Small helpers the readers share for working with decoded source records.
 
-use crate::model::{Attachment, ResultContent};
+use crate::model::{Attachment, Entry, Kind, MetaKind, ResultContent, Session};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 /// Decode a JSON Lines file into records, skipping blank lines. A leading UTF-8 BOM (Pi writes
-/// one on Windows) is tolerated.
-pub fn rows_from_lines(text: &str, what: &str) -> Result<Vec<Value>> {
+/// one on Windows) is tolerated. A last line that does not parse is what a hard kill during an
+/// append leaves: it is returned apart, as text, instead of failing the whole session; a bad line
+/// anywhere else is an error.
+pub fn rows_from_lines(text: &str, what: &str) -> Result<(Vec<Value>, Option<String>)> {
+    let lines: Vec<(usize, &str)> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .collect();
     let mut rows = Vec::new();
-    for (n, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
+    for (k, (n, line)) in lines.iter().enumerate() {
+        match serde_json::from_str::<Value>(line) {
+            Ok(row) => rows.push(row),
+            Err(_) if k + 1 == lines.len() => return Ok((rows, Some((*line).to_string()))),
+            Err(error) => return Err(error).with_context(|| format!("{what}:{}", n + 1)),
         }
-        rows.push(
-            serde_json::from_str::<Value>(line).with_context(|| format!("{what}:{}", n + 1))?,
-        );
     }
-    Ok(rows)
+    Ok((rows, None))
+}
+
+/// Keep a cut-off last line at the end of a session, as text.
+pub fn keep_unfinished(session: &mut Session, line: Option<String>) {
+    if let Some(line) = line {
+        session.entries.push(Entry {
+            id: fallback_id("unfinished", session.entries.len()),
+            kind: Kind::Meta {
+                kind: MetaKind::Unfinished,
+            },
+            raw: vec![Value::String(line)],
+        });
+    }
 }
 
 /// A string at a JSON pointer, when present.

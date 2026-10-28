@@ -409,3 +409,26 @@ fn records_of_an_abandoned_branch_are_counted() {
         "{losses:?}"
     );
 }
+
+/// No loss is silent: a last line the source never finished writing is not read, and the manifest
+/// says so.
+#[test]
+fn an_unfinished_last_line_is_counted() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-unfinished");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let cut = Entry {
+        id: "unfinished".into(),
+        kind: Kind::Meta {
+            kind: mukade::model::MetaKind::Unfinished,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![step("e1", vec![]), cut]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.dropped_unfinished_lines, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("unfinished")),
+        "{losses:?}"
+    );
+}

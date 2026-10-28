@@ -320,3 +320,25 @@ fn incomplete_last_turn_still_works_with_no_conversation_at_all() {
     assert!(conversation(&s).is_empty());
     assert!(!s.interrupted_last_turn());
 }
+
+/// A prompt that only mentions a marker tag is the user's own words.
+#[test]
+fn a_prompt_that_mentions_a_marker_tag_is_a_user_turn() {
+    let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture())
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    rows.push(serde_json::json!({
+        "timestamp": "2026-10-27T16:50:00.000Z", "type": "response_item",
+        "payload": {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "What is the <environment_context> block in my rollout? LITERAL-USER"}]},
+    }));
+    let s = codex::parse(&rows, None).unwrap();
+    let last = s.conversation().last().unwrap();
+    let Kind::User { text, .. } = &last.kind else {
+        panic!("{:?}", last.kind)
+    };
+    assert!(text.contains("LITERAL-USER"), "{text}");
+}

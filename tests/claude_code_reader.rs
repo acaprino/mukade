@@ -466,3 +466,159 @@ fn an_abandoned_branch_is_not_conversation() {
         "T2, the compaction, T3 and T4 are off the branch: {off}"
     );
 }
+
+/// The uuid of the fixture's last row in the tree, to hang new rows from.
+fn last_uuid(rows: &[serde_json::Value]) -> serde_json::Value {
+    rows.iter()
+        .rev()
+        .find_map(|row| row.get("uuid"))
+        .unwrap()
+        .clone()
+}
+
+fn user_row(
+    uuid: &str,
+    parent: serde_json::Value,
+    content: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "user", "uuid": uuid, "parentUuid": parent, "isSidechain": false,
+        "sessionId": SESSION_ID, "timestamp": "2026-10-27T15:40:00.000Z",
+        "message": {"role": "user", "content": content},
+    })
+}
+
+fn last_conversation(s: &Session) -> &Entry {
+    s.conversation().last().expect("a conversation")
+}
+
+/// A prompt that only mentions a command tag is the user's own words, not a command row.
+#[test]
+fn a_prompt_that_mentions_a_command_tag_is_a_user_turn() {
+    let mut rows = fixture_rows();
+    let parent = last_uuid(&rows);
+    rows.push(user_row(
+        "literal-1",
+        parent,
+        serde_json::json!("Why does my transcript contain <command-name>/compact</command-name> rows? LITERAL-USER"),
+    ));
+    let s = claude_code::parse(&rows, None).unwrap();
+    let Kind::User { text, .. } = &last_conversation(&s).kind else {
+        panic!("{:?}", last_conversation(&s).kind)
+    };
+    assert!(text.contains("LITERAL-USER"), "{text}");
+}
+
+/// A user row may hold tool results and the user's text together: both travel.
+#[test]
+fn a_row_with_results_and_text_is_both() {
+    let mut rows = fixture_rows();
+    let parent = last_uuid(&rows);
+    rows.push(serde_json::json!({
+        "type": "assistant", "uuid": "mixed-1", "parentUuid": parent, "isSidechain": false,
+        "sessionId": SESSION_ID, "timestamp": "2026-10-27T15:40:00.000Z",
+        "message": {"id": "msg_mixed", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "toolu_mixed", "name": "Read", "input": {"file_path": "x"}}],
+            "stop_reason": "tool_use"},
+    }));
+    rows.push(user_row(
+        "mixed-2",
+        "mixed-1".into(),
+        serde_json::json!([
+            {"type": "tool_result", "tool_use_id": "toolu_mixed", "content": "FILE-BODY"},
+            {"type": "text", "text": "also look at y"},
+        ]),
+    ));
+    let s = claude_code::parse(&rows, None).unwrap();
+    let tail: Vec<&Entry> = s.conversation().collect();
+    let [.., results, user] = tail.as_slice() else {
+        panic!()
+    };
+    let Kind::Results { results } = &results.kind else {
+        panic!("{:?}", results.kind)
+    };
+    assert_eq!(results[0].call_id, "toolu_mixed");
+    assert_eq!(results[0].content, ResultContent::Text("FILE-BODY".into()));
+    let Kind::User { text, .. } = &user.kind else {
+        panic!("{:?}", user.kind)
+    };
+    assert_eq!(text, "also look at y");
+}
+
+/// A prompt-type slash command (`/review src/lib.rs`) is a `<command-name>` row followed by the
+/// expanded prompt as an `isMeta` row; the model receives the expanded prompt, so it travels.
+#[test]
+fn the_expanded_prompt_of_a_slash_command_is_a_user_turn() {
+    let mut rows = fixture_rows();
+    let parent = last_uuid(&rows);
+    rows.push(user_row(
+        "slash-1",
+        parent,
+        serde_json::json!("<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>src/lib.rs</command-args>"),
+    ));
+    let mut expanded = user_row(
+        "slash-2",
+        "slash-1".into(),
+        serde_json::json!([{"type": "text", "text": "Review src/lib.rs carefully. EXPANDED-PROMPT"}]),
+    );
+    expanded["isMeta"] = true.into();
+    rows.push(expanded);
+    let s = claude_code::parse(&rows, None).unwrap();
+    let Kind::User { text, .. } = &last_conversation(&s).kind else {
+        panic!("{:?}", last_conversation(&s).kind)
+    };
+    assert!(text.contains("EXPANDED-PROMPT"), "{text}");
+}
+
+/// Claude Code writes internal rows asynchronously; one between the boundary and the summary row
+/// must not leave the compaction without its summary.
+#[test]
+fn an_internal_row_between_boundary_and_summary_keeps_the_summary() {
+    let mut rows = fixture_rows();
+    let boundary = rows
+        .iter()
+        .position(|row| {
+            row.get("subtype").and_then(serde_json::Value::as_str) == Some("compact_boundary")
+        })
+        .unwrap();
+    rows.insert(boundary + 1, serde_json::json!({"type": "atis-latch"}));
+    let s = claude_code::parse(&rows, None).unwrap();
+    let summary = s
+        .entries
+        .iter()
+        .find_map(|e| match &e.kind {
+            Kind::Compaction { summary, .. } => Some(summary.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        summary.contains("This session is being continued"),
+        "{summary:?}"
+    );
+}
+
+/// A hard kill during an append leaves the last line cut off: the session is still readable, and
+/// the unfinished line is kept as `Meta(Unfinished)`. A byte-order mark is not part of the first
+/// record.
+#[test]
+fn a_cut_off_last_line_and_a_byte_order_mark_do_not_stop_the_read() {
+    let text = std::fs::read_to_string(fixture()).unwrap();
+    let file = std::env::temp_dir().join(format!("mukade-cut-off-{}.jsonl", std::process::id()));
+    std::fs::write(
+        &file,
+        format!(
+            "\u{feff}{}{{\"type\":\"user\",\"uuid\":\"x\",\"mess",
+            text.trim_start_matches('\u{feff}')
+        ),
+    )
+    .unwrap();
+    let s = claude_code::read_file(&file).unwrap();
+    let _ = std::fs::remove_file(&file);
+    assert!(matches!(
+        s.entries.last().unwrap().kind,
+        Kind::Meta {
+            kind: MetaKind::Unfinished
+        }
+    ));
+    assert_eq!(s.conversation().count(), read().conversation().count());
+}

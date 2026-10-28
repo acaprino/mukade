@@ -59,6 +59,10 @@ impl Manifest {
             json!(self.counts.dropped_off_branch),
         );
         counts.insert(
+            "dropped_unfinished_lines".into(),
+            json!(self.counts.dropped_unfinished_lines),
+        );
+        counts.insert(
             "unanswered_calls".into(),
             json!(self.counts.unanswered_calls),
         );
@@ -153,6 +157,12 @@ impl Manifest {
             losses.push(format!(
                 "records of an abandoned branch (a rewind or an edited prompt) left behind ({})",
                 counts.dropped_off_branch
+            ));
+        }
+        if counts.dropped_unfinished_lines > 0 {
+            losses.push(format!(
+                "an unfinished last line of the source left unread ({})",
+                counts.dropped_unfinished_lines
             ));
         }
         if counts.dropped_empty_steps > 0 {

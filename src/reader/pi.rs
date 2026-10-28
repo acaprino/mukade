@@ -29,8 +29,10 @@ pub struct Pi;
 /// Read one Pi session file (`<PI_CODING_AGENT_DIR>/sessions/<project>/<ts>_<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let rows = rows_from_lines(&text, &path.display().to_string())?;
-    parse(&rows, Some(path))
+    let (rows, unfinished) = rows_from_lines(&text, &path.display().to_string())?;
+    let mut session = parse(&rows, Some(path))?;
+    super::json::keep_unfinished(&mut session, unfinished);
+    Ok(session)
 }
 
 /// Read records that were already decoded.

@@ -56,6 +56,9 @@ pub enum MetaKind {
     /// A record of a branch the conversation left (a rewind, an edited prompt): kept, but the
     /// harness does not resume it.
     OffBranch,
+    /// The file's last line, cut off mid-write (a hard kill during an append): kept as text, not
+    /// read.
+    Unfinished,
 }
 
 /// One unit of the interchange model.

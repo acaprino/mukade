@@ -33,8 +33,10 @@ pub struct Codex;
 /// Read one Codex rollout file (`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let rows = rows_from_lines(&text, &path.display().to_string())?;
-    parse(&rows, Some(path))
+    let (rows, unfinished) = rows_from_lines(&text, &path.display().to_string())?;
+    let mut session = parse(&rows, Some(path))?;
+    super::json::keep_unfinished(&mut session, unfinished);
+    Ok(session)
 }
 
 /// Read records that were already decoded.
@@ -89,10 +91,13 @@ fn class_of(row: &Value) -> Class {
                         .get("content")
                         .and_then(super::json::text_of_content)
                         .unwrap_or_default();
-                    if text.contains("<turn_aborted>") {
+                    // Codex's own records start with their tag; a prompt that only mentions one
+                    // is the user's words.
+                    let text = text.trim_start();
+                    if text.starts_with("<turn_aborted>") {
                         Class::Abort
-                    } else if text.contains("<environment_context>")
-                        || text.contains("<skills_instructions>")
+                    } else if text.starts_with("<environment_context>")
+                        || text.starts_with("<skills_instructions>")
                     {
                         Class::Meta(MetaKind::SystemPrompt)
                     } else {

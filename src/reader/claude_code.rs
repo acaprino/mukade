@@ -39,17 +39,10 @@ impl ClaudeCode {
 /// Read one Claude Code session file (`<CLAUDE_CONFIG_DIR>/projects/<project>/<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let mut rows = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        rows.push(
-            serde_json::from_str::<Value>(line)
-                .with_context(|| format!("{}:{}", path.display(), n + 1))?,
-        );
-    }
-    parse(&rows, Some(path))
+    let (rows, unfinished) = super::json::rows_from_lines(&text, &path.display().to_string())?;
+    let mut session = parse(&rows, Some(path))?;
+    super::json::keep_unfinished(&mut session, unfinished);
+    Ok(session)
 }
 
 /// Read records that were already decoded (the CLI and the tests both come through here).
@@ -193,23 +186,34 @@ fn class_of(row: &Value) -> Class {
                 Class::Summary
             } else if truthy(row.get("isMeta")) || truthy(row.get("isVisibleInTranscriptOnly")) {
                 Class::Meta(MetaKind::Command)
-            } else if let Some(text) = content_text(row) {
-                if text.starts_with("<local-command-")
-                    || text.contains("<command-name>")
-                    || text.contains("<command-message>")
-                {
-                    Class::Meta(MetaKind::Command)
-                } else {
-                    Class::User
-                }
             } else if has_tool_result(row) {
+                // Results first: a row may carry the user's text beside them (see `push`).
                 Class::Results
+            } else if content_text(row).is_some_and(|text| is_command_row(&text)) {
+                Class::Meta(MetaKind::Command)
             } else {
                 Class::User
             }
         }
         _ => Class::Meta(MetaKind::Internal),
     }
+}
+
+/// A command row is one Claude Code wrote for a slash command: it starts with the tag. A prompt
+/// that only mentions one is the user's own words.
+fn is_command_row(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("<local-command-")
+        || text.starts_with("<command-name>")
+        || text.starts_with("<command-message>")
+}
+
+/// A prompt-type slash command (`/review src/lib.rs`): its `<command-name>` row, which an
+/// `isMeta` row with the expanded prompt follows. `/compact` and the other local commands answer
+/// with `<local-command-stdout>` instead.
+fn is_prompt_command(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("<command-name>") || text.starts_with("<command-message>")
 }
 
 fn truthy(v: Option<&Value>) -> bool {
@@ -301,6 +305,12 @@ struct Builder {
     open_results: Option<usize>,
     /// A boundary row waiting for its summary row.
     open_compaction: Option<OpenCompaction>,
+    /// A compaction written without its summary because another row came between the boundary
+    /// and the summary row; the summary row, when it comes, fills it in.
+    unsummarized: Option<usize>,
+    /// The last command row was a prompt-type slash command: the `isMeta` row after it is the
+    /// expanded prompt the model received.
+    after_prompt_command: bool,
 }
 
 struct OpenStep {
@@ -372,7 +382,22 @@ impl Builder {
             });
             return;
         }
-        let class = class_of(row);
+        let mut class = class_of(row);
+        let text = content_text(row);
+        if matches!(class, Class::Meta(MetaKind::Command))
+            && self.after_prompt_command
+            && truthy(row.get("isMeta"))
+            && text.as_deref().is_some_and(|text| !is_command_row(text))
+        {
+            class = Class::User;
+        }
+        match &class {
+            Class::Meta(MetaKind::Command) => {
+                self.after_prompt_command = text.as_deref().is_some_and(is_prompt_command);
+            }
+            Class::Meta(_) => {}
+            _ => self.after_prompt_command = false,
+        }
         if !on_branch && !matches!(class, Class::Meta(_)) {
             // A row of a branch the conversation left: kept, not resumed.
             self.flush();
@@ -388,11 +413,25 @@ impl Builder {
         match class {
             Class::Assistant(message_id) => {
                 self.flush_unless_step(&message_id);
+                self.unsummarized = None;
                 self.step_with(index, row, message_id);
             }
             Class::Results => {
                 self.flush_unless_results();
+                self.unsummarized = None;
                 self.results_with(index, row);
+                // The user's own text beside the results is a turn of its own, after them.
+                if let Some(text) = text {
+                    self.flush();
+                    self.entries.push(Entry {
+                        id: format!("{}-text", row_id(row, index)),
+                        kind: Kind::User {
+                            text,
+                            attachments: Vec::new(),
+                        },
+                        raw: Vec::new(),
+                    });
+                }
             }
             Class::Boundary => {
                 self.flush();
@@ -409,6 +448,19 @@ impl Builder {
                         .pointer("/preservedSegment/headUuid")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
+                });
+            }
+            Class::Summary if self.open_compaction.is_none() && self.unsummarized.is_some() => {
+                let at = self.unsummarized.take().expect("checked");
+                if let Kind::Compaction { summary, .. } = &mut self.entries[at].kind {
+                    *summary = text.unwrap_or_default();
+                }
+                self.entries.push(Entry {
+                    id: row_id(row, index),
+                    kind: Kind::Meta {
+                        kind: MetaKind::Internal,
+                    },
+                    raw: vec![row.clone()],
                 });
             }
             Class::Summary => {
@@ -437,7 +489,8 @@ impl Builder {
             }
             Class::User => {
                 self.flush();
-                let text = content_text(row).unwrap_or_default();
+                self.unsummarized = None;
+                let text = text.unwrap_or_default();
                 self.entries.push(Entry {
                     id: row_id(row, index),
                     kind: Kind::User {
@@ -467,6 +520,7 @@ impl Builder {
         self.flush_step();
         self.open_results = None;
         if let Some(open) = self.open_compaction.take() {
+            self.unsummarized = Some(self.entries.len());
             self.entries.push(Entry {
                 id: row_id(&open.boundary, 0),
                 kind: Kind::Compaction {
