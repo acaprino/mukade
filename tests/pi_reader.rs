@@ -174,3 +174,64 @@ fn the_stored_system_message_and_session_records_are_meta() {
     assert_eq!(s.entries.len(), 14);
 }
 
+
+/// Navigating back in Pi's tree starts a new branch from an earlier entry and may leave a
+/// `branch_summary` there; the abandoned entries stay in the file. Pi resumes the path from the
+/// last entry back through `parentId`, and shows the branch summary to the model as a user
+/// message. The abandoned entries are kept as `Meta(OffBranch)`.
+#[test]
+fn an_abandoned_branch_is_not_conversation_and_its_summary_is() {
+    let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture())
+        .unwrap()
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let by_role = |role: &str| {
+        rows.iter()
+            .rev()
+            .find(|row| row.pointer("/message/role").and_then(serde_json::Value::as_str) == Some(role))
+            .cloned()
+            .unwrap()
+    };
+    let (mut user, mut reply) = (by_role("user"), by_role("assistant"));
+    // The end of T1: the assistant entry the tool results led to.
+    let t1_end = rows[8]["id"].as_str().unwrap().to_string();
+    rows.push(serde_json::json!({
+        "type": "branch_summary", "id": "bs000001", "parentId": t1_end,
+        "timestamp": "2026-10-27T16:30:00.000Z", "fromId": "0069c063",
+        "summary": "ABANDONED-BRANCH-SUMMARY",
+    }));
+    user["id"] = "ed000001".into();
+    user["parentId"] = "bs000001".into();
+    user["message"]["content"] = serde_json::json!([{"type": "text", "text": "PI-EDITED"}]);
+    reply["id"] = "ed000002".into();
+    reply["parentId"] = "ed000001".into();
+    reply["message"]["content"] = serde_json::json!([{"type": "text", "text": "PI-EDITED-REPLY"}]);
+    rows.push(user);
+    rows.push(reply);
+    let s = pi::parse(&rows, None).unwrap();
+
+    let users: Vec<&str> = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users.len(), 3, "{users:?}");
+    assert!(users[1].contains("ABANDONED-BRANCH-SUMMARY"), "{users:?}");
+    assert!(
+        users[1].starts_with("The following is a summary of a branch that this conversation came back from:"),
+        "{users:?}"
+    );
+    assert_eq!(users[2], "PI-EDITED");
+    assert!(!s.conversation().any(|e| matches!(e.kind, Kind::Compaction { .. })));
+    let off = s
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind, Kind::Meta { kind: MetaKind::OffBranch }))
+        .count();
+    assert_eq!(off, 6, "T2, the compaction, T3 and the killed T4 are off the branch");
+}

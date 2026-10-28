@@ -35,11 +35,57 @@ pub fn read_file(path: &Path) -> Result<Session> {
 
 /// Read records that were already decoded.
 pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
+    let on_branch = active_branch(rows);
     let mut b = Builder::default();
     for (i, row) in rows.iter().enumerate() {
-        b.push(i, row);
+        b.push(i, row, on_branch[i]);
     }
     b.finish(source_path)
+}
+
+/// Pi's own text around a branch summary when it shows one to the model
+/// (`BRANCH_SUMMARY_PREFIX` / `BRANCH_SUMMARY_SUFFIX` in pi-coding-agent 1.2.0).
+const BRANCH_SUMMARY_PREFIX: &str =
+    "The following is a summary of a branch that this conversation came back from:
+
+<summary>
+";
+const BRANCH_SUMMARY_SUFFIX: &str = "</summary>";
+
+/// Which records belong to the path Pi resumes. Navigating back in Pi's tree starts a new branch
+/// from an earlier entry and leaves the abandoned one in the file; Pi builds the context from the
+/// last entry back through `parentId` (`buildSessionPath`). The header and records outside the
+/// tree (no `id`) are left as they are.
+fn active_branch(rows: &[Value]) -> Vec<bool> {
+    let in_tree = |row: &Value| {
+        row.get("id").and_then(Value::as_str).is_some()
+            && !matches!(row.get("type").and_then(Value::as_str), Some("session" | "session_start"))
+    };
+    let Some(leaf) = rows.iter().rposition(&in_tree) else {
+        return vec![true; rows.len()];
+    };
+    let by_id: std::collections::HashMap<&str, usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| in_tree(row))
+        .filter_map(|(i, row)| row.get("id").and_then(Value::as_str).map(|id| (id, i)))
+        .collect();
+    let mut active = vec![false; rows.len()];
+    let mut at = Some(leaf);
+    while let Some(i) = at {
+        if active[i] {
+            break;
+        }
+        active[i] = true;
+        at = rows[i]
+            .get("parentId")
+            .and_then(Value::as_str)
+            .and_then(|id| by_id.get(id).copied());
+    }
+    rows.iter()
+        .zip(active)
+        .map(|(row, on)| on || !in_tree(row))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -50,6 +96,8 @@ enum Class {
     Message,
     /// `compaction`.
     Compacted,
+    /// `branch_summary`: what the branch the conversation came back from did.
+    BranchSummary,
     Meta(MetaKind),
     /// The `session` header and anything else with no conversation meaning.
     Header,
@@ -58,6 +106,7 @@ enum Class {
 fn class_of(row: &Value) -> Class {
     match row.get("type").and_then(Value::as_str).unwrap_or("") {
         "message" => Class::Message,
+        "branch_summary" => Class::BranchSummary,
         "compaction" => Class::Compacted,
         "model_change" | "thinking_level_change" => Class::Meta(MetaKind::ModelChange),
         "session" | "session_start" => Class::Header,
@@ -139,7 +188,7 @@ impl MetaBuilder {
 }
 
 impl Builder {
-    fn push(&mut self, index: usize, row: &Value) {
+    fn push(&mut self, index: usize, row: &Value, on_branch: bool) {
         self.meta.observe(row);
         if let Some(model_id) = str_at(row, "/modelId") {
             // `model_change`: the provider and model the session was using.
@@ -155,7 +204,39 @@ impl Builder {
         if let Some(api) = row.pointer("/message/api").and_then(Value::as_str) {
             self.protocol = Some(Protocol::from_provider(api));
         }
-        match class_of(row) {
+        let class = class_of(row);
+        if !on_branch && !matches!(class, Class::Header | Class::Meta(_)) {
+            // A record of a branch the conversation left: kept, not resumed.
+            self.open_results = None;
+            self.entries.push(Entry {
+                id: id_of(row, index),
+                kind: Kind::Meta {
+                    kind: MetaKind::OffBranch,
+                },
+                raw: vec![row.clone()],
+            });
+            return;
+        }
+        match class {
+            // Pi shows the model a branch summary as a user message, in its own words.
+            Class::BranchSummary => {
+                self.open_results = None;
+                let summary = str_at(row, "/summary").unwrap_or_default();
+                self.entries.push(Entry {
+                    id: id_of(row, index),
+                    kind: if summary.is_empty() {
+                        Kind::Meta {
+                            kind: MetaKind::Internal,
+                        }
+                    } else {
+                        Kind::User {
+                            text: format!("{BRANCH_SUMMARY_PREFIX}{summary}{BRANCH_SUMMARY_SUFFIX}"),
+                            attachments: Vec::new(),
+                        }
+                    },
+                    raw: vec![row.clone()],
+                });
+            }
             Class::Header => self.entries.push(Entry {
                 id: id_of(row, index),
                 kind: Kind::Meta {
