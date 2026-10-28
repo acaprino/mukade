@@ -6,9 +6,15 @@
 //! What comes back travels like the source's own compaction does (§4.2): one handoff message, then
 //! the turns the caller chose to keep.
 
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
-use crate::model::HarnessId;
+use serde_json::{Value, json};
+
+use crate::hop::HopError;
+use crate::model::{HarnessId, ModelRef, Session};
+use crate::roots::StoreRoots;
 
 /// The line the destination's model reads before the summary, so it knows where the text came from.
 /// `crate::hop::PORTABLE_HANDOFF` stays for the source's own compaction.
@@ -56,4 +62,355 @@ pub struct Summary {
 pub struct SummaryFacts {
     pub summary: Summary,
     pub left_out: usize,
+}
+
+/// What the source's model is asked (one line: a Windows `.cmd` launcher cannot take a line break,
+/// and the characters `"%^&|<>!` are not safe there).
+pub const SUMMARY_PROMPT: &str = "Write a handoff summary of this whole session for another coding agent that will continue the work from your summary alone. Do not call tools and do not continue the task: reply only with the summary, in the language the user wrote in. Cover: (1) the goal and what the user asked for, quoting the user where wording matters; (2) the current state, what is done and what is half done; (3) the decisions taken and why, and the approaches tried and dropped; (4) the files read or changed and how, and the commands and tests run with their results; (5) open problems, unanswered questions, and the next step. Keep it as short as it can be while a new agent could continue the work from it alone.";
+
+/// How long deleting OpenCode's fork may take.
+const DELETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One summarizing run of a source harness: what to start, from where, and where its reply lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SummaryCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    /// The session's own directory when it still exists; else the run starts from mukade's.
+    pub cwd: Option<PathBuf>,
+    /// Codex writes its last message to a file (`-o`) rather than only to stdout.
+    pub output_file: Option<PathBuf>,
+}
+
+/// The command that asks `session`'s own harness for a summary and saves nothing in its store
+/// (live record `docs/verification/2026-10-28-summary-live.md`, "Final commands"). `scratch` is the
+/// folder of this run, for what a harness has to write somewhere: Codex's last message, Pi's fork.
+pub fn summary_command(
+    session: &Session,
+    opts: &SummarizeOpts,
+    scratch: &Path,
+) -> Result<SummaryCommand, HopError> {
+    let harness = session.meta.harness;
+    let id = session.meta.id.clone();
+    let model = model_args(harness, opts.model.as_deref(), session.meta.models.last());
+    let mut output_file = None;
+    let mut args: Vec<String> = match harness {
+        // `--tools` takes several values: before `--resume`, so it cannot swallow the prompt.
+        HarnessId::ClaudeCode => [
+            "-p",
+            "--tools",
+            "",
+            "--resume",
+            &id,
+            "--no-session-persistence",
+            "--output-format",
+            "json",
+        ]
+        .map(String::from)
+        .to_vec(),
+        // `exec resume --ephemeral` still appends to the rollout it resumes; a fork does not.
+        HarnessId::Codex => {
+            let file = scratch.join("last-message.txt");
+            let args = vec![
+                "exec".into(),
+                "fork".into(),
+                id,
+                "--ephemeral".into(),
+                "--skip-git-repo-check".into(),
+                "-c".into(),
+                "sandbox_mode=\"read-only\"".into(),
+                "-o".into(),
+                file.display().to_string(),
+            ];
+            output_file = Some(file);
+            args
+        }
+        // `--no-session` cannot be combined with `--fork`: the fork goes to this run's folder.
+        HarnessId::Pi => {
+            let file = session.meta.source_path.clone().ok_or_else(|| {
+                HopError::Unsupported(
+                    "a Pi session is summarized from its own file, and this one was not read from a file"
+                        .into(),
+                )
+            })?;
+            vec![
+                "-p".into(),
+                "--fork".into(),
+                file,
+                "--session-dir".into(),
+                scratch.join("sessions").display().to_string(),
+                "--no-tools".into(),
+            ]
+        }
+        // Every `run` writes to the store: the fork is deleted once the reply is in.
+        HarnessId::OpenCode => [
+            "run",
+            "--standalone",
+            "--session",
+            &id,
+            "--fork",
+            "--format",
+            "json",
+        ]
+        .map(String::from)
+        .to_vec(),
+    };
+    args.extend(model);
+    args.push(SUMMARY_PROMPT.into());
+    Ok(SummaryCommand {
+        program: crate::exe::resolve(harness, opts.exe.as_deref()),
+        args,
+        cwd: session
+            .meta
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_dir()),
+        output_file,
+    })
+}
+
+/// The model flags: the one named, else the session's own last model. Pi gets the provider apart
+/// (a model id may hold a slash itself); OpenCode names a model only with its provider.
+fn model_args(harness: HarnessId, named: Option<&str>, recorded: Option<&ModelRef>) -> Vec<String> {
+    let flag = match harness {
+        HarnessId::ClaudeCode | HarnessId::Pi => "--model",
+        HarnessId::Codex | HarnessId::OpenCode => "-m",
+    };
+    if let Some(model) = named {
+        return vec![flag.into(), model.into()];
+    }
+    let Some(model) = recorded.filter(|model| !model.id.is_empty()) else {
+        return Vec::new();
+    };
+    match (harness, model.provider.as_deref()) {
+        (HarnessId::Pi, Some(provider)) => vec![
+            "--provider".into(),
+            provider.into(),
+            flag.into(),
+            model.id.clone(),
+        ],
+        (HarnessId::OpenCode, Some(provider)) => {
+            vec![flag.into(), format!("{provider}/{}", model.id)]
+        }
+        (HarnessId::OpenCode, None) => Vec::new(),
+        _ => vec![flag.into(), model.id.clone()],
+    }
+}
+
+/// What a summarizing run answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub text: String,
+    /// The tokens or cost the harness reported, as compact JSON.
+    pub usage: Option<String>,
+    /// The session OpenCode forked for the run, to be deleted.
+    pub fork: Option<String>,
+}
+
+/// Read the summary where `harness` puts it: Claude Code's JSON `result`, the file Codex wrote
+/// (`output_file` is its content), Pi's stdout, OpenCode's `text` events. An empty summary, or one
+/// the harness itself marks as an error, is no summary.
+pub fn parse_reply(
+    harness: HarnessId,
+    stdout: &str,
+    output_file: Option<&str>,
+) -> Result<Reply, String> {
+    let mut reply = Reply {
+        text: String::new(),
+        usage: None,
+        fork: None,
+    };
+    match harness {
+        HarnessId::ClaudeCode => {
+            let result: Value = stdout
+                .lines()
+                .rev()
+                .find_map(|line| serde_json::from_str(line.trim()).ok())
+                .or_else(|| serde_json::from_str(stdout.trim()).ok())
+                .ok_or_else(|| "Claude Code printed no JSON result".to_string())?;
+            let subtype = result.get("subtype").and_then(Value::as_str).unwrap_or("");
+            let text = result.get("result").and_then(Value::as_str).unwrap_or("");
+            if result.get("is_error").and_then(Value::as_bool) == Some(true) || subtype != "success"
+            {
+                return Err(format!(
+                    "Claude Code answered with an error ({}): {}",
+                    if subtype.is_empty() {
+                        "no subtype"
+                    } else {
+                        subtype
+                    },
+                    text.trim()
+                ));
+            }
+            reply.text = text.to_string();
+            let usage = json!({
+                "total_cost_usd": result.get("total_cost_usd"),
+                "usage": result.get("usage"),
+                "modelUsage": result.get("modelUsage"),
+            });
+            reply.usage = Some(usage.to_string());
+        }
+        HarnessId::Codex => reply.text = output_file.unwrap_or("").to_string(),
+        HarnessId::Pi => reply.text = stdout.to_string(),
+        HarnessId::OpenCode => {
+            let mut texts = Vec::new();
+            for event in stdout
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+            {
+                if reply.fork.is_none() {
+                    reply.fork = event
+                        .get("sessionID")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
+                if event.get("type").and_then(Value::as_str) == Some("text")
+                    && let Some(text) = event.pointer("/part/text").and_then(Value::as_str)
+                {
+                    texts.push(text.to_string());
+                }
+            }
+            reply.text = texts.join("\n\n");
+        }
+    }
+    reply.text = reply.text.trim().to_string();
+    if reply.text.is_empty() {
+        return Err("the model returned no summary".into());
+    }
+    Ok(reply)
+}
+
+/// Ask `session`'s own harness for a summary of it (design 2026-10-28). The run saves nothing in
+/// the source's store: OpenCode's fork is deleted afterwards, and named in [`Summary::leftover`]
+/// when it could not be. This run's folder under `mukade-data/tmp` is removed whatever happens.
+pub fn summarize(
+    session: &Session,
+    roots: &StoreRoots,
+    opts: &SummarizeOpts,
+) -> Result<Summary, HopError> {
+    let base =
+        crate::portable::temp_dir().map_err(|error| HopError::SummaryFailed(error.to_string()))?;
+    sweep_stale_runs(&base);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|age| age.as_nanos())
+        .unwrap_or_default();
+    let scratch = base.join(format!("summary-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&scratch).map_err(|error| {
+        HopError::SummaryFailed(format!("could not make {}: {error}", scratch.display()))
+    })?;
+    let result = summarize_in(session, roots, opts, &scratch);
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn summarize_in(
+    session: &Session,
+    roots: &StoreRoots,
+    opts: &SummarizeOpts,
+    scratch: &Path,
+) -> Result<Summary, HopError> {
+    let harness = session.meta.harness;
+    let command = summary_command(session, opts, scratch)?;
+    // The prompt is long and the same every time: a failure names it by its version.
+    let shown = {
+        let mut words = vec![command.program.clone()];
+        words.extend(command.args[..command.args.len() - 1].iter().cloned());
+        words.push(format!("<summary prompt {SUMMARY_PROMPT_VERSION}>"));
+        words.join(" ")
+    };
+    let mut process = Command::new(crate::exe::spawnable(&command.program));
+    process.args(&command.args);
+    if let Some(cwd) = &command.cwd {
+        process.current_dir(cwd);
+    }
+    roots.apply_to(harness, &mut process);
+    let finished = crate::exe::run_within(&mut process, opts.timeout)
+        .map_err(|error| HopError::SummaryFailed(format!("{shown}: {error}")))?;
+    let stdout = String::from_utf8_lossy(&finished.stdout);
+    let written = command
+        .output_file
+        .as_deref()
+        .and_then(|file| std::fs::read(file).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    let parsed = parse_reply(harness, &stdout, written.as_deref());
+    // OpenCode forked the session before it answered: the fork goes whatever came of the run.
+    let leftover = match parsed.as_ref().ok().and_then(|reply| reply.fork.clone()) {
+        Some(fork) => delete_opencode_fork(&command, roots, &fork),
+        None => None,
+    };
+    let reply = match (finished.status, parsed) {
+        (None, _) => {
+            return Err(HopError::SummaryFailed(format!(
+                "{shown} did not finish within {:?}",
+                opts.timeout
+            )));
+        }
+        (Some(status), _) if !status.success() => {
+            return Err(HopError::SummaryFailed(format!(
+                "{shown} exited with {status}: {}",
+                String::from_utf8_lossy(&finished.stderr).trim()
+            )));
+        }
+        (Some(_), Err(reason)) => {
+            return Err(HopError::SummaryFailed(format!("{shown}: {reason}")));
+        }
+        (Some(_), Ok(reply)) => reply,
+    };
+    let model = opts
+        .model
+        .clone()
+        .or_else(|| session.meta.models.last().map(|model| model.id.clone()))
+        .filter(|model| !model.is_empty());
+    Ok(Summary {
+        text: reply.text,
+        harness,
+        harness_version: crate::exe::version_of(&command.program),
+        model,
+        usage: reply.usage,
+        leftover,
+    })
+}
+
+/// Delete the session OpenCode forked for the summary: `None` once it is gone, else the command
+/// that removes it.
+fn delete_opencode_fork(
+    command: &SummaryCommand,
+    roots: &StoreRoots,
+    fork: &str,
+) -> Option<String> {
+    let args = ["session", "delete", fork, "--standalone"];
+    let mut process = Command::new(crate::exe::spawnable(&command.program));
+    process.args(args);
+    if let Some(cwd) = &command.cwd {
+        process.current_dir(cwd);
+    }
+    roots.apply_to(HarnessId::OpenCode, &mut process);
+    let deleted = crate::exe::run_within(&mut process, DELETE_TIMEOUT)
+        .ok()
+        .and_then(|finished| finished.status)
+        .is_some_and(|status| status.success());
+    (!deleted).then(|| format!("{} {}", command.program, args.join(" ")))
+}
+
+/// The folders of runs a killed process left behind, removed once they are an hour old.
+fn sweep_stale_runs(base: &Path) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry.file_name().to_string_lossy().starts_with("summary-")
+            && entry
+                .metadata()
+                .ok()
+                .filter(|meta| meta.is_dir())
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age > crate::portable::STALE_AFTER);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }

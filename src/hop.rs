@@ -398,17 +398,20 @@ pub fn compact<'a>(
     compaction: &Compaction,
     roots: &StoreRoots,
 ) -> Result<(std::borrow::Cow<'a, Session>, Option<SummaryFacts>), HopError> {
-    if let Compaction::Portable {
-        summary: SummarySource::SourceModel(_),
-        ..
-    } = compaction
-    {
-        let _ = roots;
-        return Err(HopError::Unsupported(
-            "Compaction::Portable with SummarySource::SourceModel: asking the source's model is not built yet"
-                .into(),
-        ));
-    }
+    let resolved;
+    let compaction = match compaction {
+        Compaction::Portable {
+            summary: SummarySource::SourceModel(opts),
+            keep_from,
+        } => {
+            resolved = Compaction::Portable {
+                summary: SummarySource::Generated(crate::summary::summarize(source, roots, opts)?),
+                keep_from: keep_from.clone(),
+            };
+            &resolved
+        }
+        other => other,
+    };
     let selection = select(source, compaction)?;
     let summary = match compaction {
         Compaction::Portable {
