@@ -46,21 +46,47 @@ pub fn read_source(harness: HarnessId) -> Session {
     .expect("the fixture must read")
 }
 
-/// A fresh scratch directory for one test, under the harness's own scratch area. The counter makes
-/// every call unique: two tests that ask for the same tag (a shared helper, say) must not delete
-/// each other's store while the other is still running.
+/// A fresh scratch directory for one test, under the harness's own scratch area. The process id
+/// and the counter make every call unique: two tests that ask for the same tag (a shared helper,
+/// say), or two test runs at once, must not delete each other's store while the other is still
+/// running. Scratch folders a day old are left from earlier runs and are removed.
 pub fn scratch(harness: HarnessId, tag: &str) -> PathBuf {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static SWEPT: std::sync::Once = std::sync::Once::new();
     let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = std::env::var_os("LOCALAPPDATA")
+    let area = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("mukade-tests")
+        .join("mukade-tests");
+    SWEPT.call_once(|| sweep(&area));
+    let base = area
         .join(harness.as_str())
-        .join(format!("{tag}-{unique}"));
+        .join(format!("{tag}-{}-{unique}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("home")).expect("create the scratch home");
     base
+}
+
+/// Remove the scratch folders of earlier runs, a day old or more.
+fn sweep(area: &Path) {
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    for harness in std::fs::read_dir(area).into_iter().flatten().flatten() {
+        for run in std::fs::read_dir(harness.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let old = run
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > day);
+            if old {
+                let _ = std::fs::remove_dir_all(run.path());
+            }
+        }
+    }
 }
 
 /// A launcher standing in for a harness binary: `<name>.cmd` on Windows, an executable shell

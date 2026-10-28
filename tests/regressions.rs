@@ -357,45 +357,76 @@ fn an_ambiguous_compaction_boundary_is_refused() {
     assert!(matches!(error, HopError::Unsupported(_)), "{error}");
 }
 
+/// A launcher standing in for `opencode`: it records the store it was given, then answers
+/// `session import` with `answer` (Windows `cmd` lines, POSIX `sh` lines).
+fn mock_opencode(
+    dir: &std::path::Path,
+    capture: &std::path::Path,
+    windows: &str,
+    unix: &str,
+) -> String {
+    support::launcher(
+        dir,
+        "mock-opencode",
+        &format!(
+            "echo OPENCODE_DB=%OPENCODE_DB%>\"{}\"\r\n{windows}",
+            capture.display()
+        ),
+        &format!(
+            "echo \"OPENCODE_DB=$OPENCODE_DB\" > '{}'\n{unix}",
+            capture.display()
+        ),
+    )
+    .to_string_lossy()
+    .into_owned()
+}
+
+/// L1: the import runs against the requested database, and the temporary import document is gone
+/// afterwards whether the import failed or succeeded. No real OpenCode is started.
 #[test]
 fn opencode_import_cleans_its_document_and_uses_the_requested_root() {
     let source = session(Kind::User {
         text: "hello".into(),
         attachments: Vec::new(),
     });
-    let scratch = support::scratch(HarnessId::OpenCode, "regression-opencode-process");
-    let root = scratch.join("configured-home");
-    let script = scratch.join("mock-opencode.cmd");
-    std::fs::write(&script, "@echo off\r\nset OPENCODE_DB > \"%MUKADE_CAPTURE%\"\r\nif not \"%1\"==\"session\" exit /b 2\r\nexit /b 3\r\n").unwrap();
-    let capture = scratch.join("environment.txt");
-    // The test's environment is private to this subprocess; no real OpenCode store is invoked.
-    let mut opts = opts(HarnessId::OpenCode, &scratch);
-    opts.roots.opencode_db = Some(root.join("custom.db"));
-    opts.exe = Some(script.to_string_lossy().into_owned());
-    // This executable deliberately fails import, making cleanup observable in the failure path.
-    let old = std::env::var_os("MUKADE_CAPTURE");
-    unsafe { std::env::set_var("MUKADE_CAPTURE", &capture) };
-    let error = writer::opencode::Opencode
-        .write(&source, &opts)
-        .unwrap_err();
-    match old {
-        Some(value) => unsafe { std::env::set_var("MUKADE_CAPTURE", value) },
-        None => unsafe { std::env::remove_var("MUKADE_CAPTURE") },
+    for (tag, windows, unix, succeeds) in [
+        ("fails", "exit /b 3", "exit 3", false),
+        (
+            "succeeds",
+            "echo Imported session: ses_mock",
+            "echo 'Imported session: ses_mock'",
+            true,
+        ),
+    ] {
+        let scratch = support::scratch(HarnessId::OpenCode, &format!("regression-opencode-{tag}"));
+        let root = scratch.join("configured-home");
+        let capture = scratch.join("environment.txt");
+        let mut opts = opts(HarnessId::OpenCode, &scratch);
+        opts.roots.opencode_db = Some(root.join("custom.db"));
+        opts.exe = Some(mock_opencode(&scratch.join("bin"), &capture, windows, unix));
+        let result = writer::opencode::Opencode.write(&source, &opts);
+        match (&result, succeeds) {
+            (Ok(written), true) => {
+                assert_eq!(written.id, "ses_mock");
+                assert_eq!(written.location, root.join("custom.db").to_string_lossy());
+            }
+            (Err(error), false) => assert!(
+                error.to_string().contains("opencode session import failed"),
+                "{error:#}"
+            ),
+            _ => panic!("{tag}: {result:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&capture).unwrap().trim(),
+            format!("OPENCODE_DB={}", root.join("custom.db").to_string_lossy()),
+            "{tag}"
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            0,
+            "{tag}: the temporary import document was removed"
+        );
     }
-    assert!(
-        error.to_string().contains("opencode session import failed"),
-        "{error:#}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(capture).unwrap().trim(),
-        format!("OPENCODE_DB={}", root.join("custom.db").to_string_lossy())
-    );
-    assert!(!root.join("mukade-import-test.json").exists());
-    assert_eq!(
-        std::fs::read_dir(&root).unwrap().count(),
-        0,
-        "the temporary import document was removed"
-    );
 }
 
 #[test]

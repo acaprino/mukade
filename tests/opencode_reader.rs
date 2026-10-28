@@ -348,3 +348,21 @@ fn every_model_is_listed_in_first_seen_order() {
     let ids: Vec<&str> = s.meta.models.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, ["h27-mock", "model-b"]);
 }
+
+/// Native order in the store is `seq`, not the order rows came back in.
+#[test]
+fn store_rows_are_read_in_seq_order() {
+    let path = source("rows.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let before: Vec<String> = conversation(&opencode::parse(&doc, None).unwrap())
+        .iter()
+        .map(|e| e.id.clone())
+        .collect();
+    doc["session_message"].as_array_mut().unwrap().reverse();
+    let after: Vec<String> = conversation(&opencode::parse(&doc, None).unwrap())
+        .iter()
+        .map(|e| e.id.clone())
+        .collect();
+    assert_eq!(after, before);
+}

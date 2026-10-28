@@ -22,8 +22,22 @@ fn cli(scratch: &Path, args: &[&str]) -> (bool, String, String) {
 /// [`cli`], keeping the exit code.
 fn cli_code(scratch: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let home = scratch.join("home");
+    // No real harness can be reached: PATH holds an empty directory, and the homes the
+    // well-known install locations hang from point inside the scratch.
+    let isolated = scratch.join("isolated");
+    std::fs::create_dir_all(isolated.join("bin")).unwrap();
     let output = Command::new(BIN)
         .args(args)
+        .env("PATH", isolated.join("bin"))
+        .env("APPDATA", &isolated)
+        .env("LOCALAPPDATA", &isolated)
+        .env("USERPROFILE", &isolated)
+        .env("HOME", &isolated)
+        .env_remove("OPENCODE_CONFIG")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("XDG_CACHE_HOME")
         .env("CLAUDE_CONFIG_DIR", &home)
         .env("CODEX_HOME", &home)
         .env("PI_CODING_AGENT_DIR", &home)
@@ -556,5 +570,38 @@ fn dump_writes_utf8_to_a_file() {
     assert!(
         written.to_string().contains("—"),
         "the em dash of the fixture survives"
+    );
+}
+
+/// Exit code 4: the destination refused the write and nothing changed.
+#[test]
+fn a_write_the_destination_refuses_exits_4() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-exit-4");
+    let file = scratch.join("document.json");
+    std::fs::write(&file, serde_json::to_string(&doc).unwrap()).unwrap();
+    let opencode = support::launcher(&scratch.join("bin"), "opencode", "exit /b 1", "exit 1");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "opencode",
+            file.to_str().unwrap(),
+            "--opencode-exe",
+            opencode.to_str().unwrap(),
+            "--dest-version",
+            "2.1.4",
+            "--project-id",
+            "global",
+            "--model-provider",
+            "h27",
+            "--model",
+            "m1",
+        ],
+    );
+    assert_eq!(code, Some(4), "{stderr}");
+    assert!(
+        stdout.trim().is_empty(),
+        "no receipt for a write that did not happen"
     );
 }

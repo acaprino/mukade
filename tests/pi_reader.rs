@@ -394,3 +394,35 @@ fn a_fractional_bash_timeout_becomes_milliseconds() {
         .unwrap();
     assert_eq!(call.input["timeout"], 1500);
 }
+
+/// Native order is the file's own order (and its tree), never the timestamps.
+#[test]
+fn the_file_order_wins_over_timestamps() {
+    let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture())
+        .unwrap()
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let texts = |s: &Session| -> Vec<String> {
+        s.conversation()
+            .filter_map(|e| match &e.kind {
+                Kind::User { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = texts(&pi::parse(&rows, None).unwrap());
+    let n = rows.len();
+    for (i, row) in rows.iter_mut().enumerate() {
+        row["timestamp"] = format!("2026-10-27T15:{:02}:00.000Z", 59 - (i * 59 / n)).into();
+        if let Some(message) = row
+            .get_mut("message")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            message.insert("timestamp".into(), serde_json::Value::from(n - i));
+        }
+    }
+    assert_eq!(texts(&pi::parse(&rows, None).unwrap()), before);
+}

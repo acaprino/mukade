@@ -112,3 +112,24 @@ pub fn result_content(blocks: &[Value]) -> ResultContent {
 pub fn fallback_id(prefix: &str, index: usize) -> String {
     format!("{prefix}-{index}")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blank_lines_and_a_byte_order_mark_are_not_records() {
+        let (rows, tail) = rows_from_lines("\u{feff}{\"a\":1}\n\n  \n{\"b\":2}\n", "t").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(tail.is_none());
+    }
+
+    #[test]
+    fn only_a_cut_off_last_line_is_kept_apart() {
+        let (rows, tail) = rows_from_lines("{\"a\":1}\n{\"b\":", "t").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(tail.as_deref(), Some("{\"b\":"));
+        let error = rows_from_lines("{\"a\":1}\n{bad\n{\"c\":3}\n", "t.jsonl").unwrap_err();
+        assert!(format!("{error:#}").contains("t.jsonl:2"), "{error:#}");
+    }
+}

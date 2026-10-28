@@ -209,12 +209,13 @@ fn portable_carries_the_source_summary_and_the_tail_from_its_boundary() {
     );
     let tail = tail.join("\n");
     assert!(
-        !tail.contains("H27-TOOLS"),
-        "the turn before the boundary is not carried: {tail}"
+        !tail.contains("H27-TOOLS") && !tail.contains("H27-T2"),
+        "the turns before the boundary are not carried: {tail}"
     );
+    assert!(tail.contains("H27-T3"), "but the tail is: {tail}");
     assert!(
-        tail.contains("H27-REPLY") || tail.contains("H27-T3"),
-        "but the tail is: {tail}"
+        held.contains("H27-REPLY"),
+        "the boundary itself, the reply before the summary, is the tail's first entry"
     );
     assert!(written.conversation().count() < source.conversation().count());
     assert!(
@@ -235,11 +236,9 @@ fn portable_can_keep_only_the_last_turns() {
     let held = written_text(&written);
     assert!(held.contains("we read two files and said hello"));
     assert!(held.contains("[mukade handoff v1]"));
-    assert!(
-        user_texts(&written).len() <= 2,
-        "the handoff plus one user turn: {:?}",
-        user_texts(&written)
-    );
+    let texts = user_texts(&written);
+    assert_eq!(texts.len(), 2, "the handoff plus one user turn: {texts:?}");
+    assert_eq!(texts[1], "H27-HANG", "the last turn is the one kept");
 }
 
 #[test]
@@ -437,4 +436,66 @@ fn portable_with_no_turns_keeps_only_the_handoff() {
     let receipt = hop::hop(&request).expect("the hop must complete");
     let written = read_destination(HarnessId::Pi, &receipt.location);
     assert_eq!(user_texts(&written).len(), 1, "{:?}", user_texts(&written));
+}
+
+/// Every file under a directory, with its bytes and modification time.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                let modified = entry.metadata().unwrap().modified().unwrap();
+                out.push((path.clone(), std::fs::read(&path).unwrap(), modified));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// §1.3: a hop into the source's own harness and project writes a new session beside the source
+/// and leaves the source's file exactly as it was.
+#[test]
+fn a_hop_into_the_same_harness_leaves_the_source_untouched() {
+    let (request, scratch) = request(HarnessId::Pi, HarnessId::Pi, "hop-same-harness");
+    let store = scratch.join("home").join("sessions");
+    let before = snapshot(&store);
+    assert_eq!(before.len(), 1, "the staged source");
+    let receipt = hop::hop(&request).expect("the hop must complete");
+    let after = snapshot(&store);
+    assert_eq!(
+        after.len(),
+        2,
+        "one new session, nothing replaced: {after:?}"
+    );
+    assert!(
+        after.contains(&before[0]),
+        "the source's bytes and time are unchanged"
+    );
+    assert_ne!(Path::new(&receipt.location), before[0].0);
+}
+
+/// SourceFacts fingerprint the source's own records: SHA-256 over each record's compact JSON, one
+/// per line (the expected digest computed with Python's hashlib).
+#[test]
+fn the_source_fingerprint_is_the_digest_of_its_records() {
+    let mut session = support::read_source(HarnessId::Pi);
+    session.entries = vec![mukade::model::Entry {
+        id: "e".into(),
+        kind: Kind::Meta {
+            kind: mukade::model::MetaKind::Internal,
+        },
+        raw: vec![
+            serde_json::json!({"a": 1}),
+            serde_json::json!({"b": "café"}),
+        ],
+    }];
+    assert_eq!(
+        SourceFacts::of(&session).content_sha256,
+        "18f569be308bed04a7a26c666d30444b2be698f0adaa689b43fe9ff89d9c9c79"
+    );
 }

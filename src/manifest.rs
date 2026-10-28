@@ -207,6 +207,46 @@ impl Manifest {
 mod tests {
     use super::*;
 
+    /// No loss is silent: every count of something left behind has its own line in `losses`, and
+    /// its own key in the manifest's counts. A count added without its line fails here.
+    #[test]
+    fn every_loss_count_has_a_loss_line_and_a_key() {
+        type Set = fn(&mut Counts);
+        let losses: [(&str, Set); 12] = [
+            ("tools_text_form", |c| c.tools_text_form = 1),
+            ("reasoning_dropped", |c| c.reasoning_dropped = 1),
+            ("dropped_orphan_results", |c| c.dropped_orphan_results = 1),
+            ("dropped_duplicate_results", |c| {
+                c.dropped_duplicate_results = 1
+            }),
+            ("rewritten_call_ids", |c| c.rewritten_call_ids = 1),
+            ("dropped_off_branch", |c| c.dropped_off_branch = 1),
+            ("dropped_unfinished_lines", |c| {
+                c.dropped_unfinished_lines = 1
+            }),
+            ("aborted_steps_as_replies", |c| {
+                c.aborted_steps_as_replies = 1
+            }),
+            ("unanswered_calls", |c| c.unanswered_calls = 1),
+            ("dropped_empty_steps", |c| c.dropped_empty_steps = 1),
+            ("dropped_attachments", |c| c.dropped_attachments = 1),
+            ("dropped_result_blocks", |c| c.dropped_result_blocks = 1),
+        ];
+        assert!(Manifest::losses_for(&Counts::default(), false, false).is_empty());
+        for (key, set) in losses {
+            let mut counts = Counts::default();
+            set(&mut counts);
+            let lines = Manifest::losses_for(&counts, false, false);
+            assert_eq!(lines.len(), 1, "{key}: {lines:?}");
+            let json = Manifest {
+                counts,
+                ..Manifest::default()
+            }
+            .to_json();
+            assert_eq!(json["counts"][key], 1, "{key} is a manifest count");
+        }
+    }
+
     #[test]
     fn the_manifest_has_the_keys_the_spec_names() {
         let counts = Counts {

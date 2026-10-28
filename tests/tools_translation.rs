@@ -706,3 +706,76 @@ fn a_multi_edit_pi_cannot_hold_is_text_form() {
     );
     assert!(is_text(&translate(&empty, HarnessId::Pi, None)));
 }
+
+/// The offered sets are the ones tables §2 records for the pinned versions, written out here so a
+/// change to either is a change to both.
+#[test]
+fn the_offered_sets_are_the_tables_lists() {
+    fn sorted<'a>(names: &[&'a str]) -> Vec<&'a str> {
+        let mut names = names.to_vec();
+        names.sort_unstable();
+        names
+    }
+    assert_eq!(
+        sorted(offered(HarnessId::ClaudeCode).names),
+        sorted(&[
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterWorktree",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+        ])
+    );
+    assert_eq!(
+        sorted(offered(HarnessId::OpenCode).names),
+        sorted(&[
+            "edit",
+            "glob",
+            "grep",
+            "question",
+            "read",
+            "shell",
+            "skill",
+            "subagent",
+            "webfetch",
+            "websearch",
+            "write",
+            "execute",
+        ])
+    );
+    assert_eq!(
+        sorted(offered(HarnessId::Pi).names),
+        sorted(&["read", "bash", "edit", "write"])
+    );
+    assert_eq!(
+        sorted(offered(HarnessId::Codex).names),
+        sorted(&[
+            "exec_command",
+            "write_stdin",
+            "request_user_input",
+            "view_image",
+            "get_goal",
+            "create_goal",
+            "update_goal",
+            "web_search",
+        ])
+    );
+}

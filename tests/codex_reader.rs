@@ -422,3 +422,28 @@ fn a_structured_tool_output_stays_structured() {
         ])
     );
 }
+
+/// Native order is the rollout's own order, never the timestamps.
+#[test]
+fn the_rollout_order_wins_over_timestamps() {
+    let mut rows: Vec<serde_json::Value> = std::fs::read_to_string(fixture())
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let texts = |s: &Session| -> Vec<String> {
+        s.conversation()
+            .filter_map(|e| match &e.kind {
+                Kind::User { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = texts(&codex::parse(&rows, None).unwrap());
+    let n = rows.len();
+    for (i, row) in rows.iter_mut().enumerate() {
+        row["timestamp"] = format!("2026-10-27T15:{:02}:00.000Z", 59 - (i * 59 / n)).into();
+    }
+    assert_eq!(texts(&codex::parse(&rows, None).unwrap()), before);
+}
