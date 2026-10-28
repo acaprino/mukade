@@ -339,13 +339,14 @@ impl Reader for Opencode {
         let mut command = std::process::Command::new(&argv[0]);
         command.args(&argv[1..]);
         opencode_environment(&mut command, roots);
-        let output = command
-            .output()
+        let output = crate::exe::run_within(&mut command, EXPORT_TIMEOUT)
             .with_context(|| format!("run {}", argv.join(" ")))?;
-        if !output.status.success() {
+        let Some(status) = output.status else {
+            anyhow::bail!("opencode session export {id} did not finish within {EXPORT_TIMEOUT:?}");
+        };
+        if !status.success() {
             anyhow::bail!(
-                "opencode session export {id} failed ({}): {}",
-                output.status,
+                "opencode session export {id} failed ({status}): {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
@@ -371,6 +372,9 @@ pub fn opencode_environment(command: &mut std::process::Command, roots: &StoreRo
         command.env_remove("OPENCODE_DB");
     }
 }
+
+/// How long `opencode session export` may take before it is stopped.
+const EXPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// L1: the exact argv every spawned `opencode` command carries.
 pub fn export_command(exe: &str, id: &str) -> Vec<String> {

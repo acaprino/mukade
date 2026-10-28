@@ -23,6 +23,23 @@ use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::process::Command;
 
+/// How long `opencode session import` may take before it is stopped (a locked database, say).
+const IMPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The import document holds the conversation: it is created new and, on Unix, readable by its
+/// owner only, wherever the temporary folder is.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(bytes)
+}
+
 struct ImportDocument(PathBuf);
 
 impl Drop for ImportDocument {
@@ -64,13 +81,15 @@ impl Writer for Opencode {
             .unwrap_or_else(std::env::temp_dir);
         std::fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
         let file = root.join(format!("mukade-import-{id}.json"));
-        std::fs::write(
+        // The guard exists before the file does: a write that fails half-way leaves nothing behind.
+        let temporary = ImportDocument(file.clone());
+        write_private(
             &file,
-            serde_json::to_string(&document).context("serialize the document")?,
+            serde_json::to_string(&document)
+                .context("serialize the document")?
+                .as_bytes(),
         )
         .with_context(|| format!("write {}", file.display()))?;
-
-        let temporary = ImportDocument(file.clone());
         // The override wins; otherwise the standard resolution (MUKADE_OPENCODE_EXE, PATH, the
         // well-known install locations). The resume command names the binary actually used.
         let exe = opts
@@ -81,13 +100,14 @@ impl Writer for Opencode {
         let mut command = Command::new(&argv[0]);
         command.args(&argv[1..]);
         crate::reader::opencode::opencode_environment(&mut command, &opts.roots);
-        let output = command
-            .output()
+        let output = crate::exe::run_within(&mut command, IMPORT_TIMEOUT)
             .with_context(|| format!("run {}", argv.join(" ")))?;
-        if !output.status.success() {
+        let Some(status) = output.status else {
+            anyhow::bail!("opencode session import did not finish within {IMPORT_TIMEOUT:?}");
+        };
+        if !status.success() {
             anyhow::bail!(
-                "opencode session import failed ({}): {}",
-                output.status,
+                "opencode session import failed ({status}): {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }

@@ -4,6 +4,7 @@
 //! the caller fills either from the harness's own environment variables or from a scratch
 //! directory (docs/session-interchange-spec.md §1.3 rule 2).
 
+use crate::model::HarnessId;
 use std::path::{Path, PathBuf};
 
 /// The store locations of the four harnesses. `None` is refused for Claude Code, Codex and Pi,
@@ -48,6 +49,26 @@ impl StoreRoots {
     /// Pi's `sessions/` directory.
     pub fn pi_sessions(&self) -> Option<PathBuf> {
         self.pi_agent_dir.as_deref().map(|d| d.join("sessions"))
+    }
+}
+
+impl StoreRoots {
+    /// Point a harness process at this store: the variable the harness reads, set to its root when
+    /// one is configured. OpenCode's database is passed, or the variable removed so the process
+    /// does not inherit another store (L1).
+    pub fn apply_to(&self, harness: HarnessId, command: &mut std::process::Command) {
+        let (variable, root) = match harness {
+            HarnessId::ClaudeCode => ("CLAUDE_CONFIG_DIR", &self.claude_config_dir),
+            HarnessId::Codex => ("CODEX_HOME", &self.codex_home),
+            HarnessId::Pi => ("PI_CODING_AGENT_DIR", &self.pi_agent_dir),
+            HarnessId::OpenCode => {
+                crate::reader::opencode::opencode_environment(command, self);
+                return;
+            }
+        };
+        if let Some(root) = root {
+            command.env(variable, root);
+        }
     }
 }
 

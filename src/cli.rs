@@ -354,7 +354,7 @@ impl Flags {
         session: &crate::model::Session,
         roots: &StoreRoots,
     ) -> Result<ImportOpts> {
-        let write = self.write_opts(dest, session)?;
+        let write = self.write_opts(dest, session, roots)?;
         Ok(ImportOpts {
             cwd: self.cwd.clone().or_else(|| session.meta.cwd.clone()),
             roots: roots.clone(),
@@ -390,7 +390,12 @@ impl Flags {
         })
     }
 
-    fn write_opts(&self, harness: HarnessId, session: &crate::model::Session) -> Result<WriteOpts> {
+    fn write_opts(
+        &self,
+        harness: HarnessId,
+        session: &crate::model::Session,
+        roots: &StoreRoots,
+    ) -> Result<WriteOpts> {
         let reasoning = match self.reasoning.as_deref() {
             None | Some("drop_foreign") => ReasoningPolicy::DropForeign,
             Some("as_text") => ReasoningPolicy::AsText,
@@ -456,7 +461,7 @@ impl Flags {
             Some(id) => Some(id),
             None if harness == HarnessId::OpenCode => cwd
                 .as_deref()
-                .and_then(|cwd| opencode_project_id(&resolved_exe, cwd)),
+                .and_then(|cwd| opencode_project_id(&resolved_exe, cwd, roots)),
             None => None,
         };
         Ok(WriteOpts {
@@ -530,16 +535,24 @@ fn first_version(text: &str) -> Option<String> {
 /// The project the destination already files sessions of this directory under. The destination is
 /// asked from **inside that directory**: the CLI scopes its session list to the project it is run
 /// in, so the question has to be asked where the session will live.
-fn opencode_project_id(exe: &str, cwd: &str) -> Option<String> {
+fn opencode_project_id(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
     let directory = std::path::Path::new(cwd);
-    let list = run_text(exe, &["session", "list", "--standalone"], directory)?;
+    // Asked of the store the session will be written to, not the caller's own.
+    let store = Some((HarnessId::OpenCode, roots));
+    let list = run_probe(exe, &["session", "list", "--standalone"], directory, store)
+        .map(|out| String::from_utf8_lossy(&out).into_owned())?;
     for id in list
         .lines()
         .filter_map(|line| line.split('\t').next())
         .filter(|id| id.starts_with("ses_"))
         .take(5)
     {
-        let Some(doc) = run_json(exe, &["session", "export", id, "--standalone"], directory) else {
+        let Some(doc) = run_json(
+            exe,
+            &["session", "export", id, "--standalone"],
+            directory,
+            store,
+        ) else {
             continue;
         };
         let found = doc
@@ -564,28 +577,40 @@ fn same_directory(a: &str, b: &str) -> bool {
     normalise(a) == normalise(b)
 }
 
-fn run_text(exe: &str, args: &[&str], cwd: &std::path::Path) -> Option<String> {
-    let output = std::process::Command::new(exe)
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .ok()?;
+/// How long a question to the destination's binary (its version, its sessions) may take; a probe
+/// that does not answer leaves the fact unknown instead of hanging the command.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The stdout of a probe that succeeded within [`PROBE_TIMEOUT`], run against `store` when given.
+fn run_probe(
+    exe: &str,
+    args: &[&str],
+    cwd: &std::path::Path,
+    store: Option<(HarnessId, &StoreRoots)>,
+) -> Option<Vec<u8>> {
+    let mut command = std::process::Command::new(crate::exe::spawnable(exe));
+    command.args(args).current_dir(cwd);
+    if let Some((harness, roots)) = store {
+        roots.apply_to(harness, &mut command);
+    }
+    let output = crate::exe::run_within(&mut command, PROBE_TIMEOUT).ok()?;
     output
         .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+        .is_some_and(|status| status.success())
+        .then_some(output.stdout)
 }
 
-fn run_json(exe: &str, args: &[&str], cwd: &std::path::Path) -> Option<serde_json::Value> {
-    let output = std::process::Command::new(exe)
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&output.stdout).ok()
+fn run_text(exe: &str, args: &[&str], cwd: &std::path::Path) -> Option<String> {
+    run_probe(exe, args, cwd, None).map(|out| String::from_utf8_lossy(&out).into_owned())
+}
+
+fn run_json(
+    exe: &str,
+    args: &[&str],
+    cwd: &std::path::Path,
+    store: Option<(HarnessId, &StoreRoots)>,
+) -> Option<serde_json::Value> {
+    serde_json::from_slice(&run_probe(exe, args, cwd, store)?).ok()
 }
 
 /// OpenCode's own config names its model as `<provider>/<model>`; that is where the destination's

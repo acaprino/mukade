@@ -405,10 +405,17 @@ fn resume_failure_returns_the_written_receipt_and_manifest() {
         attachments: Vec::new(),
     });
     let scratch = support::scratch(HarnessId::Pi, "regression-resume-failure");
+    // A launcher that always fails stands in for Pi: no real harness is started.
+    let mut write_opts = opts(HarnessId::Pi, &scratch);
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    write_opts.cwd = Some(work.to_string_lossy().into_owned());
+    let pi = support::launcher(&scratch.join("bin"), "pi", "exit /b 3", "exit 3");
+    write_opts.exe = Some(pi.to_string_lossy().into_owned());
     let opts = import_opts(
-        opts(HarnessId::Pi, &scratch),
+        write_opts,
         &source,
-        ResumePrompt::new("hello").with_timeout(std::time::Duration::from_secs(2)),
+        ResumePrompt::new("hello").with_timeout(std::time::Duration::from_secs(10)),
     );
     let error = hop::import(HarnessId::Pi, &source, &opts).unwrap_err();
     let HopError::ResumeFailed { receipt, .. } = error else {
@@ -475,4 +482,78 @@ fn import_opts(
         source_facts: SourceFacts::of(source),
         compaction: "none".into(),
     }
+}
+
+/// §5: the destination resumes against the store the session was written to, not whatever the
+/// caller's own environment names.
+#[test]
+fn a_resume_uses_the_store_it_was_written_to() {
+    let source = session(Kind::User {
+        text: "hello".into(),
+        attachments: Vec::new(),
+    });
+    let scratch = support::scratch(HarnessId::Pi, "regression-resume-store");
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut write_opts = opts(HarnessId::Pi, &scratch);
+    write_opts.cwd = Some(work.to_string_lossy().into_owned());
+    let pi = support::launcher(
+        &scratch.join("bin"),
+        "pi",
+        "echo store=%PI_CODING_AGENT_DIR%",
+        "echo store=$PI_CODING_AGENT_DIR",
+    );
+    write_opts.exe = Some(pi.to_string_lossy().into_owned());
+    let opts = import_opts(write_opts, &source, ResumePrompt::new("hello"));
+    let receipt = hop::import(HarnessId::Pi, &source, &opts).unwrap();
+    let output = receipt.resume_output.unwrap();
+    let home = scratch.join("home").to_string_lossy().into_owned();
+    assert!(output.contains(&home), "{output:?} should name {home}");
+}
+
+/// A resume prompt the destination would misread is refused before anything is written: one that
+/// starts with `-` is an option to every harness CLI.
+#[test]
+fn a_resume_prompt_that_looks_like_an_option_is_refused_before_the_write() {
+    let source = session(Kind::User {
+        text: "hello".into(),
+        attachments: Vec::new(),
+    });
+    let scratch = support::scratch(HarnessId::Pi, "regression-resume-dash");
+    let opts = import_opts(
+        opts(HarnessId::Pi, &scratch),
+        &source,
+        ResumePrompt::new("--help"),
+    );
+    let error = hop::import(HarnessId::Pi, &source, &opts).unwrap_err();
+    assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
+    assert!(
+        !scratch.join("home").join("sessions").exists(),
+        "nothing was written"
+    );
+}
+
+/// Rust refuses to pass a line break to a `.cmd` launcher; that is known before the write.
+#[cfg(windows)]
+#[test]
+fn a_multi_line_resume_prompt_for_a_cmd_launcher_is_refused_before_the_write() {
+    let source = session(Kind::User {
+        text: "hello".into(),
+        attachments: Vec::new(),
+    });
+    let scratch = support::scratch(HarnessId::Pi, "regression-resume-lines");
+    let mut write_opts = opts(HarnessId::Pi, &scratch);
+    let pi = support::launcher(&scratch.join("bin"), "pi", "echo hi", "echo hi");
+    write_opts.exe = Some(pi.to_string_lossy().into_owned());
+    let opts = import_opts(
+        write_opts,
+        &source,
+        ResumePrompt::new("first line\nsecond line"),
+    );
+    let error = hop::import(HarnessId::Pi, &source, &opts).unwrap_err();
+    assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
+    assert!(
+        !scratch.join("home").join("sessions").exists(),
+        "nothing was written"
+    );
 }
