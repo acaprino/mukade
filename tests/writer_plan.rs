@@ -181,3 +181,20 @@ fn native_results_come_before_the_text_that_answers_a_text_form_call() {
         .collect();
     assert_eq!(order, ["r1", "r2", "text"]);
 }
+
+/// §7 A3: a call answered twice is refused by the provider. The first answer is kept; the rest are
+/// dropped and counted.
+#[test]
+fn a_second_result_for_the_same_call_is_dropped_and_counted() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-duplicate-result");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![step("e1", vec![read_call("c1")]), results("e2", &["c1", "c1"])]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert_eq!(plan.counts.dropped_duplicate_results, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(losses.iter().any(|loss| loss.contains("duplicate")), "{losses:?}");
+}

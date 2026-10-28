@@ -67,9 +67,15 @@ pub fn check_plan(plan: &Plan, dest_protocol: Option<&Protocol>) -> Vec<String> 
                     }
                 };
                 let mut after_text = false;
+                let mut answered: Vec<&str> = Vec::new();
                 for result in results {
                     match result {
                         PlannedResult::Native { call_id, .. } => {
+                            // A3: one call, one answer.
+                            if answered.contains(&call_id.as_str()) {
+                                violations.push(format!("block {i}: call {call_id} is answered twice"));
+                            }
+                            answered.push(call_id);
                             if !calls.iter().any(|call| &call.id == call_id) {
                                 violations.push(format!("block {i}: result {call_id} answers no call of the step before it"));
                             }
@@ -172,6 +178,25 @@ mod tests {
         let found = check_plan(&plan, None);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("after text"), "{found:?}");
+    }
+
+    /// §7 A3: one call, one answer.
+    #[test]
+    fn a_call_answered_twice_is_a_violation() {
+        let native = PlannedResult::Native {
+            call_id: "c1".into(),
+            content: ResultContent::Text("x".into()),
+            is_error: false,
+        };
+        let plan = plan_of(vec![
+            PlannedBlock::Step(step(vec![call("c1")])),
+            PlannedBlock::Results {
+                results: vec![native.clone(), native],
+            },
+        ]);
+        let found = check_plan(&plan, None);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("answered twice"), "{found:?}");
     }
 
     #[test]

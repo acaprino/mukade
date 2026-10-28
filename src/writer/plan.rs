@@ -90,6 +90,8 @@ pub struct Counts {
     pub reasoning_dropped: usize,
     /// A result whose call is nowhere in the source.
     pub dropped_orphan_results: usize,
+    /// A second answer to a call already answered: the provider refuses a call answered twice (A3).
+    pub dropped_duplicate_results: usize,
     /// A call the source never answered: the provider would refuse it as a tool call (L7).
     pub unanswered_calls: usize,
     /// A step that lost everything it had and cannot be written as an empty message.
@@ -212,7 +214,14 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
             }
             Kind::Results { results } => {
                 let mut planned = Vec::new();
+                let mut answered: Vec<&str> = Vec::new();
                 for result in results {
+                    // A3: the first answer to a call is the one that travels.
+                    if answered.contains(&result.call_id.as_str()) {
+                        counts.dropped_duplicate_results += 1;
+                        continue;
+                    }
+                    answered.push(&result.call_id);
                     if last_step_native.contains(&result.call_id) {
                         if matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex)
                             && let ResultContent::Blocks(blocks) = &result.content

@@ -47,6 +47,10 @@ impl Manifest {
             json!(self.counts.dropped_orphan_results),
         );
         counts.insert(
+            "dropped_duplicate_results".into(),
+            json!(self.counts.dropped_duplicate_results),
+        );
+        counts.insert(
             "unanswered_calls".into(),
             json!(self.counts.unanswered_calls),
         );
@@ -123,6 +127,12 @@ impl Manifest {
             losses.push(format!(
                 "orphan tool results dropped ({})",
                 counts.dropped_orphan_results
+            ));
+        }
+        if counts.dropped_duplicate_results > 0 {
+            losses.push(format!(
+                "duplicate tool results dropped, the first answer kept ({})",
+                counts.dropped_duplicate_results
             ));
         }
         if counts.dropped_empty_steps > 0 {
