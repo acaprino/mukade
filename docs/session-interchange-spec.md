@@ -76,52 +76,60 @@ SessionRef ──read──▶ Session (IR, §3) ──policy──▶ Session �
 
 ```rust
 pub struct HopRequest {
-    pub source: SessionRef,              // harness + native id (or file path)
+    pub source: SessionRef,              // harness + native id (an unambiguous prefix is accepted)
     pub dest: HarnessId,                 // claude_code | codex | opencode | pi
-    pub cwd: Option<PathBuf>,            // project directory the destination files the session under
+    pub cwd: Option<String>,             // project directory the destination files the session under
     pub compaction: Compaction,          // §4
     pub resume: Option<ResumePrompt>,    // §5
     pub reasoning: ReasoningPolicy,      // §3.3, default DropForeign
-    pub roots: StoreRoots,               // scratch/test roots; None = the harness's default store
+    pub roots: StoreRoots,               // the stores; None is refused for Claude Code, Codex and Pi,
+                                         // and means "its configured store" for OpenCode
+    pub write: WriteDetails,             // destination facts: version, protocol, shell, offered tools,
+                                         // provider, model, project id, clock, executable
 }
 
 pub enum Compaction {
     None,                                // whole selected history
     Portable { summary: SummarySource, keep_from: KeepFrom },  // written by us as one user message + tail
-    DestinationNative,                   // write whole history, then run the destination's own compaction
+    DestinationNative,                   // refused: the destination's own compaction is the caller's to run
 }
 pub enum SummarySource { SourceRecord, Supplied(String) }      // SourceRecord: the source's native compaction record (L4)
-pub enum KeepFrom { SourceBoundary, LastTurns(usize), Message(MessageRef) }
+pub enum KeepFrom { SourceBoundary, LastTurns(usize), Message(String) }  // LastTurns(0): the handoff alone
 
 pub struct ResumePrompt { pub text: String, pub timeout: Duration }
 
 pub enum ReasoningPolicy {
     DropForeign,     // default: keep reasoning only when source and dest use the same provider protocol
-                     // and the block carries its signature/encrypted payload; otherwise drop it
-    AsText,          // keep foreign reasoning as visible text, labelled
+                     // and its payload has a place in the destination's format; otherwise drop it
+    AsText,          // keep foreign reasoning as visible text, labelled, before the answer
     Drop,            // never carry reasoning
 }
 
 pub struct Receipt {
     pub dest_id: String, pub location: String,
     pub resume_command: Vec<String>,     // native resume command of the destination (§2)
-    pub manifest: Manifest,              // §6.3
+    pub manifest: serde_json::Value,     // §6.3, as written
     pub resume_output: Option<String>,   // the destination's reply when a resume prompt was given
 }
 
-pub trait Reader { fn harness(&self) -> HarnessId; fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>, HopError>;
-                   fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session, HopError>; }
-pub trait Writer { fn harness(&self) -> HarnessId; fn offered_tools(&self) -> &ToolSet;          // tool tables §2/§6
-                   fn write(&self, s: &Session, opts: &WriteOpts) -> Result<Written, HopError>; }
+pub trait Reader { fn harness(&self) -> HarnessId;
+                   fn list(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>>;
+                   fn read(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<Session>; }
+pub trait Writer { fn harness(&self) -> HarnessId; fn offered(&self) -> ToolSet;                  // tool tables §2/§6
+                   fn write(&self, s: &Session, opts: &WriteOpts) -> anyhow::Result<Written>; }
 
 pub fn hop(req: &HopRequest) -> Result<Receipt, HopError>;
-pub fn export(src: &SessionRef) -> Result<Session, HopError>;                       // read + reader rules
+pub fn export(src: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError>;  // read + reader rules
+pub fn export_path(harness: HarnessId, path: &Path) -> Result<Session, HopError>;  // a session file
 pub fn import(dest: HarnessId, s: &Session, opts: &ImportOpts) -> Result<Receipt, HopError>;
+pub fn hop_session(dest: HarnessId, s: &Session, c: &Compaction, opts: &ImportOpts) -> Result<Receipt, HopError>;
 ```
 
-`HopError` kinds map to the CLI exit codes of technical design 5.5.2: `NotFound`, `Unsupported`
-(a pair or option this spec marks blocked), `WriteFailed`, `VerifyFailed`, `ResumeFailed`,
-`StrictCheckFailed` (§7).
+`HopError` kinds map to the CLI exit codes of technical design 5.5.2: `NotFound` (2: the store is
+not configured, the session is not there or the id is ambiguous — a reader's typed `Lookup`),
+`Unsupported` (2: a pair or option this spec marks blocked), `WriteFailed` (4), `StrictCheckFailed`
+(4, §7), `VerifyFailed` (5: the source is there but could not be read), `ResumeFailed` (5: the
+session was written; the error carries its receipt and manifest).
 
 ### 1.3 Rules that hold for every hop
 
@@ -134,7 +142,9 @@ pub fn import(dest: HarnessId, s: &Session, opts: &ImportOpts) -> Result<Receipt
 3. **No foreign process reaches the real home.** OpenCode's CLI hands work to a background
    service that runs with the user's real environment unless `--standalone` (or `--server`) is
    passed [V: `verify/H27/opencode/env.ps1` header; matrix `opencode-shim.log`]. Every OpenCode
-   command the library spawns carries `--standalone` (L1; the probe needed a shim for this, `verify/H27/shim`).
+   command the library spawns that touches the store (`session export`, `list`, `import`, `run`)
+   carries `--standalone` (L1; the probe needed a shim for this, `verify/H27/shim`); only the version
+   probe, `opencode --version`, runs without it.
 4. **Order is the native order**, never timestamps (OpenCode `seq`, Codex `ordinal`, Claude
    and Pi parent links).
 5. **Every loss is written into the manifest** (§6.3); none is silent.
@@ -622,6 +632,11 @@ library must pass all criteria above.
 
 - [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).
+- Not implemented: L10, reading a Codex Desktop code-mode `exec` script as the single
+  `tools.exec_command` / `tools.apply_patch` call it wraps. An `exec` call is read as one opaque
+  call and travels in text form in every direction; an `apply_patch` call reads as an edit but
+  carries no path, so it is text form too. Most calls of a Codex Desktop rollout are of this kind
+  (tables §2).
 - Not exercised by a bench run: auto-compaction by threshold, a second compaction, a rewind or
   tree navigation in the source (the readers follow the resumed branch, tested on hand-made
   records; Claude `--fork-session` and Pi fork shapes are recorded, not converted), subagent

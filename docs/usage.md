@@ -48,10 +48,15 @@ to the **source**, not a separate destination root; if source and destination ar
 they share that overridden root. Set the destination variable in the environment. For OpenCode,
 an existing directory passed as `--root` means its `opencode.db`; a file path is used as-is.
 
-`--root` does **not** set the corresponding environment variable for a subsequently spawned resume
-process. Keep the destination's real environment variables set for both `--resume-prompt` and a
-resume command run later. For OpenCode, also configure the appropriate `XDG_*` and `OPENCODE_CONFIG`
-settings where needed; a database path alone is not a guarantee of complete isolation.
+A `--resume-prompt` runs the destination with its store variable set to the root the session was
+written to, whether it came from the environment or from `--root`. A resume command you run later
+by hand does not inherit that: set the destination's variable in that shell first. For OpenCode,
+also configure the appropriate `XDG_*` and `OPENCODE_CONFIG` settings where needed; a database path
+alone is not a guarantee of complete isolation.
+
+A resume prompt that starts with `-` is refused, because every harness CLI would read it as an
+option; so is one with line breaks when the destination's executable is a `.cmd` launcher, which
+cannot take them. Both are refused before anything is written.
 
 ## 1. Claude Code
 
@@ -106,7 +111,8 @@ Codex requires a destination CLI version in its session metadata. Mukade tries t
 executable's `--version`; if that probe fails or cannot parse a version, supply the actual version
 with `--dest-version 0.164.0` (replace the example with your version). Mukade reads
 `model_provider` from `$env:CODEX_HOME\config.toml` when available; `--model-provider` can state
-it explicitly. Keep `CODEX_HOME` set for the resume process.
+it explicitly: only the top-level `model_provider` key counts, not a profile's or a provider
+table's. Keep `CODEX_HOME` set for a resume command run later.
 
 ## 3. OpenCode
 
@@ -156,10 +162,10 @@ $env:PI_CODING_AGENT_DIR = 'D:\portable\pi\agent'
 mukade hop opencode YOUR_OPENCODE_SESSION_ID pi --cwd 'C:\work\my-project'
 ```
 
-For an OpenCode destination, the current `location` in Mukade's receipt names the temporary import
-document, which is removed after import; do not treat it as a persistent session file. Use the
-returned ID and OpenCode's configured store. Keep the OpenCode environment configured when using
-the returned resume command.
+For an OpenCode destination, the receipt's `location` names the database the session was imported
+into (`OPENCODE_DB`), or says it went to OpenCode's configured store; the temporary import document
+is removed after the import, on success and on failure. Use the returned ID with that store. Keep
+the OpenCode environment configured when using the returned resume command.
 
 ## 4. Pi
 
@@ -196,13 +202,15 @@ pass the harness explicitly when you know it. For a nonstandard OpenCode databas
 ```powershell
 mukade detect 'D:\portable\pi\agent'
 mukade list --root 'D:\portable\pi\agent'
-mukade dump pi YOUR_PI_SESSION_ID --root 'D:\portable\pi\agent' | Set-Content -Encoding UTF8 'C:\work\session.json'
+mukade dump pi YOUR_PI_SESSION_ID --root 'D:\portable\pi\agent' --output 'C:\work\session.json'
 $env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
 mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
 ```
 
-Exported interchange documents contain conversation data; protect them as you would the original
-session. `write` requires an explicit destination harness and returns a JSON receipt. The destination
+Write the document with `--output`, not through a pipe: PowerShell re-encodes piped text with the
+console's code page, and non-ASCII text (an em dash, accented letters) would reach `write` already
+garbled. Exported interchange documents contain conversation data; protect them as you would the
+original session. `write` requires an explicit destination harness and returns a JSON receipt. The destination
 must have its own configuration and credentials; Mukade does not transfer them.
 
 ## Troubleshooting
