@@ -405,3 +405,36 @@ fn a_timed_out_resume_stops_the_harness_behind_its_launcher() {
         "the harness kept running after the timeout"
     );
 }
+
+/// §4.2: the source's summary travels once, in the handoff; the source's own compaction record in
+/// the tail is not written a second time.
+#[test]
+fn portable_writes_the_source_summary_once() {
+    let (mut request, _) = request(HarnessId::ClaudeCode, HarnessId::Pi, "hop-portable-once");
+    request.compaction = Compaction::Portable {
+        summary: SummarySource::SourceRecord,
+        keep_from: KeepFrom::SourceBoundary,
+    };
+    let receipt = hop::hop(&request).expect("the hop must complete");
+    let written = read_destination(HarnessId::Pi, &receipt.location);
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let summary = match source.last_compaction().map(|entry| &entry.kind) {
+        Some(Kind::Compaction { summary, .. }) => summary.clone(),
+        other => panic!("the fixture must hold a compaction, found {other:?}"),
+    };
+    let probe: String = summary.trim().chars().take(60).collect();
+    assert_eq!(written_text(&written).matches(&probe).count(), 1, "{probe}");
+}
+
+/// Keeping no turns keeps none: only the handoff travels.
+#[test]
+fn portable_with_no_turns_keeps_only_the_handoff() {
+    let (mut request, _) = request(HarnessId::ClaudeCode, HarnessId::Pi, "hop-no-turns");
+    request.compaction = Compaction::Portable {
+        summary: SummarySource::Supplied("we read two files and said hello".into()),
+        keep_from: KeepFrom::LastTurns(0),
+    };
+    let receipt = hop::hop(&request).expect("the hop must complete");
+    let written = read_destination(HarnessId::Pi, &receipt.location);
+    assert_eq!(user_texts(&written).len(), 1, "{:?}", user_texts(&written));
+}

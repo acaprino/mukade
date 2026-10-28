@@ -385,7 +385,22 @@ fn select(source: &Session, compaction: &Compaction) -> Result<Session, HopError
                 },
                 raw: Vec::new(),
             }];
-            entries.extend(source.entries.get(cut..).unwrap_or_default().iter().cloned());
+            // The source's own compaction record may sit in the tail (Claude's preserved segment,
+            // OpenCode's keepID and Pi's firstKeptEntryId all point before it); its summary
+            // already travels in the handoff, so it is not written a second time.
+            let carried = match summary {
+                SummarySource::SourceRecord => source.last_compaction().map(|entry| entry.id.clone()),
+                SummarySource::Supplied(_) => None,
+            };
+            entries.extend(
+                source
+                    .entries
+                    .get(cut..)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|entry| Some(&entry.id) != carried.as_ref())
+                    .cloned(),
+            );
             let mut selected = source.clone();
             selected.entries = entries;
             Ok(selected)
@@ -400,6 +415,8 @@ fn cut_index(
     boundary: Option<&str>,
 ) -> Result<usize, HopError> {
     match keep_from {
+        // No turns kept: the handoff alone.
+        KeepFrom::LastTurns(0) => Ok(source.entries.len()),
         KeepFrom::LastTurns(turns) => {
             let users: Vec<usize> = source
                 .entries
@@ -408,13 +425,18 @@ fn cut_index(
                 .filter(|(_, entry)| matches!(entry.kind, Kind::User { .. }))
                 .map(|(i, _)| i)
                 .collect();
-            Ok(users
+            users
                 .iter()
                 .rev()
                 .take(*turns)
                 .next_back()
                 .copied()
-                .unwrap_or(0))
+                .ok_or_else(|| {
+                    HopError::Unsupported(
+                        "Compaction::Portable with KeepFrom::LastTurns, but the source has no user turn to keep from"
+                            .into(),
+                    )
+                })
         }
         KeepFrom::Message(id) => find_entry(source, id),
         KeepFrom::SourceBoundary => {
