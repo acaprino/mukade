@@ -113,7 +113,8 @@ pub struct WriteDetails {
     pub model: Option<String>,
     pub project_id: Option<String>,
     pub now: Option<String>,
-    pub opencode_exe: Option<String>,
+    /// The destination harness's executable override (`crate::exe` resolves the default).
+    pub exe: Option<String>,
 }
 
 /// What the manifest says the source was.
@@ -259,7 +260,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         reasoning: opts.reasoning,
         title: session.meta.title.clone(),
         now: opts.write.now.clone(),
-        opencode_exe: opts.write.opencode_exe.clone(),
+        exe: opts.write.exe.clone(),
     };
 
     // §7: the gate runs on the plan the writer will use, before anything reaches the store.

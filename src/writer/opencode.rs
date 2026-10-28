@@ -66,10 +66,9 @@ impl Writer for Opencode {
         .with_context(|| format!("write {}", file.display()))?;
 
         let temporary = ImportDocument(file.clone());
-        let exe = opts
-            .opencode_exe
-            .clone()
-            .unwrap_or_else(|| "opencode".into());
+        // The override wins; otherwise the standard resolution (MUKADE_OPENCODE_EXE, PATH, the
+        // well-known install locations). The resume command names the binary actually used.
+        let exe = opts.exe.clone().unwrap_or_else(|| crate::exe::resolve(HarnessId::OpenCode, None));
         let argv = import_command(&exe, &file, &cwd);
         let mut command = Command::new(&argv[0]);
         command.args(&argv[1..]);
@@ -99,7 +98,7 @@ impl Writer for Opencode {
             id: imported.clone(),
             location: file.to_string_lossy().into_owned(),
             resume: vec![
-                "opencode".into(),
+                exe,
                 "run".into(),
                 "--standalone".into(),
                 "--session".into(),

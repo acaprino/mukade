@@ -11,6 +11,8 @@
 //! `fixtures/` carry.
 
 pub mod cli;
+pub mod detect;
+pub mod exe;
 pub mod hop;
 pub mod manifest;
 pub mod model;

@@ -57,7 +57,7 @@ impl Writer for Pi {
             location: file.to_string_lossy().into_owned(),
             // Pi searches the current project first, so the library passes the file path (§5).
             resume: vec![
-                "pi".into(),
+                opts.exe.clone().unwrap_or_else(|| "pi".into()),
                 "-p".into(),
                 "--session".into(),
                 file.to_string_lossy().into_owned(),

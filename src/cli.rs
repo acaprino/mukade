@@ -5,6 +5,7 @@
 //! mukade list  <harness>
 //! mukade dump  <harness> <session-id>            → the document on stdout
 //! mukade write <harness> <document.json>         → {"id","location","resume"} on stdout
+//! mukade detect <dir>                            → which harness stores the directory holds
 //! ```
 //!
 //! `dump` and `write` are a pair: what `dump` prints is what `write` takes. Store roots come from
@@ -29,12 +30,20 @@ mukade list  <harness> [options]
 mukade dump  <harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
+mukade detect <dir>
 
 harnesses: claude_code | codex | opencode | pi
 
 A `hop` reads the source and writes the destination in one process: set **both** harnesses' store
 variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`).
 An unset variable means that harness's configured store; Claude Code, Codex and Pi need an explicit root.
+
+`detect` prints which harness stores a directory holds, with the evidence: session records, Pi's
+models.json or OpenCode's opencode.db (that file can be passed directly; other SQLite files, e.g.
+Codex's state_*.sqlite, are not OpenCode). An empty directory tree infers nothing. With
+`--root <dir>` (non-empty) the harness may be omitted from `list`, `dump` and a `hop` source: it is
+inferred from the directory's own layout when exactly one harness is recognized. `--root` names the
+source store for a hop, the only store otherwise; for OpenCode a directory means its `opencode.db`.
 
 options:
   --cwd <dir>              the project the destination files the session under
@@ -49,7 +58,16 @@ options:
   --resume-prompt <text>   resume in the destination and keep its reply in the receipt
   --from-file <path>       read the source from a file instead of its store
   --manifest <path>        also write the manifest there
-  --opencode-exe <path>    the opencode binary to spawn (default: opencode)
+  --root <dir>             the store directory to use, and to infer the harness from
+  --claude-exe <path>      the claude binary to spawn
+  --codex-exe <path>       the codex binary to spawn
+  --opencode-exe <path>    the opencode binary to spawn
+  --pi-exe <path>          the pi binary to spawn
+
+Executable resolution: --<harness>-exe → MUKADE_CLAUDE_EXE / MUKADE_CODEX_EXE /
+MUKADE_OPENCODE_EXE / MUKADE_PI_EXE → PATH → the well-known install locations → the plain
+command name. A portable install with its own config needs only --root and its --<harness>-exe;
+a source OpenCode read spawns the binary its own resolution finds (MUKADE_OPENCODE_EXE wins).
 ";
 
 /// Parse and run the command line. `args` excludes the program name.
@@ -73,7 +91,11 @@ pub fn run(args: &[String]) -> Result<()> {
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--reasoning" => flags.reasoning = Some(next(rest, &mut i)?),
+            "--root" => flags.root = Some(next(rest, &mut i)?),
+            "--claude-exe" => flags.claude_exe = Some(next(rest, &mut i)?),
+            "--codex-exe" => flags.codex_exe = Some(next(rest, &mut i)?),
             "--opencode-exe" => flags.opencode_exe = Some(next(rest, &mut i)?),
+            "--pi-exe" => flags.pi_exe = Some(next(rest, &mut i)?),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(());
@@ -84,8 +106,60 @@ pub fn run(args: &[String]) -> Result<()> {
         i += 1;
     }
 
-    let harness: HarnessId = positional.first().context(USAGE)?.parse()?;
-    let roots = StoreRoots::from_env();
+    if command == "detect" {
+        let path = positional.first().context("detect needs a directory")?;
+        let found = crate::detect::detect_store(std::path::Path::new(path));
+        let candidates: Vec<serde_json::Value> = found
+            .iter()
+            .map(|d| json!({"harness": d.harness.as_str(), "evidence": d.evidence}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"path": path, "candidates": candidates}))?
+        );
+        return Ok(());
+    }
+
+    // An empty root would turn every store path into a relative one, writing beside the cwd.
+    if flags.root.as_deref().is_some_and(|root| root.trim().is_empty()) {
+        anyhow::bail!("--root needs a non-empty directory");
+    }
+
+    // The harness is explicit when the first positional names one. With --root it may be omitted
+    // from list/dump/hop: the store's own layout says which harness it is, when exactly one does.
+    // `write` always needs it: a destination store can legitimately be empty.
+    let inferred_allowed = flags.root.is_some() && command != "write";
+    let explicit = match positional.first() {
+        Some(first) => match first.parse::<HarnessId>() {
+            Ok(harness) => Some(harness),
+            Err(_) if inferred_allowed => None,
+            Err(error) => return Err(error),
+        },
+        None if inferred_allowed => None,
+        None => return Err(anyhow::anyhow!(USAGE)),
+    };
+    let operands: &[&str] = if explicit.is_some() { &positional[1..] } else { &positional };
+    let mut roots = StoreRoots::from_env();
+    let harness = match explicit {
+        Some(harness) => harness,
+        None => {
+            let root = flags.root.as_deref().expect("inference needs --root");
+            let found = crate::detect::detect_store(std::path::Path::new(root));
+            match found.len() {
+                0 => anyhow::bail!("no harness store recognized in {root}: state the harness explicitly"),
+                1 => found[0].harness,
+                _ => anyhow::bail!(
+                    "{root} holds more than one harness's store ({}): state the harness explicitly",
+                    found.iter().map(|d| d.harness.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+            }
+        }
+    };
+    // The root override concerns the store the command reads; for a hop that is the source, and
+    // the destination keeps its own environment.
+    if let Some(root) = flags.root.as_deref() {
+        apply_root(&mut roots, harness, std::path::Path::new(root));
+    }
     match command.as_str() {
         "list" => {
             let reader = crate::reader::for_harness(harness)?;
@@ -103,14 +177,14 @@ pub fn run(args: &[String]) -> Result<()> {
             }
         }
         "dump" => {
-            let id = positional.get(1).context("dump needs a session id")?;
+            let id = operands.first().context("dump needs a session id")?;
             let reader = crate::reader::for_harness(harness)?;
             let session = reader.read(id, &roots)?;
             let doc = wire::to_document(&session);
             println!("{}", serde_json::to_string_pretty(&doc)?);
         }
         "write" => {
-            let path = positional.get(1).context("write needs a document file")?;
+            let path = operands.first().context("write needs a document file")?;
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
@@ -134,15 +208,15 @@ pub fn run(args: &[String]) -> Result<()> {
             );
         }
         "hop" => {
-            let dest: HarnessId = positional
-                .get(2)
+            let dest: HarnessId = operands
+                .get(1)
                 .context("hop needs a destination harness")?
                 .parse()?;
             let source = match flags.from_file.as_deref() {
                 Some(path) => crate::hop::export_path(harness, std::path::Path::new(path))
                     .map_err(anyhow::Error::new)?,
                 None => {
-                    let id = positional.get(1).context("hop needs a session id")?;
+                    let id = operands.first().context("hop needs a session id")?;
                     let reader = crate::reader::for_harness(harness)?;
                     reader
                         .read(id, &roots)
@@ -161,7 +235,7 @@ pub fn run(args: &[String]) -> Result<()> {
             let request = HopRequest {
                 source: SessionRef {
                     harness,
-                    id: positional.get(1).copied().unwrap_or_default().to_string(),
+                    id: operands.first().copied().unwrap_or_default().to_string(),
                 },
                 dest,
                 cwd: opts.cwd.clone(),
@@ -227,7 +301,11 @@ struct Flags {
     resume_prompt: Option<String>,
     from_file: Option<String>,
     manifest: Option<String>,
+    root: Option<String>,
+    claude_exe: Option<String>,
+    codex_exe: Option<String>,
     opencode_exe: Option<String>,
+    pi_exe: Option<String>,
 }
 
 impl Flags {
@@ -265,7 +343,7 @@ impl Flags {
                 model: write.model,
                 project_id: write.project_id,
                 now: write.now,
-                opencode_exe: write.opencode_exe,
+                exe: write.exe,
             },
             resume: self
                 .resume_prompt
@@ -312,28 +390,31 @@ impl Flags {
             .model
             .clone()
             .or_else(|| configured.as_ref().and_then(|(_, model)| model.clone()));
+        // The binary to spawn. An explicit override (the harness's flag, or its MUKADE_*_EXE)
+        // travels with the write so the resume command names it too; probes resolve the whole
+        // chain — PATH, then the well-known install locations — so a default install is found
+        // with no flag at all. For OpenCode an override also avoids the npm shim some Windows
+        // installs put on PATH, which would append a second `--standalone`.
+        let exe_override = self
+            .exe_flag(harness)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .or_else(|| std::env::var(crate::exe::env_var_name(harness)).ok().filter(|v| !v.is_empty()));
+        let resolved_exe = crate::exe::resolve(harness, self.exe_flag(harness));
         // The destination's own version stamp, when the caller did not state it: L7 wants the
         // destination's `cli_version`, and Codex refuses a rollout without one.
         let dest_version = self
             .dest_version
             .clone()
-            .or_else(|| destination_version(harness));
+            .or_else(|| destination_version(&resolved_exe));
         let cwd = self.cwd.clone().or_else(|| session.meta.cwd.clone());
-        // A caller can name the binary to spawn in MUKADE_OPENCODE_EXE; the npm shim some Windows
-        // installs put on PATH would append a second `--standalone`. --opencode-exe wins.
-        let opencode_exe = self
-            .opencode_exe
-            .clone()
-            .or_else(|| std::env::var("MUKADE_OPENCODE_EXE").ok());
         // OpenCode's interchange format requires the destination's own project id; the destination
         // is the only one that knows it, so it is asked.
         let project_id = match self.project_id.clone() {
             Some(id) => Some(id),
-            None if harness == HarnessId::OpenCode => {
-                let exe = opencode_exe.clone().unwrap_or_else(|| "opencode".into());
-                cwd.as_deref()
-                    .and_then(|cwd| opencode_project_id(&exe, cwd))
-            }
+            None if harness == HarnessId::OpenCode => cwd
+                .as_deref()
+                .and_then(|cwd| opencode_project_id(&resolved_exe, cwd)),
             None => None,
         };
         Ok(WriteOpts {
@@ -349,20 +430,39 @@ impl Flags {
             reasoning,
             title: session.meta.title.clone(),
             now: None,
-            opencode_exe,
+            exe: exe_override,
         })
+    }
+
+    /// The executable override stated for one harness, if any.
+    fn exe_flag(&self, harness: HarnessId) -> Option<&str> {
+        match harness {
+            HarnessId::ClaudeCode => self.claude_exe.as_deref(),
+            HarnessId::Codex => self.codex_exe.as_deref(),
+            HarnessId::OpenCode => self.opencode_exe.as_deref(),
+            HarnessId::Pi => self.pi_exe.as_deref(),
+        }
     }
 }
 
-/// The destination's own version, asked of the destination's binary. No model is involved: this is
-/// `--version`, and a failure simply leaves the version unknown.
-fn destination_version(harness: HarnessId) -> Option<String> {
-    let exe = match harness {
-        HarnessId::ClaudeCode => "claude",
-        HarnessId::Codex => "codex",
-        HarnessId::OpenCode => "opencode",
-        HarnessId::Pi => "pi",
-    };
+/// Point one harness's root at an explicit directory, e.g. a portable install's own home.
+/// OpenCode's root is the database file: a directory means its `opencode.db`.
+fn apply_root(roots: &mut StoreRoots, harness: HarnessId, root: &std::path::Path) {
+    let root = root.to_path_buf();
+    match harness {
+        HarnessId::ClaudeCode => roots.claude_config_dir = Some(root),
+        HarnessId::Codex => roots.codex_home = Some(root),
+        HarnessId::OpenCode => {
+            roots.opencode_db = Some(if root.is_dir() { root.join("opencode.db") } else { root })
+        }
+        HarnessId::Pi => roots.pi_agent_dir = Some(root),
+    }
+}
+
+/// The destination's own version, asked of the destination's binary (already resolved by
+/// `crate::exe`). No model is involved: this is `--version`, and a failure simply leaves the
+/// version unknown.
+fn destination_version(exe: &str) -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     let text = run_text(exe, &["--version"], &cwd)?;
     first_version(&text)

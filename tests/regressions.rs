@@ -170,7 +170,7 @@ fn file_compaction_uses_the_same_selection_and_accurate_manifest() {
             model: write_opts.model,
             project_id: write_opts.project_id,
             now: write_opts.now,
-            opencode_exe: write_opts.opencode_exe,
+            exe: write_opts.exe,
         },
     };
     let compaction = mukade::hop::Compaction::Portable {
@@ -274,7 +274,7 @@ fn opencode_import_cleans_its_document_and_uses_the_requested_root() {
     // The test's environment is private to this subprocess; no real OpenCode store is invoked.
     let mut opts = opts(HarnessId::OpenCode, &scratch);
     opts.roots.opencode_db = Some(root.join("custom.db"));
-    opts.opencode_exe = Some(script.to_string_lossy().into_owned());
+    opts.exe = Some(script.to_string_lossy().into_owned());
     // This executable deliberately fails import, making cleanup observable in the failure path.
     let old = std::env::var_os("MUKADE_CAPTURE");
     unsafe { std::env::set_var("MUKADE_CAPTURE", &capture) };
@@ -322,7 +322,7 @@ fn resume_failure_returns_the_written_receipt_and_manifest() {
             model: write_opts.model,
             project_id: write_opts.project_id,
             now: write_opts.now,
-            opencode_exe: write_opts.opencode_exe,
+            exe: write_opts.exe,
         },
         resume: Some(ResumePrompt::new("hello").with_timeout(std::time::Duration::from_secs(2))),
         source_facts: SourceFacts::of(&source),

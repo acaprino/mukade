@@ -87,7 +87,7 @@ pub fn opts(harness: HarnessId, scratch: &Path) -> WriteOpts {
         reasoning: ReasoningPolicy::DropForeign,
         title: Some("interchange test".to_string()),
         now: Some(NOW.to_string()),
-        opencode_exe: Some("opencode".to_string()),
+        exe: Some(mukade::exe::binary_name(harness).to_string()),
     }
 }
 

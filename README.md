@@ -52,6 +52,11 @@ session, `import(dest, &session, &ImportOpts)` writes one you already hold, and 
 destination id, its location, the native resume command, the manifest and — when a resume prompt was
 given — the destination's reply.
 
+Two helpers cover the harnesses themselves: `exe::resolve(harness, override)` finds the binary to
+spawn (explicit override → `MUKADE_*_EXE` → `PATH` → well-known install locations), and
+`detect::detect_store(dir)` reports which harness stores a directory holds, with the evidence.
+`WriteDetails::exe` carries a destination-side override, which the resume command also names.
+
 ## Command line
 
 ```text
@@ -59,13 +64,30 @@ mukade list  <harness>
 mukade dump  <harness> <session-id>          # the interchange document on stdout
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
+mukade detect <dir>                          # which harness stores the directory holds
 ```
 
 A `hop` reads the source and writes the destination in one process, so set **both** harnesses' store
 variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`):
-Claude Code, Codex and Pi require an explicit root. OpenCode uses its configured store and is always invoked with `--standalone`; an explicit `OPENCODE_DB` is passed to its subprocesses.
-because without it its CLI hands the work to a background service started with the user's own
-environment. Temporary OpenCode import documents are removed on success and failure.
+Claude Code, Codex and Pi require an explicit root. OpenCode uses its configured store and is always
+invoked with `--standalone`, because without it its CLI hands the work to a background service started
+with the user's own environment; an explicit `OPENCODE_DB` is passed to its subprocesses. Temporary
+OpenCode import documents are removed on success and failure.
+
+A store can also be named per command: `--root <dir>` (non-empty) points one harness's root at that
+directory — for a hop, the source's; for OpenCode a directory means its `opencode.db`. For `list`,
+`dump` and a `hop` source the harness itself can be omitted: it is inferred from the directory's own
+layout when exactly one is recognized, and refused when none or several are. `mukade detect <dir>`
+prints the same answer with its evidence. Detection needs concrete files — session records
+(`projects/*/*.jsonl`, dated `rollout-*.jsonl`, `sessions/--*--/*.jsonl`), Pi's `models.json`,
+OpenCode's `opencode.db`, whose file can also be passed directly; an empty directory tree infers
+nothing, and another harness's SQLite state (Codex's `state_*.sqlite`) is not OpenCode.
+
+Binaries are resolved as `--claude-exe`/`--codex-exe`/`--opencode-exe`/`--pi-exe` → the matching
+`MUKADE_*_EXE` variable → `PATH` → the well-known install locations, so a portable install with its
+own config works without touching the default one: `--root <its-home> --pi-exe <its-pi>`. The
+override also names the binary in the receipt's resume command; an empty flag falls back to the
+default resolution.
 
 When a destination write succeeds but its resume fails, `HopError::ResumeFailed` contains the written
 session's receipt and manifest, so callers can recover without blindly creating another session.

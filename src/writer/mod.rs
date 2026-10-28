@@ -47,8 +47,11 @@ pub struct WriteOpts {
     /// The base instant for generated timestamps (RFC 3339). `None` means now; fixing it makes a
     /// written session reproducible.
     pub now: Option<String>,
-    /// The `opencode` executable to spawn for `session import` (L1). Defaults to `opencode`.
-    pub opencode_exe: Option<String>,
+    /// The destination harness's executable override, for spawned commands (OpenCode's
+    /// `session import`, L1) and for the resume command the receipt states. `None` means the
+    /// harness's own resolution: `MUKADE_*_EXE`, `PATH`, then the well-known install locations
+    /// (`crate::exe`).
+    pub exe: Option<String>,
 }
 
 /// A session that was written.

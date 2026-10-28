@@ -22,6 +22,11 @@ fn cli(scratch: &Path, args: &[&str]) -> (bool, String, String) {
         .env("CODEX_HOME", &home)
         .env("PI_CODING_AGENT_DIR", &home)
         .env("OPENCODE_DB", home.join("opencode.db"))
+        // The developer's own overrides must not leak into the assertions.
+        .env_remove("MUKADE_CLAUDE_EXE")
+        .env_remove("MUKADE_CODEX_EXE")
+        .env_remove("MUKADE_OPENCODE_EXE")
+        .env_remove("MUKADE_PI_EXE")
         .output()
         .expect("the binary must run");
     (
@@ -176,6 +181,99 @@ fn write_into_the_same_harness_round_trips_the_conversation() {
     let source = mukade::reader::codex::read_file(&support::source_path(HarnessId::Codex)).unwrap();
     assert_eq!(support::roundtrip_script(&back), support::roundtrip_script(&source));
     assert_eq!(back.meta.cwd, source.meta.cwd, "the project travels with the session");
+}
+
+#[test]
+fn detect_recognizes_a_store_and_root_infers_its_harness() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-detect-pi");
+    let home = scratch.join("home");
+    let _ = stage_fixture(HarnessId::Pi, &scratch);
+    let (ok, stdout, stderr) = cli(&scratch, &["detect", home.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    let harnesses: Vec<&str> = doc["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["harness"].as_str().unwrap())
+        .collect();
+    assert_eq!(harnesses, vec!["pi"], "{doc}");
+
+    // The harness can be omitted: the directory's own layout says it.
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "--root", home.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    let line: Value = serde_json::from_str(stdout.lines().next().expect("one line")).unwrap();
+    assert_eq!(line["id"], "01a17e17-9f07-743d-8072-8b3b13d65ab5");
+}
+
+#[test]
+fn an_empty_root_and_an_ambiguous_root_are_refused_for_inference() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-detect-empty");
+    let home = scratch.join("home");
+    let (ok, stdout, _) = cli(&scratch, &["detect", home.to_str().unwrap()]);
+    assert!(ok);
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["candidates"].as_array().unwrap().len(), 0);
+    let (ok, _, stderr) = cli(&scratch, &["list", "--root", home.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(stderr.contains("no harness store recognized"), "{stderr}");
+
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-detect-ambiguous");
+    let home = scratch.join("home");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let _ = stage_fixture(HarnessId::Pi, &scratch);
+    let (ok, _, stderr) = cli(&scratch, &["list", "--root", home.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(stderr.contains("more than one"), "{stderr}");
+}
+
+#[test]
+fn hop_infers_the_source_harness_from_root() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-hop-infer");
+    let home = scratch.join("home");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let (ok, stdout, stderr) = cli(
+        &scratch,
+        &["hop", "--root", home.to_str().unwrap(), "c45db7bc", "pi", "--dest-version", "1.2.0"],
+    );
+    assert!(ok, "{stderr}");
+    let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    let location = printed["location"].as_str().unwrap();
+    assert!(Path::new(location).is_file(), "{location}");
+}
+
+#[test]
+fn a_custom_pi_binary_is_named_in_the_resume_command() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let exe = if cfg!(windows) { "D:\\pi-portable\\bin\\pi.cmd" } else { "/opt/pi-portable/bin/pi" };
+    let (_, printed) = write_document(
+        HarnessId::Pi,
+        &doc,
+        "cli-write-pi-exe",
+        &["--dest-version", "1.2.0", "--pi-exe", exe],
+    );
+    assert_eq!(printed["resume"][0], exe);
+    assert_eq!(printed["resume"][1], "-p");
+}
+
+#[test]
+fn an_empty_exe_flag_falls_back_to_the_default_binary_name() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let (_, printed) = write_document(
+        HarnessId::Pi,
+        &doc,
+        "cli-write-pi-empty-exe",
+        &["--dest-version", "1.2.0", "--pi-exe", ""],
+    );
+    assert_eq!(printed["resume"][0], "pi");
+}
+
+#[test]
+fn an_empty_root_is_rejected() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-empty-root");
+    let (ok, _, stderr) = cli(&scratch, &["list", "pi", "--root", ""]);
+    assert!(!ok);
+    assert!(stderr.contains("non-empty"), "{stderr}");
 }
 
 #[test]

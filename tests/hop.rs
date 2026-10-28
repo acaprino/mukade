@@ -84,7 +84,7 @@ fn request(source: HarnessId, dest: HarnessId, tag: &str) -> (HopRequest, PathBu
             model: opts.model,
             project_id: opts.project_id,
             now: opts.now,
-            opencode_exe: opts.opencode_exe,
+            exe: opts.exe,
         },
     };
     (request, scratch)

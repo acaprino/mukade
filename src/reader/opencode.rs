@@ -336,13 +336,10 @@ impl Reader for Opencode {
     }
 }
 
-/// Which `opencode` to spawn: `MUKADE_OPENCODE_EXE` when the caller states one, otherwise the
-/// binary on `PATH`.
+/// Which `opencode` to spawn: the caller's override (`MUKADE_OPENCODE_EXE`), then the binary on
+/// `PATH`, then the well-known install locations.
 fn opencode_binary() -> String {
-    match std::env::var("MUKADE_OPENCODE_EXE") {
-        Ok(value) if !value.is_empty() => value,
-        _ => "opencode".to_string(),
-    }
+    crate::exe::resolve(HarnessId::OpenCode, None)
 }
 
 /// Carry the caller's explicit OpenCode store into the subprocess rather than silently using the
