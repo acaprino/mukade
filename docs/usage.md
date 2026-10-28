@@ -499,7 +499,14 @@ What to expect from such a thread:
   with their script, not as translated calls. Its reasoning is OpenAI's and is dropped toward any
   other provider, counted.
 - Messages its subagents sent to the main agent are left out on purpose: their content is
-  encrypted, readable only by OpenAI.
+  encrypted, readable only by OpenAI. The messages the main agent sent to its subagents travel as
+  text with that encrypted content replaced by `<encrypted by the source's provider, N chars>`.
+- In Claude Code, resuming such a session prints `Session model gpt-… could not be restored … using
+  claude-…`: the rows name the model that really wrote each reply, which Claude Code does not
+  know, so it carries on with its own. Expected; nothing to fix.
+- **Mind the size before writing in it.** Each message sent in a resumed session reads its whole
+  context first: a session of several hundred thousand tokens costs that much on the first message,
+  or makes Claude Code compact it before answering.
 
 ### OpenCode
 

@@ -951,7 +951,7 @@ fn text_form(call: &ToolCall, note: &str) -> String {
         "[tool call · {} · id {} · {note}]\n",
         call.source_name, call.id
     );
-    match &call.input {
+    match &without_encrypted(&call.input) {
         Value::Object(map) if !map.is_empty() => {
             for (k, v) in map {
                 out.push_str(&format!("{k}: {}\n", one_line(v)));
@@ -973,6 +973,51 @@ pub fn text_form_result(result: &ToolResult) -> String {
         flag,
         result.content.text()
     )
+}
+
+/// A token of OpenAI's encryption (Fernet: `gAAAAA` and base64url) is at least this long.
+const MIN_ENCRYPTED: usize = 100;
+
+/// `value` with every token the source's provider encrypted replaced by a placeholder: only that
+/// provider can read it, so written into the text of another harness it is only noise (Codex
+/// Desktop's subagent messages travel whole in such tokens).
+fn without_encrypted(value: &Value) -> Value {
+    match value {
+        Value::String(s) if s.contains("gAAAAA") => Value::String(replace_encrypted(s)),
+        Value::Array(items) => Value::Array(items.iter().map(without_encrypted).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), without_encrypted(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn replace_encrypted(text: &str) -> String {
+    let token_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '=');
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("gAAAAA") {
+        let len = rest[start..]
+            .find(|c: char| !token_char(c))
+            .unwrap_or(rest.len() - start);
+        let starts_a_word = rest[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !token_char(c));
+        out.push_str(&rest[..start]);
+        if starts_a_word && len >= MIN_ENCRYPTED {
+            out.push_str(&format!(
+                "<encrypted by the source's provider, {len} chars>"
+            ));
+        } else {
+            out.push_str(&rest[start..start + len]);
+        }
+        rest = &rest[start + len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn one_line(value: &Value) -> String {

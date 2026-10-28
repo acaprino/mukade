@@ -299,7 +299,9 @@ deprecated alias [13].
   to the root agent) holds a plain header (sender, recipient, task name) and its payload as
   `encrypted_content`, which only OpenAI can read: carried, it would tell the destination nothing.
   It reads as `Meta` and is neither carried nor counted. 223 of them were in the 0.165 thread seen
-  [26].
+  [26]. The messages the root agent sends to its subagents (`send_message`, `followup_task`,
+  `spawn_agent` calls, whose `message` is encrypted the same way) travel as text form with that
+  value replaced by `<encrypted by the source's provider, N chars>` (tables §3).
 - **A chain of pages** (a page whose base is itself a page) is read by following each
   `history_base` back to the thread's first file, as decided with the user on 2026-10-28: the
   latest version wins. That shape is tested on hand-made files only: of the 982 rollouts scanned

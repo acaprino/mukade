@@ -113,6 +113,13 @@ Subagents, skills, questions and MCP tools are text form on purpose: the agent t
 and MCP servers of the destination are not the source's, so a translated call would claim a
 capability the destination does not have.
 
+**Encrypted arguments.** In the text form of a call, a value the source's provider encrypted (an
+OpenAI Fernet token: `gAAAAA` and at least 100 base64url characters, alone or inside a longer
+string) is replaced by `<encrypted by the source's provider, N chars>`: only that provider can read
+it. Codex Desktop 0.165's `send_message`, `followup_task` and `spawn_agent` carry their whole
+`message` that way. Decided with the user on 2026-10-28 (encrypted content is excluded); not
+counted in the manifest.
+
 ## 4. Argument tables
 
 ### 4.1 Shell

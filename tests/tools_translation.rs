@@ -779,3 +779,55 @@ fn the_offered_sets_are_the_tables_lists() {
         ])
     );
 }
+
+/// A value the source's provider encrypted (an OpenAI Fernet token, `gAAAAA…`) is readable only by
+/// that provider: in the text form of a call it is replaced by a placeholder with its length,
+/// wherever it sits in the arguments. Codex Desktop's `send_message`, `followup_task` and
+/// `spawn_agent` carry their whole `message` that way (decided with the user on 2026-10-28:
+/// encrypted content is excluded).
+#[test]
+fn encrypted_argument_values_are_not_written_into_text_form() {
+    let token = format!("gAAAAABq4cOT{}", "Ab-_9z".repeat(60));
+    let len = token.chars().count();
+    let call = call(
+        CanonicalTool::Other("followup_task".into()),
+        "followup_task",
+        json!({
+            "target": "/root/cessation_reconciliation",
+            "message": token,
+            "items": [{"note": format!("before {token} after")}],
+            "short": "gAAAAAhello",
+        }),
+    );
+    let text = tools::text_form_call(&call, HarnessId::ClaudeCode);
+    let placeholder = format!("<encrypted by the source's provider, {len} chars>");
+    assert!(!text.contains(&token), "{text}");
+    assert!(text.contains(&format!("message: {placeholder}")), "{text}");
+    assert!(
+        text.contains(&format!("before {placeholder} after")),
+        "{text}"
+    );
+    assert!(
+        text.contains("target: /root/cessation_reconciliation"),
+        "{text}"
+    );
+    assert!(
+        text.contains("short: gAAAAAhello"),
+        "a short look-alike stays: {text}"
+    );
+
+    let script = call_with_input(json!(format!(
+        "text(await tools.send_message({{message:\"{token}\"}}));"
+    )));
+    let text = tools::text_form_unanswered(&script);
+    assert!(
+        text.contains(&format!(
+            "tools.send_message({{message:\"{placeholder}\"}})"
+        )),
+        "{text}"
+    );
+}
+
+fn call_with_input(input: Value) -> ToolCall {
+    call(CanonicalTool::Other("exec".into()), "exec", input)
+}
