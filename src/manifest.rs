@@ -63,6 +63,10 @@ impl Manifest {
             json!(self.counts.dropped_unfinished_lines),
         );
         counts.insert(
+            "aborted_steps_as_replies".into(),
+            json!(self.counts.aborted_steps_as_replies),
+        );
+        counts.insert(
             "unanswered_calls".into(),
             json!(self.counts.unanswered_calls),
         );
@@ -163,6 +167,12 @@ impl Manifest {
             losses.push(format!(
                 "an unfinished last line of the source left unread ({})",
                 counts.dropped_unfinished_lines
+            ));
+        }
+        if counts.aborted_steps_as_replies > 0 {
+            losses.push(format!(
+                "steps the source aborted or that failed, written as ordinary replies ({})",
+                counts.aborted_steps_as_replies
             ));
         }
         if counts.dropped_empty_steps > 0 {

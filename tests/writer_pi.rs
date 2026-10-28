@@ -77,18 +77,13 @@ fn both_parallel_calls_are_in_one_assistant_message_with_one_result_each() {
 fn the_session_file_lands_where_pi_looks_for_it() {
     let (written, rows) = write_fixture("writer-pi-path");
     let path = written.location.replace('\\', "/");
-    let project = mukade::roots::claude_project_dir_name(std::path::Path::new(&support::cwd_for(
-        HarnessId::Pi,
-    )));
-    assert!(
-        path.contains(&format!("/sessions/--{project}--/")),
-        "{path}"
-    );
+    let project = pi_project_dir_name(std::path::Path::new(&support::cwd_for(HarnessId::Pi)));
+    assert!(path.contains(&format!("/sessions/{project}/")), "{path}");
     assert!(
         Path::new(&written.location)
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with("2026-10-27T16-00-00_000Z_")
+            .is_some_and(|n| n.starts_with("2026-10-27T16-00-00-000Z_")
                 && n.ends_with(&format!("{}.jsonl", written.id))),
         "{path}"
     );
@@ -266,4 +261,48 @@ fn the_recorded_protocol_is_written_only_when_the_caller_states_it() {
             .unwrap()["message"]["api"],
         "openai-responses"
     );
+}
+
+/// Pi 1.2.0's own rule (`getDefaultSessionDirPath`): the resolved path, one leading separator
+/// dropped, and only `/`, `\` and `:` replaced.
+fn pi_project_dir_name(cwd: &std::path::Path) -> String {
+    let resolved = std::path::absolute(cwd)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let trimmed = resolved
+        .strip_prefix(['/', '\\'])
+        .unwrap_or(&resolved)
+        .replace(['/', '\\', ':'], "-");
+    format!("--{trimmed}--")
+}
+
+/// Pi replays an aborted or failed turn differently from a finished one: the step keeps its end.
+#[test]
+fn an_aborted_step_stays_aborted_in_pi() {
+    use mukade::model::{Entry, Kind, StepEnd};
+    let scratch = support::scratch(HarnessId::Pi, "writer-pi-aborted");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let mut session = support::read_source(HarnessId::ClaudeCode);
+    session.entries.push(Entry {
+        id: "aborted".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec!["PARTIAL".into()],
+            calls: vec![],
+            end: StepEnd::Aborted,
+        },
+        raw: vec![],
+    });
+    let written = mukade::writer::for_harness(HarnessId::Pi)
+        .write(&session, &opts)
+        .unwrap();
+    let last = std::fs::read_to_string(&written.location)
+        .unwrap()
+        .lines()
+        .last()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .unwrap();
+    assert_eq!(last["message"]["stopReason"], "aborted", "{last}");
 }

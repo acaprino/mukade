@@ -47,6 +47,11 @@ impl Writer for Opencode {
             .clone()
             .or_else(|| session.meta.cwd.clone())
             .context("a working directory is required")?;
+        // `opencode session import … --directory <cwd>`: a value that starts with `-` would be read
+        // as an option.
+        if cwd.starts_with('-') {
+            anyhow::bail!("the working directory {cwd:?} starts with '-': not passed to opencode");
+        }
         let mut clock = Clock::new(opts.now.as_deref());
         let document = document_for(session, &id, &cwd, opts, &mut clock)?;
 
@@ -99,7 +104,11 @@ impl Writer for Opencode {
 
         Ok(Written {
             id: imported.clone(),
-            location: file.to_string_lossy().into_owned(),
+            // The store the session now lives in: the import document is gone by now.
+            location: match opts.roots.opencode_db.as_ref() {
+                Some(db) => db.to_string_lossy().into_owned(),
+                None => format!("opencode's configured store, session {imported}"),
+            },
             resume: vec![
                 exe,
                 "run".into(),
@@ -243,6 +252,8 @@ fn assistant_message(
     model: &Value,
     clock: &mut Clock,
 ) -> Value {
+    // Times follow the conversation: the message after the one it answers, each part inside it.
+    let created = clock.next_millis();
     // L8: one message per step, with every block of that step in one `content` array.
     let mut content: Vec<Value> = Vec::new();
     for reasoning in &step.reasoning {
@@ -317,7 +328,7 @@ fn assistant_message(
             "name": call.name,
             "executed": false,
             "state": Value::Object(state),
-            "time": {"created": clock.next_millis(), "completed": clock.base_millis()},
+            "time": {"created": clock.next_millis(), "completed": clock.next_millis()},
         }));
     }
 
@@ -351,7 +362,7 @@ fn assistant_message(
     );
     message.insert(
         "time".into(),
-        json!({"created": clock.base_millis(), "completed": clock.base_millis()}),
+        json!({"created": created, "completed": clock.next_millis()}),
     );
     message.insert("cost".into(), Value::from(0));
     Value::Object(message)

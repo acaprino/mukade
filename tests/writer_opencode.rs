@@ -164,3 +164,43 @@ fn a_failed_call_carries_its_error_text() {
     assert_eq!(state["error"]["type"], "tool.execution", "{state}");
     assert_eq!(state["error"]["message"], "ENOENT: no such file", "{state}");
 }
+
+/// Timestamps follow the conversation: each message after the one before it, and nothing
+/// completed before it was created.
+#[test]
+fn document_times_never_go_backwards() {
+    let (document, _, _) = document("writer-opencode-times");
+    let mut last = 0;
+    for message in messages(&document) {
+        let created = message["time"]["created"].as_i64().unwrap();
+        assert!(created > last, "{message}");
+        if let Some(completed) = message["time"]["completed"].as_i64() {
+            assert!(completed >= created, "{message}");
+            last = completed;
+        } else {
+            last = created;
+        }
+        for part in message["content"].as_array().into_iter().flatten() {
+            if let (Some(c), Some(d)) = (
+                part["time"]["created"].as_i64(),
+                part["time"]["completed"].as_i64(),
+            ) {
+                assert!(d >= c, "{part}");
+            }
+        }
+    }
+}
+
+/// A working directory that starts with `-` would reach `opencode` as an option.
+#[test]
+fn a_working_directory_that_looks_like_an_option_is_refused() {
+    let scratch = support::scratch(HarnessId::OpenCode, "writer-opencode-dash");
+    let session = support::read_source(HarnessId::OpenCode);
+    let mut opts = support::opts(HarnessId::OpenCode, &scratch);
+    opts.project_id = Some("project-under-test".into());
+    opts.cwd = Some("--print-logs".into());
+    let error = mukade::writer::for_harness(HarnessId::OpenCode)
+        .write(&session, &opts)
+        .unwrap_err();
+    assert!(error.to_string().contains("starts with"), "{error:#}");
+}

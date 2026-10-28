@@ -148,3 +148,20 @@ fn user_turns_compaction_and_the_killed_turn_survive() {
         "the destination's own version"
     );
 }
+
+/// The folder name Claude Code 2.1.311 itself derives (`wL` in its binary, checked with that
+/// JavaScript): every UTF-16 unit outside `[a-zA-Z0-9]` becomes `-`, and a name past 200 units is
+/// cut there and suffixed with a hash of the path.
+#[test]
+fn the_project_folder_name_is_the_one_claude_code_derives() {
+    use mukade::roots::claude_project_dir_name;
+    use std::path::Path;
+    assert_eq!(claude_project_dir_name(Path::new(r"C:\a\b")), "C--a-b");
+    assert_eq!(
+        claude_project_dir_name(Path::new("C:\\w\\\u{1F600}x")),
+        "C--w---x"
+    );
+    let long = format!(r"C:\work\{}proj", r"deep\".repeat(45));
+    let expected = format!("C--work-{}de-oxvvd", "deep-".repeat(38));
+    assert_eq!(claude_project_dir_name(Path::new(&long)), expected);
+}

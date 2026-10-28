@@ -13,7 +13,7 @@
 
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written, write_jsonl};
-use crate::model::{HarnessId, Reasoning, Session, ToolResult};
+use crate::model::{HarnessId, Reasoning, Session, StepEnd, ToolResult};
 use crate::policy::{Clock, ReasoningPlan};
 use crate::tools::content_blocks;
 use anyhow::{Context, Result};
@@ -66,25 +66,30 @@ impl Writer for Pi {
     }
 }
 
-/// Pi's session file stamp: `2026-10-27T16-00-39-689Z` from an instant.
+/// Pi's session file stamp, the ISO instant with `:` and `.` turned into `-`:
+/// `2026-10-27T16-00-39-689Z`.
 fn file_stamp(millis: i64) -> String {
     match DateTime::from_timestamp_millis(millis) {
         Some(dt) => format!(
-            "{}_{:03}Z",
+            "{}-{:03}Z",
             dt.format("%Y-%m-%dT%H-%M-%S"),
             dt.timestamp_subsec_millis()
         ),
-        None => "1970-01-01T00-00-00_000Z".into(),
+        None => "1970-01-01T00-00-00-000Z".into(),
     }
 }
 
-/// Pi files a session under `--<working directory, non-alphanumerics → ->--`.
+/// Pi's own folder for a working directory (`getDefaultSessionDirPath`, Pi 1.2.0): the resolved
+/// path, one leading separator dropped, and only `/`, `\` and `:` turned into `-`, between `--`.
 fn project_dir_name(cwd: &str) -> String {
-    let sanitized: String = cwd
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    format!("--{sanitized}--")
+    let resolved = std::path::absolute(cwd)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| cwd.to_string());
+    let name = resolved
+        .strip_prefix(['/', '\\'])
+        .unwrap_or(&resolved)
+        .replace(['/', '\\', ':'], "-");
+    format!("--{name}--")
 }
 
 fn rows(
@@ -259,13 +264,15 @@ fn assistant_message(
     if let Some(model) = plan::model_id(step, session, opts) {
         message.insert("model".into(), Value::String(model));
     }
+    // Pi leaves an aborted or failed turn out of the next request, so the step keeps its end.
     message.insert(
         "stopReason".into(),
         Value::String(
-            if step.calls.is_empty() {
-                "stop"
-            } else {
-                "toolUse"
+            match step.end {
+                StepEnd::Aborted => "aborted",
+                StepEnd::Error => "error",
+                _ if step.calls.is_empty() => "stop",
+                _ => "toolUse",
             }
             .to_string(),
         ),

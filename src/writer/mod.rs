@@ -16,8 +16,8 @@ use anyhow::Result;
 /// What a writer is told about the destination.
 #[derive(Debug, Clone, Default)]
 pub struct WriteOpts {
-    /// Where the destination keeps its sessions. This library never falls back to a real home on
-    /// its own: an empty root is an error, not a guess.
+    /// Where the destination keeps its sessions. An empty root is an error for Claude Code, Codex
+    /// and Pi, not a guess; OpenCode without a database uses the store its own configuration names.
     pub roots: StoreRoots,
     /// The project directory the destination files the session under. A hop keeps the project, so
     /// the caller sets it (the source's cwd is only the fallback).

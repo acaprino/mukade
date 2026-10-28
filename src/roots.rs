@@ -6,8 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// The store locations of the four harnesses. `None` means the harness's own default, which the
-/// callers only use outside tests.
+/// The store locations of the four harnesses. `None` is refused for Claude Code, Codex and Pi,
+/// which have no store to read or write without one; OpenCode then uses the store its own
+/// configuration names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StoreRoots {
     /// Claude Code: `CLAUDE_CONFIG_DIR`; the sessions live under `projects/`.
@@ -50,11 +51,46 @@ impl StoreRoots {
     }
 }
 
-/// The project folder name Claude Code derives from a working directory: every character that is
-/// not alphanumeric becomes `-` (`C:\a\b` → `C--a-b`).
+/// The project folder name Claude Code derives from a working directory (`wL` in Claude Code
+/// 2.1.311): every UTF-16 unit outside `[a-zA-Z0-9]` becomes `-` (`C:\a\b` → `C--a-b`), and a
+/// name longer than 200 is cut there and suffixed with `-` and the base-36 hash of the path.
 pub fn claude_project_dir_name(cwd: &Path) -> String {
-    cwd.to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+    const MAX: usize = 200;
+    let path = cwd.to_string_lossy();
+    let units: Vec<u16> = path.encode_utf16().collect();
+    let name: String = units
+        .iter()
+        .map(|&unit| match char::from_u32(u32::from(unit)) {
+            Some(c) if c.is_ascii_alphanumeric() => c,
+            _ => '-',
+        })
+        .collect();
+    if name.len() <= MAX {
+        return name;
+    }
+    // Claude's `jme`: a 32-bit `h = h * 31 + unit` over the original path's UTF-16 units.
+    let hash = units.iter().fold(0i32, |h, &unit| {
+        h.wrapping_shl(5)
+            .wrapping_sub(h)
+            .wrapping_add(i32::from(unit))
+    });
+    format!(
+        "{}-{}",
+        &name[..MAX],
+        base36(u64::from(hash.unsigned_abs()))
+    )
+}
+
+fn base36(mut n: u64) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = Vec::new();
+    loop {
+        out.push(DIGITS[(n % 36) as usize]);
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    out.reverse();
+    String::from_utf8(out).expect("ASCII digits")
 }

@@ -101,6 +101,9 @@ pub struct Counts {
     pub dropped_off_branch: usize,
     /// A last source line cut off mid-write, kept as text and not read.
     pub dropped_unfinished_lines: usize,
+    /// Steps the source aborted or that failed, written as ordinary replies by a destination with
+    /// no way to mark them (Pi keeps the step's end).
+    pub aborted_steps_as_replies: usize,
     /// A call the source never answered: the provider would refuse it as a tool call (L7).
     pub unanswered_calls: usize,
     /// A step that lost everything it had and cannot be written as an empty message.
@@ -281,6 +284,9 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 calls,
                 end,
             } => {
+                if matches!(end, StepEnd::Aborted | StepEnd::Error) && dest != HarnessId::Pi {
+                    counts.aborted_steps_as_replies += 1;
+                }
                 let mut planned = PlannedStep {
                     model: model.clone(),
                     reasoning: Vec::new(),

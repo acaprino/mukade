@@ -513,3 +513,39 @@ fn reasoning_as_text_comes_before_the_answer() {
     assert!(step.text[0].contains("THINKING"), "{:?}", step.text);
     assert_eq!(step.text[1], "ANSWER");
 }
+
+/// No loss is silent: outside Pi, which keeps a step's end, an aborted or failed step is written
+/// as an ordinary reply, and the manifest says so.
+#[test]
+fn an_aborted_step_written_as_a_reply_is_counted() {
+    let aborted = Entry {
+        id: "e1".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec!["PARTIAL".into()],
+            calls: vec![],
+            end: StepEnd::Aborted,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![aborted]);
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-aborted");
+    let plan = plan::plan(
+        &s,
+        HarnessId::ClaudeCode,
+        &support::opts(HarnessId::ClaudeCode, &scratch),
+    );
+    assert_eq!(plan.counts.aborted_steps_as_replies, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("aborted")),
+        "{losses:?}"
+    );
+    let scratch = support::scratch(HarnessId::Pi, "plan-aborted");
+    let plan = plan::plan(&s, HarnessId::Pi, &support::opts(HarnessId::Pi, &scratch));
+    assert_eq!(
+        plan.counts.aborted_steps_as_replies, 0,
+        "Pi keeps the step's end"
+    );
+}
