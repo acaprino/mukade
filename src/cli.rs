@@ -57,6 +57,7 @@ options:
   --resume-prompt <text>   resume in the destination and keep its reply in the receipt
   --from-file <path>       read the source from a file instead of its store
   --manifest <path>        also write the manifest there
+  --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --root <dir>             the store directory to use, and to infer the harness from
   --claude-exe <path>      the claude binary to spawn
   --codex-exe <path>       the codex binary to spawn
@@ -65,8 +66,10 @@ options:
 
 Executable resolution: --<harness>-exe → MUKADE_CLAUDE_EXE / MUKADE_CODEX_EXE /
 MUKADE_OPENCODE_EXE / MUKADE_PI_EXE → PATH → the well-known install locations → the plain
-command name. A portable install with its own config needs only --root and its --<harness>-exe;
-a source OpenCode read spawns the binary its own resolution finds (MUKADE_OPENCODE_EXE wins).
+command name (OpenCode prefers its real binary over the npm shim on PATH). --root selects the
+source store of a hop; a portable destination needs its store variable set in the environment
+and its --<harness>-exe. A source OpenCode read spawns the binary its own resolution finds
+(MUKADE_OPENCODE_EXE wins).
 ";
 
 /// Parse and run the command line. `args` excludes the program name.
@@ -102,6 +105,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--resume-prompt" => flags.resume_prompt = Some(next(rest, &mut i)?),
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
+            "--output" => flags.output = Some(next(rest, &mut i)?),
             "--reasoning" => flags.reasoning = Some(next(rest, &mut i)?),
             "--root" => flags.root = Some(next(rest, &mut i)?),
             "--claude-exe" => flags.claude_exe = Some(next(rest, &mut i)?),
@@ -206,10 +210,15 @@ pub fn run(args: &[String]) -> Result<()> {
         "dump" => {
             no_more(operands, 1)?;
             let id = operands.first().context("dump needs a session id")?;
-            let reader = crate::reader::for_harness(harness)?;
-            let session = reader.read(id, &roots)?;
-            let doc = wire::to_document(&session);
-            println!("{}", serde_json::to_string_pretty(&doc)?);
+            let session = crate::hop::export(&SessionRef::id(harness, *id), &roots)
+                .map_err(anyhow::Error::new)?;
+            let doc = serde_json::to_string_pretty(&wire::to_document(&session))?;
+            match flags.output.as_deref() {
+                // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
+                // the console's code page.
+                Some(path) => std::fs::write(path, doc).with_context(|| format!("write {path}"))?,
+                None => println!("{doc}"),
+            }
         }
         "write" => {
             no_more(operands, 1)?;
@@ -340,6 +349,7 @@ struct Flags {
     resume_prompt: Option<String>,
     from_file: Option<String>,
     manifest: Option<String>,
+    output: Option<String>,
     root: Option<String>,
     claude_exe: Option<String>,
     codex_exe: Option<String>,

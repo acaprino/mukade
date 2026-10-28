@@ -527,3 +527,34 @@ fn an_empty_store_variable_is_not_a_store() {
     assert!(!output.status.success());
     assert!(!scratch.join("sessions").exists(), "nothing beside the cwd");
 }
+
+/// `dump --output` writes the document as UTF-8 itself: a shell pipe would re-encode it with the
+/// console's code page (PowerShell's `Set-Content` turns an em dash into mojibake).
+#[test]
+fn dump_writes_utf8_to_a_file() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-dump-output");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let file = scratch.join("document.json");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "dump",
+            "claude_code",
+            "c45db7bc",
+            "--output",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stdout.trim().is_empty(),
+        "the document goes to the file: {stdout}"
+    );
+    let written: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let (_, printed) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    assert_eq!(written["messages"], printed["messages"]);
+    assert!(
+        written.to_string().contains("—"),
+        "the em dash of the fixture survives"
+    );
+}
