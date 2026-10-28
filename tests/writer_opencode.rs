@@ -204,3 +204,84 @@ fn a_working_directory_that_looks_like_an_option_is_refused() {
         .unwrap_err();
     assert!(error.to_string().contains("starts with"), "{error:#}");
 }
+
+/// The sorted keys of a JSON object.
+fn keys(value: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = value
+        .as_object()
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+/// The first value in `values` whose `type` is `kind`.
+fn of_type<'a>(values: impl IntoIterator<Item = &'a Value>, kind: &str) -> &'a Value {
+    values
+        .into_iter()
+        .find(|value| value["type"] == kind)
+        .unwrap_or_else(|| panic!("no {kind} in the recorded export"))
+}
+
+/// The document is checked against OpenCode's own recorded export, not only against our own
+/// reader: the keys of `info`, of each message type and of a tool part are the recorded ones, so
+/// a field renamed in the writer and the reader together no longer passes.
+#[test]
+fn the_import_document_has_the_shape_of_opencodes_own_export() {
+    let recorded: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("fixtures/opencode/source/session-export.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let (document, _, _) = document("writer-opencode-shape");
+    let theirs = messages(&recorded);
+    let ours = messages(&document);
+
+    // `info`: every key the export has, except `outcome`, which OpenCode records for its own
+    // sessions: real imports without it succeed (checked 2026-10-28 against OpenCode 2.1.4).
+    for key in keys(&recorded["info"]) {
+        if key == "outcome" {
+            continue;
+        }
+        assert!(
+            document["info"].get(&key).is_some(),
+            "info.{key} is in OpenCode's export and missing from the document"
+        );
+    }
+    for kind in ["user", "assistant"] {
+        let expected = keys(of_type(theirs.iter().copied(), kind));
+        let written = keys(of_type(ours.iter().copied(), kind));
+        for key in &expected {
+            // `tokens` is recorded by OpenCode itself and optional on import.
+            if key == "tokens" {
+                continue;
+            }
+            assert!(
+                written.contains(key),
+                "{kind} message: {key} missing from {written:?}"
+            );
+        }
+    }
+    let part = |messages: &[&Value]| {
+        of_type(
+            messages
+                .iter()
+                .filter_map(|m| m["content"].as_array())
+                .flatten(),
+            "tool",
+        )
+        .clone()
+    };
+    let (their_tool, our_tool) = (part(&theirs), part(&ours));
+    for key in keys(&their_tool) {
+        // `ran` is recorded by OpenCode when the tool started; it is optional on import.
+        if key == "time" || key == "ran" {
+            continue;
+        }
+        assert!(our_tool.get(&key).is_some(), "tool part: {key} missing");
+    }
+    assert_eq!(keys(&their_tool["state"]), keys(&our_tool["state"]));
+}

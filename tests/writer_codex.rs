@@ -119,15 +119,18 @@ fn no_database_is_touched() {
         .nth(5)
         .expect("the sessions root")
         .to_path_buf();
+    // The Codex home must exist and hold the sessions folder, or the check below says nothing.
+    assert!(
+        home.join("sessions").is_dir(),
+        "{} is not the Codex home",
+        home.display()
+    );
     let leftovers: Vec<String> = std::fs::read_dir(&home)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.contains("sqlite") || n.contains("state_"))
-                .collect()
-        })
-        .unwrap_or_default();
+        .expect("the Codex home is readable")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("sqlite") || n.contains("state_"))
+        .collect();
     assert!(
         leftovers.is_empty(),
         "no SQLite state was written: {leftovers:?}"

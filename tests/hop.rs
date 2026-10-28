@@ -142,7 +142,12 @@ fn a_hop_reads_the_source_writes_the_destination_and_reports_a_manifest() {
     assert_eq!(manifest["options"]["compaction"], "none");
     assert_eq!(manifest["options"]["reasoning"], "drop_foreign");
     assert_eq!(manifest["options"]["resume_prompt"], false);
-    assert!(manifest["counts"]["messages_in"].as_u64().unwrap() >= 10);
+    // The count is what the plan read: the source's conversation without its Meta rows.
+    let source = support::read_source(HarnessId::ClaudeCode);
+    assert_eq!(
+        manifest["counts"]["messages_in"].as_u64().unwrap(),
+        source.conversation().count() as u64
+    );
     assert_eq!(
         manifest["strict"],
         serde_json::json!({"checked": true, "violations": []})
