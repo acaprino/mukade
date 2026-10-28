@@ -29,9 +29,11 @@ D:\tools\mukade.exe --help
 ```
 
 The Windows executable has the C runtime built in, so it runs on a machine with no Visual C++
-redistributable. Run it from a shell, by its path or from a folder on `PATH`. The files it needs it
-generates in the folder where the executable is, and nowhere else: see
-[Where its files go](#6-where-its-files-go).
+redistributable. Run it from a shell, by its path or from a folder on `PATH`; in the examples below
+`mukade` stands for whichever you use (`D:\tools\mukade.exe`, say). It has no installer, no
+configuration file and no first-run step. The files it needs it generates in the folder where the
+executable is, and nowhere else: a folder `mukade-data`, made only when something is first written
+to it. See [Where its files go](#6-where-its-files-go) for what is in it and what it costs.
 
 Install and configure the harnesses you intend to use separately: mukade moves sessions, it does
 not install harnesses or transfer their credentials.
@@ -290,6 +292,24 @@ mukade does not look for another place: the cache is not kept (every hop asks th
 costs time but works), and a hop to OpenCode stops with an error that names the folder, before
 anything is written. Copy `mukade.exe` to a folder you can write to.
 
+**What it looks like.** A real run: the executable copied alone into an empty folder, then two hops
+to Claude Code whose launcher answers `--version` (`--timing` shows the cost of asking):
+
+```text
+before the first hop          after it
+tools\                          tools\
+  mukade.exe                        mukade.exe
+                                    mukade-data\cache\probes.json
+
+1st hop   probe destination version   70.8 ms   total  78.6 ms
+2nd hop   probe destination version    0.3 ms   total   9.4 ms     (answered from the cache)
+
+probes.json: {"version|<dir>/claude.cmd|20|1793205746861450700":"2.9.9"}
+```
+
+A hop that has nothing to ask writes nothing next to the executable at all: a hop to Pi, with no
+`pi` launcher to start, left the folder holding `mukade.exe` and nothing else.
+
 This is checked by an automated test that runs the real binary alone in a folder, with the
 temporary folder, the home folder and the application-data folders pointed at an empty sandbox, and
 asserts the sandbox stays empty and the folder holds only the executable and `mukade-data`.
@@ -346,6 +366,10 @@ cannot take them. Both are refused before anything is written. Every harness pro
 starts runs with a deadline; one that outlives it is stopped together with everything it started.
 
 ## 9. Per-harness examples
+
+Most examples use the harnesses' standard locations. Where a harness is kept in a folder of its own
+(`D:\portable\…`, a USB stick, say) the example shows its store variable and executable flag; that
+is about the **harness**, not about mukade, which needs nothing beyond its own executable.
 
 ### Claude Code
 
@@ -455,7 +479,7 @@ mukade list pi
 mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project'
 ```
 
-A portable Pi destination:
+A Pi destination kept in its own folder:
 
 ```powershell
 $env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
@@ -465,7 +489,7 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --pi
 
 Mukade writes the new Pi session below `PI_CODING_AGENT_DIR\sessions`, in the folder Pi itself
 would use for the project. The receipt's `resume` contains the chosen launcher and the session
-file path. Keep `PI_CODING_AGENT_DIR` set when running it; separately verify the portable Pi
+file path. Keep `PI_CODING_AGENT_DIR` set when running it; separately verify that Pi
 installation's provider credentials and configuration. A separate agent directory does not by itself
 prove that every resource Pi reads is isolated. Sessions written this way were run against Pi 1.2.0
 and 1.4.0 (see `docs/verification/2026-10-28-pi-live.md`).
@@ -501,6 +525,10 @@ the directory's own layout when exactly one harness is recognized. `write` alway
   OpenCode source requires `MUKADE_OPENCODE_EXE`; a destination uses its corresponding flag or env var.
 - **Codex version or OpenCode project/model missing:** provide the actual destination version,
   project ID, provider or model using the flags described above.
+- **"mukade keeps its temporary files in … mukade-data beside its executable and could not make it"**
+  (exit 4, from a hop to OpenCode): the executable is in a folder it cannot write to, or something
+  that is not a folder is named `mukade-data` there. Nothing was written. Copy `mukade.exe` to a
+  folder you can write to; see [section 6](#6-where-its-files-go).
 - **Resume fails after a successful write** (exit 5): the session already exists. Mukade still
   prints its receipt on stdout and saves `--manifest`: use that `id` and `location` instead of
   retrying, which would create another session. A resume that outlives its timeout is stopped,

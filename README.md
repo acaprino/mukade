@@ -69,7 +69,7 @@ call of one harness becomes a call of another.
 
 ## Command line
 
-For complete examples for each harness, including custom and portable installations, see the
+For complete examples for each harness, including ones kept in a folder of their own, see the
 [command-line usage guide](docs/usage.md).
 
 ```text
@@ -99,7 +99,7 @@ directly; an empty directory tree infers nothing, and another harness's SQLite s
 `state_*.sqlite`) is not OpenCode.
 
 Binaries are resolved as `--claude-exe`/`--codex-exe`/`--opencode-exe`/`--pi-exe` → the matching
-`MUKADE_*_EXE` variable → `PATH` → the well-known install locations, so a portable install with its
+`MUKADE_*_EXE` variable → `PATH` → the well-known install locations, so an install kept in its own folder with its
 own config can be selected explicitly. For a hop, set the destination's store variable in the
 environment; `--root` selects the source store. A `--resume-prompt` runs the destination with its
 store variable set to the root the session was written to; a resume command run later by hand needs
