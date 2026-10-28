@@ -216,6 +216,47 @@ What the `losses` lines mean, and what to do:
 | `the source's compaction summary travels as one user message` | `--compaction portable`. |
 | `the resume prompt did not complete: …` | the session was written but `--resume-prompt` failed (exit 5): see [troubleshooting](#11-troubleshooting). |
 
+### Tool calls and reasoning: what is converted, and when
+
+**`dump` converts nothing.** The document keeps every tool call as the source wrote it: its own
+name, its own arguments, and the canonical form mukade read it as. Reasoning blocks keep their text
+and their opaque part (below). Conversion happens when a session is **written** into a harness, by
+`write` or `hop`, so one document can be written into any of the four with the same result a hop
+would have.
+
+**Tool calls** are translated to the destination's own tool, by the rules of
+[`tool-conversion-tables.md`](tool-conversion-tables.md); one with no equivalent travels as text,
+with its arguments, and is counted (`tools_text_form`).
+
+**Reasoning (chain of thought)** is not converted, because it cannot be. A block has visible text
+and an opaque part — a signature over the text, or a provider-encrypted payload — that only the
+provider protocol that produced it can read back, and that mukade never edits or makes up.
+`--reasoning` decides what happens to each block:
+
+| `--reasoning` | what happens |
+|---|---|
+| `drop_foreign` (default) | kept **natively** when the destination speaks the same protocol and its format has a place for the opaque part; otherwise dropped and counted (`reasoning_dropped`) |
+| `as_text` | written as visible text before the answer it led to, labelled `[earlier reasoning, not replayable]`: the destination's model can read it, but it is no longer reasoning to its provider |
+| `drop` | never carried |
+
+Where the opaque part fits: Claude Code takes a signature (`thinking`) or an encrypted payload
+(`redacted_thinking`), Codex only an encrypted payload, Pi only a signature, OpenCode either. So
+Claude → Claude and Codex → Codex keep reasoning natively; Claude → Codex and Codex → Claude drop
+it, or carry it as text with `as_text`.
+
+OpenCode and Pi speak whatever provider they are configured with, so mukade does not know their
+protocol, and **with the default every reasoning block toward them is dropped**. Say which protocol
+the destination will use and blocks from the same protocol are kept:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --dest-protocol anthropic-messages
+```
+
+`--dest-protocol` is `anthropic-messages`, `openai-responses` or `openai-chat`. Name the one the
+destination's configured provider really uses. mukade takes it on trust: the strict check refuses a
+block of one protocol carried into another (exit 4), but it compares against this value, so it
+cannot tell that the value itself is wrong.
+
 ## 5. Speed
 
 A handover is meant to feel instant. Measured on this repository's release build, hopping a Claude

@@ -103,11 +103,11 @@ for calls from Codex, OpenCode and Pi; a Claude source keeps its own `Grep`, `Gl
 | `LS` (none in 2.1.311) | T | T | T | `ls` (when enabled) |
 | `WebFetch` | ≈ `WebFetch` (needs its `prompt`) | T | ≈ `webfetch` (no `prompt`) | T |
 | `WebSearch` | `WebSearch` | T (built-in `web_search` is server-side) | ≈ `websearch` (query only) | T |
-| `Agent` / `subagent` / `spawn_agent` | T | T | T |
-| `Skill` / `skill` | T | T | T |
-| `AskUserQuestion` / `question` / `request_user_input` | T | T | T |
-| `mcp__<server>__<tool>` | T | T | T |
-| everything else (harness-internal: `StructuredOutput`, `Monitor`, `Cron*`, `Workflow`, goals, todo, `execute`, Pi extensions) | T | T | T |
+| `Agent` / `subagent` / `spawn_agent` | T | T | T | T |
+| `Skill` / `skill` | T | T | T | T |
+| `AskUserQuestion` / `question` / `request_user_input` | T | T | T | T |
+| `mcp__<server>__<tool>` | T | T | T | T |
+| everything else (harness-internal: `StructuredOutput`, `Monitor`, `Cron*`, `Workflow`, goals, todo, `execute`, Pi extensions) | T | T | T | T |
 
 Subagents, skills, questions and MCP tools are text form on purpose: the agent types, skill sets
 and MCP servers of the destination are not the source's, so a translated call would claim a
