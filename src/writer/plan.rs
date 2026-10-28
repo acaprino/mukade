@@ -7,7 +7,7 @@
 use crate::model::{
     Attachment, HarnessId, Kind, ModelRef, Protocol, ResultContent, Session, StepEnd,
 };
-use crate::policy::{ReasoningPlan, plan_reasoning};
+use crate::policy::{ReasoningPlan, payload_fits, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::WriteOpts;
 use serde_json::Value;
@@ -154,14 +154,21 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 };
                 for r in reasoning {
                     match plan_reasoning(r, dest_protocol.as_ref(), opts.reasoning) {
-                        ReasoningPlan::Native(native) => {
+                        // A4: the payload must have a place in the destination's own format, or
+                        // the block would be written without it and refused.
+                        ReasoningPlan::Native(native)
+                            if native
+                                .opaque
+                                .as_ref()
+                                .is_some_and(|opaque| payload_fits(opaque, dest)) =>
+                        {
                             planned.reasoning.push(ReasoningPlan::Native(native))
                         }
                         ReasoningPlan::Text(t) => {
                             planned.reasoning.push(ReasoningPlan::Text(t.clone()));
                             planned.text.push(t);
                         }
-                        ReasoningPlan::Drop => {
+                        ReasoningPlan::Native(_) | ReasoningPlan::Drop => {
                             counts.reasoning_dropped += 1;
                             planned.reasoning.push(ReasoningPlan::Drop);
                         }

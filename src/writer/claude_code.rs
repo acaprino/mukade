@@ -265,11 +265,15 @@ fn step_blocks(step: &PlannedStep) -> Vec<Value> {
     let mut blocks = Vec::new();
     for reasoning in &step.reasoning {
         if let ReasoningPlan::Native(Reasoning { text, opaque }) = reasoning {
-            blocks.push(json!({
-                "type": "thinking",
-                "thinking": text,
-                "signature": opaque.as_ref().and_then(|o| o.signature.clone()),
-            }));
+            let signature = opaque.as_ref().and_then(|o| o.signature.clone());
+            let encrypted = opaque.as_ref().and_then(|o| o.encrypted.clone());
+            // A redacted block has no signature: its payload is `data`, and it goes back as it came.
+            blocks.push(match (signature, encrypted) {
+                (None, Some(data)) => json!({"type": "redacted_thinking", "data": data}),
+                (signature, _) => {
+                    json!({"type": "thinking", "thinking": text, "signature": signature})
+                }
+            });
         }
     }
     for text in &step.text {

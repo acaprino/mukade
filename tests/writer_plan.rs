@@ -198,3 +198,80 @@ fn a_second_result_for_the_same_call_is_dropped_and_counted() {
     let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
     assert!(losses.iter().any(|loss| loss.contains("duplicate")), "{losses:?}");
 }
+
+fn reasoning_step(id: &str, protocol: mukade::model::Protocol, signature: Option<&str>, encrypted: Option<&str>) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![mukade::model::Reasoning {
+                text: String::new(),
+                opaque: Some(mukade::model::Opaque {
+                    protocol,
+                    model: Some("m".into()),
+                    signature: signature.map(str::to_owned),
+                    encrypted: encrypted.map(str::to_owned),
+                }),
+            }],
+            text: vec!["done".into()],
+            calls: vec![],
+            end: StepEnd::Completed,
+        },
+        raw: vec![],
+    }
+}
+
+/// A4: Claude's `redacted_thinking` carries its payload in `data`, not in a signature. Written back
+/// as `thinking` with a null signature it is refused and the payload is gone.
+#[test]
+fn redacted_thinking_is_written_back_as_redacted_thinking() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-redacted-thinking");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![reasoning_step(
+        "e1",
+        mukade::model::Protocol::AnthropicMessages,
+        None,
+        Some("REDACTED-PAYLOAD"),
+    )]);
+    let written = mukade::writer::for_harness(HarnessId::ClaudeCode).write(&s, &opts).unwrap();
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&written.location)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let blocks: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter_map(|row| row.pointer("/message/content").and_then(serde_json::Value::as_array))
+        .flatten()
+        .collect();
+    assert!(
+        blocks.iter().any(|b| b["type"] == "redacted_thinking" && b["data"] == "REDACTED-PAYLOAD"),
+        "{blocks:?}"
+    );
+    assert!(!blocks.iter().any(|b| b["type"] == "thinking"), "{blocks:?}");
+}
+
+/// A4: Pi replays thinking from its signature. Reasoning that has only an encrypted payload cannot
+/// be written there, so it is dropped and counted instead of travelling as an unsigned block.
+#[test]
+fn reasoning_with_only_an_encrypted_payload_is_dropped_for_pi() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-encrypted-to-pi");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.dest_protocol = Some(mukade::model::Protocol::OpenaiResponses);
+    let s = session(vec![reasoning_step(
+        "e1",
+        mukade::model::Protocol::OpenaiResponses,
+        None,
+        Some("gAAAA-ENCRYPTED"),
+    )]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.reasoning_dropped, 1);
+    let Some(PlannedBlock::Step(step)) = plan.blocks.first() else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert!(
+        !step.reasoning.iter().any(|r| matches!(r, mukade::policy::ReasoningPlan::Native(_))),
+        "{:?}",
+        step.reasoning
+    );
+}

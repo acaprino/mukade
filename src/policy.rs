@@ -1,7 +1,7 @@
 //! The hop policy: what is carried, what is dropped, and what is written down as lost
 //! (docs/session-interchange-spec.md §3.3, §4, §7).
 
-use crate::model::{HarnessId, Protocol, Reasoning};
+use crate::model::{HarnessId, Opaque, Protocol, Reasoning};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 
 /// The label `AsText` puts in front of reasoning the destination cannot replay.
@@ -28,6 +28,19 @@ pub fn destination_protocol(harness: HarnessId) -> Option<Protocol> {
         HarnessId::Codex => Some(Protocol::OpenaiResponses),
         // OpenCode and Pi speak whatever their configured provider speaks.
         HarnessId::OpenCode | HarnessId::Pi => None,
+    }
+}
+
+/// Whether a destination's own format has a place for this opaque payload. Claude writes a
+/// signature as `thinking` and an encrypted payload as `redacted_thinking`; Pi replays only a
+/// `thinkingSignature`; Codex only `encrypted_content`; OpenCode keeps both.
+pub fn payload_fits(opaque: &Opaque, dest: HarnessId) -> bool {
+    match dest {
+        HarnessId::ClaudeCode | HarnessId::OpenCode => {
+            opaque.signature.is_some() || opaque.encrypted.is_some()
+        }
+        HarnessId::Pi => opaque.signature.is_some(),
+        HarnessId::Codex => opaque.encrypted.is_some(),
     }
 }
 
