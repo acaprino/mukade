@@ -238,11 +238,22 @@ fn assistant_message(
     let mut content: Vec<Value> = Vec::new();
     for reasoning in &step.reasoning {
         if let ReasoningPlan::Native(Reasoning { text, opaque }) = reasoning {
-            content.push(json!({
-                "type": "thinking",
-                "thinking": text,
-                "thinkingSignature": opaque.as_ref().and_then(|o| o.signature.clone()),
-            }));
+            let signature = opaque.as_ref().and_then(|o| o.signature.clone());
+            let encrypted = opaque.as_ref().and_then(|o| o.encrypted.clone());
+            content.push(match (signature, encrypted) {
+                // Anthropic's `redacted_thinking`, in the shape Pi keeps it and sends it back.
+                (None, Some(data)) => json!({
+                    "type": "thinking",
+                    "thinking": "[Reasoning redacted]",
+                    "thinkingSignature": data,
+                    "redacted": true,
+                }),
+                (signature, _) => json!({
+                    "type": "thinking",
+                    "thinking": text,
+                    "thinkingSignature": signature,
+                }),
+            });
         }
     }
     for text in &step.text {

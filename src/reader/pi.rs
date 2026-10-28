@@ -489,18 +489,28 @@ impl Builder {
             .flatten()
         {
             match block.get("type").and_then(Value::as_str).unwrap_or("") {
-                "thinking" => reasoning.push(Reasoning {
-                    text: str_at(block, "/thinking").unwrap_or_default(),
-                    opaque: Some(Opaque {
-                        protocol: self
-                            .protocol
-                            .clone()
-                            .unwrap_or(Protocol::Other("unknown".into())),
-                        model: model_id.clone(),
-                        signature: str_at(block, "/thinkingSignature"),
-                        encrypted: None,
-                    }),
-                }),
+                "thinking" => {
+                    // Anthropic's `redacted_thinking`, as Pi keeps it: a placeholder text, the
+                    // encrypted data in `thinkingSignature`, `redacted: true`.
+                    let redacted = block.get("redacted").and_then(Value::as_bool) == Some(true);
+                    let payload = str_at(block, "/thinkingSignature");
+                    reasoning.push(Reasoning {
+                        text: if redacted {
+                            String::new()
+                        } else {
+                            str_at(block, "/thinking").unwrap_or_default()
+                        },
+                        opaque: Some(Opaque {
+                            protocol: self
+                                .protocol
+                                .clone()
+                                .unwrap_or(Protocol::Other("unknown".into())),
+                            model: model_id.clone(),
+                            signature: if redacted { None } else { payload.clone() },
+                            encrypted: if redacted { payload } else { None },
+                        }),
+                    })
+                }
                 "text" => {
                     let t = str_at(block, "/text").unwrap_or_default();
                     if !t.is_empty() {

@@ -520,3 +520,42 @@ fn the_latest_context_edit_wins_and_user_messages_can_be_edited() {
         "{users:?}"
     );
 }
+
+/// Pi keeps Anthropic's `redacted_thinking` as a thinking block with a placeholder text, the
+/// encrypted data in `thinkingSignature` and `redacted: true` (seen live through OpenRouter on
+/// 2026-10-28; Pi's own anthropic-messages code sends it back as `redacted_thinking {data}`). It is
+/// an encrypted payload with no visible text, not a signature over "[Reasoning redacted]".
+#[test]
+fn a_redacted_thinking_block_is_an_encrypted_payload_without_text() {
+    let s = rows_with(vec![serde_json::json!({
+        "type": "message",
+        "message": {"role": "assistant", "api": "anthropic-messages", "provider": "openrouter",
+                    "model": "anthropic/claude-haiku-5.5", "stopReason": "stop",
+                    "content": [
+                        {"type": "thinking", "thinking": "[Reasoning redacted]",
+                         "thinkingSignature": "CAQSxAUKEAgTGAI4-REDACTED-DATA", "redacted": true},
+                        {"type": "thinking", "thinking": "visible", "thinkingSignature": "SIG"},
+                        {"type": "text", "text": "391"}]}
+    })]);
+    let reasoning = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Step { reasoning, .. } => Some(reasoning.clone()),
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    assert_eq!(reasoning.len(), 2);
+    let redacted = &reasoning[0];
+    assert_eq!(redacted.text, "");
+    let opaque = redacted.opaque.as_ref().unwrap();
+    assert_eq!(
+        opaque.encrypted.as_deref(),
+        Some("CAQSxAUKEAgTGAI4-REDACTED-DATA")
+    );
+    assert_eq!(opaque.signature, None);
+    assert_eq!(opaque.protocol, mukade::model::Protocol::AnthropicMessages);
+    let signed = reasoning[1].opaque.as_ref().unwrap();
+    assert_eq!(signed.signature.as_deref(), Some("SIG"));
+    assert_eq!(signed.encrypted, None);
+}

@@ -348,3 +348,60 @@ fn a_temporary_file_a_killed_write_left_behind_is_swept() {
         "the sessions themselves stay"
     );
 }
+
+/// An Anthropic reasoning block that has only its encrypted payload (`redacted_thinking`) is
+/// written in Pi's own shape for it: placeholder text, the payload in `thinkingSignature`,
+/// `redacted: true`, which Pi sends back as `redacted_thinking`.
+#[test]
+fn redacted_anthropic_reasoning_is_written_in_pis_redacted_shape() {
+    let scratch = support::scratch(HarnessId::Pi, "writer-pi-redacted");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.dest_protocol = Some(Protocol::AnthropicMessages);
+    let mut session = support::read_source(HarnessId::Pi);
+    session.entries.push(Entry {
+        id: "redacted-step".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![mukade::model::Reasoning {
+                text: String::new(),
+                opaque: Some(mukade::model::Opaque {
+                    protocol: Protocol::AnthropicMessages,
+                    model: Some("claude-haiku-5-5".into()),
+                    signature: None,
+                    encrypted: Some("REDACTED-DATA".into()),
+                }),
+            }],
+            text: vec!["391".into()],
+            calls: vec![],
+            end: StepEnd::Completed,
+        },
+        raw: vec![],
+    });
+    let written = for_harness(HarnessId::Pi)
+        .write(&session, &opts)
+        .expect("write");
+    let rows = support::read_jsonl(Path::new(&written.location));
+    let blocks: Vec<&Value> = messages(&rows)
+        .into_iter()
+        .filter(|r| r["message"]["role"] == "assistant")
+        .flat_map(|r| r["message"]["content"].as_array().unwrap())
+        .filter(|b| b["thinkingSignature"] == "REDACTED-DATA")
+        .collect();
+    assert_eq!(blocks.len(), 1, "the redacted block was written");
+    assert_eq!(
+        blocks[0],
+        &json!({"type": "thinking", "thinking": "[Reasoning redacted]",
+                "thinkingSignature": "REDACTED-DATA", "redacted": true})
+    );
+    let back = mukade::reader::pi::read_file(Path::new(&written.location)).unwrap();
+    let opaque = back
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Step { reasoning, .. } => reasoning.first().and_then(|r| r.opaque.clone()),
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    assert_eq!(opaque.encrypted.as_deref(), Some("REDACTED-DATA"));
+    assert_eq!(opaque.signature, None);
+}

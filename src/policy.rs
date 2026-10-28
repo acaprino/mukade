@@ -32,14 +32,18 @@ pub fn destination_protocol(harness: HarnessId) -> Option<Protocol> {
 }
 
 /// Whether a destination's own format has a place for this opaque payload. Claude writes a
-/// signature as `thinking` and an encrypted payload as `redacted_thinking`; Pi replays only a
-/// `thinkingSignature`; Codex only `encrypted_content`; OpenCode keeps both.
+/// signature as `thinking` and an encrypted payload as `redacted_thinking`; Pi replays a
+/// `thinkingSignature`, and an Anthropic encrypted payload as its own `redacted: true` block;
+/// Codex only `encrypted_content`; OpenCode keeps both.
 pub fn payload_fits(opaque: &Opaque, dest: HarnessId) -> bool {
     match dest {
         HarnessId::ClaudeCode | HarnessId::OpenCode => {
             opaque.signature.is_some() || opaque.encrypted.is_some()
         }
-        HarnessId::Pi => opaque.signature.is_some(),
+        HarnessId::Pi => {
+            opaque.signature.is_some()
+                || (opaque.encrypted.is_some() && opaque.protocol == Protocol::AnthropicMessages)
+        }
         HarnessId::Codex => opaque.encrypted.is_some(),
     }
 }
