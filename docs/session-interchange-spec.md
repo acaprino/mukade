@@ -273,7 +273,10 @@ reads the prefix, then the page; the earlier file's later records are off-branch
 or carried with `Branches::All` (`--all-branches`). Compaction summaries are encrypted
 (`compacted.message` empty; an item `{type:"compaction", encrypted_content}` in
 `replacement_history`): none is written as an empty message (`dropped_unreadable_summaries`), and
-`Portable` from such a record is refused.
+`Portable` from such a record is refused. Subagent messages to the root agent (`agent_message`)
+carry their payload as `encrypted_content`, readable only by OpenAI, and nothing but a header in
+plain text: they are **excluded by decision** (2026-10-28), read as `Meta`, neither carried nor
+counted.
 
 ### 2.3 OpenCode 2.1.4
 
@@ -657,8 +660,7 @@ library must pass all criteria above.
 - [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).
 - Codex 0.165: a chain of pages (a page whose base is itself a page) is refused, not read; only
-  one page over a base file has been seen. Subagent `agent_message` records are not carried and not
-  counted.
+  one page over a base file has been seen.
 - Not implemented: L10, reading a Codex Desktop code-mode `exec` script as the single
   `tools.exec_command` / `tools.apply_patch` call it wraps. An `exec` call is read as one opaque
   call and travels in text form in every direction; an `apply_patch` call reads as an edit but

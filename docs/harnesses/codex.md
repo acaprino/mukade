@@ -295,9 +295,11 @@ deprecated alias [13].
   fixture [19 §4.4].
 - **Not converted:** subagent threads, forks, names from `session_index.jsonl`, and
   compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].
-- **Subagent messages are not carried.** `agent_message` records (a subagent writing to the root
-  agent; the payload is encrypted) read as `Meta` and are not counted in the manifest. 223 of them
-  were in the 0.165 thread seen [26].
+- **Subagent messages are excluded, by decision.** An `agent_message` record (a subagent writing
+  to the root agent) holds a plain header (sender, recipient, task name) and its payload as
+  `encrypted_content`, which only OpenAI can read: carried, it would tell the destination nothing.
+  It reads as `Meta` and is neither carried nor counted. 223 of them were in the 0.165 thread seen
+  [26].
 - **A chain of pages** (a page whose base is itself a page) is refused with its reason; only one
   page over a base file has been seen [26].
 - **Resume:** keep `CODEX_HOME` set for the resume process and run it from the session's cwd

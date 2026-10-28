@@ -496,7 +496,8 @@ What to expect from such a thread:
 - Most of its tool calls are one `exec` script each (Codex's "code mode"); they travel as text,
   with their script, not as translated calls. Its reasoning is OpenAI's and is dropped toward any
   other provider, counted.
-- Messages its subagents sent to the main agent are not carried (their content is encrypted).
+- Messages its subagents sent to the main agent are left out on purpose: their content is
+  encrypted, readable only by OpenAI.
 
 ### OpenCode
 
