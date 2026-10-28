@@ -15,6 +15,12 @@ const BIN: &str = env!("CARGO_BIN_EXE_mukade");
 
 /// A process with every harness root pointed at a scratch home.
 fn cli(scratch: &Path, args: &[&str]) -> (bool, String, String) {
+    let (code, stdout, stderr) = cli_code(scratch, args);
+    (code == Some(0), stdout, stderr)
+}
+
+/// [`cli`], keeping the exit code.
+fn cli_code(scratch: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let home = scratch.join("home");
     let output = Command::new(BIN)
         .args(args)
@@ -30,7 +36,7 @@ fn cli(scratch: &Path, args: &[&str]) -> (bool, String, String) {
         .output()
         .expect("the binary must run");
     (
-        output.status.success(),
+        output.status.code(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
@@ -288,4 +294,78 @@ fn bad_arguments_fail_loudly() {
     let (ok, _, stderr) = cli(&scratch, &["dump", "claude_code", "c45db7bc"]);
     assert!(!ok, "nothing is staged in this home");
     assert!(stderr.contains("no Claude Code session"), "{stderr}");
+}
+
+/// Once the session is written, its receipt reaches stdout whatever fails after: a caller that
+/// sees no receipt writes the session again.
+#[test]
+fn a_manifest_that_cannot_be_saved_still_prints_the_written_session() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let scratch = support::scratch(HarnessId::Pi, "cli-write-manifest-unsaved");
+    let file = scratch.join("document.json");
+    std::fs::write(&file, serde_json::to_string(&doc).unwrap()).unwrap();
+    let manifest = scratch.join("no-such-dir").join("manifest.json");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            file.to_str().unwrap(),
+            "--dest-version",
+            "1.2.0",
+            "--manifest",
+            manifest.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(code, Some(0), "the manifest was not saved");
+    let printed: Value = serde_json::from_str(stdout.lines().last().expect("the receipt is printed"))
+        .expect("the receipt is one JSON line");
+    assert!(Path::new(printed["location"].as_str().unwrap()).exists());
+    assert!(stderr.contains("was written"), "{stderr}");
+}
+
+/// §5: a resume that fails after the write still hands back the receipt and the manifest.
+#[test]
+fn a_failed_resume_prints_the_written_session_and_saves_its_manifest() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let scratch = support::scratch(HarnessId::Pi, "cli-write-resume-fails");
+    let file = scratch.join("document.json");
+    std::fs::write(&file, serde_json::to_string(&doc).unwrap()).unwrap();
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let pi = support::launcher(&scratch.join("bin"), "pi", "exit /b 3", "exit 3");
+    let manifest = scratch.join("manifest.json");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            file.to_str().unwrap(),
+            "--dest-version",
+            "1.2.0",
+            "--cwd",
+            work.to_str().unwrap(),
+            "--pi-exe",
+            pi.to_str().unwrap(),
+            "--resume-prompt",
+            "hello",
+            "--manifest",
+            manifest.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(5), "{stderr}");
+    let printed: Value = serde_json::from_str(stdout.lines().last().expect("the receipt is printed"))
+        .expect("the receipt is one JSON line");
+    assert!(Path::new(printed["location"].as_str().unwrap()).exists());
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest).expect("the manifest is saved"))
+            .unwrap();
+    assert!(
+        saved["losses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|loss| loss.as_str().unwrap().contains("resume prompt")),
+        "{saved}"
+    );
 }

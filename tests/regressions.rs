@@ -308,8 +308,55 @@ fn resume_failure_returns_the_written_receipt_and_manifest() {
         attachments: Vec::new(),
     });
     let scratch = support::scratch(HarnessId::Pi, "regression-resume-failure");
-    let write_opts = opts(HarnessId::Pi, &scratch);
-    let opts = ImportOpts {
+    let opts = import_opts(
+        opts(HarnessId::Pi, &scratch),
+        &source,
+        ResumePrompt::new("hello").with_timeout(std::time::Duration::from_secs(2)),
+    );
+    let error = hop::import(HarnessId::Pi, &source, &opts).unwrap_err();
+    let HopError::ResumeFailed { receipt, .. } = error else {
+        panic!("wrong failure")
+    };
+    assert!(!receipt.dest_id.is_empty());
+    assert!(std::path::Path::new(&receipt.location).exists());
+    assert!(
+        receipt.manifest["losses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|loss| loss.as_str().unwrap().contains("resume prompt"))
+    );
+}
+
+/// §5: the destination resumes from the session's own working directory, not from wherever the
+/// caller happens to run.
+#[test]
+fn a_resume_runs_in_the_sessions_working_directory() {
+    let source = session(Kind::User {
+        text: "hello".into(),
+        attachments: Vec::new(),
+    });
+    let scratch = support::scratch(HarnessId::Pi, "regression-resume-cwd");
+    // A name the test process's own working directory does not contain.
+    let work = scratch.join("resume-runs-here");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut write_opts = opts(HarnessId::Pi, &scratch);
+    write_opts.cwd = Some(work.to_string_lossy().into_owned());
+    let pi = support::launcher(&scratch.join("bin"), "pi", "echo %CD%", "pwd");
+    write_opts.exe = Some(pi.to_string_lossy().into_owned());
+    let opts = import_opts(write_opts, &source, ResumePrompt::new("hello"));
+
+    let receipt = hop::import(HarnessId::Pi, &source, &opts).unwrap();
+    let output = receipt.resume_output.unwrap();
+    assert!(output.contains("resume-runs-here"), "the resume ran in {output:?}");
+}
+
+fn import_opts(
+    write_opts: mukade::writer::WriteOpts,
+    source: &Session,
+    resume: ResumePrompt,
+) -> ImportOpts {
+    ImportOpts {
         cwd: write_opts.cwd,
         roots: write_opts.roots,
         reasoning: write_opts.reasoning,
@@ -324,21 +371,8 @@ fn resume_failure_returns_the_written_receipt_and_manifest() {
             now: write_opts.now,
             exe: write_opts.exe,
         },
-        resume: Some(ResumePrompt::new("hello").with_timeout(std::time::Duration::from_secs(2))),
-        source_facts: SourceFacts::of(&source),
+        resume: Some(resume),
+        source_facts: SourceFacts::of(source),
         compaction: "none".into(),
-    };
-    let error = hop::import(HarnessId::Pi, &source, &opts).unwrap_err();
-    let HopError::ResumeFailed { receipt, .. } = error else {
-        panic!("wrong failure")
-    };
-    assert!(!receipt.dest_id.is_empty());
-    assert!(std::path::Path::new(&receipt.location).exists());
-    assert!(
-        receipt.manifest["losses"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|loss| loss.as_str().unwrap().contains("resume prompt"))
-    );
+    }
 }

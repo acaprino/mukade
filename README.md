@@ -59,6 +59,9 @@ spawn (explicit override → `MUKADE_*_EXE` → `PATH` → well-known install lo
 
 ## Command line
 
+For complete examples for each harness, including custom and portable installations, see the
+[command-line usage guide](docs/usage.md).
+
 ```text
 mukade list  <harness>
 mukade dump  <harness> <session-id>          # the interchange document on stdout
@@ -85,12 +88,18 @@ nothing, and another harness's SQLite state (Codex's `state_*.sqlite`) is not Op
 
 Binaries are resolved as `--claude-exe`/`--codex-exe`/`--opencode-exe`/`--pi-exe` → the matching
 `MUKADE_*_EXE` variable → `PATH` → the well-known install locations, so a portable install with its
-own config works without touching the default one: `--root <its-home> --pi-exe <its-pi>`. The
-override also names the binary in the receipt's resume command; an empty flag falls back to the
-default resolution.
+own config can be selected explicitly. For a hop, set the destination's store variable separately;
+`--root` selects the source store and does not configure a spawned resume process. Set the relevant
+environment variables for that process too. The executable override also names the binary in the
+receipt's resume command; an empty flag falls back to the default resolution. For OpenCode as a
+source, select its custom executable with `MUKADE_OPENCODE_EXE`.
 
 When a destination write succeeds but its resume fails, `HopError::ResumeFailed` contains the written
-session's receipt and manifest, so callers can recover without blindly creating another session.
+session's receipt and manifest, so callers can recover without blindly creating another session. The
+command line prints that receipt on stdout and saves `--manifest` before it exits with code 5; once a
+session is written, its receipt is printed even when the manifest file cannot be saved. The resume
+runs from the session's working directory, and a timeout stops the harness, including one started
+through a Windows `.cmd` launcher.
 
 ## Compaction and reasoning between hops
 

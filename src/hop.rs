@@ -13,7 +13,10 @@ use crate::strict::check_plan;
 use crate::tools::{Shell, ToolSet};
 use crate::writer::{self, WriteOpts, Written, plan};
 use serde_json::Value;
+use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The text every portable hop writes before the source's own summary (§4.2, verbatim).
@@ -292,7 +295,8 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         session.last_compaction().is_some(),
     );
     if let Some(prompt) = opts.resume.as_ref() {
-        match run_resume(&written.resume, &prompt.text, prompt.timeout) {
+        let cwd = write_opts.cwd.as_deref().map(Path::new);
+        match run_resume(&written.resume, cwd, &prompt.text, prompt.timeout) {
             Ok(output) => receipt.resume_output = Some(output),
             Err(HopError::ResumeFailed { reason, .. }) => {
                 losses.push(format!("the resume prompt did not complete: {reason}"));
@@ -526,11 +530,6 @@ fn extra_losses(session: &Session) -> Vec<String> {
     losses
 }
 
-/// Run the destination's own resume command with the prompt as the last argument (§5).
-///
-/// The command is the one the writer stated (`Written::resume`), so the caller decides the
-/// environment: pointing it at a scratch store and a mock is what keeps this free. A hop that asks
-/// for a resume without setting that environment resumes against the user's real configuration.
 fn resume_error(reason: String) -> HopError {
     HopError::ResumeFailed {
         reason,
@@ -544,37 +543,50 @@ fn resume_error(reason: String) -> HopError {
     }
 }
 
-pub fn run_resume(argv: &[String], prompt: &str, timeout: Duration) -> Result<String, HopError> {
+/// How long the output of a harness that has exited may still take to arrive. Past it, whatever
+/// holds the pipes open is a process the harness left behind, not the harness's answer.
+const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(1);
+
+/// Run the destination's own resume command with the prompt as the last argument (§5), from the
+/// session's working directory when there is one: Claude Code stamps the rows it appends with the
+/// directory it runs in.
+///
+/// The command is the one the writer stated (`Written::resume`), so the caller decides the
+/// environment: pointing it at a scratch store and a mock is what keeps this free. A hop that asks
+/// for a resume without setting that environment resumes against the user's real configuration.
+pub fn run_resume(
+    argv: &[String],
+    cwd: Option<&Path>,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, HopError> {
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| resume_error("the destination stated no resume command".into()))?;
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .arg(prompt)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| resume_error(format!("{program}: {error}")))?;
+        .stderr(Stdio::piped());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = command.spawn().map_err(|error| match cwd {
+        Some(cwd) => resume_error(format!("{program} (in {}): {error}", cwd.display())),
+        None => resume_error(format!("{program}: {error}")),
+    })?;
 
-    let stdout = child
-        .stdout
-        .take()
-        .map(|out| std::thread::spawn(move || read_to_string(out)));
-    let stderr = child
-        .stderr
-        .take()
-        .map(|err| std::thread::spawn(move || read_to_string(err)));
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let out = stdout
-                    .and_then(|handle| handle.join().ok())
-                    .unwrap_or_default();
-                let err = stderr
-                    .and_then(|handle| handle.join().ok())
-                    .unwrap_or_default();
+                let drained_by = Instant::now() + DRAIN_AFTER_EXIT;
+                let out = stdout.map(|pipe| pipe.take(drained_by)).unwrap_or_default();
+                let err = stderr.map(|pipe| pipe.take(drained_by)).unwrap_or_default();
                 if status.success() {
                     return Ok(out.trim_end().to_string());
                 }
@@ -586,7 +598,7 @@ pub fn run_resume(argv: &[String], prompt: &str, timeout: Duration) -> Result<St
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
+                    kill_tree(&mut child);
                     let _ = child.wait();
                     return Err(resume_error(format!(
                         "{} did not finish within {timeout:?}",
@@ -600,10 +612,59 @@ pub fn run_resume(argv: &[String], prompt: &str, timeout: Duration) -> Result<St
     }
 }
 
-fn read_to_string(mut reader: impl std::io::Read) -> String {
-    let mut text = String::new();
-    let _ = reader.read_to_string(&mut text);
-    text
+/// One output pipe of the resumed harness, read on its own thread into a buffer that can be taken
+/// whether or not the pipe has closed.
+struct Drained {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    reader: std::thread::JoinHandle<()>,
+}
+
+fn drain(mut pipe: impl Read + Send + 'static) -> Drained {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&bytes);
+    let reader = std::thread::spawn(move || {
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = pipe.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]);
+        }
+    });
+    Drained { bytes, reader }
+}
+
+impl Drained {
+    /// What arrived by the time the pipe closed, or by `by` if something still holds it open.
+    fn take(self, by: Instant) -> String {
+        while !self.reader.is_finished() && Instant::now() < by {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let bytes = self.bytes.lock().unwrap_or_else(|e| e.into_inner());
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+/// Stop the resumed harness and what it started. An npm install puts a `.cmd` launcher in front
+/// of the harness: the child is `cmd.exe`, and killing it alone leaves the harness running.
+#[cfg(windows)]
+fn kill_tree(child: &mut std::process::Child) {
+    let taskkill = std::env::var_os("SystemRoot")
+        .map(|root| Path::new(&root).join("System32").join("taskkill.exe"))
+        .unwrap_or_else(|| "taskkill.exe".into());
+    let _ = Command::new(taskkill)
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+}
+
+/// Elsewhere a launcher `exec`s the harness, so the child is the harness itself.
+#[cfg(not(windows))]
+fn kill_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 /// A read failure is a refusal when the session (or the store) is not there, and a verification

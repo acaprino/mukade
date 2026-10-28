@@ -442,8 +442,11 @@ entry with `firstKeptEntryId`) are **[U]** for hand-written records. Until a fix
 
 [V: every `*/resume/*.capture.jsonl`] For all four destinations the commands of section 2 resume a
 session written by the probe and send the prompt as **the last user message** of one request; the
-destination's reply is on stdout. The library runs them with the destination's environment, a
-timeout, stdin from an empty file, and records exit code, stdout, stderr in the receipt.
+destination's reply is on stdout. The library runs them from the session's working directory, with
+the caller's environment (the destination's store variables must be set there), stdin closed and a
+timeout that stops the harness, including one behind a Windows `.cmd` launcher. On success the receipt keeps stdout as
+`resume_output`; on failure `ResumeFailed` carries the written receipt, its reason names the
+command, the exit status and stderr, and the manifest records the failed resume as a loss.
 
 Cautions [V]:
 - OpenCode `run --session <unknown id>` creates a new session: the library checks the id with

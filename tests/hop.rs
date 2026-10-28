@@ -301,6 +301,7 @@ fn a_resume_prompt_runs_the_command_and_keeps_its_reply() {
     let argv = vec!["cmd".to_string(), "/c".to_string(), "echo".to_string()];
     let out = hop::run_resume(
         &argv,
+        None,
         "hello destination",
         std::time::Duration::from_secs(30),
     )
@@ -313,7 +314,7 @@ fn a_resume_prompt_runs_the_command_and_keeps_its_reply() {
         "exit".to_string(),
         "3".to_string(),
     ];
-    let error = hop::run_resume(&failing, "x", std::time::Duration::from_secs(30)).unwrap_err();
+    let error = hop::run_resume(&failing, None, "x", std::time::Duration::from_secs(30)).unwrap_err();
     assert!(matches!(error, HopError::ResumeFailed { .. }), "{error:?}");
     assert_eq!(
         error.exit_code(),
@@ -340,4 +341,62 @@ fn a_hop_into_the_same_harness_keeps_the_conversation() {
         written.meta.cwd.as_deref(),
         Some(support::cwd_for(HarnessId::Codex).as_str())
     );
+}
+
+/// A harness that exits but leaves a child of its own holding the output open does not hold the
+/// resume until that child ends.
+#[test]
+fn a_resume_returns_once_the_harness_exits_even_if_its_child_holds_the_output() {
+    let scratch = support::scratch(HarnessId::Pi, "resume-lingering-child");
+    let harness = support::launcher(
+        &scratch,
+        "harness",
+        "echo answered
+start /b ping -n 6 127.0.0.1",
+        "echo answered
+sleep 5 &",
+    );
+    let started = std::time::Instant::now();
+    let out = hop::run_resume(
+        &[harness.to_string_lossy().into_owned()],
+        None,
+        "x",
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "returned after {:?}",
+        started.elapsed()
+    );
+    assert!(out.contains("answered"), "{out:?}");
+}
+
+/// An npm launcher is `cmd.exe` waiting on the real harness: a timeout stops the harness too, not
+/// only the launcher, so nothing keeps writing to the session after the caller was told it failed.
+#[cfg(windows)]
+#[test]
+fn a_timed_out_resume_stops_the_harness_behind_its_launcher() {
+    let scratch = support::scratch(HarnessId::Pi, "resume-kill-tree");
+    let marker = scratch.join("still-running.txt");
+    let harness = support::launcher(
+        &scratch,
+        "harness",
+        &format!("ping -n 4 127.0.0.1 >nul\r\necho late>\"{}\"", marker.display()),
+        "",
+    );
+    let launcher = support::launcher(
+        &scratch,
+        "launcher",
+        &format!("cmd /c \"{}\"", harness.display()),
+        "",
+    );
+    let _ = hop::run_resume(
+        &[launcher.to_string_lossy().into_owned()],
+        None,
+        "x",
+        std::time::Duration::from_millis(500),
+    );
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(!marker.exists(), "the harness kept running after the timeout");
 }

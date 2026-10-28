@@ -60,6 +60,28 @@ pub fn scratch(harness: HarnessId, tag: &str) -> PathBuf {
     base
 }
 
+/// A launcher standing in for a harness binary: `<name>.cmd` on Windows, an executable shell
+/// script `<name>` elsewhere. Like the real ones, it receives the resume prompt as its last
+/// argument.
+pub fn launcher(dir: &Path, name: &str, windows: &str, unix: &str) -> PathBuf {
+    std::fs::create_dir_all(dir).expect("create the launcher directory");
+    if cfg!(windows) {
+        let path = dir.join(format!("{name}.cmd"));
+        std::fs::write(&path, format!("@echo off\r\n{windows}\r\n")).expect("write the launcher");
+        path
+    } else {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{unix}\n")).expect("write the launcher");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("make the launcher executable");
+        }
+        path
+    }
+}
+
 /// The working directory a hop files the session under: the destination's own project folder.
 pub fn cwd_for(harness: HarnessId) -> String {
     std::env::temp_dir().join(format!("mukade-{}-work", harness.as_str())).display().to_string()

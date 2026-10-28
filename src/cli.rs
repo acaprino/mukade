@@ -13,8 +13,8 @@
 //! `PI_CODING_AGENT_DIR`), so every run stays inside the scratch home the caller set.
 
 use crate::hop::{
-    Compaction, HopError, HopRequest, ImportOpts, KeepFrom, SessionRef, SourceFacts, SummarySource,
-    WriteDetails,
+    Compaction, HopError, HopRequest, ImportOpts, KeepFrom, Receipt, SessionRef, SourceFacts,
+    SummarySource, WriteDetails,
 };
 use crate::model::{HarnessId, Protocol};
 use crate::policy::ReasoningPolicy;
@@ -190,22 +190,10 @@ pub fn run(args: &[String]) -> Result<()> {
                 .with_context(|| format!("parse {path}"))?;
             let session = wire::from_document(&doc)?;
             let opts = flags.import_opts(harness, harness, &session, &roots)?;
-            let receipt =
-                crate::hop::import(harness, &session, &opts).map_err(anyhow::Error::new)?;
-            if let Some(path) = flags.manifest.as_deref() {
-                std::fs::write(path, serde_json::to_string_pretty(&receipt.manifest)?)
-                    .with_context(|| format!("write {path}"))?;
-            }
-            println!(
-                "{}",
-                json!({
-                    "id": receipt.dest_id,
-                    "location": receipt.location,
-                    "resume": receipt.resume_command,
-                    "manifest": receipt.manifest,
-                    "resume_output": receipt.resume_output,
-                })
-            );
+            deliver(
+                crate::hop::import(harness, &session, &opts),
+                flags.manifest.as_deref(),
+            )?;
         }
         "hop" => {
             let dest: HarnessId = operands
@@ -248,7 +236,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 roots: roots.clone(),
                 write: opts.write.clone(),
             };
-            let receipt = match flags.from_file.as_deref() {
+            let result = match flags.from_file.as_deref() {
                 // A session that came from a file is already in hand: only the write is left.
                 Some(_) => {
                     let import_opts = crate::hop::ImportOpts {
@@ -258,26 +246,55 @@ pub fn run(args: &[String]) -> Result<()> {
                     crate::hop::hop_session(dest, &source, &selection, &import_opts)
                 }
                 None => crate::hop::hop(&request),
-            }
-            .map_err(anyhow::Error::new)?;
-            if let Some(path) = flags.manifest.as_deref() {
-                std::fs::write(path, serde_json::to_string_pretty(&receipt.manifest)?)
-                    .with_context(|| format!("write {path}"))?;
-            }
-            println!(
-                "{}",
-                json!({
-                    "id": receipt.dest_id,
-                    "location": receipt.location,
-                    "resume": receipt.resume_command,
-                    "manifest": receipt.manifest,
-                    "resume_output": receipt.resume_output,
-                })
-            );
+            };
+            deliver(result, flags.manifest.as_deref())?;
         }
         other => anyhow::bail!("unknown command {other}\n\n{USAGE}"),
     }
     Ok(())
+}
+
+/// Hand back a written session: its receipt on stdout first, so a caller always learns what was
+/// written, then the manifest file when one was asked for. A resume that failed after the write
+/// still has both (§5), and keeps its own exit code.
+fn deliver(result: Result<Receipt, HopError>, manifest: Option<&str>) -> Result<()> {
+    let (receipt, failure) = match result {
+        Ok(receipt) => (receipt, None),
+        Err(HopError::ResumeFailed { reason, receipt }) => {
+            let written = (*receipt).clone();
+            (written, Some(HopError::ResumeFailed { reason, receipt }))
+        }
+        Err(other) => return Err(anyhow::Error::new(other)),
+    };
+    println!(
+        "{}",
+        json!({
+            "id": receipt.dest_id,
+            "location": receipt.location,
+            "resume": receipt.resume_command,
+            "manifest": receipt.manifest,
+            "resume_output": receipt.resume_output,
+        })
+    );
+    let saved = match manifest {
+        Some(path) => std::fs::write(path, serde_json::to_string_pretty(&receipt.manifest)?)
+            .with_context(|| {
+                format!(
+                    "the session was written ({}), but its manifest could not be saved to {path}",
+                    receipt.location
+                )
+            }),
+        None => Ok(()),
+    };
+    match failure {
+        Some(error) => {
+            if let Err(unsaved) = saved {
+                eprintln!("{unsaved:#}");
+            }
+            Err(anyhow::Error::new(error))
+        }
+        None => saved,
+    }
 }
 
 fn next(rest: &[String], i: &mut usize) -> Result<String> {
