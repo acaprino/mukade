@@ -412,6 +412,7 @@ impl Flags {
                 .clone()
                 .map(crate::hop::ResumePrompt::new),
             compaction: self.compaction.clone().unwrap_or_else(|| "none".into()),
+            summary: None,
         })
     }
 

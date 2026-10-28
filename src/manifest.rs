@@ -22,6 +22,8 @@ pub struct Manifest {
     pub reader: String,
     pub writer: String,
     pub compaction: String,
+    /// The summary the source's model wrote, when the history travelled as one.
+    pub summary: Option<crate::summary::SummaryFacts>,
     pub reasoning: String,
     pub resume_prompt: bool,
     pub counts: Counts,
@@ -112,6 +114,16 @@ impl Manifest {
             },
             "options": {
                 "compaction": self.compaction,
+                "summary": self.summary.as_ref().map(|facts| json!({
+                    "source": "source_model",
+                    "harness": facts.summary.harness.as_str(),
+                    "version": facts.summary.harness_version,
+                    "model": facts.summary.model,
+                    "prompt": crate::summary::SUMMARY_PROMPT_VERSION,
+                    "chars": facts.summary.text.chars().count(),
+                    "usage": facts.summary.usage.as_deref().and_then(|usage| serde_json::from_str::<Value>(usage).ok()),
+                    "left_out": facts.left_out,
+                })),
                 "reasoning": self.reasoning,
                 "resume_prompt": self.resume_prompt,
             },
@@ -293,6 +305,7 @@ mod tests {
             reader: "codex@0.164.0".into(),
             writer: "claude_code@2.1.312".into(),
             compaction: "none".into(),
+            summary: None,
             reasoning: "drop_foreign".into(),
             resume_prompt: false,
             counts: counts.clone(),

@@ -10,6 +10,7 @@ use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
 use crate::sha256::records_sha256;
 use crate::strict::check_plan;
+use crate::summary::{MODEL_SUMMARY_HANDOFF, SummarizeOpts, Summary, SummaryFacts};
 use crate::tools::{Shell, ToolSet};
 use crate::writer::{self, WriteOpts, Written, plan};
 use serde_json::Value;
@@ -43,6 +44,10 @@ pub enum SummarySource {
     SourceRecord,
     /// Text the caller supplies, e.g. written by a cheaper model.
     Supplied(String),
+    /// Ask the source harness's own model for it now ([`compact`] runs it, `crate::summary`).
+    SourceModel(SummarizeOpts),
+    /// What the source harness's model wrote: [`compact`] turns a `SourceModel` into this.
+    Generated(Summary),
 }
 
 /// Where the tail of a portable hop starts.
@@ -76,6 +81,10 @@ impl Compaction {
     pub fn name(&self) -> &'static str {
         match self {
             Compaction::None => "none",
+            Compaction::Portable {
+                summary: SummarySource::SourceModel(_) | SummarySource::Generated(_),
+                ..
+            } => "summary",
             Compaction::Portable { .. } => "portable",
             Compaction::DestinationNative => "destination_native",
         }
@@ -170,8 +179,10 @@ pub struct ImportOpts {
     pub resume: Option<ResumePrompt>,
     /// What the manifest states about the source.
     pub source_facts: SourceFacts,
-    /// `none` | `portable` | `destination_native`, as requested.
+    /// `none` | `portable` | `summary` | `destination_native`, as requested.
     pub compaction: String,
+    /// The summary the source's model wrote, when the history travels as one.
+    pub summary: Option<SummaryFacts>,
 }
 
 /// What a hop produced (§1.2).
@@ -205,13 +216,17 @@ pub enum HopError {
     },
     /// The plan would produce a request a real provider refuses (§7). Nothing was written.
     StrictCheckFailed(Vec<String>),
+    /// The source harness could not write the summary asked of it. Nothing was written.
+    SummaryFailed(String),
 }
 
 impl HopError {
     pub fn exit_code(&self) -> i32 {
         match self {
             HopError::NotFound(_) | HopError::Unsupported(_) => 2,
-            HopError::WriteFailed(_) | HopError::StrictCheckFailed(_) => 4,
+            HopError::WriteFailed(_)
+            | HopError::StrictCheckFailed(_)
+            | HopError::SummaryFailed(_) => 4,
             HopError::VerifyFailed(_) | HopError::ResumeFailed { .. } => 5,
         }
     }
@@ -224,6 +239,7 @@ impl std::fmt::Display for HopError {
             HopError::Unsupported(what) => write!(f, "unsupported: {what}"),
             HopError::WriteFailed(what) => write!(f, "write failed: {what}"),
             HopError::VerifyFailed(what) => write!(f, "could not read the source: {what}"),
+            HopError::SummaryFailed(what) => write!(f, "summary failed: {what}"),
             HopError::ResumeFailed { reason, receipt } => write!(
                 f,
                 "resume failed: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
@@ -302,12 +318,16 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         resume_output: None,
     };
 
+    // A summary written by the source's model has a loss line of its own, so it is not also said
+    // to be the source's compaction.
     let mut losses = Manifest::losses_for(
         &plan.counts,
         session.interrupted_last_turn(),
-        plan.blocks
-            .iter()
-            .any(|block| matches!(block, crate::writer::plan::PlannedBlock::Compaction { .. })),
+        opts.summary.is_none()
+            && plan
+                .blocks
+                .iter()
+                .any(|block| matches!(block, crate::writer::plan::PlannedBlock::Compaction { .. })),
     );
     if let Some(prompt) = opts.resume.as_ref() {
         let cwd = write_opts.cwd.as_deref().map(Path::new);
@@ -335,7 +355,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
 pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
     let source = export(&req.source, &req.roots)?;
     let facts = SourceFacts::of(&source);
-    let selection = select(&source, &req.compaction)?;
+    let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
     let opts = ImportOpts {
         cwd: req.cwd.clone(),
         roots: req.roots.clone(),
@@ -344,6 +364,7 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
         resume: req.resume.clone(),
         source_facts: facts,
         compaction: req.compaction.name().to_string(),
+        summary,
     };
     import(req.dest, &selection, &opts)
 }
@@ -355,8 +376,51 @@ pub fn hop_session(
     compaction: &Compaction,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
+    let (selection, summary) = compact(source, compaction, &opts.roots)?;
+    match summary {
+        Some(summary) => import(
+            dest,
+            &selection,
+            &ImportOpts {
+                summary: Some(summary),
+                ..opts.clone()
+            },
+        ),
+        None => import(dest, &selection, opts),
+    }
+}
+
+/// The session a compaction policy hands to the writer, and the summary it carries when the source's
+/// model wrote one. A [`SummarySource::SourceModel`] is asked of the source harness here, once, so
+/// the selection itself stays a function of the session: what `dump` exports is what `hop` writes.
+pub fn compact<'a>(
+    source: &'a Session,
+    compaction: &Compaction,
+    roots: &StoreRoots,
+) -> Result<(std::borrow::Cow<'a, Session>, Option<SummaryFacts>), HopError> {
+    if let Compaction::Portable {
+        summary: SummarySource::SourceModel(_),
+        ..
+    } = compaction
+    {
+        let _ = roots;
+        return Err(HopError::Unsupported(
+            "Compaction::Portable with SummarySource::SourceModel: asking the source's model is not built yet"
+                .into(),
+        ));
+    }
     let selection = select(source, compaction)?;
-    import(dest, &selection, opts)
+    let summary = match compaction {
+        Compaction::Portable {
+            summary: SummarySource::Generated(summary),
+            ..
+        } => Some(SummaryFacts {
+            summary: summary.clone(),
+            left_out: source.entries.len() + 1 - selection.entries.len(),
+        }),
+        _ => None,
+    };
+    Ok((selection, summary))
 }
 
 /// The session a compaction policy hands to the writer: the source itself when nothing is cut,
@@ -378,6 +442,15 @@ fn select<'a>(
         Compaction::Portable { summary, keep_from } => {
             let (text, trigger, tokens_before, boundary) = match summary {
                 SummarySource::Supplied(text) => (text.clone(), crate::model::Trigger::Unknown, None, None),
+                SummarySource::Generated(summary) => {
+                    (summary.text.clone(), crate::model::Trigger::Unknown, None, None)
+                }
+                SummarySource::SourceModel(_) => {
+                    return Err(HopError::Unsupported(
+                        "SummarySource::SourceModel has to be asked of the source first: use hop::compact"
+                            .into(),
+                    ));
+                }
                 SummarySource::SourceRecord => match source.last_compaction().map(|entry| &entry.kind) {
                     Some(Kind::Compaction { summary, trigger, tokens_before, kept_from }) => (
                         summary.clone(),
@@ -407,7 +480,13 @@ fn select<'a>(
             let mut entries = vec![Entry {
                 id: "portable-handoff".into(),
                 kind: Kind::Compaction {
-                    summary: format!("{PORTABLE_HANDOFF}\n{text}"),
+                    summary: format!(
+                        "{}\n{text}",
+                        match summary {
+                            SummarySource::Generated(_) => MODEL_SUMMARY_HANDOFF,
+                            _ => PORTABLE_HANDOFF,
+                        }
+                    ),
                     kept_from: source.entries.get(cut).map(|entry| entry.id.clone()),
                     trigger,
                     tokens_before,
@@ -419,7 +498,9 @@ fn select<'a>(
             // already travels in the handoff, so it is not written a second time.
             let carried = match summary {
                 SummarySource::SourceRecord => source.last_compaction().map(|entry| entry.id.clone()),
-                SummarySource::Supplied(_) => None,
+                SummarySource::Supplied(_)
+                | SummarySource::SourceModel(_)
+                | SummarySource::Generated(_) => None,
             };
             entries.extend(
                 source
@@ -542,6 +623,7 @@ fn manifest_of(
         reader: at(&opts.source_facts.harness, source_version.as_ref()),
         writer: at(dest.as_str(), dest_version.as_ref()),
         compaction: opts.compaction.clone(),
+        summary: opts.summary.clone(),
         reasoning: match opts.reasoning {
             ReasoningPolicy::DropForeign => "drop_foreign",
             ReasoningPolicy::AsText => "as_text",
@@ -552,7 +634,7 @@ fn manifest_of(
         counts: plan.counts.clone(),
         losses: {
             let mut losses = losses;
-            losses.extend(extra_losses(session));
+            losses.extend(extra_losses(session, opts.summary.as_ref()));
             losses
         },
         strict_checked: true,
@@ -561,8 +643,31 @@ fn manifest_of(
 }
 
 /// Losses that belong to the selection rather than to the plan.
-fn extra_losses(session: &Session) -> Vec<String> {
+fn extra_losses(session: &Session, summary: Option<&SummaryFacts>) -> Vec<String> {
     let mut losses = Vec::new();
+    if let Some(facts) = summary {
+        let harness = facts.summary.harness.as_str();
+        let kept_from = match session.entries.first().map(|entry| &entry.kind) {
+            Some(Kind::Compaction { kept_from, .. }) => kept_from.clone(),
+            _ => None,
+        };
+        losses.push(match kept_from {
+            Some(id) => format!(
+                "the history before {id} ({} entries) travelled as a summary written by {harness}'s model",
+                facts.left_out
+            ),
+            None => format!(
+                "the whole history ({} entries) travelled as a summary written by {harness}'s model",
+                facts.left_out
+            ),
+        });
+        if let Some(command) = &facts.summary.leftover {
+            losses.push(format!(
+                "the summarizing run left a fork in the source store: run {command}"
+            ));
+        }
+        return losses;
+    }
     let kept_from = match session.last_compaction().map(|entry| &entry.kind) {
         Some(Kind::Compaction { kept_from, .. }) => Some(kept_from.clone()),
         _ => None,

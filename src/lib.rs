@@ -23,6 +23,7 @@ pub mod reader;
 pub mod roots;
 pub mod sha256;
 pub mod strict;
+pub mod summary;
 pub mod timing;
 pub mod tools;
 pub mod wire;

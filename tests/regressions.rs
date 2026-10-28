@@ -284,6 +284,7 @@ fn file_compaction_uses_the_same_selection_and_accurate_manifest() {
         resume: None,
         source_facts: SourceFacts::of(&source),
         compaction: compaction.name().into(),
+        summary: None,
     };
     let receipt = hop::hop_session(HarnessId::Pi, &source, &compaction, &opts).unwrap();
     assert!(
@@ -345,6 +346,7 @@ fn an_ambiguous_compaction_boundary_is_refused() {
         resume: None,
         source_facts: SourceFacts::of(&source),
         compaction: "portable".into(),
+        summary: None,
     };
     let error = hop::hop_session(
         HarnessId::Pi,
@@ -566,6 +568,7 @@ fn import_opts(
         resume: Some(resume),
         source_facts: SourceFacts::of(source),
         compaction: "none".into(),
+        summary: None,
     }
 }
 

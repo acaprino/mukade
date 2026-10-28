@@ -11,6 +11,7 @@ use mukade::hop::{
 };
 use mukade::model::{HarnessId, Kind, Session};
 use mukade::roots::StoreRoots;
+use mukade::summary;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -540,4 +541,116 @@ fn a_sources_fingerprint_is_the_sha256_of_its_file() {
         )),
         "91f1a54dd0b5adc20bf1f7de65593d1c5d04f01100c1f0e191992c5a5823a8ab"
     );
+}
+
+/// A summary as the source's model would have written it (the run itself is `summary`'s).
+fn generated(harness: HarnessId, text: &str) -> SummarySource {
+    SummarySource::Generated(summary::Summary {
+        text: text.into(),
+        harness,
+        harness_version: Some("1.4.0".into()),
+        model: Some("anthropic/claude-x".into()),
+        usage: None,
+        leftover: None,
+    })
+}
+
+/// The design's default: the summary alone stands for the whole history.
+#[test]
+fn a_model_summary_replaces_the_whole_history() {
+    let source = support::read_source(HarnessId::Pi);
+    let compaction = Compaction::Portable {
+        summary: generated(HarnessId::Pi, "S"),
+        keep_from: KeepFrom::LastTurns(0),
+    };
+    let (selection, facts) =
+        hop::compact(&source, &compaction, &StoreRoots::default()).expect("compact");
+    assert_eq!(selection.entries.len(), 1);
+    assert!(
+        matches!(&selection.entries[0].kind,
+            Kind::Compaction { summary: text, .. } if *text == format!("{}\nS", summary::MODEL_SUMMARY_HANDOFF)),
+        "{:?}",
+        selection.entries[0].kind
+    );
+    assert_eq!(
+        facts.expect("the summary's facts").left_out,
+        source.entries.len()
+    );
+    assert_eq!(compaction.name(), "summary");
+}
+
+/// `--keep-turns 2`: the handoff, then the source from its second-to-last user turn on, unchanged.
+#[test]
+fn a_model_summary_can_keep_the_last_turns() {
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let compaction = Compaction::Portable {
+        summary: generated(HarnessId::ClaudeCode, "S"),
+        keep_from: KeepFrom::LastTurns(2),
+    };
+    let (selection, facts) =
+        hop::compact(&source, &compaction, &StoreRoots::default()).expect("compact");
+    let users: Vec<usize> = source
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| matches!(entry.kind, Kind::User { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    let cut = users[users.len() - 2];
+    assert!(matches!(selection.entries[0].kind, Kind::Compaction { .. }));
+    assert_eq!(selection.entries[1..], source.entries[cut..]);
+    assert_eq!(
+        selection.entries[1..]
+            .iter()
+            .filter(|entry| matches!(entry.kind, Kind::User { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(facts.expect("the summary's facts").left_out, cut);
+}
+
+/// The manifest says where the history went: a summary by the source's model, not the source's
+/// own compaction.
+#[test]
+fn a_model_summary_hop_says_where_the_summary_came_from() {
+    let (mut request, _) = request(HarnessId::ClaudeCode, HarnessId::Pi, "hop-model-summary");
+    request.compaction = Compaction::Portable {
+        summary: generated(HarnessId::ClaudeCode, "we read two files and said hello"),
+        keep_from: KeepFrom::LastTurns(0),
+    };
+    let receipt = hop::hop(&request).expect("the hop must complete");
+    let options = &receipt.manifest["options"];
+    assert_eq!(options["compaction"], "summary");
+    assert_eq!(options["summary"]["source"], "source_model");
+    assert_eq!(options["summary"]["harness"], "claude_code");
+    assert_eq!(options["summary"]["prompt"], "v1");
+    let losses: Vec<&str> = receipt.manifest["losses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|loss| loss.as_str().unwrap())
+        .collect();
+    assert!(
+        losses
+            .iter()
+            .any(|loss| loss.contains("travelled as a summary written by claude_code's model")),
+        "{losses:?}"
+    );
+    assert!(
+        !losses.iter().any(
+            |loss| loss.contains("the source's own compaction is in the session")
+                || loss.contains("the source's compaction summary travels")
+        ),
+        "{losses:?}"
+    );
+    let written = read_destination(HarnessId::Pi, &receipt.location);
+    assert!(
+        written_text(&written)
+            .contains("written by the source agent's model when the session was moved")
+    );
+}
+
+#[test]
+fn a_failed_summary_is_a_failure_where_nothing_changed() {
+    assert_eq!(HopError::SummaryFailed("x".into()).exit_code(), 4);
 }
