@@ -81,6 +81,13 @@ enum Class {
 
 fn class_of(row: &Value) -> Class {
     match row.get("type").and_then(Value::as_str).unwrap_or("") {
+        // L9: Claude Code's own stand-in reply ("No response requested.", an API error), written
+        // when it reloads a killed session or a request fails. The model never said it.
+        "assistant"
+            if row.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>") =>
+        {
+            Class::Meta(MetaKind::Synthetic)
+        }
         "assistant" => {
             let mid = row
                 .pointer("/message/id")

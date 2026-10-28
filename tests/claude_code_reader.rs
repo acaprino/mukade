@@ -250,3 +250,40 @@ fn completed_steps_report_their_end() {
     );
 }
 
+
+/// L9: on the next load of a killed session Claude Code writes a `<synthetic>` assistant row
+/// ("No response requested.", or an API error). It is not the model's reply: it is `Meta`, and the
+/// turn before it stays unanswered.
+#[test]
+fn a_synthetic_reply_is_meta_and_the_turn_stays_unanswered() {
+    let text = std::fs::read_to_string(fixture()).unwrap();
+    let mut rows: Vec<serde_json::Value> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    rows.push(serde_json::json!({
+        "type": "assistant",
+        "uuid": "synthetic-1",
+        "parentUuid": rows.last().unwrap()["uuid"],
+        "isSidechain": false,
+        "sessionId": SESSION_ID,
+        "timestamp": "2026-10-27T15:40:00.000Z",
+        "message": {
+            "id": "msg_synthetic",
+            "role": "assistant",
+            "model": "<synthetic>",
+            "content": [{"type": "text", "text": "No response requested."}],
+            "stop_reason": "stop_sequence",
+        },
+    }));
+    let s = claude_code::parse(&rows, None).unwrap();
+    assert!(s.interrupted_last_turn(), "the synthetic row is not an answer");
+    let last = s.entries.last().unwrap();
+    assert!(
+        matches!(last.kind, Kind::Meta { kind: MetaKind::Synthetic }),
+        "{:?}",
+        last.kind
+    );
+}
