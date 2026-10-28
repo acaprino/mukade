@@ -233,7 +233,41 @@ fn rows(
             }
         }
     }
+    // The session's name, as Claude Code's own /rename writes it: /resume lists it under this.
+    if let Some(title) = opts
+        .title
+        .as_ref()
+        .or(session.meta.title.as_ref())
+        .filter(|t| !t.trim().is_empty())
+    {
+        w.out
+            .push(json!({"type": "custom-title", "customTitle": title, "sessionId": session_id}));
+    }
+    // Claude Code's /resume picker titles a session by the `lastPrompt` of its last `last-prompt`
+    // row, else by its first user prompt; a native session ends with one.
+    if let Some(leaf) = w.parent.clone() {
+        let mut row = json!({"type": "last-prompt", "leafUuid": leaf, "sessionId": session_id});
+        if let Some(prompt) = last_prompt(plan) {
+            row["lastPrompt"] = Value::String(prompt);
+        }
+        w.out.push(row);
+    }
     w.out
+}
+
+/// The user prompt the conversation ended on, as the picker shows it: one line, at most 200
+/// characters and an ellipsis.
+fn last_prompt(plan: &plan::Plan) -> Option<String> {
+    let text = plan.blocks.iter().rev().find_map(|block| match block {
+        PlannedBlock::User { text, .. } if !text.trim().is_empty() => Some(text.as_str()),
+        _ => None,
+    })?;
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(if line.chars().count() > 200 {
+        format!("{}…", line.chars().take(200).collect::<String>().trim_end())
+    } else {
+        line
+    })
 }
 
 impl RowWriter<'_> {

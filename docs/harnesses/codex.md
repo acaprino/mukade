@@ -252,7 +252,7 @@ deprecated alias [13].
 | store | `list` walks `sessions/` for `*.jsonl`, one entry per thread at its latest file; `read <id>` matches an id **prefix** of the thread uuid in the file name (none → `NotFound`, several threads → `Ambiguous`; several files of **one** thread → its latest page) | `src/reader/codex.rs` `list`, `read_with`, `rollout_id` |
 | paginated thread | the **latest version** is read: the latest page, preceded by the base file's first `end_ordinal_exclusive` records (checked against `end_byte_offset`). When that base is itself a page (a thread redone more than once), its own base is followed the same way, down to the thread's first file, up to 64 files. Each earlier file's conversation records past its cut become `Meta::OffBranch` and are counted (`dropped_off_branch`). `--all-branches` (`Branches::All`) reads every file of the thread whole instead, the first one first. A missing base or an offset that does not fall at the end of that record → error with the reason. The fingerprint covers the bytes read, in order | `read_file_with`, `base_prefix` |
 | line order | file order, never timestamps; a cut-off last line → `Meta::Unfinished`; a bad line elsewhere fails with `file:line` | `src/reader/json.rs:11-40` |
-| user `message` | `User`, unless its text, after leading whitespace, **starts with** `<environment_context>`/`<skills_instructions>` (→ `Meta::SystemPrompt`) or `<turn_aborted>` (→ `Meta::TurnAborted`); a prompt that only mentions a tag stays the user's words | `:87-104` |
+| user `message` | `User`, unless its text, after leading whitespace, **starts with** `<environment_context>`/`<skills_instructions>`/`# AGENTS.md instructions for ` (the project's AGENTS.md, which 0.165 Desktop sends as a user message [26]) (→ `Meta::SystemPrompt`), `<external_codex_apps_open_page>` (an app event, → `Meta::Internal`) or `<turn_aborted>` (→ `Meta::TurnAborted`); a prompt that only mentions a tag stays the user's words, and so does the answer to a question (`<send_user_message_question_reply>`) | `class_of` |
 | `developer`/`system` `message` | `Meta::SystemPrompt` | `:81-88` |
 | assistant `message`, `reasoning`, calls | one `Step` per model response; `turn_context` or a new `internal_chat_message_metadata_passthrough.turn_id` starts the next; parallel calls stay together | `:307-330` |
 | `reasoning` | `summary` text + `Opaque{openai-responses, model, encrypted_content}`; `content` is not read | `:353-365` |
@@ -262,7 +262,7 @@ deprecated alias [13].
 | `function_call_output`, `custom_tool_call_output` | string → text; **array (images, MCP content) → structured blocks kept** (`input_text`/`output_text` → `{"type":"text"}`, other items as recorded); `is_error` always `false` | `:399-433,481-489` |
 | `compacted` | `Compaction{summary: message, kept_from: next non-Meta entry, trigger: Unknown, tokens_before: latest_token_usage_record.usage.input_tokens}`; the step of the same `turn_id` that wrote the summary is folded in; `replacement_history` stays in `raw` only. An empty `message` (0.165's encrypted summary) is never written as an empty user message: the plan leaves it out and counts it (`dropped_unreadable_summaries`), and `--compaction portable` is refused, exit 2 | `:271-300,435-455`; `src/writer/plan.rs`, `src/hop.rs` `select` |
 | `event_msg`, `turn_context`, `world_state`, `token_usage_record` | `Meta`, kept raw; models from `event_msg/thread_settings_applied` | `:69-80,195-207` |
-| `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title and parent always empty** (`session_index.jsonl` not read, forks not linked) | `:149-181,455-470` |
+| `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title** from `<CODEX_HOME>/session_index.jsonl`, the newest `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent always empty** (forks and subagent spawns not linked) | `:149-181,455-470` |
 
 **Writer** (`src/writer/codex.rs`) [23]:
 
@@ -293,7 +293,7 @@ deprecated alias [13].
 - **No native compaction record.** A `portable` hop writes the summary as a user message, not a
   `compacted` record, even though Codex accepts `compacted{message}` (P6). That form waits for a
   fixture [19 §4.4].
-- **Not converted:** subagent threads, forks, names from `session_index.jsonl`, and
+- **Not converted:** subagent threads, forks, and
   compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].
 - **Subagent messages are excluded, by decision.** An `agent_message` record (a subagent writing
   to the root agent) holds a plain header (sender, recipient, task name) and its payload as

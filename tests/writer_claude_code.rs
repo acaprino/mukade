@@ -143,8 +143,12 @@ fn user_turns_compaction_and_the_killed_turn_survive() {
         Some("H27-HANG"),
         "the interrupted turn is the last row"
     );
+    // Every conversation row; the closing `last-prompt` row has no version, as a native one has
+    // none.
     assert!(
-        rows.iter().all(|r| r["version"] == "2.1.311"),
+        rows.iter()
+            .filter(|r| r["type"] == "user" || r["type"] == "assistant")
+            .all(|r| r["version"] == "2.1.311"),
         "the destination's own version"
     );
 }
@@ -164,4 +168,95 @@ fn the_project_folder_name_is_the_one_claude_code_derives() {
     let long = format!(r"C:\work\{}proj", r"deep\".repeat(45));
     let expected = format!("C--work-{}de-oxvvd", "deep-".repeat(38));
     assert_eq!(claude_project_dir_name(Path::new(&long)), expected);
+}
+
+/// Claude Code's /resume picker titles a session by the `lastPrompt` of its last `last-prompt`
+/// row, else by its first user prompt. A native session ends with one, naming the last user
+/// prompt and the last row; a written one does too, so it is listed under the prompt the
+/// conversation ended on.
+#[test]
+fn the_session_ends_with_the_last_prompt_row_the_resume_picker_reads() {
+    let (written, rows) = write_fixture("writer-claude-last-prompt");
+    let last = rows.last().expect("rows");
+    assert_eq!(last["type"], "last-prompt", "{last}");
+    assert_eq!(last["sessionId"], written.id.as_str());
+    let conversation: Vec<&Value> = rows
+        .iter()
+        .filter(|r| r["type"] == "user" || r["type"] == "assistant")
+        .collect();
+    assert_eq!(
+        last["leafUuid"],
+        conversation.last().unwrap()["uuid"],
+        "the leaf is the last conversation row"
+    );
+    let prompt_of = |r: &Value| -> Option<String> {
+        if r["type"] != "user" {
+            return None;
+        }
+        match &r["message"]["content"] {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(blocks) => blocks
+                .iter()
+                .find(|b| b["type"] == "text")
+                .and_then(|b| b["text"].as_str().map(str::to_owned)),
+            _ => None,
+        }
+    };
+    let last_user_prompt = conversation
+        .iter()
+        .rev()
+        .filter(|r| {
+            !r["message"]["content"]
+                .as_array()
+                .is_some_and(|b| b.iter().any(|x| x["type"] == "tool_result"))
+        })
+        .find_map(|r| prompt_of(r))
+        .expect("the fixture has a user prompt");
+    let shown = last["lastPrompt"].as_str().expect("lastPrompt");
+    assert!(
+        last_user_prompt.starts_with(shown.trim_end_matches('…')),
+        "{shown:?} is the start of {last_user_prompt:?}"
+    );
+    assert!(shown.chars().count() <= 201, "{shown}");
+}
+
+/// A session with a name is written with Claude Code's own `custom-title` row, so /resume lists
+/// it under that name; a title the caller states wins over the source's; with neither there is
+/// no title row.
+#[test]
+fn a_named_session_carries_its_name_as_a_custom_title() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "writer-claude-title");
+    let mut opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let write = |session: &mukade::model::Session, opts: &mukade::writer::WriteOpts| {
+        let written = for_harness(HarnessId::ClaudeCode)
+            .write(session, opts)
+            .expect("write");
+        let rows = support::read_jsonl(Path::new(&written.location));
+        (written, rows)
+    };
+    let titles_of = |rows: &[Value]| -> Vec<Value> {
+        rows.iter()
+            .filter(|r| r["type"] == "custom-title")
+            .cloned()
+            .collect()
+    };
+    let mut session = support::read_source(HarnessId::ClaudeCode);
+    session.meta.title = Some("Misura i task code access".into());
+
+    opts.title = None;
+    let (written, rows) = write(&session, &opts);
+    let titles = titles_of(&rows);
+    assert_eq!(titles.len(), 1, "{titles:?}");
+    assert_eq!(titles[0]["customTitle"], "Misura i task code access");
+    assert_eq!(titles[0]["sessionId"], written.id.as_str());
+    assert_eq!(rows.last().unwrap()["type"], "last-prompt");
+
+    opts.title = Some("Stated".into());
+    let (_, rows) = write(&session, &opts);
+    assert_eq!(titles_of(&rows)[0]["customTitle"], "Stated");
+
+    opts.title = None;
+    session.meta.title = None;
+    let (_, rows) = write(&session, &opts);
+    assert!(titles_of(&rows).is_empty(), "no name, no title row");
 }

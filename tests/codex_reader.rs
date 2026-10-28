@@ -776,3 +776,80 @@ fn a_subagent_rollout_is_its_own_thread_not_the_one_that_spawned_it() {
     let only_id = header(serde_json::json!({"id": child, "cwd": r"C:\x"}));
     assert_eq!(codex::parse(&only_id, None).unwrap().meta.id, child);
 }
+
+/// Codex Desktop 0.165 sends the project's AGENTS.md as a user message
+/// (`# AGENTS.md instructions for <dir>`), and records app events such as
+/// `<external_codex_apps_open_page>` as user messages too. Neither is the user's prompt; the
+/// user's answer to a question (`<send_user_message_question_reply>`) is.
+#[test]
+fn injected_instructions_and_app_events_are_not_user_prompts() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "# AGENTS.md instructions for D:\\Projects\\daodan\n\n<INSTRUCTIONS>\nrules\n</INSTRUCTIONS>"}]}),
+        serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "<external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>"}]}),
+        serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "<send_user_message_question_reply> [{\"answer\":\"yes\"}]"}]}),
+    ]);
+    let users: Vec<String> = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !users.iter().any(|t| t.contains("AGENTS.md instructions")),
+        "{users:?}"
+    );
+    assert!(
+        !users
+            .iter()
+            .any(|t| t.contains("external_codex_apps_open_page")),
+        "{users:?}"
+    );
+    assert!(
+        users
+            .iter()
+            .any(|t| t.contains("send_user_message_question_reply")),
+        "{users:?}"
+    );
+    let metas: Vec<&MetaKind> = s
+        .entries
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::Meta { kind } => Some(kind),
+            _ => None,
+        })
+        .collect();
+    assert!(metas.contains(&&MetaKind::SystemPrompt));
+}
+
+/// A thread's name is in `<CODEX_HOME>/session_index.jsonl`, an append-only catalogue of
+/// `{id, thread_name, updated_at}` where the newest entry wins; it is the name the Codex app shows.
+#[test]
+fn the_thread_name_comes_from_the_session_index() {
+    use mukade::reader::Reader;
+    let (home, _, page) = paginated_home("name", 0);
+    let index = [
+        serde_json::json!({"id": THREAD, "thread_name": "First name", "updated_at": "2026-10-28T09:38:20Z"}),
+        serde_json::json!({"id": "someone-else", "thread_name": "Other", "updated_at": "2026-10-28T11:00:00Z"}),
+        serde_json::json!({"id": THREAD, "thread_name": "Renamed", "updated_at": "2026-10-28T10:00:00Z"}),
+    ]
+    .iter()
+    .map(|v| v.to_string() + "\n")
+    .collect::<String>()
+        + "not json\n";
+    std::fs::write(home.join("session_index.jsonl"), index).unwrap();
+    let s = codex::Codex.read(THREAD, &roots(&home)).unwrap();
+    assert_eq!(s.meta.title.as_deref(), Some("Renamed"));
+    assert_eq!(
+        codex::read_file(&page).unwrap().meta.title.as_deref(),
+        Some("Renamed")
+    );
+    std::fs::remove_file(home.join("session_index.jsonl")).unwrap();
+    assert_eq!(
+        codex::Codex.read(THREAD, &roots(&home)).unwrap().meta.title,
+        None
+    );
+}

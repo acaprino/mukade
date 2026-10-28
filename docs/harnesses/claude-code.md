@@ -204,6 +204,7 @@ Sources: `src/reader/claude_code.rs`, `src/writer/claude_code.rs`, `src/writer/p
 - **Tool ids** are rewritten to `^[a-zA-Z0-9_-]+$` for Anthropic destinations: each other character becomes `_`, a collision gets `_2`, `_3`…, an empty id becomes `toolu_mukade`; the same id is used for the call and its result and counted as `rewritten_call_ids` [5].
 - **Tools:** calls become Claude's own `Bash`, `PowerShell`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, `WebFetch`, `WebSearch` when equivalent; subagent, skill, question, MCP and harness-internal calls travel as text form, following the tables [3][7]. Result content is flattened to text; non-text blocks are dropped and counted (`dropped_result_blocks`).
 - **Compaction** is written as a user message (`[mukade handoff v1] Summary of the earlier conversation, written by the source agent's own compaction:` and the summary), then the tail; no native `compact_boundary` is written [1][7].
+- **How `/resume` lists it.** The session ends as a native one does: a `{"type":"custom-title","customTitle":…,"sessionId":…}` row when the session has a name (the source's, e.g. a Codex thread's name, or the caller's `WriteOpts.title`), then `{"type":"last-prompt","lastPrompt":…,"leafUuid":…,"sessionId":…}` naming the last user prompt (one line, at most 200 characters) and the last row. Claude Code 2.1.312's picker titles a session by its custom title, else by that `lastPrompt`, else by its first user prompt (read from its own code, 2026-10-28) [9]. Without those rows a session written from Codex was listed under the AGENTS.md text Codex injects as the first user message, and could not be told apart.
 - Orphan and duplicate results, empty steps and unanswered calls are dropped or moved to text and counted in the manifest [5].
 
 **Known limits** [1][4]:
@@ -213,6 +214,12 @@ Sources: `src/reader/claude_code.rs`, `src/writer/claude_code.rs`, `src/writer/p
 - mukade does not create Claude Code's authentication or onboarding configuration [8].
 
 ## 9. Sources
+
+[9] Claude Code 2.1.312's own JavaScript, embedded in `claude.exe`, read on 2026-10-28: the
+`/resume` list is built from each session file's head and tail (first prompt, `lastPrompt`,
+`customTitle`, `aiTitle`), and drops sessions that are sidechains, team or daemon sessions, `/loop`
+sessions, of some entrypoints, superseded ("continued in"), recorded under another directory with
+the same project slug, or made of bookkeeping rows only (no `"parentUuid":`).
 
 All accessed 2026-10-28.
 

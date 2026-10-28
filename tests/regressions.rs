@@ -101,7 +101,9 @@ fn attachments_reach_every_writer_in_its_own_image_shape() {
             HarnessId::OpenCode => unreachable!(),
         }
         .unwrap();
-        let Some(Kind::User { attachments, .. }) = back.entries.last().map(|entry| &entry.kind)
+        // The last conversation entry: a written Claude session ends with its `last-prompt` row.
+        let Some(Kind::User { attachments, .. }) =
+            back.conversation().last().map(|entry| &entry.kind)
         else {
             panic!("the user turn did not survive for {dest:?}");
         };

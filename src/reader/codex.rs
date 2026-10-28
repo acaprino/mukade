@@ -59,6 +59,40 @@ pub fn read_file(path: &Path) -> Result<Session> {
 
 /// [`read_file`], choosing which branches of a paginated thread to carry.
 pub fn read_file_with(path: &Path, branches: Branches) -> Result<Session> {
+    let mut session = read_rollout(path, branches)?;
+    if session.meta.title.is_none() {
+        session.meta.title = indexed_name(path, &session.meta.id);
+    }
+    Ok(session)
+}
+
+/// The thread's name in `<CODEX_HOME>/session_index.jsonl`, the append-only catalogue of
+/// `{id, thread_name, updated_at}` the Codex app names its threads from: the newest entry wins
+/// (by `updated_at`, then by place in the file). None when the rollout is not under a
+/// `sessions/` folder, the catalogue is missing, or it does not name the thread.
+fn indexed_name(rollout: &Path, id: &str) -> Option<String> {
+    let sessions = rollout
+        .ancestors()
+        .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))?;
+    let text = std::fs::read_to_string(sessions.parent()?.join("session_index.jsonl")).ok()?;
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.get("id").and_then(Value::as_str) == Some(id))
+        .filter_map(|entry| {
+            let name = entry.get("thread_name")?.as_str()?.trim().to_string();
+            let updated = entry
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            (!name.is_empty()).then_some((updated, name))
+        })
+        .enumerate()
+        .max_by(|(i, (a, _)), (j, (b, _))| a.cmp(b).then(i.cmp(j)))
+        .map(|(_, (_, name))| name)
+}
+
+fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
     let Some(base) = history_base(&file.rows) else {
         let _span = crate::timing::span("build entries");
@@ -309,8 +343,13 @@ fn class_of(row: &Value) -> Class {
                         Class::Abort
                     } else if text.starts_with("<environment_context>")
                         || text.starts_with("<skills_instructions>")
+                        // Codex Desktop 0.165 sends the project's AGENTS.md as a user message.
+                        || text.starts_with("# AGENTS.md instructions for ")
                     {
                         Class::Meta(MetaKind::SystemPrompt)
+                    } else if text.starts_with("<external_codex_apps_open_page>") {
+                        // An event of the Desktop app, recorded as a user message.
+                        Class::Meta(MetaKind::Internal)
                     } else {
                         Class::User
                     }
