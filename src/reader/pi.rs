@@ -11,7 +11,7 @@
 //! - a killed turn leaves only the user entry, so the last entry of a killed session is a user
 //!   turn with no reply (L9).
 
-use super::json::{result_content, rows_from_lines, str_at};
+use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
     CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
@@ -28,31 +28,40 @@ pub struct Pi;
 
 /// Read one Pi session file (`<PI_CODING_AGENT_DIR>/sessions/<project>/<ts>_<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let (rows, unfinished) = rows_from_lines(&text, &path.display().to_string())?;
-    let mut session = parse(&rows, Some(path))?;
-    super::json::keep_unfinished(&mut session, unfinished);
+    let file = super::json::read_jsonl(path)?;
+    let _span = crate::timing::span("build entries");
+    let mut session = parse_owned(file.rows, Some(path))?;
+    session.meta.source_sha256 = Some(file.sha256.wait());
+    super::json::keep_unfinished(&mut session, file.unfinished);
     Ok(session)
 }
 
 /// Read records that were already decoded.
 pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
-    let on_branch = active_branch(rows);
-    let (views, originals) = apply_context_edits(rows, &on_branch);
+    parse_owned(rows.to_vec(), source_path)
+}
+
+/// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
+/// instead of being copied there.
+pub fn parse_owned(mut rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    let on_branch = active_branch(&rows);
+    let mut originals = apply_context_edits(&mut rows, &on_branch);
     let mut b = Builder::default();
-    for (i, row) in views.iter().enumerate() {
+    for (i, row) in rows.into_iter().enumerate() {
         b.push(i, row, on_branch[i]);
     }
     let mut session = b.finish(source_path)?;
     // The entries were built from the edited view of a record; the record itself is what is kept.
-    for entry in &mut session.entries {
-        for raw in &mut entry.raw {
-            let original = raw
-                .get("id")
-                .and_then(Value::as_str)
-                .and_then(|id| originals.get(id));
-            if let Some(original) = original {
-                *raw = original.clone();
+    if !originals.is_empty() {
+        for entry in &mut session.entries {
+            for raw in &mut entry.raw {
+                let original = raw
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| originals.remove(id));
+                if let Some(original) = original {
+                    *raw = original;
+                }
             }
         }
     }
@@ -62,13 +71,14 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// What the model is shown after Pi's `context_edit` entries (`buildSessionProjection`, Pi
 /// 1.2.0): for each target on the resumed path, the latest edit applies. A message keeps its role
 /// and takes the replacement's content (a string becomes one text block for an assistant message
-/// or a tool result); a null replacement leaves it out. Returns the records as the reader should
-/// interpret them, and the original of each one that changed, by id.
+/// or a tool result); a null replacement leaves it out. A record that an edit changes is replaced
+/// in place by its edited view; the record as written is returned, by id. A session with no edits
+/// is not copied at all.
 fn apply_context_edits(
-    rows: &[Value],
+    rows: &mut [Value],
     on_branch: &[bool],
-) -> (Vec<Value>, std::collections::HashMap<String, Value>) {
-    let mut edits: std::collections::HashMap<&str, &Value> = std::collections::HashMap::new();
+) -> std::collections::HashMap<String, Value> {
+    let mut edits: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     for (row, on) in rows.iter().zip(on_branch) {
         if *on
             && row.get("type").and_then(Value::as_str) == Some("context_edit")
@@ -77,26 +87,27 @@ fn apply_context_edits(
                 row.get("replacement"),
             )
         {
-            edits.insert(target, replacement);
+            edits.insert(target.to_string(), replacement.clone());
         }
     }
     let mut originals = std::collections::HashMap::new();
-    let views = rows
-        .iter()
-        .zip(on_branch)
-        .map(|(row, on)| {
-            let id = row.get("id").and_then(Value::as_str);
-            let Some(replacement) = id.filter(|_| *on).and_then(|id| edits.get(id)) else {
-                return row.clone();
-            };
-            let Some(view) = edited_view(row, replacement) else {
-                return row.clone();
-            };
-            originals.insert(id.unwrap_or_default().to_string(), row.clone());
-            view
-        })
-        .collect();
-    (views, originals)
+    if edits.is_empty() {
+        return originals;
+    }
+    for (row, on) in rows.iter_mut().zip(on_branch) {
+        let Some(id) = row.get("id").and_then(Value::as_str).filter(|_| *on) else {
+            continue;
+        };
+        let Some(replacement) = edits.get(id) else {
+            continue;
+        };
+        let Some(view) = edited_view(row, replacement) else {
+            continue;
+        };
+        let id = id.to_string();
+        originals.insert(id, std::mem::replace(row, view));
+    }
+    originals
 }
 
 /// One record as its edit shows it, or `None` when the edit does not apply to this kind of record.
@@ -131,6 +142,9 @@ fn edited_view(row: &Value, replacement: &Value) -> Option<Value> {
     }
     Some(view)
 }
+
+/// What `row.get("message")` is for a `bashExecution` record without one.
+static NO_MESSAGE: Value = Value::Null;
 
 /// Pi's own text for a `bashExecution` message (`bashExecutionToText`, pi-coding-agent 1.2.0).
 fn bash_execution_text(message: &Value) -> String {
@@ -304,12 +318,12 @@ impl MetaBuilder {
 }
 
 impl Builder {
-    fn push(&mut self, index: usize, row: &Value, on_branch: bool) {
-        self.meta.observe(row);
-        if let Some(model_id) = str_at(row, "/modelId") {
+    fn push(&mut self, index: usize, row: Value, on_branch: bool) {
+        self.meta.observe(&row);
+        if let Some(model_id) = str_at(&row, "/modelId") {
             // `model_change`: the provider and model the session was using.
             let model = ModelRef {
-                provider: str_at(row, "/provider"),
+                provider: str_at(&row, "/provider"),
                 id: model_id,
             };
             if !model.id.is_empty() && !self.meta.models.iter().any(|m| m.id == model.id) {
@@ -320,16 +334,16 @@ impl Builder {
         if let Some(api) = row.pointer("/message/api").and_then(Value::as_str) {
             self.protocol = Some(Protocol::from_provider(api));
         }
-        let class = class_of(row);
+        let class = class_of(&row);
         if !on_branch && !matches!(class, Class::Header | Class::Meta(_)) {
             // A record of a branch the conversation left: kept, not resumed.
             self.open_results = None;
             self.entries.push(Entry {
-                id: id_of(row, index),
+                id: id_of(&row, index),
                 kind: Kind::Meta {
                     kind: MetaKind::OffBranch,
                 },
-                raw: vec![row.clone()],
+                raw: vec![row],
             });
             return;
         }
@@ -337,7 +351,7 @@ impl Builder {
             Class::CustomMessage => {
                 self.open_results = None;
                 self.entries.push(Entry {
-                    id: id_of(row, index),
+                    id: id_of(&row, index),
                     kind: Kind::User {
                         text: row
                             .get("content")
@@ -349,15 +363,15 @@ impl Builder {
                             .map(|blocks| super::json::attachments(blocks))
                             .unwrap_or_default(),
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
             // Pi shows the model a branch summary as a user message, in its own words.
             Class::BranchSummary => {
                 self.open_results = None;
-                let summary = str_at(row, "/summary").unwrap_or_default();
+                let summary = str_at(&row, "/summary").unwrap_or_default();
                 self.entries.push(Entry {
-                    id: id_of(row, index),
+                    id: id_of(&row, index),
                     kind: if summary.is_empty() {
                         Kind::Meta {
                             kind: MetaKind::Internal,
@@ -370,26 +384,26 @@ impl Builder {
                             attachments: Vec::new(),
                         }
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
             Class::Header => self.entries.push(Entry {
-                id: id_of(row, index),
+                id: id_of(&row, index),
                 kind: Kind::Meta {
                     kind: MetaKind::Internal,
                 },
-                raw: vec![row.clone()],
+                raw: vec![row],
             }),
             Class::Meta(kind) => self.entries.push(Entry {
-                id: id_of(row, index),
+                id: id_of(&row, index),
                 kind: Kind::Meta { kind },
-                raw: vec![row.clone()],
+                raw: vec![row],
             }),
-            Class::Message => match role_of(row) {
+            Class::Message => match role_of(&row) {
                 "user" => {
                     self.open_results = None;
                     self.entries.push(Entry {
-                        id: id_of(row, index),
+                        id: id_of(&row, index),
                         kind: Kind::User {
                             text: row
                                 .pointer("/message/content")
@@ -401,7 +415,7 @@ impl Builder {
                                 .map(|blocks| super::json::attachments(blocks))
                                 .unwrap_or_default(),
                         },
-                        raw: vec![row.clone()],
+                        raw: vec![row],
                     });
                 }
                 "assistant" => {
@@ -413,49 +427,49 @@ impl Builder {
                 // `!!` kept it out of the context.
                 "bashExecution" => {
                     self.open_results = None;
-                    let message = row.get("message").cloned().unwrap_or(Value::Null);
+                    let message = row.get("message").unwrap_or(&NO_MESSAGE);
                     let excluded = message.get("excludeFromContext") == Some(&Value::Bool(true));
                     self.entries.push(Entry {
-                        id: id_of(row, index),
+                        id: id_of(&row, index),
                         kind: if excluded {
                             Kind::Meta {
                                 kind: MetaKind::Internal,
                             }
                         } else {
                             Kind::User {
-                                text: bash_execution_text(&message),
+                                text: bash_execution_text(message),
                                 attachments: Vec::new(),
                             }
                         },
-                        raw: vec![row.clone()],
+                        raw: vec![row],
                     });
                 }
                 "system" => self.entries.push(Entry {
-                    id: id_of(row, index),
+                    id: id_of(&row, index),
                     kind: Kind::Meta {
                         kind: MetaKind::SystemPrompt,
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 }),
                 _ => self.entries.push(Entry {
-                    id: id_of(row, index),
+                    id: id_of(&row, index),
                     kind: Kind::Meta {
                         kind: MetaKind::Internal,
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 }),
             },
             Class::Compacted => {
                 self.open_results = None;
                 self.entries.push(Entry {
-                    id: id_of(row, index),
+                    id: id_of(&row, index),
                     kind: Kind::Compaction {
-                        summary: str_at(row, "/summary").unwrap_or_default(),
-                        kept_from: str_at(row, "/firstKeptEntryId"),
+                        summary: str_at(&row, "/summary").unwrap_or_default(),
+                        kept_from: str_at(&row, "/firstKeptEntryId"),
                         trigger: Trigger::Unknown,
                         tokens_before: row.get("tokensBefore").and_then(Value::as_u64),
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
         }
@@ -463,7 +477,7 @@ impl Builder {
 
     /// One assistant message: thinking, text and **all** of its tool calls together (L3's other
     /// half: what Pi writes back on its own resume).
-    fn assistant(&mut self, row: &Value, index: usize) {
+    fn assistant(&mut self, row: Value, index: usize) {
         let model_id = self.model.as_ref().map(|m| m.id.clone());
         let mut reasoning = Vec::new();
         let mut text = Vec::new();
@@ -520,11 +534,11 @@ impl Builder {
             }
         }
         let end = step_end(
-            str_at(row, "/message/stopReason").as_deref(),
+            str_at(&row, "/message/stopReason").as_deref(),
             !calls.is_empty(),
         );
         self.entries.push(Entry {
-            id: id_of(row, index),
+            id: id_of(&row, index),
             kind: Kind::Step {
                 model: self.model.clone(),
                 reasoning,
@@ -532,19 +546,18 @@ impl Builder {
                 calls,
                 end,
             },
-            raw: vec![row.clone()],
+            raw: vec![row],
         });
     }
 
-    fn tool_result(&mut self, row: &Value, index: usize) {
-        let blocks = row
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+    fn tool_result(&mut self, row: Value, index: usize) {
         let result = ToolResult {
-            call_id: str_at(row, "/message/toolCallId").unwrap_or_default(),
-            content: result_content(&blocks),
+            call_id: str_at(&row, "/message/toolCallId").unwrap_or_default(),
+            content: result_content(
+                row.pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .map_or(&[][..], Vec::as_slice),
+            ),
             is_error: row
                 .pointer("/message/isError")
                 .and_then(Value::as_bool)
@@ -554,18 +567,18 @@ impl Builder {
         match self.open_results {
             Some(i) => {
                 let entry = &mut self.entries[i];
-                entry.raw.push(row.clone());
+                entry.raw.push(row);
                 if let Kind::Results { results } = &mut entry.kind {
                     results.push(result);
                 }
             }
             None => {
                 self.entries.push(Entry {
-                    id: id_of(row, index),
+                    id: id_of(&row, index),
                     kind: Kind::Results {
                         results: vec![result],
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
                 self.open_results = Some(self.entries.len() - 1);
             }
@@ -587,6 +600,7 @@ impl Builder {
                 git_branch: None,
                 parent: m.parent,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
+                source_sha256: None,
             },
             entries: self.entries,
         })

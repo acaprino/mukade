@@ -128,18 +128,21 @@ pub struct SourceFacts {
 }
 
 impl SourceFacts {
-    /// The facts of a session we hold: its own metadata, and the fingerprint of its records.
+    /// The facts of a session we hold: its own metadata, and its fingerprint: the SHA-256 of the
+    /// source's own bytes when the reader hashed them, else that of its records.
     pub fn of(session: &Session) -> Self {
-        let records: Vec<Value> = session
-            .entries
-            .iter()
-            .flat_map(|entry| entry.raw.clone())
-            .collect();
+        let content_sha256 = match &session.meta.source_sha256 {
+            Some(digest) => digest.clone(),
+            None => {
+                let _span = crate::timing::span("fingerprint");
+                records_sha256(session.entries.iter().flat_map(|entry| entry.raw.iter()))
+            }
+        };
         SourceFacts {
             harness: session.meta.harness.as_str().to_string(),
             version: Some(session.meta.harness_version.clone()).filter(|v| !v.is_empty()),
             session_id: session.meta.id.clone(),
-            content_sha256: records_sha256(&records),
+            content_sha256,
         }
     }
 }
@@ -243,6 +246,7 @@ impl std::error::Error for HopError {}
 pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
     let reader = crate::reader::for_harness(source.harness)
         .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
+    let _span = crate::timing::span("read source");
     reader.read(&source.id, roots).map_err(classify_read)
 }
 
@@ -269,19 +273,26 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
     }
 
     // §7: the gate runs on the plan the writer will use, before anything reaches the store.
+    let plan_span = crate::timing::span("plan");
     let plan = plan::plan(session, dest, &write_opts);
+    drop(plan_span);
     let dest_protocol = write_opts
         .dest_protocol
         .clone()
         .or_else(|| crate::policy::destination_protocol(dest));
-    let violations = check_plan(&plan, dest_protocol.as_ref());
+    let violations = {
+        let _span = crate::timing::span("strict check");
+        check_plan(&plan, dest_protocol.as_ref())
+    };
     if !violations.is_empty() {
         return Err(HopError::StrictCheckFailed(violations));
     }
 
+    let write_span = crate::timing::span("write files");
     let written: Written = writer::for_harness(dest)
-        .write(session, &write_opts)
+        .write_planned(session, &plan, &write_opts)
         .map_err(|error| HopError::WriteFailed(format!("{error:#}")))?;
+    drop(write_span);
 
     let mut receipt = Receipt {
         dest_id: written.id.clone(),
@@ -346,10 +357,15 @@ pub fn hop_session(
     import(dest, &selection, opts)
 }
 
-/// The session a compaction policy hands to the writer.
-fn select(source: &Session, compaction: &Compaction) -> Result<Session, HopError> {
+/// The session a compaction policy hands to the writer: the source itself when nothing is cut,
+/// so a whole-history hop copies nothing.
+fn select<'a>(
+    source: &'a Session,
+    compaction: &Compaction,
+) -> Result<std::borrow::Cow<'a, Session>, HopError> {
+    let _span = crate::timing::span("select");
     match compaction {
-        Compaction::None => Ok(source.clone()),
+        Compaction::None => Ok(std::borrow::Cow::Borrowed(source)),
         Compaction::DestinationNative => Err(HopError::Unsupported(
             "Compaction::DestinationNative: the destination's own compaction has to be triggered by the \
              caller, inside the destination's own environment (a resume command, an HTTP endpoint or an \
@@ -404,9 +420,10 @@ fn select(source: &Session, compaction: &Compaction) -> Result<Session, HopError
                     .filter(|entry| Some(&entry.id) != carried.as_ref())
                     .cloned(),
             );
-            let mut selected = source.clone();
-            selected.entries = entries;
-            Ok(selected)
+            Ok(std::borrow::Cow::Owned(Session {
+                meta: source.meta.clone(),
+                entries,
+            }))
         }
     }
 }

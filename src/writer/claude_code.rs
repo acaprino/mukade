@@ -28,7 +28,12 @@ impl Writer for ClaudeCode {
         HarnessId::ClaudeCode
     }
 
-    fn write(&self, session: &Session, opts: &WriteOpts) -> Result<Written> {
+    fn write_planned(
+        &self,
+        session: &Session,
+        plan: &plan::Plan,
+        opts: &WriteOpts,
+    ) -> Result<Written> {
         let root =
             opts.roots.claude_config_dir.clone().context(
                 "CLAUDE_CONFIG_DIR is not set: nowhere to write the Claude Code session",
@@ -45,9 +50,8 @@ impl Writer for ClaudeCode {
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let file = dir.join(format!("{id}.jsonl"));
 
-        let plan = plan::plan(session, HarnessId::ClaudeCode, opts);
         let mut clock = Clock::new(opts.now.as_deref());
-        let rows = rows(&plan, session, &id, &cwd, opts, &mut clock);
+        let rows = rows(plan, session, &id, &cwd, opts, &mut clock);
         write_jsonl(&file, &rows)?;
 
         Ok(Written {

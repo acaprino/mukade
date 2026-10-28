@@ -38,20 +38,34 @@ impl ClaudeCode {
 
 /// Read one Claude Code session file (`<CLAUDE_CONFIG_DIR>/projects/<project>/<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let (rows, unfinished) = super::json::rows_from_lines(&text, &path.display().to_string())?;
-    let mut session = parse(&rows, Some(path))?;
-    super::json::keep_unfinished(&mut session, unfinished);
+    let file = super::json::read_jsonl(path)?;
+    let _span = crate::timing::span("build entries");
+    let mut session = parse_owned(file.rows, Some(path))?;
+    session.meta.source_sha256 = Some(file.sha256.wait());
+    super::json::keep_unfinished(&mut session, file.unfinished);
     Ok(session)
 }
 
 /// Read records that were already decoded (the CLI and the tests both come through here).
 pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
-    let on_branch = active_branch(rows);
+    parse_owned(rows.to_vec(), source_path)
+}
+
+/// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
+/// instead of being copied there.
+pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    let on_branch = {
+        let _span = crate::timing::span("resumed branch");
+        active_branch(&rows)
+    };
     let mut b = Builder::default();
-    for (i, row) in rows.iter().enumerate() {
-        b.push(i, row, on_branch[i]);
+    {
+        let _span = crate::timing::span("entries");
+        for (i, row) in rows.into_iter().enumerate() {
+            b.push(i, row, on_branch[i]);
+        }
     }
+    let _span = crate::timing::span("finish");
     b.finish(source_path)
 }
 
@@ -368,22 +382,22 @@ impl MetaBuilder {
 }
 
 impl Builder {
-    fn push(&mut self, index: usize, row: &Value, on_branch: bool) {
-        self.meta.observe(row);
+    fn push(&mut self, index: usize, row: Value, on_branch: bool) {
+        self.meta.observe(&row);
         if truthy(row.get("isSidechain")) {
             // A subagent's transcript: kept, never conversation (§10 "not exercised").
             self.flush();
             self.entries.push(Entry {
-                id: row_id(row, index),
+                id: row_id(&row, index),
                 kind: Kind::Meta {
                     kind: MetaKind::Internal,
                 },
-                raw: vec![row.clone()],
+                raw: vec![row],
             });
             return;
         }
-        let mut class = class_of(row);
-        let text = content_text(row);
+        let mut class = class_of(&row);
+        let text = content_text(&row);
         if matches!(class, Class::Meta(MetaKind::Command))
             && self.after_prompt_command
             && truthy(row.get("isMeta"))
@@ -402,11 +416,11 @@ impl Builder {
             // A row of a branch the conversation left: kept, not resumed.
             self.flush();
             self.entries.push(Entry {
-                id: row_id(row, index),
+                id: row_id(&row, index),
                 kind: Kind::Meta {
                     kind: MetaKind::OffBranch,
                 },
-                raw: vec![row.clone()],
+                raw: vec![row],
             });
             return;
         }
@@ -419,12 +433,13 @@ impl Builder {
             Class::Results => {
                 self.flush_unless_results();
                 self.unsummarized = None;
+                let id = row_id(&row, index);
                 self.results_with(index, row);
                 // The user's own text beside the results is a turn of its own, after them.
                 if let Some(text) = text {
                     self.flush();
                     self.entries.push(Entry {
-                        id: format!("{}-text", row_id(row, index)),
+                        id: format!("{id}-text"),
                         kind: Kind::User {
                             text,
                             attachments: Vec::new(),
@@ -437,7 +452,7 @@ impl Builder {
                 self.flush();
                 let compact = row.get("compactMetadata").cloned().unwrap_or(Value::Null);
                 self.open_compaction = Some(OpenCompaction {
-                    boundary: row.clone(),
+                    boundary: row,
                     trigger: match compact.get("trigger").and_then(Value::as_str) {
                         Some("manual") => Trigger::Manual,
                         Some("auto") => Trigger::Auto,
@@ -456,16 +471,16 @@ impl Builder {
                     *summary = text.unwrap_or_default();
                 }
                 self.entries.push(Entry {
-                    id: row_id(row, index),
+                    id: row_id(&row, index),
                     kind: Kind::Meta {
                         kind: MetaKind::Internal,
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
             Class::Summary => {
                 if let Some(open) = self.open_compaction.take() {
-                    let summary = content_text(row).unwrap_or_default();
+                    let summary = content_text(&row).unwrap_or_default();
                     self.entries.push(Entry {
                         id: row_id(&open.boundary, index),
                         kind: Kind::Compaction {
@@ -474,16 +489,16 @@ impl Builder {
                             trigger: open.trigger,
                             tokens_before: open.tokens_before,
                         },
-                        raw: vec![open.boundary, row.clone()],
+                        raw: vec![open.boundary, row],
                     });
                 } else {
                     // A summary with no boundary before it: keep it, do not guess.
                     self.entries.push(Entry {
-                        id: row_id(row, index),
+                        id: row_id(&row, index),
                         kind: Kind::Meta {
                             kind: MetaKind::Internal,
                         },
-                        raw: vec![row.clone()],
+                        raw: vec![row],
                     });
                 }
             }
@@ -492,7 +507,7 @@ impl Builder {
                 self.unsummarized = None;
                 let text = text.unwrap_or_default();
                 self.entries.push(Entry {
-                    id: row_id(row, index),
+                    id: row_id(&row, index),
                     kind: Kind::User {
                         text,
                         attachments: row
@@ -501,15 +516,15 @@ impl Builder {
                             .map(|blocks| super::json::attachments(blocks))
                             .unwrap_or_default(),
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
             Class::Meta(kind) => {
                 self.flush();
                 self.entries.push(Entry {
-                    id: row_id(row, index),
+                    id: row_id(&row, index),
                     kind: Kind::Meta { kind },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
         }
@@ -557,9 +572,9 @@ impl Builder {
         }
     }
 
-    fn step_with(&mut self, index: usize, row: &Value, message_id: String) {
+    fn step_with(&mut self, index: usize, row: Value, message_id: String) {
         if self.open_step.is_none() {
-            let id = row_id(row, index);
+            let id = row_id(&row, index);
             self.entries.push(Entry {
                 id,
                 kind: Kind::Step {
@@ -578,7 +593,6 @@ impl Builder {
         }
         let i = self.open_step.as_ref().expect("just opened").index;
         let entry = &mut self.entries[i];
-        entry.raw.push(row.clone());
         let model_id = row
             .pointer("/message/model")
             .and_then(Value::as_str)
@@ -651,34 +665,34 @@ impl Builder {
             }
             *end = step_end(row.pointer("/message/stop_reason").and_then(Value::as_str));
         }
+        entry.raw.push(row);
     }
 
-    fn results_with(&mut self, index: usize, row: &Value) {
-        let blocks: Vec<Value> = row
+    fn results_with(&mut self, index: usize, row: Value) {
+        // Read from the record where it is: the tool results' bodies are most of a session.
+        let found: Vec<ToolResult> = row
             .pointer("/message/content")
             .and_then(Value::as_array)
             .map(|b| {
                 b.iter()
                     .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
-                    .cloned()
+                    .map(tool_result_of)
                     .collect()
             })
             .unwrap_or_default();
         match self.open_results {
             Some(i) => {
                 let entry = &mut self.entries[i];
-                entry.raw.push(row.clone());
+                entry.raw.push(row);
                 if let Kind::Results { results } = &mut entry.kind {
-                    results.extend(blocks.iter().map(tool_result_of));
+                    results.extend(found);
                 }
             }
             None => {
                 self.entries.push(Entry {
-                    id: row_id(row, index),
-                    kind: Kind::Results {
-                        results: blocks.iter().map(tool_result_of).collect(),
-                    },
-                    raw: vec![row.clone()],
+                    id: row_id(&row, index),
+                    kind: Kind::Results { results: found },
+                    raw: vec![row],
                 });
                 self.open_results = Some(self.entries.len() - 1);
             }
@@ -721,6 +735,7 @@ impl Builder {
                 git_branch: m.git_branch,
                 parent: None,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
+                source_sha256: None,
             },
             entries: self.entries,
         })

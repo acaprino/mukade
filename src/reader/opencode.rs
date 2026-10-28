@@ -36,7 +36,9 @@ pub fn read_file(path: &Path) -> Result<Session> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let doc: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .with_context(|| format!("parse {}", path.display()))?;
-    parse(&doc, Some(path))
+    let mut session = parse(&doc, Some(path))?;
+    session.meta.source_sha256 = Some(crate::sha256::sha256_hex(text.as_bytes()));
+    Ok(session)
 }
 
 /// Read a decoded OpenCode document.
@@ -307,6 +309,7 @@ impl Builder {
                 git_branch: None,
                 parent: str_at(&session, "/parent_id"),
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
+                source_sha256: None,
             },
             entries: self.entries,
         })
@@ -356,7 +359,9 @@ impl Reader for Opencode {
         let text = String::from_utf8_lossy(&output.stdout);
         let doc: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
             .context("opencode session export did not print an interchange document")?;
-        parse(&doc, None)
+        let mut session = parse(&doc, None)?;
+        session.meta.source_sha256 = Some(crate::sha256::sha256_hex(text.as_bytes()));
+        Ok(session)
     }
 }
 

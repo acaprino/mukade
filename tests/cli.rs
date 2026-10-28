@@ -29,6 +29,7 @@ fn cli_code(scratch: &Path, args: &[&str]) -> (Option<i32>, String, String) {
     let output = Command::new(BIN)
         .args(args)
         .env("PATH", isolated.join("bin"))
+        .env("MUKADE_CACHE_DIR", isolated.join("cache"))
         .env("APPDATA", &isolated)
         .env("LOCALAPPDATA", &isolated)
         .env("USERPROFILE", &isolated)

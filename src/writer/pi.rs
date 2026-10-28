@@ -29,7 +29,12 @@ impl Writer for Pi {
         HarnessId::Pi
     }
 
-    fn write(&self, session: &Session, opts: &WriteOpts) -> Result<Written> {
+    fn write_planned(
+        &self,
+        session: &Session,
+        plan: &plan::Plan,
+        opts: &WriteOpts,
+    ) -> Result<Written> {
         let root = opts
             .roots
             .pi_agent_dir
@@ -48,8 +53,7 @@ impl Writer for Pi {
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
         let file = dir.join(format!("{stamp}_{id}.jsonl"));
 
-        let plan = plan::plan(session, HarnessId::Pi, opts);
-        let rows = rows(&plan, session, &id, &cwd, opts, &mut clock);
+        let rows = rows(plan, session, &id, &cwd, opts, &mut clock);
         write_jsonl(&file, &rows)?;
 
         Ok(Written {

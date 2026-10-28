@@ -4,13 +4,30 @@ use crate::model::{Attachment, Entry, Kind, MetaKind, ResultContent, Session};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+/// Below this size, threads cost more than they save.
+const PARALLEL_FROM: usize = 2 * 1024 * 1024;
+const MAX_THREADS: usize = 8;
+
 /// Decode a JSON Lines file into records, skipping blank lines. A leading UTF-8 BOM (Pi writes
 /// one on Windows) is tolerated. A last line that does not parse is what a hard kill during an
 /// append leaves: it is returned apart, as text, instead of failing the whole session; a bad line
-/// anywhere else is an error.
+/// anywhere else is an error naming its line.
+///
+/// A large file is cut at line breaks and decoded on several threads. Whatever is not clean
+/// (a cut-off last line, a bad line) is decided again by the one-thread path, which defines the
+/// result and the error.
 pub fn rows_from_lines(text: &str, what: &str) -> Result<(Vec<Value>, Option<String>)> {
+    let _span = crate::timing::span("parse json lines");
+    let text = text.trim_start_matches('\u{feff}');
+    if let Some(clean) = decode_in_parallel(text) {
+        return Ok((clean, None));
+    }
+    decode_in_order(text, what)
+}
+
+/// The reference decoding: one thread, line by line.
+fn decode_in_order(text: &str, what: &str) -> Result<(Vec<Value>, Option<String>)> {
     let lines: Vec<(usize, &str)> = text
-        .trim_start_matches('\u{feff}')
         .lines()
         .enumerate()
         .filter(|(_, line)| !line.trim().is_empty())
@@ -24,6 +41,94 @@ pub fn rows_from_lines(text: &str, what: &str) -> Result<(Vec<Value>, Option<Str
         }
     }
     Ok((rows, None))
+}
+
+/// Every record of a large text, decoded on several threads, or `None` when the text is small or
+/// any line does not decode (the caller then takes the one-thread path).
+fn decode_in_parallel(text: &str) -> Option<Vec<Value>> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(MAX_THREADS);
+    if text.len() < PARALLEL_FROM || threads < 2 {
+        return None;
+    }
+    // Cut points just after a line break, so every piece is whole lines (and valid UTF-8).
+    let bytes = text.as_bytes();
+    let mut bounds = vec![0usize];
+    for k in 1..threads {
+        let guess = (text.len() / threads * k).max(*bounds.last()?);
+        match bytes[guess..].iter().position(|b| *b == b'\n') {
+            Some(at) => bounds.push(guess + at + 1),
+            None => break,
+        }
+    }
+    bounds.push(text.len());
+    bounds.dedup();
+    let pieces: Vec<&str> = bounds.windows(2).map(|w| &text[w[0]..w[1]]).collect();
+    let decoded: Vec<Option<Vec<Value>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = pieces
+            .iter()
+            .map(|piece| {
+                scope.spawn(move || {
+                    piece
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .map(|line| serde_json::from_str::<Value>(line).ok())
+                        .collect::<Option<Vec<Value>>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("a decoding thread does not panic"))
+            .collect()
+    });
+    let mut rows = Vec::new();
+    for piece in decoded {
+        rows.extend(piece?);
+    }
+    Some(rows)
+}
+
+/// A JSON Lines file, read and decoded.
+pub struct Jsonl {
+    pub rows: Vec<Value>,
+    /// The file's last line when a hard kill cut it off mid-write.
+    pub unfinished: Option<String>,
+    /// The SHA-256 of the file's bytes, still being computed.
+    pub sha256: PendingDigest,
+}
+
+/// A digest being computed on its own thread.
+pub struct PendingDigest(std::thread::JoinHandle<String>);
+
+impl PendingDigest {
+    /// The digest, waiting for the thread if it is not done.
+    pub fn wait(self) -> String {
+        self.0.join().expect("the hashing thread does not panic")
+    }
+}
+
+/// Read a JSON Lines file. Its digest is computed on a second thread, starting while the lines are
+/// decoded and finishing while the caller builds its entries: the fingerprint costs no wall time.
+pub fn read_jsonl(path: &std::path::Path) -> Result<Jsonl> {
+    let text = {
+        let _span = crate::timing::span("read file");
+        std::sync::Arc::new(
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+        )
+    };
+    let hashed = std::sync::Arc::clone(&text);
+    let sha256 = PendingDigest(std::thread::spawn(move || {
+        let _span = crate::timing::span("fingerprint (parallel)");
+        crate::sha256::sha256_hex(hashed.as_bytes())
+    }));
+    let (rows, unfinished) = rows_from_lines(&text, &path.display().to_string())?;
+    Ok(Jsonl {
+        rows,
+        unfinished,
+        sha256,
+    })
 }
 
 /// Keep a cut-off last line at the end of a session, as text.
@@ -122,6 +227,36 @@ mod tests {
         let (rows, tail) = rows_from_lines("\u{feff}{\"a\":1}\n\n  \n{\"b\":2}\n", "t").unwrap();
         assert_eq!(rows.len(), 2);
         assert!(tail.is_none());
+    }
+
+    /// A text large enough to be decoded on several threads gives the same records, in the same
+    /// order, as the one-thread path, and the same answer for a cut-off last line and for a bad
+    /// line in the middle.
+    #[test]
+    fn a_large_text_decodes_the_same_on_several_threads() {
+        let line = |n: usize| format!("{{\"n\":{n},\"pad\":\"{}\"}}\n", "x".repeat(200));
+        let text: String = (0..20_000).map(line).collect();
+        assert!(text.len() > PARALLEL_FROM);
+        let (rows, tail) = rows_from_lines(&text, "big").unwrap();
+        assert!(tail.is_none());
+        assert_eq!(rows.len(), 20_000);
+        assert!(
+            rows.iter().enumerate().all(|(i, r)| r["n"] == i),
+            "native order"
+        );
+
+        let cut = format!("{text}{{\"n\":20000,\"pad\":\"x");
+        let (rows, tail) = rows_from_lines(&cut, "big").unwrap();
+        assert_eq!(rows.len(), 20_000);
+        assert_eq!(tail.as_deref(), Some("{\"n\":20000,\"pad\":\"x"));
+
+        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+        lines[12_345] = "{broken".into();
+        let error = rows_from_lines(&lines.join("\n"), "big.jsonl").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("big.jsonl:12346"),
+            "{error:#}"
+        );
     }
 
     #[test]

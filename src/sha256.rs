@@ -19,71 +19,143 @@ const H0: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
 ];
 
+/// A streaming SHA-256: feed it any number of slices, then take the digest. Nothing is copied or
+/// buffered beyond one 64-byte block.
+pub struct Sha256 {
+    h: [u32; 8],
+    block: [u8; 64],
+    filled: usize,
+    length: u64,
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Sha256 {
+            h: H0,
+            block: [0; 64],
+            filled: 0,
+            length: 0,
+        }
+    }
+}
+
+impl Sha256 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn update(&mut self, mut bytes: &[u8]) {
+        self.length = self.length.wrapping_add(bytes.len() as u64);
+        if self.filled > 0 {
+            let take = (64 - self.filled).min(bytes.len());
+            self.block[self.filled..self.filled + take].copy_from_slice(&bytes[..take]);
+            self.filled += take;
+            bytes = &bytes[take..];
+            if self.filled < 64 {
+                return;
+            }
+            let block = self.block;
+            compress(&mut self.h, &block);
+            self.filled = 0;
+        }
+        let (blocks, rest) = bytes.as_chunks::<64>();
+        for block in blocks {
+            compress(&mut self.h, block);
+        }
+        self.block[..rest.len()].copy_from_slice(rest);
+        self.filled = rest.len();
+    }
+
+    /// The lowercase hex digest of everything fed so far.
+    pub fn finalize_hex(mut self) -> String {
+        let bit_len = self.length.wrapping_mul(8);
+        let mut tail = [0u8; 72];
+        tail[0] = 0x80;
+        // Pad to 56 mod 64, then the length: one block, or two when the length does not fit.
+        let pad = if self.filled < 56 {
+            56 - self.filled
+        } else {
+            120 - self.filled
+        };
+        tail[pad..pad + 8].copy_from_slice(&bit_len.to_be_bytes());
+        let length = self.length;
+        self.update(&tail[..pad + 8]);
+        self.length = length;
+        self.h.iter().map(|word| format!("{word:08x}")).collect()
+    }
+}
+
+/// An `io::Write` that hashes what is written, so a value can be serialized straight into the
+/// digest without building its text first.
+impl std::io::Write for Sha256 {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// The lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = H0;
-    let mut message = bytes.to_vec();
-    let bit_len = (bytes.len() as u64).wrapping_mul(8);
-    message.push(0x80);
-    while message.len() % 64 != 56 {
-        message.push(0);
-    }
-    message.extend_from_slice(&bit_len.to_be_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize_hex()
+}
 
-    for block in message.as_chunks::<64>().0 {
-        let mut w = [0u32; 64];
-        for (i, word) in block.as_chunks::<4>().0.iter().enumerate() {
-            w[i] = u32::from_be_bytes(*word);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-        let mut v = h;
-        for i in 0..64 {
-            let s1 = v[4].rotate_right(6) ^ v[4].rotate_right(11) ^ v[4].rotate_right(25);
-            let ch = (v[4] & v[5]) ^ (!v[4] & v[6]);
-            let t1 = v[7]
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = v[0].rotate_right(2) ^ v[0].rotate_right(13) ^ v[0].rotate_right(22);
-            let maj = (v[0] & v[1]) ^ (v[0] & v[2]) ^ (v[1] & v[2]);
-            let t2 = s0.wrapping_add(maj);
-            v = [
-                t1.wrapping_add(t2),
-                v[0],
-                v[1],
-                v[2],
-                v[3].wrapping_add(t1),
-                v[4],
-                v[5],
-                v[6],
-            ];
-        }
-        for i in 0..8 {
-            h[i] = h[i].wrapping_add(v[i]);
-        }
+fn compress(h: &mut [u32; 8], block: &[u8; 64]) {
+    let mut w = [0u32; 64];
+    for (i, word) in block.as_chunks::<4>().0.iter().enumerate() {
+        w[i] = u32::from_be_bytes(*word);
     }
-    h.iter().map(|word| format!("{word:08x}")).collect()
+    for i in 16..64 {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
+    }
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
+    for i in 0..64 {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ (!e & g);
+        let t1 = hh
+            .wrapping_add(s1)
+            .wrapping_add(ch)
+            .wrapping_add(K[i])
+            .wrapping_add(w[i]);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        hh = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    for (state, word) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+        *state = state.wrapping_add(word);
+    }
 }
 
 /// The fingerprint of a list of records: SHA-256 over each record's compact JSON text, one per
 /// line, in the order the source stored them. It is the digest of the records as decoded, not of
 /// the file's bytes: the same records yield the same digest, but whitespace, escapes and number
-/// spellings of the file do not count.
-pub fn records_sha256(records: &[serde_json::Value]) -> String {
-    let mut text = String::new();
+/// spellings of the file do not count. Each record is serialized straight into the hasher.
+pub fn records_sha256<'a>(records: impl IntoIterator<Item = &'a serde_json::Value>) -> String {
+    let mut hasher = Sha256::new();
     for record in records {
-        text.push_str(&record.to_string());
-        text.push('\n');
+        // Writing into a hasher cannot fail, and a `Value` always serializes.
+        let _ = serde_json::to_writer(&mut hasher, record);
+        hasher.update(b"\n");
     }
-    sha256_hex(text.as_bytes())
+    hasher.finalize_hex()
 }
 
 #[cfg(test)]
@@ -118,15 +190,44 @@ mod tests {
         );
     }
 
+    /// Lengths around the padding boundaries (55, 56, 63, 64, 119, 120) and every split point of
+    /// a streamed input agree with the one-shot digest, and with `sha256sum` (digests computed
+    /// with Python's hashlib).
+    #[test]
+    fn streaming_agrees_at_every_boundary() {
+        let data: Vec<u8> = (0..300u32).map(|i| (i * 7 + 3) as u8).collect();
+        for len in [0, 1, 55, 56, 57, 63, 64, 65, 119, 120, 121, 128, 255, 300] {
+            let whole = sha256_hex(&data[..len]);
+            for split in 0..=len {
+                let mut hasher = Sha256::new();
+                hasher.update(&data[..split]);
+                hasher.update(&data[split..len]);
+                assert_eq!(hasher.finalize_hex(), whole, "len {len} split {split}");
+            }
+        }
+        assert_eq!(
+            sha256_hex(&data[..56]),
+            "4324d65f3c103567f5589c710bc08f8523f929a9272e3af36fc968e52abc6c27"
+        );
+        assert_eq!(
+            sha256_hex(&data[..64]),
+            "39e3d7b6b5d075d37d053ad89b24b41bef4f3c29760c84447cab3f3be1882241"
+        );
+        assert_eq!(
+            sha256_hex(&data[..120]),
+            "7836b787757e95e58b3ca5aec90b1b004e8deba1e50e9675af9cabf1a13a04b5"
+        );
+    }
+
     #[test]
     fn a_fingerprint_changes_with_one_byte() {
-        let a = records_sha256(&[serde_json::json!({"type": "message", "text": "one"})]);
-        let b = records_sha256(&[serde_json::json!({"type": "message", "text": "two"})]);
+        let a = records_sha256([&serde_json::json!({"type": "message", "text": "one"})]);
+        let b = records_sha256([&serde_json::json!({"type": "message", "text": "two"})]);
         assert_ne!(a, b);
         assert_eq!(a.len(), 64);
         assert_eq!(
             a,
-            records_sha256(&[serde_json::json!({"type": "message", "text": "one"})])
+            records_sha256([&serde_json::json!({"type": "message", "text": "one"})])
         );
     }
 }

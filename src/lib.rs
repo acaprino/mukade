@@ -10,6 +10,7 @@
 //! reader and writer here was built against that bench's fixtures, which the tests under
 //! `fixtures/` carry.
 
+pub mod cache;
 pub mod cli;
 pub mod detect;
 pub mod exe;
@@ -21,6 +22,7 @@ pub mod reader;
 pub mod roots;
 pub mod sha256;
 pub mod strict;
+pub mod timing;
 pub mod tools;
 pub mod wire;
 pub mod writer;

@@ -44,6 +44,105 @@ pub fn resolve(harness: HarnessId, explicit: Option<&str>) -> String {
     pick(explicit, env, on_path(name), well_known, name)
 }
 
+/// The version a harness binary reports, found as cheaply as it can be:
+///
+/// 1. an npm launcher (`pi.cmd`, or a symlink into `node_modules`) names the package it starts:
+///    the version is in that package's `package.json`, and no process is started (Pi, a Node
+///    program, takes about half a second to say it);
+/// 2. a version already learned about this very file (same path, size and modification time);
+/// 3. otherwise the binary is asked for `--version`, with a deadline, and the answer is kept.
+pub fn version_of(exe: &str) -> Option<String> {
+    version_of_in(exe, crate::cache::dir().as_deref())
+}
+
+/// [`version_of`] with the cache folder stated.
+pub fn version_of_in(exe: &str, cache: Option<&Path>) -> Option<String> {
+    let program = PathBuf::from(spawnable(exe));
+    if let Some(version) = package_version(&program) {
+        return Some(version);
+    }
+    let key = crate::cache::identity(&program).map(|identity| format!("version|{identity}"));
+    if let (Some(dir), Some(key)) = (cache, &key)
+        && let Some(known) = crate::cache::get(dir, key)
+    {
+        return Some(known);
+    }
+    let version = probe_version(&program)?;
+    if let (Some(dir), Some(key)) = (cache, &key) {
+        crate::cache::put(dir, key, &version);
+    }
+    Some(version)
+}
+
+/// How long `--version` may take before it is given up on.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn probe_version(program: &Path) -> Option<String> {
+    let mut command = Command::new(program);
+    command.arg("--version");
+    if let Ok(cwd) = std::env::current_dir() {
+        command.current_dir(cwd);
+    }
+    let output = run_within(&mut command, VERSION_TIMEOUT).ok()?;
+    output.status.filter(|status| status.success())?;
+    first_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The first `x.y.z` token of a line like `codex-cli 0.164.0` or `2.1.4`.
+pub fn first_version(text: &str) -> Option<String> {
+    text.split_whitespace().find_map(|token| {
+        let token = token.trim_start_matches('v');
+        let parts: Vec<&str> = token.split('.').collect();
+        let numeric = parts.len() >= 2
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+        numeric.then(|| token.to_string())
+    })
+}
+
+/// The version of the npm package a launcher starts, read from the package itself.
+fn package_version(program: &Path) -> Option<String> {
+    let dir = package_dir_of(program)?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("package.json")).ok()?).ok()?;
+    // A command-line package: one that declares what it installs.
+    manifest.get("bin")?;
+    manifest.get("version")?.as_str().map(str::to_owned)
+}
+
+/// The `node_modules/<package>` folder a launcher belongs to: the one a Windows npm `.cmd` shim
+/// names, or the one a symlinked launcher (npm's `bin` on Unix) resolves into.
+fn package_dir_of(program: &Path) -> Option<PathBuf> {
+    let in_node_modules = |dir: &Path| {
+        let parent = dir.parent()?;
+        let scoped = parent
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with('@'));
+        let holder = if scoped { parent.parent()? } else { parent };
+        (holder.file_name()? == "node_modules").then(|| dir.to_path_buf())
+    };
+    if is_batch(&program.to_string_lossy()) {
+        // `"%dp0%\node_modules\@scope\name\dist\cli.js" %*`, beside the shim.
+        let text = std::fs::read_to_string(program).ok()?;
+        let at = text.find("node_modules")? + "node_modules".len();
+        let mut names = text[at..]
+            .split(['\\', '/', '"', ' ', '\r', '\n'])
+            .filter(|part| !part.is_empty());
+        let first = names.next()?;
+        let mut dir = program.parent()?.join("node_modules").join(first);
+        if first.starts_with('@') {
+            dir = dir.join(names.next()?);
+        }
+        return in_node_modules(&dir).filter(|dir| dir.is_dir());
+    }
+    let real = std::fs::canonicalize(program).ok()?;
+    real.ancestors()
+        .skip(1)
+        .take(8)
+        .find_map(|dir| in_node_modules(dir).filter(|dir| dir.join("package.json").is_file()))
+}
+
 /// The program to spawn for a command. A bare name (no directory, no extension) is looked up on
 /// `PATH` the way a shell would, `PATHEXT` included: `Command::new("pi")` on Windows finds only a
 /// `pi.exe`, and an npm install is a `pi.cmd` launcher.
@@ -319,6 +418,124 @@ mod tests {
         assert!(is_batch("run.BAT"));
         assert!(!is_batch("pi"));
         assert!(!is_batch(r"C:\bin\pi.exe"));
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mukade-exe-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A launcher that counts how often it is run, and prints `faketool <version>`.
+    fn counting_launcher(dir: &Path, count: &Path, version: &str) -> PathBuf {
+        if cfg!(windows) {
+            let path = dir.join("faketool.cmd");
+            std::fs::write(
+                &path,
+                format!(
+                    "@echo off\r\necho x>>\"{}\"\r\necho faketool {version}\r\n",
+                    count.display()
+                ),
+            )
+            .unwrap();
+            path
+        } else {
+            let path = dir.join("faketool");
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\necho x >> '{}'\necho faketool {version}\n",
+                    count.display()
+                ),
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            path
+        }
+    }
+
+    fn runs(count: &Path) -> usize {
+        std::fs::read_to_string(count).map_or(0, |text| text.lines().count())
+    }
+
+    /// A version already learned about this very file is not asked for again; a changed file is.
+    #[test]
+    fn a_probe_is_asked_once_per_binary() {
+        let dir = scratch("probe-cache");
+        let (cache, count) = (dir.join("cache"), dir.join("count.txt"));
+        let tool = counting_launcher(&dir, &count, "3.4.5");
+        let program = tool.to_string_lossy().into_owned();
+        assert_eq!(
+            version_of_in(&program, Some(&cache)).as_deref(),
+            Some("3.4.5")
+        );
+        assert_eq!(
+            version_of_in(&program, Some(&cache)).as_deref(),
+            Some("3.4.5")
+        );
+        assert_eq!(runs(&count), 1, "the second answer came from the cache");
+        // An updated binary (another size) is a different binary.
+        counting_launcher(&dir, &count, "3.4.50");
+        assert_eq!(
+            version_of_in(&program, Some(&cache)).as_deref(),
+            Some("3.4.50")
+        );
+        assert_eq!(runs(&count), 2);
+        // Without a cache folder it just asks.
+        assert_eq!(version_of_in(&program, None).as_deref(), Some("3.4.50"));
+        assert_eq!(runs(&count), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An npm launcher's version is the package's own: no process is started.
+    #[cfg(windows)]
+    #[test]
+    fn an_npm_launchers_version_is_read_from_its_package() {
+        let dir = scratch("npm-shim");
+        let package = dir.join("node_modules").join("@scope").join("tool");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"@scope/tool","version":"9.8.7","bin":{"tool":"cli.js"}}"#,
+        )
+        .unwrap();
+        let shim = dir.join("tool.cmd");
+        std::fs::write(
+            &shim,
+            "@ECHO off\r\nSETLOCAL\r\nCALL :find_dp0\r\nnode \"%dp0%\\node_modules\\@scope\\tool\\cli.js\" %*\r\n",
+        )
+        .unwrap();
+        // The cache folder is None and the shim would not run: only the package can answer.
+        assert_eq!(
+            version_of_in(&shim.to_string_lossy(), None).as_deref(),
+            Some("9.8.7")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `package.json` somewhere above a native binary is not that binary's package.
+    #[test]
+    fn a_stray_package_json_above_a_binary_is_not_its_package() {
+        let dir = scratch("stray");
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"version":"0.0.1","bin":{"x":"y"}}"#,
+        )
+        .unwrap();
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let count = dir.join("count.txt");
+        let tool = counting_launcher(&bin, &count, "2.0.0");
+        assert_eq!(
+            version_of_in(&tool.to_string_lossy(), None).as_deref(),
+            Some("2.0.0")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

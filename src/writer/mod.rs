@@ -75,7 +75,19 @@ pub trait Writer {
     }
 
     /// Write the session as a new native session of this harness.
-    fn write(&self, session: &Session, opts: &WriteOpts) -> Result<Written>;
+    fn write(&self, session: &Session, opts: &WriteOpts) -> Result<Written> {
+        let plan = plan::plan(session, self.harness(), opts);
+        self.write_planned(session, &plan, opts)
+    }
+
+    /// Write a session whose plan is already made: the hop plans once, checks that plan against
+    /// the provider rules, and writes that same plan.
+    fn write_planned(
+        &self,
+        session: &Session,
+        plan: &plan::Plan,
+        opts: &WriteOpts,
+    ) -> Result<Written>;
 }
 
 /// The writer for a harness.
@@ -91,6 +103,7 @@ pub fn for_harness(harness: HarnessId) -> Box<dyn Writer> {
 /// Write a session's rows to a file, as JSON Lines with a trailing newline.
 pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) -> Result<()> {
     use anyhow::Context;
+    let _span = crate::timing::span("serialize + write file");
     let mut text = String::new();
     for row in rows {
         text.push_str(&serde_json::to_string(row).context("serialize a record")?);

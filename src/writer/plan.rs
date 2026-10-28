@@ -263,6 +263,25 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let source = session.meta.harness;
     let mut ids = CallIds::new(dest_protocol.as_ref() == Some(&Protocol::AnthropicMessages));
 
+    // The structured (non-text) result blocks of each call, counted once: a call that travels as
+    // text loses them, and looking them up per call would rescan every result.
+    let mut structured: HashMap<&str, usize> = HashMap::new();
+    for entry in session.conversation() {
+        if let Kind::Results { results } = &entry.kind {
+            for result in results {
+                if let ResultContent::Blocks(blocks) = &result.content {
+                    let n = blocks
+                        .iter()
+                        .filter(|block| block.get("type").and_then(Value::as_str) != Some("text"))
+                        .count();
+                    if n > 0 {
+                        *structured.entry(result.call_id.as_str()).or_default() += n;
+                    }
+                }
+            }
+        }
+    }
+
     for entry in session.conversation() {
         counts.messages_in += 1;
         match &entry.kind {
@@ -337,25 +356,8 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                             });
                         }
                         Translation::Text { .. } => {
-                            for result in session
-                                .conversation()
-                                .filter_map(|entry| match &entry.kind {
-                                    Kind::Results { results } => Some(results),
-                                    _ => None,
-                                })
-                                .flatten()
-                                .filter(|result| result.call_id == call.id)
-                            {
-                                if let ResultContent::Blocks(blocks) = &result.content {
-                                    counts.dropped_result_blocks += blocks
-                                        .iter()
-                                        .filter(|block| {
-                                            block.get("type").and_then(Value::as_str)
-                                                != Some("text")
-                                        })
-                                        .count();
-                                }
-                            }
+                            counts.dropped_result_blocks +=
+                                structured.get(call.id.as_str()).copied().unwrap_or(0);
                             counts.tools_text_form += 1;
                             if !counts.text_form_tools.contains(&call.source_name) {
                                 counts.text_form_tools.push(call.source_name.clone());

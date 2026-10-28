@@ -57,7 +57,12 @@ impl Writer for Opencode {
         HarnessId::OpenCode
     }
 
-    fn write(&self, session: &Session, opts: &WriteOpts) -> Result<Written> {
+    fn write_planned(
+        &self,
+        session: &Session,
+        plan: &plan::Plan,
+        opts: &WriteOpts,
+    ) -> Result<Written> {
         let id = new_session_id();
         let cwd = opts
             .cwd
@@ -70,7 +75,7 @@ impl Writer for Opencode {
             anyhow::bail!("the working directory {cwd:?} starts with '-': not passed to opencode");
         }
         let mut clock = Clock::new(opts.now.as_deref());
-        let document = document_for(session, &id, &cwd, opts, &mut clock)?;
+        let document = document_from_plan(session, plan, &id, &cwd, opts, &mut clock)?;
 
         // The document goes beside the destination's store, never over it.
         let root = opts
@@ -167,6 +172,18 @@ pub fn document_for(
     clock: &mut Clock,
 ) -> Result<Value> {
     let plan = plan::plan(session, HarnessId::OpenCode, opts);
+    document_from_plan(session, &plan, id, cwd, opts, clock)
+}
+
+/// [`document_for`] for a plan that is already made.
+pub fn document_from_plan(
+    session: &Session,
+    plan: &plan::Plan,
+    id: &str,
+    cwd: &str,
+    opts: &WriteOpts,
+    clock: &mut Clock,
+) -> Result<Value> {
     let model = model_of(session, opts)?;
     let project_id = opts
         .project_id

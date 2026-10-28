@@ -52,6 +52,10 @@ pub struct Meta {
     /// Where the session was read from, for the receipt and the manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
+    /// The SHA-256 of the source's own bytes (the file, or the text `session export` printed), as
+    /// `sha256sum` would print it: what the manifest states as the source's fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sha256: Option<String>,
 }
 
 /// One conversation, ready to be written somewhere else.

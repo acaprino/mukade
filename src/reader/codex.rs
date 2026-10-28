@@ -14,7 +14,7 @@
 //! - a graceful interrupt writes a user message carrying `<turn_aborted>` plus an
 //!   `event_msg/turn_aborted`; a hard kill leaves the user message and nothing else (L9).
 
-use super::json::{blocks_text, fallback_id, rows_from_lines, str_at};
+use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
     CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
@@ -32,21 +32,31 @@ pub struct Codex;
 
 /// Read one Codex rollout file (`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let (rows, unfinished) = rows_from_lines(&text, &path.display().to_string())?;
-    let mut session = parse(&rows, Some(path))?;
-    super::json::keep_unfinished(&mut session, unfinished);
+    let file = super::json::read_jsonl(path)?;
+    let _span = crate::timing::span("build entries");
+    let mut session = parse_owned(file.rows, Some(path))?;
+    session.meta.source_sha256 = Some(file.sha256.wait());
+    super::json::keep_unfinished(&mut session, file.unfinished);
     Ok(session)
 }
 
 /// Read records that were already decoded.
 pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
+    parse_owned(rows.to_vec(), source_path)
+}
+
+/// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
+/// instead of being copied there.
+pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
     let mut b = Builder::default();
-    for (i, row) in rows.iter().enumerate() {
+    for (i, row) in rows.into_iter().enumerate() {
         b.push(i, row);
     }
     b.finish(source_path)
 }
+
+/// What `row.get("payload")` is for a record without one.
+static NO_PAYLOAD: Value = Value::Null;
 
 // ---------------------------------------------------------------------------------------------
 
@@ -67,7 +77,7 @@ enum Class {
 }
 
 fn class_of(row: &Value) -> Class {
-    let payload = row.get("payload").cloned().unwrap_or(Value::Null);
+    let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
     let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
     match row.get("type").and_then(Value::as_str).unwrap_or("") {
         "compacted" => Class::Compacted,
@@ -148,25 +158,25 @@ struct MetaBuilder {
 
 impl MetaBuilder {
     fn observe(&mut self, row: &Value) {
-        let payload = row.get("payload").cloned().unwrap_or(Value::Null);
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         if row.get("type").and_then(Value::as_str) == Some("session_meta") {
             if self.id.is_none() {
                 // A native rollout states both; a hand-written one may carry only `id`.
-                self.id = str_at(&payload, "/session_id")
-                    .or_else(|| str_at(&payload, "/id"))
+                self.id = str_at(payload, "/session_id")
+                    .or_else(|| str_at(payload, "/id"))
                     .filter(|s| !s.is_empty());
             }
             if self.cwd.is_none() {
-                self.cwd = str_at(&payload, "/cwd");
+                self.cwd = str_at(payload, "/cwd");
             }
             if self.version.is_none() {
-                self.version = str_at(&payload, "/cli_version");
+                self.version = str_at(payload, "/cli_version");
             }
             if self.created.is_none() {
-                self.created = str_at(&payload, "/timestamp");
+                self.created = str_at(payload, "/timestamp");
             }
             if self.git_branch.is_none() {
-                self.git_branch = str_at(&payload, "/git/branch");
+                self.git_branch = str_at(payload, "/git/branch");
             }
         }
         if let Some(ts) = str_at(row, "/timestamp") {
@@ -181,9 +191,9 @@ impl MetaBuilder {
 }
 
 impl Builder {
-    fn push(&mut self, index: usize, row: &Value) {
-        self.meta.observe(row);
-        let payload = row.get("payload").cloned().unwrap_or(Value::Null);
+    fn push(&mut self, index: usize, row: Value) {
+        self.meta.observe(&row);
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         // The environment block states the shell commands run with; it arrives before any call.
         if let Some(text) = payload
             .get("content")
@@ -205,19 +215,19 @@ impl Builder {
             }
             self.model = Some(model);
         }
-        match class_of(row) {
+        match class_of(&row) {
             Class::StepPart => {
                 self.open_results = None;
-                self.step_with(index, row, &payload);
+                self.step_with(index, row);
             }
             Class::Result => {
                 self.open_step = None;
-                self.results_with(index, row, &payload);
+                self.results_with(index, row);
             }
             Class::User => {
                 self.flush();
                 self.entries.push(Entry {
-                    id: id_of(&payload, index),
+                    id: id_of(payload, index),
                     kind: Kind::User {
                         text: payload
                             .get("content")
@@ -229,38 +239,38 @@ impl Builder {
                             .map(|blocks| super::json::attachments(blocks))
                             .unwrap_or_default(),
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
             Class::Abort => {
                 self.flush();
                 self.entries.push(Entry {
-                    id: id_of(&payload, index),
+                    id: id_of(payload, index),
                     kind: Kind::Meta {
                         kind: MetaKind::TurnAborted,
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
-            Class::Compacted => self.compacted(index, row, &payload),
+            Class::Compacted => self.compacted(index, row),
             Class::TurnBoundary => {
                 // A new turn starts here: the step and any results entry that was still open
                 // belong to the turn that just ended.
                 self.open_step = None;
                 self.open_results = None;
                 self.entries.push(Entry {
-                    id: id_of(&payload, index),
+                    id: id_of(payload, index),
                     kind: Kind::Meta {
                         kind: MetaKind::Internal,
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
             Class::Meta(kind) => {
                 self.entries.push(Entry {
-                    id: id_of(&payload, index),
+                    id: id_of(payload, index),
                     kind: Kind::Meta { kind },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
             }
         }
@@ -268,7 +278,8 @@ impl Builder {
 
     /// The `compacted` record. The summary the model wrote in the turn it names is folded into
     /// this entry: it is not part of the history the destination replays.
-    fn compacted(&mut self, index: usize, row: &Value, payload: &Value) {
+    fn compacted(&mut self, index: usize, row: Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         let compaction_turn = str_at(payload, "/latest_token_usage_record/turn_id");
         let fold = match (&self.open_step, &compaction_turn) {
             (Some((i, turn)), Some(t)) if turn == t => Some(*i),
@@ -288,13 +299,13 @@ impl Builder {
             // Replace the summary turn in place, so the entry stays where its first record is.
             Some(i) => {
                 let entry = &mut self.entries[i];
-                entry.raw.push(row.clone());
+                entry.raw.push(row);
                 entry.kind = kind;
             }
             None => self.entries.push(Entry {
                 id: id_of(payload, index),
                 kind,
-                raw: vec![row.clone()],
+                raw: vec![row],
             }),
         }
     }
@@ -304,7 +315,8 @@ impl Builder {
         self.open_results = None;
     }
 
-    fn step_with(&mut self, index: usize, row: &Value, payload: &Value) {
+    fn step_with(&mut self, index: usize, row: Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         let turn = str_at(
             payload,
             "/internal_chat_message_metadata_passthrough/turn_id",
@@ -336,7 +348,6 @@ impl Builder {
         }
         let (i, _) = *self.open_step.as_ref().expect("just opened");
         let entry = &mut self.entries[i];
-        entry.raw.push(row.clone());
         let model_id = self.model.as_ref().map(|m| m.id.clone());
         let Kind::Step {
             reasoning,
@@ -346,6 +357,7 @@ impl Builder {
             ..
         } = &mut entry.kind
         else {
+            entry.raw.push(row);
             return;
         };
         let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
@@ -394,9 +406,11 @@ impl Builder {
             _ => {}
         }
         *end = step_end(None, !calls.is_empty());
+        entry.raw.push(row);
     }
 
-    fn results_with(&mut self, index: usize, row: &Value, payload: &Value) {
+    fn results_with(&mut self, index: usize, row: Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         let result = ToolResult {
             call_id: str_at(payload, "/call_id").unwrap_or_default(),
             content: match payload.get("output") {
@@ -414,7 +428,7 @@ impl Builder {
         match self.open_results {
             Some(i) => {
                 let entry = &mut self.entries[i];
-                entry.raw.push(row.clone());
+                entry.raw.push(row);
                 if let Kind::Results { results } = &mut entry.kind {
                     results.push(result);
                 }
@@ -425,7 +439,7 @@ impl Builder {
                     kind: Kind::Results {
                         results: vec![result],
                     },
-                    raw: vec![row.clone()],
+                    raw: vec![row],
                 });
                 self.open_results = Some(self.entries.len() - 1);
             }
@@ -466,6 +480,7 @@ impl Builder {
                 git_branch: m.git_branch,
                 parent: None,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
+                source_sha256: None,
             },
             entries: self.entries,
         })

@@ -25,6 +25,7 @@ fn session(entries: Vec<Entry>) -> Session {
             git_branch: None,
             parent: None,
             source_path: None,
+            source_sha256: None,
         },
         entries,
     }

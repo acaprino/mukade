@@ -58,6 +58,7 @@ options:
   --from-file <path>       read the source from a file instead of its store
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
+  --timing                 print where the time went, phase by phase, on stderr
   --root <dir>             the store directory to use, and to infer the harness from
   --claude-exe <path>      the claude binary to spawn
   --codex-exe <path>       the codex binary to spawn
@@ -106,6 +107,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--output" => flags.output = Some(next(rest, &mut i)?),
+            "--timing" => crate::timing::enable(),
             "--reasoning" => flags.reasoning = Some(next(rest, &mut i)?),
             "--root" => flags.root = Some(next(rest, &mut i)?),
             "--claude-exe" => flags.claude_exe = Some(next(rest, &mut i)?),
@@ -232,8 +234,9 @@ pub fn run(args: &[String]) -> Result<()> {
             opts.source_facts.content_sha256 = crate::sha256::records_sha256(
                 doc.get("messages")
                     .and_then(serde_json::Value::as_array)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
+                    .map(|messages| messages.iter())
+                    .into_iter()
+                    .flatten(),
             );
             deliver(
                 crate::hop::import(harness, &session, &opts),
@@ -373,15 +376,7 @@ impl Flags {
             reasoning: write.reasoning,
             source_facts: SourceFacts {
                 harness: source_harness.as_str().to_string(),
-                version: Some(session.meta.harness_version.clone()).filter(|v| !v.is_empty()),
-                session_id: session.meta.id.clone(),
-                content_sha256: crate::sha256::records_sha256(
-                    &session
-                        .entries
-                        .iter()
-                        .flat_map(|entry| entry.raw.clone())
-                        .collect::<Vec<_>>(),
-                ),
+                ..SourceFacts::of(session)
             },
             write: WriteDetails {
                 dest_version: write.dest_version,
@@ -461,10 +456,10 @@ impl Flags {
         let resolved_exe = crate::exe::resolve(harness, self.exe_flag(harness));
         // The destination's own version stamp, when the caller did not state it: L7 wants the
         // destination's `cli_version`, and Codex refuses a rollout without one.
-        let dest_version = self
-            .dest_version
-            .clone()
-            .or_else(|| destination_version(&resolved_exe));
+        let dest_version = self.dest_version.clone().or_else(|| {
+            let _span = crate::timing::span("probe destination version");
+            crate::exe::version_of(&resolved_exe)
+        });
         let cwd = self.cwd.clone().or_else(|| session.meta.cwd.clone());
         // OpenCode's interchange format requires the destination's own project id; the destination
         // is the only one that knows it, so it is asked.
@@ -521,32 +516,44 @@ fn apply_root(roots: &mut StoreRoots, harness: HarnessId, root: &std::path::Path
     }
 }
 
-/// The destination's own version, asked of the destination's binary (already resolved by
-/// `crate::exe`). No model is involved: this is `--version`, and a failure simply leaves the
-/// version unknown.
-fn destination_version(exe: &str) -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    let text = run_text(exe, &["--version"], &cwd)?;
-    first_version(&text)
-}
-
-/// The first `x.y.z` token of a line like `codex-cli 0.164.0` or `2.1.4`.
-fn first_version(text: &str) -> Option<String> {
-    text.split_whitespace().find_map(|token| {
-        let token = token.trim_start_matches('v');
-        let parts: Vec<&str> = token.split('.').collect();
-        let numeric = parts.len() >= 2
-            && parts
-                .iter()
-                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
-        numeric.then(|| token.to_string())
-    })
-}
-
 /// The project the destination already files sessions of this directory under. The destination is
 /// asked from **inside that directory**: the CLI scopes its session list to the project it is run
 /// in, so the question has to be asked where the session will live.
 fn opencode_project_id(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
+    let _span = crate::timing::span("probe opencode project");
+    opencode_project_id_in(exe, cwd, roots, crate::cache::dir().as_deref())
+}
+
+/// [`opencode_project_id`] with the cache folder stated. The answer is kept for this binary, this
+/// database and this directory: finding it takes a process start per session it has to look at.
+fn opencode_project_id_in(
+    exe: &str,
+    cwd: &str,
+    roots: &StoreRoots,
+    cache: Option<&std::path::Path>,
+) -> Option<String> {
+    let program = std::path::PathBuf::from(crate::exe::spawnable(exe));
+    let key = crate::cache::identity(&program).map(|identity| {
+        let database = roots
+            .opencode_db
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        format!("project|{identity}|{database}|{}", normalise_directory(cwd))
+    });
+    if let (Some(dir), Some(key)) = (cache, &key)
+        && let Some(known) = crate::cache::get(dir, key)
+    {
+        return Some(known);
+    }
+    let found = ask_opencode_project(exe, cwd, roots)?;
+    if let (Some(dir), Some(key)) = (cache, &key) {
+        crate::cache::put(dir, key, &found);
+    }
+    Some(found)
+}
+
+fn ask_opencode_project(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
     let directory = std::path::Path::new(cwd);
     // Asked of the store the session will be written to, not the caller's own.
     let store = Some((HarnessId::OpenCode, roots));
@@ -579,13 +586,15 @@ fn opencode_project_id(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<Strin
     None
 }
 
+fn normalise_directory(directory: &str) -> String {
+    directory
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
 fn same_directory(a: &str, b: &str) -> bool {
-    let normalise = |s: &str| {
-        s.replace('\\', "/")
-            .trim_end_matches('/')
-            .to_ascii_lowercase()
-    };
-    normalise(a) == normalise(b)
+    normalise_directory(a) == normalise_directory(b)
 }
 
 /// How long a question to the destination's binary (its version, its sessions) may take; a probe
@@ -609,10 +618,6 @@ fn run_probe(
         .status
         .is_some_and(|status| status.success())
         .then_some(output.stdout)
-}
-
-fn run_text(exe: &str, args: &[&str], cwd: &std::path::Path) -> Option<String> {
-    run_probe(exe, args, cwd, None).map(|out| String::from_utf8_lossy(&out).into_owned())
 }
 
 fn run_json(
@@ -673,7 +678,8 @@ fn top_level_string(text: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::top_level_string;
+    use super::{opencode_project_id_in, top_level_string};
+    use crate::roots::StoreRoots;
 
     /// Codex's own provider is the top-level key: not a provider table's field, not a profile's,
     /// and not the comment after it.
@@ -688,5 +694,70 @@ mod tests {
         assert_eq!(top_level_string(nested, "model_provider"), None);
         let dotted = "model_providers.azure.name = \"Azure\"\n";
         assert_eq!(top_level_string(dotted, "model_provider"), None);
+    }
+
+    /// The project id OpenCode files a directory under takes one process start per session it has
+    /// to look at: it is asked once per binary, database and directory.
+    #[test]
+    fn the_opencode_project_of_a_directory_is_asked_once() {
+        let dir = std::env::temp_dir().join(format!("mukade-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let (count, document) = (dir.join("count.txt"), dir.join("export.json"));
+        std::fs::write(
+            &document,
+            serde_json::json!({"info": {"location": {"directory": work.to_string_lossy()},
+                                        "projectID": "proj_work"}})
+            .to_string(),
+        )
+        .unwrap();
+        // `session list` prints one session; `session export` prints its document.
+        let launcher = if cfg!(windows) {
+            let path = dir.join("fakeopencode.cmd");
+            std::fs::write(
+                &path,
+                format!(
+                    "@echo off\r\necho x>>\"{}\"\r\nif \"%2\"==\"list\" (echo ses_one	title) else type \"{}\"\r\n",
+                    count.display(),
+                    document.display()
+                ),
+            )
+            .unwrap();
+            path
+        } else {
+            let path = dir.join("fakeopencode");
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\necho x >> '{}'\nif [ \"$2\" = list ]; then printf 'ses_one\\ttitle\\n'; else cat '{}'; fi\n",
+                    count.display(),
+                    document.display()
+                ),
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            path
+        };
+        let exe = launcher.to_string_lossy().into_owned();
+        let cache = dir.join("cache");
+        let roots = StoreRoots::default();
+        let cwd = work.to_string_lossy().into_owned();
+        let runs = || std::fs::read_to_string(&count).map_or(0, |t| t.lines().count());
+        let first = opencode_project_id_in(&exe, &cwd, &roots, Some(&cache));
+        assert_eq!(first.as_deref(), Some("proj_work"));
+        let asked = runs();
+        assert!(asked >= 2, "a list and an export: {asked}");
+        assert_eq!(
+            opencode_project_id_in(&exe, &cwd, &roots, Some(&cache)).as_deref(),
+            Some("proj_work")
+        );
+        assert_eq!(runs(), asked, "the second answer came from the cache");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

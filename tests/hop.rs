@@ -489,6 +489,9 @@ fn a_hop_into_the_same_harness_leaves_the_source_untouched() {
 #[test]
 fn the_source_fingerprint_is_the_digest_of_its_records() {
     let mut session = support::read_source(HarnessId::Pi);
+    // A session with no file digest (built by hand, or from a document) is fingerprinted by its
+    // records.
+    session.meta.source_sha256 = None;
     session.entries = vec![mukade::model::Entry {
         id: "e".into(),
         kind: Kind::Meta {
@@ -502,5 +505,39 @@ fn the_source_fingerprint_is_the_digest_of_its_records() {
     assert_eq!(
         SourceFacts::of(&session).content_sha256,
         "18f569be308bed04a7a26c666d30444b2be698f0adaa689b43fe9ff89d9c9c79"
+    );
+}
+
+/// The manifest's fingerprint of a source is the SHA-256 of its own bytes, so it can be checked
+/// with `sha256sum` (the digests below were computed with Python's hashlib).
+#[test]
+fn a_sources_fingerprint_is_the_sha256_of_its_file() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let digest = |session: Result<Session, anyhow::Error>| {
+        SourceFacts::of(&session.expect("the fixture reads")).content_sha256
+    };
+    assert_eq!(
+        digest(mukade::reader::claude_code::read_file(&fixtures.join(
+            "claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl"
+        ))),
+        "df8f8f84d7fd3d21e66088171255f12021f06090c0349dce8ee7783e726206de"
+    );
+    assert_eq!(
+        digest(mukade::reader::codex::read_file(&fixtures.join(
+            "codex/source/rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl"
+        ))),
+        "6fc8faaa724eaa70ce6ccef6132a19d3baa290a50a2e9c5c484d7c4d7fe932d7"
+    );
+    assert_eq!(
+        digest(mukade::reader::pi::read_file(&fixtures.join(
+            "pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"
+        ))),
+        "978673389f8cbe70357fcb56624453069b6d86a38e04ddc277b9190694b51c73"
+    );
+    assert_eq!(
+        digest(mukade::reader::opencode::read_file(
+            &fixtures.join("opencode/source/session-export.json")
+        )),
+        "91f1a54dd0b5adc20bf1f7de65593d1c5d04f01100c1f0e191992c5a5823a8ab"
     );
 }
