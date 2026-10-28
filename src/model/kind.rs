@@ -53,6 +53,9 @@ pub enum MetaKind {
     Attachment,
     /// Any other harness-internal record (requests, cost, telemetry, queues).
     Internal,
+    /// A record of a branch the conversation left (a rewind, an edited prompt): kept, but the
+    /// harness does not resume it.
+    OffBranch,
 }
 
 /// One unit of the interchange model.

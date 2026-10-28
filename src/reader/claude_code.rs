@@ -54,11 +54,93 @@ pub fn read_file(path: &Path) -> Result<Session> {
 
 /// Read records that were already decoded (the CLI and the tests both come through here).
 pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
+    let on_branch = active_branch(rows);
     let mut b = Builder::default();
     for (i, row) in rows.iter().enumerate() {
-        b.push(i, row);
+        b.push(i, row, on_branch[i]);
     }
     b.finish(source_path)
+}
+
+/// Which rows belong to the branch Claude Code resumes. A rewind or an edited prompt starts a new
+/// branch from an earlier row and leaves the abandoned one in the file; Claude Code resumes the
+/// branch of the last row, walking `parentUuid` back from it (and `logicalParentUuid` across a
+/// compaction boundary, whose `parentUuid` is null). Walking parents alone loses a parallel call:
+/// its `tool_use` row shares the `message.id` of a row on the chain, and its `tool_result` row hangs
+/// off that `tool_use` row, so both are taken by those ids. Rows outside the tree (no `uuid`) and
+/// subagent rows are left as they are.
+fn active_branch(rows: &[Value]) -> Vec<bool> {
+    let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
+    let in_tree =
+        |row: &Value| row.get("uuid").and_then(Value::as_str).is_some() && !truthy(row.get("isSidechain"));
+    let Some(leaf) = rows.iter().rposition(&in_tree) else {
+        return vec![true; rows.len()];
+    };
+    let by_uuid: std::collections::HashMap<String, usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| in_tree(row))
+        .filter_map(|(i, row)| text(row, "uuid").map(|uuid| (uuid, i)))
+        .collect();
+
+    let mut active = vec![false; rows.len()];
+    let mut at = Some(leaf);
+    while let Some(i) = at {
+        if active[i] {
+            break;
+        }
+        active[i] = true;
+        let parent = text(&rows[i], "parentUuid").or_else(|| text(&rows[i], "logicalParentUuid"));
+        at = parent.and_then(|uuid| by_uuid.get(&uuid).copied());
+    }
+
+    let message_ids: std::collections::HashSet<String> = rows
+        .iter()
+        .zip(&active)
+        .filter(|(_, on)| **on)
+        .filter_map(|(row, _)| row.pointer("/message/id").and_then(Value::as_str).map(str::to_owned))
+        .collect();
+    for (i, row) in rows.iter().enumerate() {
+        if in_tree(row)
+            && row.get("type").and_then(Value::as_str) == Some("assistant")
+            && row
+                .pointer("/message/id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| message_ids.contains(id))
+        {
+            active[i] = true;
+        }
+    }
+    let call_ids: std::collections::HashSet<&str> = rows
+        .iter()
+        .zip(&active)
+        .filter(|(_, on)| **on)
+        .filter_map(|(row, _)| row.pointer("/message/content").and_then(Value::as_array))
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter_map(|block| block.get("id").and_then(Value::as_str))
+        .collect();
+    for (i, row) in rows.iter().enumerate() {
+        let answers_a_call = row
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                blocks.iter().any(|block| {
+                    block
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| call_ids.contains(id))
+                })
+            });
+        if in_tree(row) && answers_a_call {
+            active[i] = true;
+        }
+    }
+
+    rows.iter()
+        .zip(active)
+        .map(|(row, on)| on || !in_tree(row))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -271,7 +353,7 @@ impl MetaBuilder {
 }
 
 impl Builder {
-    fn push(&mut self, index: usize, row: &Value) {
+    fn push(&mut self, index: usize, row: &Value, on_branch: bool) {
         self.meta.observe(row);
         if truthy(row.get("isSidechain")) {
             // A subagent's transcript: kept, never conversation (§10 "not exercised").
@@ -285,7 +367,20 @@ impl Builder {
             });
             return;
         }
-        match class_of(row) {
+        let class = class_of(row);
+        if !on_branch && !matches!(class, Class::Meta(_)) {
+            // A row of a branch the conversation left: kept, not resumed.
+            self.flush();
+            self.entries.push(Entry {
+                id: row_id(row, index),
+                kind: Kind::Meta {
+                    kind: MetaKind::OffBranch,
+                },
+                raw: vec![row.clone()],
+            });
+            return;
+        }
+        match class {
             Class::Assistant(message_id) => {
                 self.flush_unless_step(&message_id);
                 self.step_with(index, row, message_id);

@@ -301,3 +301,21 @@ fn a_call_id_anthropic_refuses_is_rewritten_for_call_and_result() {
     let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
     assert!(losses.iter().any(|loss| loss.contains("ids rewritten")), "{losses:?}");
 }
+
+/// No loss is silent: the records of an abandoned branch (a rewind, an edited prompt) stay in the
+/// source and are not written, and the manifest says so.
+#[test]
+fn records_of_an_abandoned_branch_are_counted() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-off-branch");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let off = Entry {
+        id: "old".into(),
+        kind: Kind::Meta { kind: mukade::model::MetaKind::OffBranch },
+        raw: vec![],
+    };
+    let s = session(vec![off.clone(), off, step("e1", vec![])]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.dropped_off_branch, 2);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(losses.iter().any(|loss| loss.contains("abandoned branch")), "{losses:?}");
+}

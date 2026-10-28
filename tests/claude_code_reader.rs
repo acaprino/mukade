@@ -266,7 +266,7 @@ fn a_synthetic_reply_is_meta_and_the_turn_stays_unanswered() {
     rows.push(serde_json::json!({
         "type": "assistant",
         "uuid": "synthetic-1",
-        "parentUuid": rows.last().unwrap()["uuid"],
+        "parentUuid": rows.iter().rev().find_map(|row| row.get("uuid")).unwrap(),
         "isSidechain": false,
         "sessionId": SESSION_ID,
         "timestamp": "2026-10-27T15:40:00.000Z",
@@ -286,4 +286,81 @@ fn a_synthetic_reply_is_meta_and_the_turn_stays_unanswered() {
         "{:?}",
         last.kind
     );
+}
+
+/// The fixture's rows, decoded, for tests that extend the recorded session.
+fn fixture_rows() -> Vec<serde_json::Value> {
+    std::fs::read_to_string(fixture())
+        .unwrap()
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// A rewind or an edited prompt starts a new branch from an earlier row; the abandoned rows stay in
+/// the file. Claude Code resumes the branch of the last row, walking `parentUuid` back from it, so
+/// the abandoned rows are not conversation: they are kept as `Meta(OffBranch)`. The parallel call
+/// whose `tool_use` and `tool_result` rows hang beside the chain still belongs to it.
+#[test]
+fn an_abandoned_branch_is_not_conversation() {
+    let mut rows = fixture_rows();
+    let t1_reply = rows
+        .iter()
+        .find(|row| {
+            row.pointer("/message/content/0/text").and_then(serde_json::Value::as_str)
+                == Some("H27-FINAL: both files were read.")
+        })
+        .and_then(|row| row["uuid"].as_str())
+        .expect("the T1 reply")
+        .to_string();
+    rows.push(serde_json::json!({
+        "type": "user", "uuid": "edited-1", "parentUuid": t1_reply, "isSidechain": false,
+        "sessionId": SESSION_ID, "timestamp": "2026-10-27T15:40:00.000Z",
+        "message": {"role": "user", "content": "H27-EDITED"},
+    }));
+    rows.push(serde_json::json!({
+        "type": "assistant", "uuid": "edited-2", "parentUuid": "edited-1", "isSidechain": false,
+        "sessionId": SESSION_ID, "timestamp": "2026-10-27T15:40:01.000Z",
+        "message": {"id": "msg_edited", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "EDITED-REPLY"}], "stop_reason": "end_turn"},
+    }));
+    let s = claude_code::parse(&rows, None).unwrap();
+
+    let users: Vec<&str> = s
+        .conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(users.len(), 2, "{users:?}");
+    assert!(users[0].starts_with("H27-TOOLS"), "{users:?}");
+    assert_eq!(users[1], "H27-EDITED");
+    assert!(!s.conversation().any(|e| matches!(e.kind, Kind::Compaction { .. })));
+    assert!(!s.interrupted_last_turn());
+
+    let calls: usize = s
+        .conversation()
+        .map(|e| match &e.kind {
+            Kind::Step { calls, .. } => calls.len(),
+            _ => 0,
+        })
+        .sum();
+    let results: usize = s
+        .conversation()
+        .map(|e| match &e.kind {
+            Kind::Results { results } => results.len(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!((calls, results), (2, 2), "both parallel calls and both results stay");
+
+    let off = s
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind, Kind::Meta { kind: MetaKind::OffBranch }))
+        .count();
+    assert!(off >= 4, "T2, the compaction, T3 and T4 are off the branch: {off}");
 }

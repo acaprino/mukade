@@ -5,7 +5,7 @@
 //! what is dropped. A writer's job is then only to lay the plan out as native records.
 
 use crate::model::{
-    Attachment, HarnessId, Kind, ModelRef, Protocol, ResultContent, Session, StepEnd,
+    Attachment, HarnessId, Kind, MetaKind, ModelRef, Protocol, ResultContent, Session, StepEnd,
 };
 use crate::policy::{ReasoningPlan, payload_fits, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
@@ -95,6 +95,8 @@ pub struct Counts {
     pub dropped_duplicate_results: usize,
     /// Tool-call ids the destination's protocol refuses, rewritten for the call and its result.
     pub rewritten_call_ids: usize,
+    /// Source records of a branch the conversation left (a rewind, an edited prompt), not written.
+    pub dropped_off_branch: usize,
     /// A call the source never answered: the provider would refuse it as a tool call (L7).
     pub unanswered_calls: usize,
     /// A step that lost everything it had and cannot be written as an empty message.
@@ -222,7 +224,14 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     // knows it passes it in, otherwise the pinned list is used.
     let offered = opts.offered.unwrap_or_else(|| tools::offered(dest));
     let mut blocks: Vec<PlannedBlock> = Vec::new();
-    let mut counts = Counts::default();
+    let mut counts = Counts {
+        dropped_off_branch: session
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.kind, Kind::Meta { kind: MetaKind::OffBranch }))
+            .count(),
+        ..Counts::default()
+    };
     // The calls of the step just planned: which of them the destination took natively, and which
     // of them exist at all (a result whose call is nowhere is an orphan and is dropped).
     let mut last_step_native: Vec<String> = Vec::new();

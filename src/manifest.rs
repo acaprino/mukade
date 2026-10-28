@@ -55,6 +55,10 @@ impl Manifest {
             json!(self.counts.rewritten_call_ids),
         );
         counts.insert(
+            "dropped_off_branch".into(),
+            json!(self.counts.dropped_off_branch),
+        );
+        counts.insert(
             "unanswered_calls".into(),
             json!(self.counts.unanswered_calls),
         );
@@ -143,6 +147,12 @@ impl Manifest {
             losses.push(format!(
                 "tool call ids rewritten to the destination's id pattern ({})",
                 counts.rewritten_call_ids
+            ));
+        }
+        if counts.dropped_off_branch > 0 {
+            losses.push(format!(
+                "records of an abandoned branch (a rewind or an edited prompt) left behind ({})",
+                counts.dropped_off_branch
             ));
         }
         if counts.dropped_empty_steps > 0 {
