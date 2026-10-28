@@ -265,6 +265,12 @@ developer message + `replacement_history` + later items + prompt; no `encrypted_
 - `session_message {id, session_id, type, seq, …, data}`; order by `seq`.
 - Assistant = one row per model step; **parallel calls are one row** `content:[reasoning, text, tool, tool]`;
   each `tool` part holds the call and its result (`state{status,input,content}`).
+- A failed call's part is `state{status:"error", input, error, content}`, where `error` is a
+  `Session.StructuredError` `{type, message}` (OpenCode records `tool.execution` for a tool that
+  failed); `session import` refuses an error part without it (`Bad Request`) [V 2026-10-28].
+- Images: a user turn carries `files:[{data, mime, source:{type:"inline"}}]`
+  (`Prompt.FileAttachment`), a tool result `{type:"file", uri:"data:…", mime}`
+  (`Tool.FileContent`) [V 2026-10-28, import and export of a scratch session].
 - Reasoning `{"type":"reasoning","text":…,"native":{"signature":…}}` — **signature stored**; sent
   back only when the stored provider and model equal the current ones [S: `to-llm-message.ts:155`].
 - Turn end: `{"type":"idle","outcome":"succeeded"}`.
@@ -307,6 +313,12 @@ API-key variables from the environment. RPC stdin must be UTF-8 **without BOM**.
   tokensBefore, details{readFiles, modifiedFiles}, usage, fromHook, systemMessage}`.
 - Killed turn: only the user entry. Aborted turn: assistant `stopReason:"aborted"`, dropped from the next request.
 - A hand-written 3-line session (header, user, assistant) resumes [V: `pi/resume/synthetic.*`].
+- **Tree.** Every entry has `id` and `parentId`. Navigating back with `/tree` starts a new branch
+  from an earlier entry, optionally through a `branch_summary` entry `{summary, fromId}`, and
+  leaves the abandoned branch in the file. Pi builds the context from the last entry back through
+  `parentId`, and shows a `branch_summary` on that path to the model as a user message
+  `The following is a summary of a branch that this conversation came back from:\n\n<summary>\n…</summary>`
+  [pi-coding-agent 1.2.0 `buildSessionPath`, `BRANCH_SUMMARY_PREFIX`; not a bench run].
 
 **On resume [V].** After a compaction: system + user `The conversation history before this point
 was compacted into the following summary:\n\n<summary>…</summary>` + entries from
@@ -523,6 +535,14 @@ each is a rule for our writers (§8.2).
 }
 ```
 
+The counts are `messages_in`, `messages_out`, `tool_calls`, `tools_text_form`,
+`reasoning_dropped`, `dropped_orphan_results`, `dropped_duplicate_results` (a second answer to a
+call, A3), `rewritten_call_ids` (ids outside Anthropic's `^[a-zA-Z0-9_-]+$`, rewritten for the
+call and its result), `dropped_off_branch` (records of a branch the source left: a rewind, an
+edited prompt, Pi tree navigation), `unanswered_calls`, `dropped_empty_steps`,
+`dropped_attachments` and `dropped_result_blocks`. Every count above zero also has its line in
+`losses`.
+
 ## 7. Strict check (what a real API would refuse)
 
 The bench's mock accepts anything, so `verify/H27/strict.py` checks every resume request against
@@ -533,8 +553,12 @@ versa, **R3** (warning) reasoning without `encrypted_content` under `store:false
 
 The library runs the same invariants on the `Session` **before** writing (the request
 itself is built later by the destination): parallel calls grouped in one message, each grouped
-call answered in the next entry, no `ToolResult` without its `ToolCall`, no `Reasoning` without
-its opaque payload toward an Anthropic-protocol destination. A violation is fixed by policy
+call answered in the next entry, no `ToolResult` without its `ToolCall`, no call answered twice
+(A3), native results before the text that answers a call carried as text (Pi ends the tool flow at
+the first user text, §6.2), call ids in Anthropic's pattern toward an Anthropic-protocol
+destination, and no `Reasoning` carried natively unless its payload has a place in the
+destination's format (a Claude signature as `thinking`, an encrypted payload as
+`redacted_thinking`; Pi a `thinkingSignature`; Codex `encrypted_content`). A violation is fixed by policy
 (drop the orphan, drop the reasoning) and written to the manifest, or the hop fails with
 `StrictCheckFailed`.
 
@@ -598,8 +622,10 @@ library must pass all criteria above.
 
 - [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).
-- Not exercised: auto-compaction by threshold, a second compaction, a rewind/fork in the source
-  (Claude `--fork-session` and Pi fork shapes are recorded, not converted), subagent sessions,
-  images and attachments, sessions larger than a few turns.
+- Not exercised by a bench run: auto-compaction by threshold, a second compaction, a rewind or
+  tree navigation in the source (the readers follow the resumed branch, tested on hand-made
+  records; Claude `--fork-session` and Pi fork shapes are recorded, not converted), subagent
+  sessions, images and attachments (converted between the four shapes; only OpenCode's verified by
+  a real import), sessions larger than a few turns.
 - The source sessions were generated before two mock fixes; their T3 reply is the mock's summary
   text, not a harness behaviour (FINDINGS of each leg).
