@@ -120,6 +120,28 @@ through a Windows `.cmd` launcher. A resume prompt that starts with `-`, or one 
 changed (the destination refused the write, or the plan would be refused by a provider), 5 failed and
 recovery needed (the source could not be read, or the resume failed after the write).
 
+## Portable use and speed
+
+Nothing has to be installed. `scripts/package-portable.ps1` (or `.sh`) builds a folder holding
+`mukade.exe` and an empty `mukade.portable` file; run it from anywhere, a USB stick included. The
+Windows build links the C runtime in, so it needs no redistributable.
+
+mukade leaves no files scattered about the machine. With `mukade.portable` (or a `mukade-data`
+folder) beside the executable, or `MUKADE_PORTABLE=1`, everything it keeps for itself goes to
+`mukade-data/` there: a small cache of the versions and OpenCode project ids it learned from harness
+binaries (`cache/`), and the temporary document an OpenCode import needs (`tmp/`, removed when the
+import ends, a killed run's leftovers swept an hour later). Outside portable mode there is no cache
+unless `MUKADE_CACHE_DIR` names a folder, and that temporary file is in the system's temporary folder
+and removed as well. Nothing goes to the user profile, the application-data folders or the registry.
+An automated test runs the real binary with all of those pointed at an empty sandbox and asserts it
+stays empty.
+
+A hop is quick: 30–35 ms for a 1 MB session, 185–240 ms for 10 MB, 440–630 ms for 30 MB (it was
+83, 556 and 1657 ms). The harnesses'
+own stores are JSON Lines and SQLite and are read and written as they are, so the cost was never the
+format; it was copies, hashing and asking a harness for its version, which is what `--timing` shows
+phase by phase on stderr. See the [usage guide](docs/usage.md#5-speed).
+
 ## Compaction and reasoning between hops
 
 A hop can carry the source's own compaction instead of the whole history: `Compaction::Portable`
