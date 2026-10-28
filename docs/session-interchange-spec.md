@@ -4,7 +4,7 @@ Date: 2026-10-27 (rewritten the same day: the library is Shinatama's own; no thi
 Status: draft, every behaviour below was run on this machine unless marked otherwise. Companion of Shinatama's technical design (5.3, 5.4, 5.4.1, 5.5, 6.4), which stays with that product's documentation.
 Verification record: [`verification/2026-10-27-H27.md`](verification/2026-10-27-H27.md).
 Background reading (secondary sources, superseded here for the four harnesses below):
-[`reference/2026-10-27-session-persistence-reference.md`](reference/2026-10-27-session-persistence-reference.md).
+[`reference/harness-session-persistence-reference.md`](reference/harness-session-persistence-reference.md).
 
 **Evidence labels.** **[V]** seen in the H27 bench run, with the file under
 `verify/H27/out/2026-10-27/` that shows it. **[S]** read in source code, not exercised. **[A]** a

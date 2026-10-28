@@ -89,7 +89,7 @@ The documentation ships here too: the specification
 ([`docs/session-interchange-spec.md`](docs/session-interchange-spec.md)), the tool translation
 tables ([`docs/tool-conversion-tables.md`](docs/tool-conversion-tables.md)), the reference notes on
 the four harnesses' stores
-([`docs/reference/2026-10-27-session-persistence-reference.md`](docs/reference/2026-10-27-session-persistence-reference.md))
+([`docs/reference/harness-session-persistence-reference.md`](docs/reference/harness-session-persistence-reference.md))
 and the conformance bench report
 ([`docs/verification/2026-10-27-H27.md`](docs/verification/2026-10-27-H27.md)). The bench itself —
 the scripts that run the real harnesses against a mock model — belongs to Shinatama and stays there.
