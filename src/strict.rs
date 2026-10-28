@@ -6,7 +6,7 @@
 
 use crate::model::Protocol;
 use crate::policy::ReasoningPlan;
-use crate::writer::plan::{Plan, PlannedBlock, PlannedResult};
+use crate::writer::plan::{Plan, PlannedBlock, PlannedResult, anthropic_id_char};
 
 /// The provider rules of §7, as far as the written request can be judged from the plan.
 pub fn check_plan(plan: &Plan, dest_protocol: Option<&Protocol>) -> Vec<String> {
@@ -22,6 +22,14 @@ pub fn check_plan(plan: &Plan, dest_protocol: Option<&Protocol>) -> Vec<String> 
                     _ => &[],
                 };
                 for call in &step.calls {
+                    if dest_protocol == Some(&Protocol::AnthropicMessages)
+                        && (call.id.is_empty() || !call.id.chars().all(anthropic_id_char))
+                    {
+                        violations.push(format!(
+                            "block {i}: tool call id {:?} is outside Anthropic's id pattern",
+                            call.id
+                        ));
+                    }
                     let answered = answers.iter().any(|r| match r {
                         PlannedResult::Native { call_id, .. } => *call_id == call.id,
                         PlannedResult::Text(_) => false,
@@ -197,6 +205,25 @@ mod tests {
         let found = check_plan(&plan, None);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("answered twice"), "{found:?}");
+    }
+
+    /// Anthropic accepts a tool-call id only in `^[a-zA-Z0-9_-]+$`.
+    #[test]
+    fn a_call_id_outside_the_anthropic_pattern_is_a_violation() {
+        let plan = plan_of(vec![
+            PlannedBlock::Step(step(vec![call("a|b")])),
+            PlannedBlock::Results {
+                results: vec![PlannedResult::Native {
+                    call_id: "a|b".into(),
+                    content: ResultContent::Text("x".into()),
+                    is_error: false,
+                }],
+            },
+        ]);
+        assert!(check_plan(&plan, None).is_empty());
+        let found = check_plan(&plan, Some(&Protocol::AnthropicMessages));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("id pattern"), "{found:?}");
     }
 
     #[test]

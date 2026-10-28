@@ -11,6 +11,7 @@ use crate::policy::{ReasoningPlan, payload_fits, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::WriteOpts;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 /// One call that will be written as the destination's own tool.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +93,8 @@ pub struct Counts {
     pub dropped_orphan_results: usize,
     /// A second answer to a call already answered: the provider refuses a call answered twice (A3).
     pub dropped_duplicate_results: usize,
+    /// Tool-call ids the destination's protocol refuses, rewritten for the call and its result.
+    pub rewritten_call_ids: usize,
     /// A call the source never answered: the provider would refuse it as a tool call (L7).
     pub unanswered_calls: usize,
     /// A step that lost everything it had and cannot be written as an empty message.
@@ -109,6 +112,52 @@ pub struct Plan {
     pub counts: Counts,
 }
 
+/// Tool-call ids as the destination's protocol accepts them. Anthropic refuses an id outside
+/// `^[a-zA-Z0-9_-]+$`, and Pi on `openai-responses` records ids such as `call_x|fc_y`: such an id
+/// is rewritten once, the same way for the call and for its result, and counted.
+struct CallIds {
+    rewrite: bool,
+    given: HashMap<String, String>,
+    used: HashSet<String>,
+}
+
+impl CallIds {
+    fn new(rewrite: bool) -> Self {
+        CallIds { rewrite, given: HashMap::new(), used: HashSet::new() }
+    }
+
+    fn of(&mut self, id: &str, counts: &mut Counts) -> String {
+        if !self.rewrite {
+            return id.to_string();
+        }
+        if let Some(given) = self.given.get(id) {
+            return given.clone();
+        }
+        let base: String = id
+            .chars()
+            .map(|c| if anthropic_id_char(c) { c } else { '_' })
+            .collect();
+        let base = if base.is_empty() { "toolu_mukade".to_string() } else { base };
+        let mut candidate = base.clone();
+        let mut n = 1;
+        while self.used.contains(&candidate) {
+            n += 1;
+            candidate = format!("{base}_{n}");
+        }
+        if candidate != id {
+            counts.rewritten_call_ids += 1;
+        }
+        self.used.insert(candidate.clone());
+        self.given.insert(id.to_string(), candidate.clone());
+        candidate
+    }
+}
+
+/// A character Anthropic accepts in a tool-call id.
+pub fn anthropic_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
 /// Plan the conversation of a session for a destination.
 pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let dest_protocol = opts
@@ -124,6 +173,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     // of them exist at all (a result whose call is nowhere is an orphan and is dropped).
     let mut last_step_native: Vec<String> = Vec::new();
     let mut last_step_calls: Vec<String> = Vec::new();
+    let mut ids = CallIds::new(dest_protocol.as_ref() == Some(&Protocol::AnthropicMessages));
 
     for entry in session.conversation() {
         counts.messages_in += 1;
@@ -183,7 +233,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                             counts.tools_translated += 1;
                             last_step_native.push(call.id.clone());
                             planned.calls.push(PlannedCall {
-                                id: call.id.clone(),
+                                id: ids.of(&call.id, &mut counts),
                                 name: name.to_string(),
                                 source_name: call.source_name.clone(),
                                 input,
@@ -241,7 +291,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                                 .count();
                         }
                         planned.push(PlannedResult::Native {
-                            call_id: result.call_id.clone(),
+                            call_id: ids.of(&result.call_id, &mut counts),
                             content: result.content.clone(),
                             is_error: result.is_error,
                         });

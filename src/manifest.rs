@@ -51,6 +51,10 @@ impl Manifest {
             json!(self.counts.dropped_duplicate_results),
         );
         counts.insert(
+            "rewritten_call_ids".into(),
+            json!(self.counts.rewritten_call_ids),
+        );
+        counts.insert(
             "unanswered_calls".into(),
             json!(self.counts.unanswered_calls),
         );
@@ -133,6 +137,12 @@ impl Manifest {
             losses.push(format!(
                 "duplicate tool results dropped, the first answer kept ({})",
                 counts.dropped_duplicate_results
+            ));
+        }
+        if counts.rewritten_call_ids > 0 {
+            losses.push(format!(
+                "tool call ids rewritten to the destination's id pattern ({})",
+                counts.rewritten_call_ids
             ));
         }
         if counts.dropped_empty_steps > 0 {

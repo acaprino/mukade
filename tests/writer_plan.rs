@@ -275,3 +275,29 @@ fn reasoning_with_only_an_encrypted_payload_is_dropped_for_pi() {
         step.reasoning
     );
 }
+
+/// Anthropic refuses a tool-call id outside `^[a-zA-Z0-9_-]+$`; Pi on `openai-responses` records
+/// ids such as `call_x|fc_y`. The id is rewritten the same way for the call and its result, and
+/// counted.
+#[test]
+fn a_call_id_anthropic_refuses_is_rewritten_for_call_and_result() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-call-id");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![step("e1", vec![read_call("call_x|fc_y")]), results("e2", &["call_x|fc_y"])]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    let (Some(PlannedBlock::Step(step)), Some(PlannedBlock::Results { results })) =
+        (plan.blocks.first(), plan.blocks.get(1))
+    else {
+        panic!("{:?}", plan.blocks)
+    };
+    let id = &step.calls[0].id;
+    assert!(
+        !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+        "{id}"
+    );
+    let PlannedResult::Native { call_id, .. } = &results[0] else { panic!("{results:?}") };
+    assert_eq!(call_id, id);
+    assert_eq!(plan.counts.rewritten_call_ids, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(losses.iter().any(|loss| loss.contains("ids rewritten")), "{losses:?}");
+}
