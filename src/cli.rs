@@ -233,9 +233,17 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             .map_err(anyhow::Error::new)?;
             // What `dump` exports is what `hop` would write: `write` imports it later.
-            let (selection, _) =
+            let (selection, summary) =
                 crate::hop::compact(&session, &compaction, &roots).map_err(anyhow::Error::new)?;
-            let doc = serde_json::to_string_pretty(&wire::to_document(&selection))?;
+            let mut doc = wire::to_document(&selection);
+            // Who wrote the summary travels with it, for the manifest `write` makes later.
+            if let Some(facts) = &summary {
+                if let Some(command) = &facts.summary.leftover {
+                    eprintln!("the summarizing run left a fork in the source store: run {command}");
+                }
+                doc["summary"] = serde_json::to_value(facts)?;
+            }
+            let doc = serde_json::to_string_pretty(&doc)?;
             match flags.output.as_deref() {
                 // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
                 // the console's code page.
@@ -251,6 +259,14 @@ pub fn run(args: &[String]) -> Result<()> {
                 .with_context(|| format!("parse {path}"))?;
             let session = wire::from_document(&doc)?;
             let mut opts = flags.import_opts(session.meta.harness, harness, &session, &roots)?;
+            // A document `dump --compaction summary` made says who wrote its summary.
+            if let Some(facts) = doc
+                .get("summary")
+                .and_then(|facts| serde_json::from_value(facts.clone()).ok())
+            {
+                opts.summary = Some(facts);
+                opts.compaction = "summary".into();
+            }
             // A document holds no source records: its fingerprint is that of its own messages.
             opts.source_facts.content_sha256 = crate::sha256::records_sha256(
                 doc.get("messages")

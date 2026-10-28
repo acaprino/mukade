@@ -791,6 +791,36 @@ fn dump_exports_a_model_summary_and_write_imports_it() {
         &["--dest-version", "2.1.312", "--cwd", work.to_str().unwrap()],
     );
     assert!(Path::new(printed["location"].as_str().unwrap()).is_file());
+    // The imported document still says who wrote its summary.
+    let manifest = &printed["manifest"];
+    assert_eq!(manifest["options"]["compaction"], "summary");
+    assert_eq!(manifest["options"]["summary"]["harness"], "pi");
+    let losses = manifest["losses"].to_string();
+    assert!(
+        losses.contains("travelled as a summary written by pi's model"),
+        "{losses}"
+    );
+    assert!(
+        !losses.contains("the source's compaction summary travels"),
+        "{losses}"
+    );
+    assert!(
+        !losses.contains("the source's own compaction is in the session"),
+        "{losses}"
+    );
+
+    // A fork the summarizing run could not delete is still named when the document is imported.
+    let mut with_leftover = doc.clone();
+    with_leftover["summary"]["summary"]["leftover"] =
+        Value::from("opencode session delete ses_fork1 --standalone");
+    let (_, printed) = write_document(
+        HarnessId::ClaudeCode,
+        &with_leftover,
+        "cli-write-summary-leftover",
+        &["--dest-version", "2.1.312", "--cwd", work.to_str().unwrap()],
+    );
+    let losses = printed["manifest"]["losses"].to_string();
+    assert!(losses.contains("session delete ses_fork1"), "{losses}");
 }
 
 #[test]

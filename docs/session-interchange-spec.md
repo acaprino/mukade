@@ -498,13 +498,15 @@ versioned (`v1`), not the harness's native `/compact`: that writes into the sour
 Codex's native summary is encrypted. The run goes through the source's binary, credentials and
 configuration, and saves nothing in its store: Claude Code `--no-session-persistence`, Codex
 `exec fork --ephemeral`, Pi `--fork` into a temporary folder, OpenCode a fork deleted afterwards
+whatever came of the run (with every tool denied through `OPENCODE_CONFIG_CONTENT`)
 [V: `docs/verification/2026-10-28-summary-live.md`; Codex against a mock].
 
 The result is the shape of §4.2 with its own handoff line,
 `[mukade handoff v1] Summary of the earlier conversation, written by the source agent's model when the session was moved:`,
 then the last `N` user turns (none by default). `hop::compact` resolves the summary once, before
 the selection, so `dump --compaction summary` exports the same document `hop` would write, and
-`write` imports it later. The manifest carries `options.summary` (`source: "source_model"`,
+`write` imports it later; the document's top-level `summary` says who wrote it, so the manifest
+`write` makes says so too. The manifest carries `options.summary` (`source: "source_model"`,
 harness, version, model, `prompt: "v1"`, `chars`, `usage`, `left_out`) and one loss line. A failed
 summary (an error, an empty reply, a deadline) is `HopError::SummaryFailed`, exit 4: nothing was
 written. Refused (exit 2): `--all-branches`, and `--from-file` for a source other than Pi.

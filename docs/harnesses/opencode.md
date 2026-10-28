@@ -158,7 +158,9 @@ MIT, declared in `@opencode/cli` 2.1.4's `package.json` and on the repository [1
   `session_v2`, `session_message`, `event_sequence` and `instruction_state` rows): every table's row
   count returns to what it was before the fork [37].
 - **No switch removes the tools** of `run`; without `--auto`, permissions that ask are not
-  approved [1].
+  approved [1]. The inline configuration `OPENCODE_CONFIG_CONTENT='{"permission":{"*":"deny"}}'`
+  (merged with the user's own) denies every tool: asked to write a file, the model wrote none, and a
+  fork of a session whose history holds a tool call was summarized normally [37].
 - **Output.** `--format json` prints one event per line (`step_start`, `tool_use`, `text`,
   `step_finish`), each with the `sessionID` it belongs to: for a fork, the fork's id [37].
 
@@ -325,10 +327,13 @@ each (`PROBE_TIMEOUT`); resume prompt 300 s by default. Past one, the process tr
 ### How mukade summarizes it
 
 With `--compaction summary` and OpenCode as the source, mukade runs
-`opencode run --standalone --session <id> --fork --format json [-m <provider>/<id>] <prompt>`,
-reads the summary from the `text` events and the fork's id from their `sessionID`, then runs
-`opencode session delete <fork id> --standalone`. When that delete fails the hop still completes,
-and its manifest says `the summarizing run left a fork in the source store: run <command>` [37].
+`opencode run --standalone --session <id> --fork --format json [-m <provider>/<id>] <prompt>`
+with `OPENCODE_CONFIG_CONTENT='{"permission":{"*":"deny"}}'`, reads the summary from the `text`
+events, and fails the summary on a `tool_use` or an `error` event. The fork's id is the `sessionID`
+of the first event, so the fork is deleted (`opencode session delete <fork id> --standalone`)
+whatever came of the run. When that delete fails, a hop that succeeded says
+`the summarizing run left a fork in the source store: run <command>` in its manifest, and a failed
+summary says the same in its error [37].
 
 ## 9. Sources
 

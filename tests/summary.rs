@@ -7,7 +7,7 @@
 mod support;
 
 use mukade::hop::HopError;
-use mukade::model::{HarnessId, ModelRef, Session};
+use mukade::model::{HarnessId, Kind, ModelRef, Session};
 use mukade::roots::StoreRoots;
 use mukade::summary::{self, SummarizeOpts};
 use std::path::{Path, PathBuf};
@@ -28,13 +28,50 @@ fn args_of(session: &Session, opts: &SummarizeOpts, scratch: &Path) -> Vec<Strin
         .args
 }
 
+/// The session as if every step had been answered by one model.
 fn with_model(mut session: Session, provider: Option<&str>, id: &str) -> Session {
-    session.meta.models = vec![ModelRef {
+    let model = ModelRef {
         provider: provider.map(str::to_owned),
         id: id.into(),
-    }];
+    };
+    session.meta.models = vec![model.clone()];
+    set_step_models(&mut session, Some(model));
     session
 }
+
+fn set_step_models(session: &mut Session, to: Option<ModelRef>) {
+    for entry in &mut session.entries {
+        if let Kind::Step { model, .. } = &mut entry.kind {
+            *model = to.clone();
+        }
+    }
+}
+
+/// A launcher that plays OpenCode: `session delete` does `on_delete`, any other call prints
+/// `events` and exits with `code`.
+fn fake_opencode(dir: &Path, events: &str, code: i32, on_delete: (&str, &str)) -> PathBuf {
+    let file = dir.join("events.jsonl");
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(&file, events).unwrap();
+    support::launcher(
+        &dir.join("bin"),
+        "opencode",
+        &format!(
+            "if \"%1\"==\"session\" (\r\n{}\r\n)\r\ntype \"{}\"\r\nexit /b {code}",
+            on_delete.0,
+            file.display()
+        ),
+        &format!(
+            "if [ \"$1\" = session ]; then\n{}\nfi\ncat \"{}\"\nexit {code}",
+            on_delete.1,
+            file.display()
+        ),
+    )
+}
+
+/// The first event OpenCode prints for a fork: it names the fork before any text.
+const FORK_STARTED: &str =
+    r#"{"type":"step_start","timestamp":1,"sessionID":"ses_fork1","part":{"type":"step-start"}}"#;
 
 fn leftovers() -> Vec<String> {
     let Ok(dir) = mukade::portable::temp_dir() else {
@@ -187,6 +224,7 @@ fn the_sessions_own_model_is_used_unless_one_is_named() {
     ] {
         let mut session = support::read_source(harness);
         session.meta.models.clear();
+        set_step_models(&mut session, None);
         let args = args_of(&session, &SummarizeOpts::default(), &dir);
         assert!(
             !args
@@ -377,5 +415,148 @@ fn an_opencode_fork_that_cannot_be_deleted_is_named() {
     assert!(
         leftover.ends_with("session delete ses_e7be56c69ffer6BEbBHfEuQ7mG --standalone"),
         "{leftover}"
+    );
+}
+
+/// A Claude session that was killed or hit an API error records `<synthetic>` replies: that is no
+/// model to ask, and the session's own model is the last real one that answered.
+#[test]
+fn a_synthetic_reply_is_not_a_model_to_ask() {
+    let dir = scratch("summary-synthetic");
+    let mut session = with_model(
+        support::read_source(HarnessId::ClaudeCode),
+        None,
+        "claude-sonnet-5",
+    );
+    let last = session
+        .entries
+        .iter()
+        .rposition(|entry| matches!(entry.kind, Kind::Step { .. }))
+        .expect("a step");
+    if let Kind::Step { model, .. } = &mut session.entries[last].kind {
+        *model = Some(ModelRef {
+            provider: None,
+            id: "<synthetic>".into(),
+        });
+    }
+    session.meta.models.push(ModelRef {
+        provider: None,
+        id: "<synthetic>".into(),
+    });
+    let args = args_of(&session, &SummarizeOpts::default(), &dir);
+    assert!(
+        args.windows(2).any(|w| w == ["--model", "claude-sonnet-5"]),
+        "{args:?}"
+    );
+}
+
+/// A subagent's model is recorded in the session's models, but the steps of the branch the
+/// harness resumes say which model the conversation was having.
+#[test]
+fn the_model_of_the_conversation_wins_over_a_subagents() {
+    let dir = scratch("summary-subagent-model");
+    let mut session = with_model(
+        support::read_source(HarnessId::ClaudeCode),
+        None,
+        "main-model",
+    );
+    session.meta.models.push(ModelRef {
+        provider: None,
+        id: "subagent-model".into(),
+    });
+    let args = args_of(&session, &SummarizeOpts::default(), &dir);
+    assert!(
+        args.windows(2).any(|w| w == ["--model", "main-model"]),
+        "{args:?}"
+    );
+}
+
+/// OpenCode's `run` has no switch for tools: every permission is denied through its inline
+/// configuration, so the summarizing run cannot edit a file or run a command.
+#[test]
+fn opencode_summarizes_with_every_tool_denied() {
+    let session = support::read_source(HarnessId::OpenCode);
+    let command =
+        summary::summary_command(&session, &SummarizeOpts::default(), &scratch("oc-deny")).unwrap();
+    assert!(
+        command
+            .env
+            .iter()
+            .any(|(key, value)| key == "OPENCODE_CONFIG_CONTENT"
+                && value == r#"{"permission":{"*":"deny"}}"#),
+        "{:?}",
+        command.env
+    );
+}
+
+/// A run that worked instead of summarizing, or that broke off with an error, is no summary.
+#[test]
+fn an_opencode_run_that_used_a_tool_or_failed_is_no_summary() {
+    let tool = [
+        FORK_STARTED,
+        r#"{"type":"tool_use","sessionID":"ses_fork1","part":{"type":"tool","tool":"read"}}"#,
+        r#"{"type":"text","sessionID":"ses_fork1","part":{"type":"text","text":"Now I will fix it."}}"#,
+    ]
+    .join("\n");
+    let error = summary::parse_reply(HarnessId::OpenCode, &tool, None).unwrap_err();
+    assert!(error.contains("tool"), "{error}");
+    let broken = [
+        FORK_STARTED,
+        r#"{"type":"text","sessionID":"ses_fork1","part":{"type":"text","text":"Handoff, half"}}"#,
+        r#"{"type":"error","sessionID":"ses_fork1","error":{"name":"APIError","data":{"message":"context too long"}}}"#,
+    ]
+    .join("\n");
+    let error = summary::parse_reply(HarnessId::OpenCode, &broken, None).unwrap_err();
+    assert!(error.contains("context too long"), "{error}");
+}
+
+/// The fork exists as soon as OpenCode names it: it is deleted when the run then fails too.
+#[test]
+fn an_opencode_fork_is_deleted_when_the_run_fails() {
+    let _one = RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = scratch("summary-oc-fails-deleted");
+    let marker = dir.join("deleted.txt");
+    let opencode = fake_opencode(
+        &dir,
+        FORK_STARTED,
+        0,
+        (
+            &format!("echo deleted>\"{}\"\r\nexit /b 0", marker.display()),
+            &format!("echo deleted > \"{}\"\nexit 0", marker.display()),
+        ),
+    );
+    let error = summary::summarize(
+        &support::read_source(HarnessId::OpenCode),
+        &StoreRoots::default(),
+        &SummarizeOpts {
+            exe: Some(opencode.display().to_string()),
+            ..SummarizeOpts::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, HopError::SummaryFailed(_)), "{error:?}");
+    assert!(marker.exists(), "the fork was not deleted");
+}
+
+/// A failed run whose fork could not be deleted says how to remove it.
+#[test]
+fn a_failed_run_names_the_fork_it_left_behind() {
+    let _one = RUNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let dir = scratch("summary-oc-fails-left");
+    let opencode = fake_opencode(&dir, FORK_STARTED, 1, ("exit /b 1", "exit 1"));
+    let error = summary::summarize(
+        &support::read_source(HarnessId::OpenCode),
+        &StoreRoots::default(),
+        &SummarizeOpts {
+            exe: Some(opencode.display().to_string()),
+            ..SummarizeOpts::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("session delete ses_fork1 --standalone"),
+        "{error}"
     );
 }

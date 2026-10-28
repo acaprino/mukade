@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::hop::HopError;
-use crate::model::{HarnessId, ModelRef, Session};
+use crate::model::{HarnessId, Kind, ModelRef, Session};
 use crate::roots::StoreRoots;
 
 /// The line the destination's model reads before the summary, so it knows where the text came from.
@@ -45,7 +46,7 @@ impl Default for SummarizeOpts {
 }
 
 /// What the source harness's model wrote, and what is known about the run that wrote it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
     pub text: String,
     pub harness: HarnessId,
@@ -58,7 +59,7 @@ pub struct Summary {
 }
 
 /// A summary as a hop used it: the text, and how many source entries it stands for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SummaryFacts {
     pub summary: Summary,
     pub left_out: usize,
@@ -67,6 +68,10 @@ pub struct SummaryFacts {
 /// What the source's model is asked (one line: a Windows `.cmd` launcher cannot take a line break,
 /// and the characters `"%^&|<>!` are not safe there).
 pub const SUMMARY_PROMPT: &str = "Write a handoff summary of this whole session for another coding agent that will continue the work from your summary alone. Do not call tools and do not continue the task: reply only with the summary, in the language the user wrote in. Cover: (1) the goal and what the user asked for, quoting the user where wording matters; (2) the current state, what is done and what is half done; (3) the decisions taken and why, and the approaches tried and dropped; (4) the files read or changed and how, and the commands and tests run with their results; (5) open problems, unanswered questions, and the next step. Keep it as short as it can be while a new agent could continue the work from it alone.";
+
+/// OpenCode's `run` has no switch for tools: its inline configuration denies every permission, so
+/// the summarizing run cannot edit a file or run a command (live record, "Ephemeral runs").
+const OPENCODE_DENY_ALL: &str = r#"{"permission":{"*":"deny"}}"#;
 
 /// How long deleting OpenCode's fork may take.
 const DELETE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -80,6 +85,8 @@ pub struct SummaryCommand {
     pub cwd: Option<PathBuf>,
     /// Codex writes its last message to a file (`-o`) rather than only to stdout.
     pub output_file: Option<PathBuf>,
+    /// Variables the run needs set (OpenCode's inline configuration).
+    pub env: Vec<(String, String)>,
 }
 
 /// The command that asks `session`'s own harness for a summary and saves nothing in its store
@@ -92,7 +99,7 @@ pub fn summary_command(
 ) -> Result<SummaryCommand, HopError> {
     let harness = session.meta.harness;
     let id = session.meta.id.clone();
-    let model = model_args(harness, opts.model.as_deref(), session.meta.models.last());
+    let model = model_args(harness, opts.model.as_deref(), own_model(session));
     let mut output_file = None;
     let mut args: Vec<String> = match harness {
         // `--tools` takes several values: before `--resume`, so it cannot swallow the prompt.
@@ -167,7 +174,29 @@ pub fn summary_command(
             .map(PathBuf::from)
             .filter(|dir| dir.is_dir()),
         output_file,
+        env: match harness {
+            HarnessId::OpenCode => {
+                vec![("OPENCODE_CONFIG_CONTENT".into(), OPENCODE_DENY_ALL.into())]
+            }
+            _ => Vec::new(),
+        },
     })
+}
+
+/// The model the conversation was last having: that of its last step, else the last the session
+/// recorded. A subagent's model is recorded too, and a killed or failed Claude reply is recorded as
+/// `<synthetic>`, which no harness can be asked for.
+fn own_model(session: &Session) -> Option<&ModelRef> {
+    let real = |model: &&ModelRef| !model.id.is_empty() && model.id != "<synthetic>";
+    session
+        .entries
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.kind {
+            Kind::Step { model, .. } => model.as_ref().filter(real),
+            _ => None,
+        })
+        .or_else(|| session.meta.models.iter().rev().find(real))
 }
 
 /// The model flags: the one named, else the session's own last model. Pi gets the provider apart
@@ -259,18 +288,36 @@ pub fn parse_reply(
                 .lines()
                 .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
             {
-                if reply.fork.is_none() {
-                    reply.fork = event
-                        .get("sessionID")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
-                }
-                if event.get("type").and_then(Value::as_str) == Some("text")
-                    && let Some(text) = event.pointer("/part/text").and_then(Value::as_str)
-                {
-                    texts.push(text.to_string());
+                match event.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        if let Some(text) = event.pointer("/part/text").and_then(Value::as_str) {
+                            texts.push(text.to_string());
+                        }
+                    }
+                    // A model that reached for a tool was working, not summarizing.
+                    Some("tool_use") => {
+                        return Err(format!(
+                            "the model called a tool ({}) instead of only summarizing",
+                            event
+                                .pointer("/part/tool")
+                                .and_then(Value::as_str)
+                                .unwrap_or("?")
+                        ));
+                    }
+                    Some("error") => {
+                        let error = event.get("error").unwrap_or(&event);
+                        let message = error
+                            .pointer("/data/message")
+                            .or_else(|| error.get("message"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| error.to_string());
+                        return Err(format!("OpenCode reported an error: {message}"));
+                    }
+                    _ => {}
                 }
             }
+            reply.fork = opencode_fork(stdout);
             reply.text = texts.join("\n\n");
         }
     }
@@ -279,6 +326,20 @@ pub fn parse_reply(
         return Err("the model returned no summary".into());
     }
     Ok(reply)
+}
+
+/// The session OpenCode forked for a run: the `sessionID` of the first event it printed, there as
+/// soon as the fork exists, before any text.
+pub fn opencode_fork(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .find_map(|event| {
+            event
+                .get("sessionID")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
 }
 
 /// Ask `session`'s own harness for a summary of it (design 2026-10-28). The run saves nothing in
@@ -326,6 +387,7 @@ fn summarize_in(
         process.current_dir(cwd);
     }
     roots.apply_to(harness, &mut process);
+    process.envs(command.env.iter().map(|(key, value)| (key, value)));
     let finished = crate::exe::run_within(&mut process, opts.timeout)
         .map_err(|error| HopError::SummaryFailed(format!("{shown}: {error}")))?;
     let stdout = String::from_utf8_lossy(&finished.stdout);
@@ -335,34 +397,42 @@ fn summarize_in(
         .and_then(|file| std::fs::read(file).ok())
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
     let parsed = parse_reply(harness, &stdout, written.as_deref());
-    // OpenCode forked the session before it answered: the fork goes whatever came of the run.
-    let leftover = match parsed.as_ref().ok().and_then(|reply| reply.fork.clone()) {
-        Some(fork) => delete_opencode_fork(&command, roots, &fork),
-        None => None,
+    // OpenCode's fork exists as soon as it names it: it goes whatever came of the run, and a
+    // failure says how to remove one that stayed.
+    let leftover = match harness {
+        HarnessId::OpenCode => {
+            opencode_fork(&stdout).and_then(|fork| delete_opencode_fork(&command, roots, &fork))
+        }
+        _ => None,
+    };
+    let failed = |reason: String| {
+        HopError::SummaryFailed(match &leftover {
+            Some(command) => {
+                format!("{reason} (the run left a fork in the source store: run {command})")
+            }
+            None => reason,
+        })
     };
     let reply = match (finished.status, parsed) {
         (None, _) => {
-            return Err(HopError::SummaryFailed(format!(
+            return Err(failed(format!(
                 "{shown} did not finish within {:?}",
                 opts.timeout
             )));
         }
         (Some(status), _) if !status.success() => {
-            return Err(HopError::SummaryFailed(format!(
+            return Err(failed(format!(
                 "{shown} exited with {status}: {}",
                 String::from_utf8_lossy(&finished.stderr).trim()
             )));
         }
-        (Some(_), Err(reason)) => {
-            return Err(HopError::SummaryFailed(format!("{shown}: {reason}")));
-        }
+        (Some(_), Err(reason)) => return Err(failed(format!("{shown}: {reason}"))),
         (Some(_), Ok(reply)) => reply,
     };
     let model = opts
         .model
         .clone()
-        .or_else(|| session.meta.models.last().map(|model| model.id.clone()))
-        .filter(|model| !model.is_empty());
+        .or_else(|| own_model(session).map(|model| model.id.clone()));
     Ok(Summary {
         text: reply.text,
         harness,

@@ -111,6 +111,19 @@ add to every request, not the conversation.
   the user had requested the handoff. The summary describes the session; the request for it is part
   of what the model saw.
 
+## Tools denied in OpenCode (after the review)
+
+OpenCode's `run` has no switch for tools, and the review asked what stops the summarizing run from
+editing files. Two more runs on the same day, OpenCode 2.1.4, its default model:
+
+- `OPENCODE_CONFIG_CONTENT='{"permission":{"*":"deny"}}' opencode run … "Create a file named
+  WRITTEN.txt … using your write tool"`: no `tool_use` event, no file; the model printed its call as
+  text instead.
+- The same configuration on `run --session <id> --fork` of a session holding a `read` call, with the
+  summary prompt: a normal summary (`# Handoff summary …`).
+
+The three throwaway sessions were deleted by id.
+
 ## Final commands
 
 These are what `src/summary.rs` runs (`<prompt>` is always the last argument; `[…]` only when a
@@ -121,7 +134,7 @@ model is known):
 | Claude Code | `claude -p --tools "" --resume <id> --no-session-persistence --output-format json [--model <id>] <prompt>` |
 | Codex | `codex exec fork <id> --ephemeral --skip-git-repo-check -c sandbox_mode="read-only" -o <scratch>/last-message.txt [-m <id>] <prompt>` |
 | Pi | `pi -p --fork <session file> --session-dir <scratch>/sessions --no-tools [--provider <p>] [--model <id>] <prompt>` |
-| OpenCode | `opencode run --standalone --session <id> --fork --format json [-m <provider>/<id>] <prompt>`; then `opencode session delete <fork id> --standalone` |
+| OpenCode | `OPENCODE_CONFIG_CONTENT='{"permission":{"*":"deny"}}' opencode run --standalone --session <id> --fork --format json [-m <provider>/<id>] <prompt>`; then `opencode session delete <fork id> --standalone` |
 
 The two fixtures kept from this run are `fixtures/claude_code/summary-print.json` (Claude Code's
 JSON reply, the warm run) and `fixtures/opencode/summary-run.jsonl` (OpenCode's events for the fork).
