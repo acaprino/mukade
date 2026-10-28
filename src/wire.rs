@@ -47,7 +47,7 @@ pub fn to_document(session: &Session) -> Value {
                         "raw": attachment.raw,
                     }));
                 }
-                messages.push(json!({"role": "user", "timestamp": timestamp, "content": content}));
+                messages.push(json!({"role": "user", "id": entry.id, "timestamp": timestamp, "content": content}));
             }
             Kind::Step {
                 model,
@@ -78,8 +78,10 @@ pub fn to_document(session: &Session) -> Value {
                 }
                 messages.push(json!({
                     "role": "assistant",
+                    "id": entry.id,
                     "timestamp": timestamp,
                     "model": model.as_ref().map(|m| m.id.clone()),
+                    "provider": model.as_ref().and_then(|m| m.provider.clone()),
                     "end": end,
                     "content": content,
                 }));
@@ -95,7 +97,7 @@ pub fn to_document(session: &Session) -> Value {
                         "truncated_by_source": result.truncated_by_source,
                     }));
                 }
-                messages.push(json!({"role": "user", "timestamp": timestamp, "content": content}));
+                messages.push(json!({"role": "user", "id": entry.id, "timestamp": timestamp, "content": content}));
             }
             Kind::Compaction {
                 summary,
@@ -104,6 +106,7 @@ pub fn to_document(session: &Session) -> Value {
                 tokens_before,
             } => messages.push(json!({
                 "role": "user",
+                "id": entry.id,
                 "timestamp": timestamp,
                 "content": [{"type": "text", "text": summary}],
                 "compaction": {
@@ -143,7 +146,12 @@ pub fn from_document(doc: &Value) -> Result<Session> {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let id = format!("doc-{n}");
+        // The source's own entry id, so a compaction boundary still points at its entry.
+        let id = message
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("doc-{n}"));
 
         match role {
             "assistant" => {
@@ -192,7 +200,11 @@ pub fn from_document(doc: &Value) -> Result<Session> {
                                 input: block.get("input").cloned().unwrap_or(Value::Null),
                             });
                         }
-                        _ => {}
+                        other => {
+                            anyhow::bail!(
+                                "message {n}: an assistant block of type {other:?} is not part of a document"
+                            )
+                        }
                     }
                 }
                 let end =
@@ -206,7 +218,10 @@ pub fn from_document(doc: &Value) -> Result<Session> {
                     .get("model")
                     .and_then(Value::as_str)
                     .map(|id| ModelRef {
-                        provider: None,
+                        provider: message
+                            .get("provider")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
                         id: id.to_string(),
                     });
                 entries.push(Entry {
@@ -235,10 +250,8 @@ pub fn from_document(doc: &Value) -> Result<Session> {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_string(),
-                            content: serde_json::from_value(
-                                block.get("content").cloned().unwrap_or(Value::Null),
-                            )
-                            .unwrap_or_else(|_| ResultContent::Text(String::new())),
+                            content: result_content_of(block.get("content"))
+                                .with_context(|| format!("message {n}: a tool result's content"))?,
                             is_error: block
                                 .get("is_error")
                                 .and_then(Value::as_bool)
@@ -264,12 +277,22 @@ pub fn from_document(doc: &Value) -> Result<Session> {
                             path: block.get("path").and_then(Value::as_str).map(str::to_owned),
                             raw: block.get("raw").cloned().unwrap_or(Value::Null),
                         }),
-                        _ => {}
+                        other => {
+                            anyhow::bail!(
+                                "message {n}: a user block of type {other:?} is not part of a document"
+                            )
+                        }
                     }
                 }
+                let has_text =
+                    compaction.is_some() || !text_parts.is_empty() || !attachments.is_empty();
                 if !results.is_empty() {
                     entries.push(Entry {
-                        id: format!("{id}-results"),
+                        id: if has_text {
+                            format!("{id}-results")
+                        } else {
+                            id.clone()
+                        },
                         kind: Kind::Results { results },
                         raw: Vec::new(),
                     });
@@ -306,6 +329,18 @@ pub fn from_document(doc: &Value) -> Result<Session> {
         }
     }
     Ok(Session { meta, entries })
+}
+
+/// A tool result's content: this library's `{text}` / `{blocks}` form, or Claude's own plain
+/// string or array of blocks.
+fn result_content_of(content: Option<&Value>) -> Result<ResultContent> {
+    match content {
+        None | Some(Value::Null) => Ok(ResultContent::Text(String::new())),
+        Some(Value::String(text)) => Ok(ResultContent::Text(text.clone())),
+        Some(Value::Array(blocks)) => Ok(crate::reader::json::result_content(blocks)),
+        Some(other) => serde_json::from_value(other.clone())
+            .with_context(|| format!("not a result content: {other}")),
+    }
 }
 
 fn timestamp_of(entry: &Entry) -> Option<String> {

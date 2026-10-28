@@ -73,8 +73,10 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     h.iter().map(|word| format!("{word:08x}")).collect()
 }
 
-/// The fingerprint of a list of records: SHA-256 over each record's JSON text, one per line, in the
-/// order the source stored them. The same store yields the same digest, byte for byte.
+/// The fingerprint of a list of records: SHA-256 over each record's compact JSON text, one per
+/// line, in the order the source stored them. It is the digest of the records as decoded, not of
+/// the file's bytes: the same records yield the same digest, but whitespace, escapes and number
+/// spellings of the file do not count.
 pub fn records_sha256(records: &[serde_json::Value]) -> String {
     let mut text = String::new();
     for record in records {

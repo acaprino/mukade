@@ -202,7 +202,14 @@ pub fn run(args: &[String]) -> Result<()> {
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
             let session = wire::from_document(&doc)?;
-            let opts = flags.import_opts(harness, harness, &session, &roots)?;
+            let mut opts = flags.import_opts(session.meta.harness, harness, &session, &roots)?;
+            // A document holds no source records: its fingerprint is that of its own messages.
+            opts.source_facts.content_sha256 = crate::sha256::records_sha256(
+                doc.get("messages")
+                    .and_then(serde_json::Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
             deliver(
                 crate::hop::import(harness, &session, &opts),
                 flags.manifest.as_deref(),

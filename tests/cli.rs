@@ -427,3 +427,20 @@ fn a_failed_resume_prints_the_written_session_and_saves_its_manifest() {
         "{saved}"
     );
 }
+
+/// A written document's manifest names the harness the document came from, and fingerprints the
+/// document itself: it holds no source records.
+#[test]
+fn a_written_document_names_its_source_and_has_a_fingerprint() {
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let (_, printed) = write_document(
+        HarnessId::Pi,
+        &doc,
+        "cli-write-source-facts",
+        &["--dest-version", "1.2.0"],
+    );
+    let source = &printed["manifest"]["source"];
+    assert_eq!(source["harness"], "claude_code", "{source}");
+    let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    assert_ne!(source["content_sha256"], empty, "{source}");
+}

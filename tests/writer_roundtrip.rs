@@ -160,3 +160,66 @@ fn a_cross_harness_hop_keeps_the_conversation_and_counts_its_losses() {
     let plan = plan::plan(&session, HarnessId::Pi, &other);
     assert_eq!(plan.counts.reasoning_dropped, 1);
 }
+
+fn step_models(session: &mukade::model::Session) -> Vec<Option<mukade::model::ModelRef>> {
+    session
+        .conversation()
+        .filter_map(|entry| match &entry.kind {
+            mukade::model::Kind::Step { model, .. } => Some(model.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A document keeps what a writer needs: each step's provider as well as its model id, and the
+/// entry ids a compaction boundary points at.
+#[test]
+fn a_document_keeps_step_providers_and_entry_ids() {
+    use mukade::wire::{from_document, to_document};
+    let source = support::read_source(HarnessId::Pi);
+    let back = from_document(&to_document(&source)).unwrap();
+    assert_eq!(step_models(&back), step_models(&source));
+
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let back = from_document(&to_document(&source)).unwrap();
+    let Some(mukade::model::Kind::Compaction {
+        kept_from: Some(kept_from),
+        ..
+    }) = back.last_compaction().map(|entry| &entry.kind)
+    else {
+        panic!("the compaction and its boundary travel")
+    };
+    assert!(back.entry(kept_from).is_some(), "{kept_from} resolves");
+}
+
+/// A document is read whole or refused: an unknown block is an error, not a silent drop, and a
+/// tool result's content may be a plain string, as Claude writes it.
+#[test]
+fn a_document_block_is_read_or_refused() {
+    use mukade::wire::{from_document, to_document};
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let mut doc = to_document(&source);
+    doc["messages"][0]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "hologram", "data": 1}));
+    let error = from_document(&doc).unwrap_err();
+    assert!(format!("{error:#}").contains("hologram"), "{error:#}");
+
+    let mut doc = to_document(&source);
+    let message = doc["messages"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|m| m["content"][0]["type"] == "tool_result")
+        .unwrap();
+    message["content"][0]["content"] = "PLAIN-RESULT".into();
+    let back = from_document(&doc).unwrap();
+    let found = back.conversation().any(|entry| match &entry.kind {
+        mukade::model::Kind::Results { results } => results
+            .iter()
+            .any(|r| r.content == mukade::model::ResultContent::Text("PLAIN-RESULT".into())),
+        _ => false,
+    });
+    assert!(found);
+}
