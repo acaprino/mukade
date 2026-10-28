@@ -411,9 +411,11 @@ resume (all four `capture-gen.jsonl`). Across harnesses the bench saw:
 
 Policy (default `DropForeign`): carry a reasoning block only when the destination speaks the
 same provider protocol as the block's provenance **and** the opaque payload is present
-unmodified; otherwise drop it and record `reasoning_dropped: n` in the manifest. `AsText`
-keeps it as a labelled text block (`[earlier reasoning, not replayable]`). Never synthesize,
-edit or concatenate a signed or encrypted payload.
+unmodified; otherwise drop it and record `reasoning_dropped: n` in the manifest, with a loss
+line per reason (no payload, the destination's protocol not known, another protocol, no place for
+the payload in the destination's format, dropped on request). `AsText` keeps it as a labelled text
+block (`[earlier reasoning, not replayable]`) and counts it in `reasoning_as_text`. Never
+synthesize, edit or concatenate a signed or encrypted payload.
 
 ## 4. Compaction between hops (optional)
 
@@ -550,13 +552,13 @@ each is a rule for our writers (§8.2).
   "library": {"name": "shinatama-interchange", "version": "…", "reader": "codex@0.164.0", "writer": "claude_code@2.1.311"},
   "options": {"compaction": "portable", "reasoning": "drop_foreign", "resume_prompt": true},
   "counts":  {"messages_in": 18, "messages_out": 9, "tool_calls": 0, "reasoning_dropped": 1},
-  "losses":  ["reasoning dropped: foreign provider (1)", "interrupted_last_turn"],
+  "losses":  ["reasoning dropped: made by another provider protocol (1)", "interrupted_last_turn"],
   "strict":  {"checked": true, "violations": []}
 }
 ```
 
 The counts are `messages_in`, `messages_out`, `tool_calls`, `tools_text_form`,
-`reasoning_dropped`, `dropped_orphan_results`, `dropped_duplicate_results` (a second answer to a
+`reasoning_dropped`, `reasoning_as_text`, `dropped_orphan_results`, `dropped_duplicate_results` (a second answer to a
 call, A3), `rewritten_call_ids` (ids outside Anthropic's `^[a-zA-Z0-9_-]+$`, rewritten for the
 call and its result), `dropped_off_branch` (records of a branch the source left: a rewind, an
 edited prompt, Pi tree navigation), `unanswered_calls`, `dropped_empty_steps`,

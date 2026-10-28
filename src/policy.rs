@@ -51,8 +51,44 @@ pub enum ReasoningPlan {
     Native(Reasoning),
     /// Carried as visible text, labelled.
     Text(String),
-    /// Not carried at all.
-    Drop,
+    /// Not carried at all, for this reason.
+    Drop(ReasoningDrop),
+}
+
+/// Why a reasoning block was not carried: the manifest says it, so the reader knows what would
+/// have kept it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningDrop {
+    /// `--reasoning drop`.
+    Requested,
+    /// The block has neither a signature nor an encrypted payload to be replayed with.
+    NoPayload,
+    /// The destination's provider protocol is not known (OpenCode, Pi), so no protocol matches.
+    UnknownProtocol,
+    /// The block was made by another provider protocol than the destination's.
+    ForeignProtocol,
+    /// Same protocol, but the destination's format has no place for this payload (§3.3, A4).
+    NoPlaceInFormat,
+    /// `--reasoning as_text` on a block that has no visible text (an encrypted payload only).
+    NoVisibleText,
+}
+
+impl ReasoningDrop {
+    /// The reason as a loss line says it.
+    pub fn describe(self) -> &'static str {
+        match self {
+            ReasoningDrop::Requested => "not carried, as --reasoning drop asks",
+            ReasoningDrop::NoPayload => "no signature or encrypted payload to replay it with",
+            ReasoningDrop::UnknownProtocol => {
+                "the destination's provider protocol is not known; name it with --dest-protocol"
+            }
+            ReasoningDrop::ForeignProtocol => "made by another provider protocol",
+            ReasoningDrop::NoPlaceInFormat => {
+                "the destination's format has no place for its payload"
+            }
+            ReasoningDrop::NoVisibleText => "encrypted only, no visible text to write as text",
+        }
+    }
 }
 
 /// Apply the policy to one reasoning block.
@@ -62,22 +98,24 @@ pub fn plan_reasoning(
     policy: ReasoningPolicy,
 ) -> ReasoningPlan {
     match policy {
-        ReasoningPolicy::Drop => ReasoningPlan::Drop,
+        ReasoningPolicy::Drop => ReasoningPlan::Drop(ReasoningDrop::Requested),
         ReasoningPolicy::AsText => {
             if reasoning.text.is_empty() {
-                ReasoningPlan::Drop
+                ReasoningPlan::Drop(ReasoningDrop::NoVisibleText)
             } else {
                 ReasoningPlan::Text(format!("{REASONING_AS_TEXT_LABEL}\n{}", reasoning.text))
             }
         }
         ReasoningPolicy::DropForeign => match (&reasoning.opaque, dest) {
-            (Some(opaque), Some(dest))
-                if opaque.protocol == *dest
-                    && (opaque.signature.is_some() || opaque.encrypted.is_some()) =>
-            {
+            (Some(opaque), _) if opaque.signature.is_none() && opaque.encrypted.is_none() => {
+                ReasoningPlan::Drop(ReasoningDrop::NoPayload)
+            }
+            (None, _) => ReasoningPlan::Drop(ReasoningDrop::NoPayload),
+            (Some(_), None) => ReasoningPlan::Drop(ReasoningDrop::UnknownProtocol),
+            (Some(opaque), Some(dest)) if opaque.protocol == *dest => {
                 ReasoningPlan::Native(reasoning.clone())
             }
-            _ => ReasoningPlan::Drop,
+            (Some(_), Some(_)) => ReasoningPlan::Drop(ReasoningDrop::ForeignProtocol),
         },
     }
 }
@@ -155,19 +193,47 @@ mod tests {
             Some(&anthropic),
             ReasoningPolicy::DropForeign,
         );
-        assert_eq!(drop, ReasoningPlan::Drop);
+        assert_eq!(drop, ReasoningPlan::Drop(ReasoningDrop::ForeignProtocol));
         let unsigned = plan_reasoning(
             &reasoning(anthropic.clone(), None),
             Some(&anthropic),
             ReasoningPolicy::DropForeign,
         );
-        assert_eq!(unsigned, ReasoningPlan::Drop);
+        assert_eq!(unsigned, ReasoningPlan::Drop(ReasoningDrop::NoPayload));
         let unknown = plan_reasoning(
             &reasoning(anthropic, Some("sig")),
             None,
             ReasoningPolicy::DropForeign,
         );
-        assert_eq!(unknown, ReasoningPlan::Drop);
+        assert_eq!(unknown, ReasoningPlan::Drop(ReasoningDrop::UnknownProtocol));
+    }
+
+    /// The reason a block is dropped tells the user what to do: the live run of 2026-10-28 into Pi
+    /// dropped a block that had its signature, because Pi's protocol was not named.
+    #[test]
+    fn each_reason_says_what_happened() {
+        assert!(
+            ReasoningDrop::UnknownProtocol
+                .describe()
+                .contains("--dest-protocol")
+        );
+        assert!(
+            ReasoningDrop::Requested
+                .describe()
+                .contains("--reasoning drop")
+        );
+        let all = [
+            ReasoningDrop::Requested,
+            ReasoningDrop::NoPayload,
+            ReasoningDrop::UnknownProtocol,
+            ReasoningDrop::ForeignProtocol,
+            ReasoningDrop::NoPlaceInFormat,
+            ReasoningDrop::NoVisibleText,
+        ];
+        let mut texts: Vec<&str> = all.iter().map(|why| why.describe()).collect();
+        texts.sort_unstable();
+        texts.dedup();
+        assert_eq!(texts.len(), all.len(), "each reason reads differently");
     }
 
     #[test]
@@ -180,7 +246,15 @@ mod tests {
         );
         assert_eq!(
             plan_reasoning(&r, None, ReasoningPolicy::Drop),
-            ReasoningPlan::Drop
+            ReasoningPlan::Drop(ReasoningDrop::Requested)
+        );
+        let encrypted_only = Reasoning {
+            text: String::new(),
+            ..r
+        };
+        assert_eq!(
+            plan_reasoning(&encrypted_only, None, ReasoningPolicy::AsText),
+            ReasoningPlan::Drop(ReasoningDrop::NoVisibleText)
         );
     }
 }

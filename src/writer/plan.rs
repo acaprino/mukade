@@ -7,7 +7,7 @@
 use crate::model::{
     Attachment, HarnessId, Kind, MetaKind, ModelRef, Protocol, ResultContent, Session, StepEnd,
 };
-use crate::policy::{ReasoningPlan, payload_fits, plan_reasoning};
+use crate::policy::{ReasoningDrop, ReasoningPlan, payload_fits, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::{WriteOpts, media};
 use serde_json::Value;
@@ -90,7 +90,13 @@ pub struct Counts {
     pub tools_translated: usize,
     pub tools_text_form: usize,
     pub text_form_tools: Vec<String>,
+    /// Reasoning blocks not carried, in all.
     pub reasoning_dropped: usize,
+    /// The same blocks by reason, in the order the reasons first came up.
+    pub reasoning_dropped_why: Vec<(ReasoningDrop, usize)>,
+    /// Reasoning blocks written as labelled text (`--reasoning as_text`): readable by the
+    /// destination's model, but no longer reasoning its provider can replay.
+    pub reasoning_as_text: usize,
     /// A result whose call is nowhere in the source.
     pub dropped_orphan_results: usize,
     /// A second answer to a call already answered: the provider refuses a call answered twice (A3).
@@ -112,6 +118,21 @@ pub struct Counts {
     pub dropped_attachments: usize,
     /// Structured blocks flattened by a destination that only accepts text results.
     pub dropped_result_blocks: usize,
+}
+
+impl Counts {
+    /// Count one reasoning block not carried, under its reason.
+    fn drop_reasoning(&mut self, why: ReasoningDrop) {
+        self.reasoning_dropped += 1;
+        match self
+            .reasoning_dropped_why
+            .iter_mut()
+            .find(|(seen, _)| *seen == why)
+        {
+            Some((_, n)) => *n += 1,
+            None => self.reasoning_dropped_why.push((why, 1)),
+        }
+    }
 }
 
 /// A whole session, planned.
@@ -328,13 +349,18 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                             planned.reasoning.push(ReasoningPlan::Native(native))
                         }
                         ReasoningPlan::Text(t) => {
+                            counts.reasoning_as_text += 1;
                             planned.reasoning.push(ReasoningPlan::Text(t.clone()));
                             planned.text.insert(lead, t);
                             lead += 1;
                         }
-                        ReasoningPlan::Native(_) | ReasoningPlan::Drop => {
-                            counts.reasoning_dropped += 1;
-                            planned.reasoning.push(ReasoningPlan::Drop);
+                        dropped => {
+                            let why = match dropped {
+                                ReasoningPlan::Drop(why) => why,
+                                _ => ReasoningDrop::NoPlaceInFormat,
+                            };
+                            counts.drop_reasoning(why);
+                            planned.reasoning.push(ReasoningPlan::Drop(why));
                         }
                     }
                 }

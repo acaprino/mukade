@@ -176,7 +176,8 @@ into Pi with `--compaction portable`; long paths shortened):
     "dest":   { "harness": "pi", "version": "1.2.0", "session_id": "a7b29d83-…", "location": "…" },
     "options": { "compaction": "portable", "reasoning": "drop_foreign", "resume_prompt": false },
     "counts": { "messages_in": 5, "messages_out": 5, "tool_calls": 0, "tools_text_form": 0,
-                "reasoning_dropped": 0, "dropped_orphan_results": 0, "dropped_duplicate_results": 0,
+                "reasoning_dropped": 0, "reasoning_as_text": 0,
+                "dropped_orphan_results": 0, "dropped_duplicate_results": 0,
                 "rewritten_call_ids": 0, "dropped_off_branch": 0, "dropped_unfinished_lines": 0,
                 "aborted_steps_as_replies": 0, "unanswered_calls": 0, "dropped_empty_steps": 0,
                 "dropped_attachments": 0, "dropped_result_blocks": 0 },
@@ -204,7 +205,8 @@ What the `losses` lines mean, and what to do:
 | line | what happened |
 |---|---|
 | `interrupted_last_turn` | the source ended on a turn with no answer (the harness was killed, or the step was aborted); it travels as a user message with no reply. Normal. |
-| `reasoning dropped: foreign provider or no opaque payload (n)` | thinking can only be replayed to a provider that speaks the same protocol and whose format can hold its signature or encrypted payload; otherwise it is dropped. `--reasoning as_text` keeps it as labelled text instead. |
+| `reasoning dropped: <reason> (n)` | thinking can only be replayed to a provider that speaks the same protocol and whose format can hold its signature or encrypted payload; otherwise it is dropped, one line per reason: *the destination's provider protocol is not known; name it with --dest-protocol* (OpenCode, Pi), *made by another provider protocol*, *no signature or encrypted payload to replay it with*, *the destination's format has no place for its payload*, *not carried, as --reasoning drop asks*, *encrypted only, no visible text to write as text*. `--reasoning as_text` keeps it as labelled text instead. |
+| `reasoning written as labelled text, no longer replayable by a provider (n)` | `--reasoning as_text`: the destination's model can read it, its provider cannot replay it. |
 | `tool calls written as text, not translated (n, Tool, …)` | the destination has no equivalent tool, or an argument had no counterpart; the call and its result travel as text. Nothing is invented. |
 | `unanswered tool calls carried as text (n)` | the source never recorded a result for a call (a killed tool); a provider refuses a call without its result, so it travels as text. |
 | `orphan tool results dropped (n)` · `duplicate tool results dropped, the first answer kept (n)` | a result with no call, or a second answer to one call; a provider would refuse either. |
@@ -235,8 +237,8 @@ provider protocol that produced it can read back, and that mukade never edits or
 
 | `--reasoning` | what happens |
 |---|---|
-| `drop_foreign` (default) | kept **natively** when the destination speaks the same protocol and its format has a place for the opaque part; otherwise dropped and counted (`reasoning_dropped`) |
-| `as_text` | written as visible text before the answer it led to, labelled `[earlier reasoning, not replayable]`: the destination's model can read it, but it is no longer reasoning to its provider |
+| `drop_foreign` (default) | kept **natively** when the destination speaks the same protocol and its format has a place for the opaque part; otherwise dropped and counted (`reasoning_dropped`), with the reason in `losses` |
+| `as_text` | written as visible text before the answer it led to, labelled `[earlier reasoning, not replayable]`: the destination's model can read it, but it is no longer reasoning to its provider; counted (`reasoning_as_text`). A block with no visible text (encrypted only) is dropped |
 | `drop` | never carried |
 
 Where the opaque part fits: Claude Code takes a signature (`thinking`) or an encrypted payload

@@ -351,6 +351,96 @@ fn reasoning_with_only_an_encrypted_payload_is_dropped_for_pi() {
     );
 }
 
+/// Every reasoning block a plan does not carry natively is accounted for with its reason, and one
+/// written as text is counted too: the live run of 2026-10-28 found a block dropped toward Pi
+/// under "foreign provider" when the destination's protocol was simply not named, and `as_text`
+/// leaving no trace in the manifest.
+#[test]
+fn reasoning_not_carried_natively_is_counted_with_its_reason() {
+    use mukade::manifest::Manifest;
+    use mukade::model::Protocol;
+    use mukade::policy::{ReasoningDrop, ReasoningPolicy};
+    let scratch = support::scratch(HarnessId::Pi, "plan-reasoning-why");
+    let plan_of = |entry: Entry, dest_protocol: Option<Protocol>, policy| {
+        let mut opts = support::opts(HarnessId::Pi, &scratch);
+        opts.dest_protocol = dest_protocol;
+        opts.reasoning = policy;
+        plan::plan(&session(vec![entry]), HarnessId::Pi, &opts)
+    };
+    let signed = || reasoning_step("r", Protocol::AnthropicMessages, Some("SIG"), None);
+    let with_text = |mut entry: Entry| {
+        if let Kind::Step { reasoning, .. } = &mut entry.kind {
+            reasoning[0].text = "17 times 23".into();
+        }
+        entry
+    };
+    let cases = [
+        (
+            plan_of(signed(), None, ReasoningPolicy::DropForeign),
+            ReasoningDrop::UnknownProtocol,
+        ),
+        (
+            plan_of(
+                signed(),
+                Some(Protocol::OpenaiResponses),
+                ReasoningPolicy::DropForeign,
+            ),
+            ReasoningDrop::ForeignProtocol,
+        ),
+        (
+            plan_of(
+                reasoning_step("r", Protocol::AnthropicMessages, None, None),
+                Some(Protocol::AnthropicMessages),
+                ReasoningPolicy::DropForeign,
+            ),
+            ReasoningDrop::NoPayload,
+        ),
+        (
+            plan_of(
+                reasoning_step("r", Protocol::OpenaiResponses, None, Some("gAAAA")),
+                Some(Protocol::OpenaiResponses),
+                ReasoningPolicy::DropForeign,
+            ),
+            ReasoningDrop::NoPlaceInFormat,
+        ),
+        (
+            plan_of(signed(), None, ReasoningPolicy::Drop),
+            ReasoningDrop::Requested,
+        ),
+        (
+            plan_of(signed(), None, ReasoningPolicy::AsText),
+            ReasoningDrop::NoVisibleText,
+        ),
+    ];
+    for (plan, why) in cases {
+        assert_eq!(plan.counts.reasoning_dropped, 1, "{why:?}");
+        assert_eq!(plan.counts.reasoning_dropped_why, [(why, 1)]);
+        let losses = Manifest::losses_for(&plan.counts, false, false);
+        assert!(
+            losses.iter().any(|l| l.contains(why.describe())),
+            "{why:?}: {losses:?}"
+        );
+    }
+
+    let as_text = plan_of(with_text(signed()), None, ReasoningPolicy::AsText);
+    assert_eq!(as_text.counts.reasoning_dropped, 0);
+    assert_eq!(as_text.counts.reasoning_as_text, 1);
+    let losses = Manifest::losses_for(&as_text.counts, false, false);
+    assert!(
+        losses.iter().any(|l| l.contains("as labelled text")),
+        "{losses:?}"
+    );
+
+    let kept = plan_of(
+        signed(),
+        Some(Protocol::AnthropicMessages),
+        ReasoningPolicy::DropForeign,
+    );
+    assert_eq!(kept.counts.reasoning_dropped, 0);
+    assert_eq!(kept.counts.reasoning_as_text, 0);
+    assert!(Manifest::losses_for(&kept.counts, false, false).is_empty());
+}
+
 /// Anthropic refuses a tool-call id outside `^[a-zA-Z0-9_-]+$`; Pi on `openai-responses` records
 /// ids such as `call_x|fc_y`. The id is rewritten the same way for the call and its result, and
 /// counted.

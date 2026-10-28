@@ -43,6 +43,10 @@ impl Manifest {
             json!(self.counts.reasoning_dropped),
         );
         counts.insert(
+            "reasoning_as_text".into(),
+            json!(self.counts.reasoning_as_text),
+        );
+        counts.insert(
             "dropped_orphan_results".into(),
             json!(self.counts.dropped_orphan_results),
         );
@@ -120,10 +124,17 @@ impl Manifest {
         compaction_carried: bool,
     ) -> Vec<String> {
         let mut losses = Vec::new();
-        if counts.reasoning_dropped > 0 {
+        // One line per reason; a count set without its reasons (a caller's own) still has a line.
+        if counts.reasoning_dropped_why.is_empty() && counts.reasoning_dropped > 0 {
+            losses.push(format!("reasoning dropped ({})", counts.reasoning_dropped));
+        }
+        for (why, n) in &counts.reasoning_dropped_why {
+            losses.push(format!("reasoning dropped: {} ({n})", why.describe()));
+        }
+        if counts.reasoning_as_text > 0 {
             losses.push(format!(
-                "reasoning dropped: foreign provider or no opaque payload ({})",
-                counts.reasoning_dropped
+                "reasoning written as labelled text, no longer replayable by a provider ({})",
+                counts.reasoning_as_text
             ));
         }
         if counts.tools_text_form > 0 {
@@ -212,9 +223,10 @@ mod tests {
     #[test]
     fn every_loss_count_has_a_loss_line_and_a_key() {
         type Set = fn(&mut Counts);
-        let losses: [(&str, Set); 12] = [
+        let losses: [(&str, Set); 13] = [
             ("tools_text_form", |c| c.tools_text_form = 1),
             ("reasoning_dropped", |c| c.reasoning_dropped = 1),
+            ("reasoning_as_text", |c| c.reasoning_as_text = 1),
             ("dropped_orphan_results", |c| c.dropped_orphan_results = 1),
             ("dropped_duplicate_results", |c| {
                 c.dropped_duplicate_results = 1
@@ -287,6 +299,35 @@ mod tests {
         assert_eq!(json["strict"]["checked"], true);
         assert_eq!(json["losses"].as_array().unwrap().len(), 1);
         assert_eq!(json["library"]["name"], "mukade");
+    }
+
+    /// Dropped reasoning has one line per reason, each with its own number, so the line says what
+    /// to do about it.
+    #[test]
+    fn dropped_reasoning_has_a_line_per_reason() {
+        use crate::policy::ReasoningDrop;
+        let counts = Counts {
+            reasoning_dropped: 3,
+            reasoning_dropped_why: vec![
+                (ReasoningDrop::UnknownProtocol, 2),
+                (ReasoningDrop::NoPayload, 1),
+            ],
+            ..Counts::default()
+        };
+        let losses = Manifest::losses_for(&counts, false, false);
+        assert_eq!(
+            losses,
+            [
+                format!(
+                    "reasoning dropped: {} (2)",
+                    ReasoningDrop::UnknownProtocol.describe()
+                ),
+                format!(
+                    "reasoning dropped: {} (1)",
+                    ReasoningDrop::NoPayload.describe()
+                ),
+            ]
+        );
     }
 
     #[test]

@@ -51,13 +51,18 @@ successful resume is evidence that the signature was carried intact, not that it
    configured with and mukade cannot know which (`src/policy.rs`, `destination_protocol`). Naming
    it with `--dest-protocol` keeps blocks of that protocol, as this run shows. The usage guide says
    so (section 4, "Tool calls and reasoning").
-2. **The default's loss line names the wrong reason here.** It says "foreign provider or no opaque
+2. **The default's loss line named the wrong reason here.** It said "foreign provider or no opaque
    payload"; the block had its payload and the destination could hold it — what was missing is the
-   destination's protocol.
-3. **`--reasoning as_text` leaves no trace in the manifest.** The block's signature is gone and its
-   text is no longer reasoning to the provider, but `counts` has no number for it and `losses` no
-   line; only `options.reasoning: "as_text"` says it happened. That is short of "which of the three
-   happened is in the manifest" (README) and of "no loss is silent" (spec §1.3).
+   destination's protocol. *Fixed the same day:* every dropped block now has a loss line with its
+   own reason, here "the destination's provider protocol is not known; name it with
+   --dest-protocol" (`ReasoningDrop` in `src/policy.rs`, test
+   `reasoning_not_carried_natively_is_counted_with_its_reason`).
+3. **`--reasoning as_text` left no trace in the manifest.** The block's signature is gone and its
+   text is no longer reasoning to the provider, but `counts` had no number for it and `losses` no
+   line; only `options.reasoning: "as_text"` said it happened. That was short of "which of the
+   three happened is in the manifest" (README) and of "no loss is silent" (spec §1.3). *Fixed the
+   same day:* a `reasoning_as_text` count and the line "reasoning written as labelled text, no
+   longer replayable by a provider (n)".
 
 ## Not covered
 
