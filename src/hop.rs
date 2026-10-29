@@ -1,4 +1,4 @@
-//! One hop, end to end (§1.2): read a source session, apply the compaction policy, plan, check the
+﻿//! One hop, end to end (Â§1.2): read a source session, apply the compaction policy, plan, check the
 //! strict gate, write, and report what happened in a [`Manifest`].
 //!
 //! `hop` is the whole pipeline; [`import`] is the second half alone, for a caller that already holds
@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-/// The text every portable hop writes before the source's own summary (§4.2, verbatim).
+/// The text every portable hop writes before the source's own summary (Â§4.2, verbatim).
 pub const PORTABLE_HANDOFF: &str = "[mukade handoff v1] Summary of the earlier conversation, written by the source agent's own compaction:";
 
 /// Which session to read: its native id, or a file that holds it.
@@ -61,18 +61,18 @@ pub enum KeepFrom {
     Message(String),
 }
 
-/// What to do with the source's compaction (§4).
+/// What to do with the source's compaction (Â§4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Compaction {
-    /// The whole selected history (§4.1).
+    /// The whole selected history (Â§4.1).
     #[default]
     None,
-    /// The summary as one user message, then the tail from the boundary (§4.2).
+    /// The summary as one user message, then the tail from the boundary (Â§4.2).
     Portable {
         summary: SummarySource,
         keep_from: KeepFrom,
     },
-    /// The whole history, then the destination's own compaction (§4.3). The compaction itself is
+    /// The whole history, then the destination's own compaction (Â§4.3). The compaction itself is
     /// run by the caller, as the bench does: it needs the destination's environment.
     DestinationNative,
 }
@@ -91,7 +91,7 @@ impl Compaction {
     }
 }
 
-/// Ask the destination to resume, and keep its reply for the receipt (§5).
+/// Ask the destination to resume, and keep its reply for the receipt (Â§5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResumePrompt {
     pub text: String,
@@ -112,7 +112,7 @@ impl ResumePrompt {
     }
 }
 
-/// The destination-side facts a writer needs that the spec's §1.2 leaves to [`WriteOpts`].
+/// The destination-side facts a writer needs that the spec's Â§1.2 leaves to [`WriteOpts`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WriteDetails {
     pub dest_version: Option<String>,
@@ -123,8 +123,10 @@ pub struct WriteDetails {
     pub model: Option<String>,
     pub project_id: Option<String>,
     pub dest_id: Option<String>,
+    pub dest_path: Option<std::path::PathBuf>,
     pub dest_agent: Option<String>,
     pub metadata: Option<Value>,
+    pub tool_map: Vec<(String, String, serde_json::Value, serde_json::Value)>,
     pub without_tools: bool,
     pub now: Option<String>,
     /// The destination harness's executable override (`crate::exe` resolves the default).
@@ -160,7 +162,7 @@ impl SourceFacts {
     }
 }
 
-/// A whole hop request (§1.2).
+/// A whole hop request (Â§1.2).
 #[derive(Debug, Clone)]
 pub struct HopRequest {
     pub source: SessionRef,
@@ -189,7 +191,7 @@ pub struct ImportOpts {
     pub summary: Option<SummaryFacts>,
 }
 
-/// What a hop produced (§1.2).
+/// What a hop produced (Â§1.2).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Receipt {
     pub dest_id: String,
@@ -226,7 +228,7 @@ pub enum HopError {
         reason: String,
         receipt: Box<Receipt>,
     },
-    /// The plan would produce a request a real provider refuses (§7). Nothing was written.
+    /// The plan would produce a request a real provider refuses (Â§7). Nothing was written.
     StrictCheckFailed(Vec<String>),
     /// The source harness could not write the summary asked of it. Nothing was written.
     SummaryFailed(String),
@@ -288,7 +290,7 @@ impl std::fmt::Display for HopError {
 
 impl std::error::Error for HopError {}
 
-/// Read a session with its harness's reader and rules (§8.1).
+/// Read a session with its harness's reader and rules (Â§8.1).
 pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
     let reader = crate::reader::for_harness(source.harness)
         .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
@@ -299,12 +301,10 @@ pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopErr
 /// Write a session we hold into a destination.
 pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
     if dest != HarnessId::OpenCode
-        && (opts.write.dest_id.is_some()
-            || opts.write.dest_agent.is_some()
-            || opts.write.metadata.is_some())
+        && (opts.write.dest_agent.is_some() || opts.write.metadata.is_some())
     {
         return Err(HopError::Unsupported(
-            "a reserved destination ID, agent and metadata are currently supported only for OpenCode"
+            "a destination agent and metadata are currently supported only for OpenCode"
                 .into(),
         ));
     }
@@ -319,8 +319,10 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         model: opts.write.model.clone(),
         project_id: opts.write.project_id.clone(),
         dest_id: opts.write.dest_id.clone(),
+        dest_path: opts.write.dest_path.clone(),
         dest_agent: opts.write.dest_agent.clone(),
         metadata: opts.write.metadata.clone(),
+        tool_map: opts.write.tool_map.clone(),
         without_tools: opts.write.without_tools,
         reasoning: opts.reasoning,
         title: session.meta.title.clone(),
@@ -332,7 +334,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         check_resume_prompt(&prompt.text, dest, write_opts.exe.as_deref())?;
     }
 
-    // §7: the gate runs on the plan the writer will use, before anything reaches the store.
+    // Â§7: the gate runs on the plan the writer will use, before anything reaches the store.
     let plan_span = crate::timing::span("plan");
     let plan = plan::plan(session, dest, &write_opts);
     drop(plan_span);
@@ -404,7 +406,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
     Ok(receipt)
 }
 
-/// Read, plan, check, write: the whole pipeline of §1.
+/// Read, plan, check, write: the whole pipeline of Â§1.
 pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
     let source = export(&req.source, &req.roots)?;
     let facts = SourceFacts::of(&source);
@@ -531,7 +533,7 @@ fn select<'a>(
                         .into(),
                 ));
             }
-            // §4.2: one user message, the handoff line first, then the tail from the boundary.
+            // Â§4.2: one user message, the handoff line first, then the tail from the boundary.
             let cut = cut_index(source, keep_from, boundary.as_deref())?;
             let mut entries = vec![Entry {
                 id: "portable-handoff".into(),
@@ -757,7 +759,7 @@ fn resume_error(reason: String) -> HopError {
     }
 }
 
-/// Run the destination's own resume command with the prompt as the last argument (§5), from the
+/// Run the destination's own resume command with the prompt as the last argument (Â§5), from the
 /// session's working directory when there is one: Claude Code stamps the rows it appends with the
 /// directory it runs in.
 ///

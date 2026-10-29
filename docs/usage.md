@@ -170,13 +170,16 @@ source untouched, and the manifest counts them
 (`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`, `custom_message` and `context_edit`
 entries reach the destination the way Pi shows them to its model.
 
-For Claude Code, `last-prompt.leafUuid` selects a checkpoint when present; a later continuation or
-a new user branch can supersede it when the checkpoint's leaf was already recorded before the
-checkpoint. A checkpoint flushed before its own leaf is not treated as a rewind ordering barrier.
+For Claude Code, `last-prompt.leafUuid` selects a checkpoint when present. A later continuation
+descending from it can supersede it. A new user branch can supersede it when the checkpoint's
+leaf was already recorded before the checkpoint. A checkpoint flushed before its own leaf is
+not treated as a rewind ordering barrier. Text beside tool results can start a new user turn too.
 Without a checkpoint, the last non-sidechain user or assistant
 row selects the branch. Parent links and compaction metadata reconstruct its order; split responses
 and parallel results are grouped by message and call IDs, even if written late. A UUID-less block,
 result or compaction summary is recovered only when those identities establish its position.
+An explicit parent on an abandoned conversation branch prevents a tool result from being
+recovered into the selected branch, even if `sourceToolAssistantUUID` names an active response.
 Missing parents, cycles, duplicate UUIDs, contradictory compaction metadata and genuinely ambiguous
 records are refused, not silently assigned to a branch. Real automatic compaction and rewind
 remain to be verified against Claude Code itself.

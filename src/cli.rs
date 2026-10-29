@@ -1,11 +1,11 @@
-//! The library's command line: `list`, `dump`, `write` and `hop` as a binary, for scripts, CI
+﻿//! The library's command line: `list`, `dump`, `write` and `hop` as a binary, for scripts, CI
 //! and any caller that would rather not write Rust to move a session.
 //!
 //! ```text
 //! mukade list  <harness>
-//! mukade dump  <harness> <session-id>            → the document on stdout
-//! mukade write <harness> <document.json>         → {"id","location","resume"} on stdout
-//! mukade detect <dir>                            → which harness stores the directory holds
+//! mukade dump  <harness> <session-id>            â†’ the document on stdout
+//! mukade write <harness> <document.json>         â†’ {"id","location","resume"} on stdout
+//! mukade detect <dir>                            â†’ which harness stores the directory holds
 //! ```
 //!
 //! `dump` and `write` are a pair: what `dump` prints is what `write` takes. Store roots come from
@@ -28,6 +28,7 @@ use serde_json::json;
 pub const USAGE: &str = "\
 mukade list  <harness> [options]
 mukade dump  <harness> <session-id> [options]
+mukade document opencode <src-harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
 mukade detect <dir>
@@ -49,13 +50,15 @@ options:
   --cwd <dir>              the project the destination files the session under
   --dest-version <v>       the destination's own version stamp
   --dest-protocol <p>      anthropic-messages | openai-responses | openai-chat
-  --dest-shell <s>         bash | sh | zsh | powershell | pwsh — the destination's shell
+  --dest-shell <s>         bash | sh | zsh | powershell | pwsh â€” the destination's shell
   --model-provider <id>    the destination's provider id
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
-  --dest-id <id>           a reserved destination session ID (OpenCode only)
+  --dest-id <id>           a reserved destination session ID
+  --dest-path <path>       a reserved file for a file-based destination
   --dest-agent <name>      the destination's primary agent (OpenCode only)
   --metadata-file <path>   a JSON object to store as session metadata (OpenCode only)
+  --tool-map <path>        explicit source tool bindings from the destination catalog
   --without-tools          omit historical tool calls and results (hop and write)
   --expect-sha256 <hash>   refuse a hop when the captured source fingerprint changed
   --reasoning <mode>       drop_foreign (default) | as_text | drop
@@ -78,8 +81,8 @@ options:
   --opencode-exe <path>    the opencode binary to spawn
   --pi-exe <path>          the pi binary to spawn
 
-Executable resolution: --<harness>-exe → MUKADE_CLAUDE_EXE / MUKADE_CODEX_EXE /
-MUKADE_OPENCODE_EXE / MUKADE_PI_EXE → PATH → the well-known install locations → the plain
+Executable resolution: --<harness>-exe â†’ MUKADE_CLAUDE_EXE / MUKADE_CODEX_EXE /
+MUKADE_OPENCODE_EXE / MUKADE_PI_EXE â†’ PATH â†’ the well-known install locations â†’ the plain
 command name. --root selects the
 source store of a hop; a portable destination needs its store variable set in the environment
 and its --<harness>-exe. A source OpenCode read spawns the binary its own resolution finds
@@ -89,6 +92,12 @@ and its --<harness>-exe. A source OpenCode read spawns the binary its own resolu
 /// Parse and run the command line. `args` excludes the program name.
 pub fn run(args: &[String]) -> Result<()> {
     let (command, rest) = args.split_first().context(USAGE)?;
+    if command == "--identity" {
+        anyhow::ensure!(rest.is_empty(), "--identity takes no arguments");
+        println!("{}", json!({ "name":"mukade", "version":env!("CARGO_PKG_VERSION"),
+            "commit":option_env!("MUKADE_SOURCE_COMMIT"), "target": if cfg!(all(windows, target_arch="x86_64", target_env="msvc")) { "x86_64-pc-windows-msvc" } else { "other" } }));
+        return Ok(());
+    }
     if matches!(command.as_str(), "-h" | "--help" | "help") {
         print!("{USAGE}");
         return Ok(());
@@ -121,8 +130,10 @@ pub fn run(args: &[String]) -> Result<()> {
             "--model" => flags.model = Some(next(rest, &mut i)?),
             "--project-id" => flags.project_id = Some(next(rest, &mut i)?),
             "--dest-id" => flags.dest_id = Some(next(rest, &mut i)?),
+            "--dest-path" => flags.dest_path = Some(next(rest, &mut i)?),
             "--dest-agent" => flags.dest_agent = Some(next(rest, &mut i)?),
             "--metadata-file" => flags.metadata_file = Some(next(rest, &mut i)?),
+            "--tool-map" => flags.tool_map = Some(next(rest, &mut i)?),
             "--without-tools" => flags.without_tools = true,
             "--expect-sha256" => flags.expect_sha256 = Some(next(rest, &mut i)?),
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
@@ -151,8 +162,8 @@ pub fn run(args: &[String]) -> Result<()> {
         i += 1;
     }
 
-    if flags.without_tools && !matches!(command.as_str(), "hop" | "write") {
-        anyhow::bail!("--without-tools is supported only by hop and write");
+    if flags.without_tools && !matches!(command.as_str(), "hop" | "write" | "document") {
+        anyhow::bail!("--without-tools is supported only by hop, write and document");
     }
     if let Some(hash) = flags.expect_sha256.as_deref() {
         anyhow::ensure!(command == "hop", "--expect-sha256 is supported only by hop");
@@ -161,15 +172,18 @@ pub fn run(args: &[String]) -> Result<()> {
             "--expect-sha256 must be a 64-digit SHA-256"
         );
     }
-    if (flags.dest_id.is_some() || flags.dest_agent.is_some() || flags.metadata_file.is_some())
-        && !matches!(command.as_str(), "hop" | "write")
+    if flags.tool_map.is_some() && !matches!(command.as_str(), "hop" | "write" | "document") {
+        anyhow::bail!("--tool-map is supported only by hop, write and document");
+    }
+    if (flags.dest_id.is_some() || flags.dest_path.is_some() || flags.dest_agent.is_some() || flags.metadata_file.is_some())
+        && !matches!(command.as_str(), "hop" | "write" | "document")
     {
         anyhow::bail!(
-            "--dest-id, --dest-agent and --metadata-file are supported only by hop and write"
+            "--dest-id, --dest-path, --dest-agent and --metadata-file are supported only by hop, write and document"
         );
     }
     if let Some(id) = flags.dest_id.as_deref() {
-        crate::writer::opencode::validate_session_id(id)?;
+        crate::writer::validate_id_syntax(id)?;
     }
     if let Some(agent) = flags.dest_agent.as_deref() {
         crate::writer::opencode::validate_agent(agent)?;
@@ -321,6 +335,56 @@ pub fn run(args: &[String]) -> Result<()> {
                 flags.manifest.as_deref(),
             )?;
         }
+        "document" => {
+            no_more(operands, 2)?;
+            let source_harness: HarnessId = operands.first().context("document needs a source harness")?.parse()?;
+            let dest = harness;
+            if dest != HarnessId::OpenCode {
+                anyhow::bail!("document currently supports only an OpenCode destination");
+            }
+            let source = match (flags.from_file.as_deref(), flags.all_branches) {
+                (Some(path), false) => crate::hop::export_path(source_harness, std::path::Path::new(path)),
+                (Some(path), true) => crate::hop::export_path_all_branches(source_harness, std::path::Path::new(path)),
+                (None, all) => {
+                    let id = operands.get(1).context("document needs a session id")?;
+                    let source = SessionRef::id(source_harness, *id);
+                    if all { crate::hop::export_all_branches(&source, &roots) } else { crate::hop::export(&source, &roots) }
+                }
+            }.map_err(anyhow::Error::new)?;
+            anyhow::ensure!(source.conversation().any(|entry| matches!(entry.kind, crate::model::Kind::Step { .. })), "noCompleteTurn");
+            let mut opts = flags.write_opts(dest, &source, &destination_roots)?;
+            if source_harness == HarnessId::OpenCode {
+                for entry in source.conversation() {
+                    if let crate::model::Kind::Step { calls, .. } = &entry.kind {
+                        for call in calls {
+                            if crate::tools::offered(dest).contains(&call.source_name) && call.input.is_object() {
+                                opts.tool_map.push((call.source_name.clone(), call.source_name.clone(), call.input.clone(), call.input.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            let mut clock = crate::policy::Clock::new(opts.now.as_deref());
+            let id = opts.dest_id.as_deref().unwrap_or("ses_preview");
+            crate::writer::opencode::validate_session_id(id)?;
+            let plan = crate::writer::plan::plan(&source, dest, &opts);
+            let violations = crate::strict::check_plan(&plan, opts.dest_protocol.as_ref());
+            anyhow::ensure!(violations.is_empty(), "the document would violate the provider contract: {}", violations.join("; "));
+            let document = crate::writer::opencode::document_from_plan(&source, &plan, id, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
+            println!("{}", json!({
+                "document": document,
+                "turns": source.conversation().filter(|entry| matches!(entry.kind, crate::model::Kind::User { .. })).count(),
+                "interrupted_last_turn": source.interrupted_last_turn(),
+                "counts": {
+                    "messages_in": plan.counts.messages_in,
+                    "messages_out": plan.counts.messages_out,
+                    "tools_translated": plan.counts.tools_translated,
+                    "tools_text_form": plan.counts.tools_text_form,
+                    "tools_omitted": plan.counts.tools_omitted,
+                },
+                "losses": crate::manifest::Manifest::losses_for(&plan.counts, source.interrupted_last_turn(), false),
+            }));
+        }
         "hop" => {
             no_more(operands, 2)?;
             let dest: HarnessId = operands
@@ -328,12 +392,10 @@ pub fn run(args: &[String]) -> Result<()> {
                 .context("hop needs a destination harness")?
                 .parse()?;
             if dest != HarnessId::OpenCode
-                && (flags.dest_id.is_some()
-                    || flags.dest_agent.is_some()
-                    || flags.metadata_file.is_some())
+                && (flags.dest_agent.is_some() || flags.metadata_file.is_some())
             {
                 anyhow::bail!(
-                    "--dest-id, --dest-agent and --metadata-file are supported only for an OpenCode destination"
+                    "--dest-agent and --metadata-file are supported only for an OpenCode destination"
                 );
             }
             // The source is read once, by the same path the library uses: a session that is not
@@ -380,7 +442,7 @@ pub fn run(args: &[String]) -> Result<()> {
 
 /// Hand back a written session: its receipt on stdout first, so a caller always learns what was
 /// written, then the manifest file when one was asked for. A resume that failed after the write
-/// still has both (§5), and keeps its own exit code.
+/// still has both (Â§5), and keeps its own exit code.
 fn deliver(result: Result<Receipt, HopError>, manifest: Option<&str>) -> Result<()> {
     let (receipt, failure) = match result {
         Ok(receipt) => (receipt, None),
@@ -450,8 +512,10 @@ struct Flags {
     model: Option<String>,
     project_id: Option<String>,
     dest_id: Option<String>,
+    dest_path: Option<String>,
     dest_agent: Option<String>,
     metadata_file: Option<String>,
+    tool_map: Option<String>,
     without_tools: bool,
     expect_sha256: Option<String>,
     reasoning: Option<String>,
@@ -498,8 +562,10 @@ impl Flags {
                 model: write.model,
                 project_id: write.project_id,
                 dest_id: write.dest_id,
+                dest_path: write.dest_path,
                 dest_agent: write.dest_agent,
                 metadata: write.metadata,
+                tool_map: write.tool_map,
                 without_tools: write.without_tools,
                 now: write.now,
                 exe: write.exe,
@@ -520,14 +586,18 @@ impl Flags {
         roots: &StoreRoots,
     ) -> Result<WriteOpts> {
         if harness != HarnessId::OpenCode
-            && (self.dest_id.is_some() || self.dest_agent.is_some() || self.metadata_file.is_some())
+            && (self.dest_agent.is_some() || self.metadata_file.is_some())
         {
             anyhow::bail!(
-                "--dest-id, --dest-agent and --metadata-file are supported only for an OpenCode destination"
+                "--dest-agent and --metadata-file are supported only for an OpenCode destination"
             );
         }
         if let Some(id) = self.dest_id.as_deref() {
-            crate::writer::opencode::validate_session_id(id)?;
+            if harness == HarnessId::OpenCode {
+                crate::writer::opencode::validate_session_id(id)?;
+            } else {
+                uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination UUID"))?;
+            }
         }
         if let Some(agent) = self.dest_agent.as_deref() {
             crate::writer::opencode::validate_agent(agent)?;
@@ -545,6 +615,19 @@ impl Flags {
                     .with_context(|| format!("parse metadata file {file}"))?;
                 anyhow::ensure!(value.is_object(), "session metadata must be a JSON object");
                 Some(value)
+            }
+        };
+        let tool_map = match self.tool_map.as_deref() {
+            None => Vec::new(),
+            Some(file) => {
+                let info = std::fs::metadata(file).with_context(|| format!("tool map {file}"))?;
+                anyhow::ensure!(info.is_file() && info.len() <= 1_048_576, "tool map must be a regular file no larger than 1 MiB");
+                let entries: Vec<(String, String, serde_json::Value, serde_json::Value)> = serde_json::from_slice(&std::fs::read(file)?)
+                    .with_context(|| format!("parse tool map {file}"))?;
+                anyhow::ensure!(entries.len() <= 4096 && entries.iter().all(|(source, destination, original, mapped)|
+                    !source.is_empty() && !destination.is_empty() && source.len() <= 256 && destination.len() <= 256
+                    && original.is_object() && mapped.is_object()), "invalid tool map");
+                entries
             }
         };
         let reasoning = match self.reasoning.as_deref() {
@@ -586,7 +669,7 @@ impl Flags {
             .or_else(|| configured.as_ref().and_then(|(_, model)| model.clone()));
         // The binary to spawn. An explicit override (the harness's flag, or its MUKADE_*_EXE)
         // travels with the write so the resume command names it too; probes resolve the whole
-        // chain — PATH, then the well-known install locations — so a default install is found
+        // chain â€” PATH, then the well-known install locations â€” so a default install is found
         // with no flag at all.
         let exe_override = self
             .exe_flag(harness)
@@ -625,8 +708,10 @@ impl Flags {
             model,
             project_id,
             dest_id: self.dest_id.clone(),
+            dest_path: self.dest_path.as_ref().map(std::path::PathBuf::from),
             dest_agent: self.dest_agent.clone(),
             metadata,
+            tool_map,
             without_tools: self.without_tools,
             reasoning,
             title: session.meta.title.clone(),

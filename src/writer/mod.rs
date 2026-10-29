@@ -1,5 +1,5 @@
-//! Writers: [`Session`] → a new native session in a destination's store
-//! (docs/session-interchange-spec.md §1.2, §8.2).
+﻿//! Writers: [`Session`] â†’ a new native session in a destination's store
+//! (docs/session-interchange-spec.md Â§1.2, Â§8.2).
 
 pub mod claude_code;
 pub mod codex;
@@ -28,9 +28,9 @@ pub struct WriteOpts {
     /// opaque reasoning cannot be proven replayable and is dropped.
     pub dest_protocol: Option<Protocol>,
     /// The shell the destination runs commands with. A shell call whose dialect differs is text
-    /// form (tables §4.1).
+    /// form (tables Â§4.1).
     pub dest_shell: Option<Shell>,
-    /// The destination's offered tool set, when the caller knows it (tables §6). `None` uses the
+    /// The destination's offered tool set, when the caller knows it (tables Â§6). `None` uses the
     /// list pinned for that harness's bench version.
     pub offered: Option<ToolSet>,
     /// The destination's model provider id (Codex `session_meta.model_provider`, OpenCode
@@ -41,15 +41,19 @@ pub struct WriteOpts {
     /// The destination's project: OpenCode's interchange format requires `info.projectID`, and the
     /// project is the destination's own (it derives one per directory).
     pub project_id: Option<String>,
-    /// A previously reserved OpenCode session ID, for retry-safe callers.
+    /// A previously reserved destination session ID, for retry-safe callers.
     pub dest_id: Option<String>,
+    /// A previously reserved destination file, for retry-safe callers of file-based harnesses.
+    pub dest_path: Option<std::path::PathBuf>,
     /// The destination's primary agent for an OpenCode session.
     pub dest_agent: Option<String>,
     /// Metadata supplied by the caller for the new OpenCode session.
     pub metadata: Option<serde_json::Value>,
+    /// Explicit source-to-destination tool bindings supplied by the host's catalog.
+    pub tool_map: Vec<(String, String, serde_json::Value, serde_json::Value)>,
     /// Omit recorded tool calls and their results, retaining only conversation text.
     pub without_tools: bool,
-    /// §3.3. The default drops reasoning the destination cannot replay.
+    /// Â§3.3. The default drops reasoning the destination cannot replay.
     pub reasoning: ReasoningPolicy,
     /// A title, where the destination has one.
     pub title: Option<String>,
@@ -93,17 +97,39 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 
 impl std::error::Error for WriteOutcomeUnknown {}
 
+/// The CLI validates a reserved ID before it knows the source or starts a process.
+pub fn validate_id_syntax(id: &str) -> Result<()> {
+    if id.starts_with("ses_") {
+        return opencode::validate_session_id(id);
+    }
+    uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination session ID"))?;
+    Ok(())
+}
+
 /// Options for another destination must never be silently ignored by a writer.
 pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<()> {
-    if harness != HarnessId::OpenCode
-        && (opts.dest_id.is_some() || opts.dest_agent.is_some() || opts.metadata.is_some())
-    {
-        anyhow::bail!(
-            "a reserved destination ID, agent and metadata are currently supported only for OpenCode"
-        );
+    if harness != HarnessId::OpenCode && (opts.dest_agent.is_some() || opts.metadata.is_some()) {
+        anyhow::bail!("a destination agent and metadata are currently supported only for OpenCode");
+    }
+    if harness == HarnessId::OpenCode && opts.dest_path.is_some() {
+        anyhow::bail!("--dest-path is supported only for file-based destinations");
+    }
+    if let Some(path) = &opts.dest_path {
+        let root = match harness {
+            HarnessId::ClaudeCode => opts.roots.claude_config_dir.as_ref(),
+            HarnessId::Codex => opts.roots.codex_home.as_ref(),
+            HarnessId::Pi => opts.roots.pi_agent_dir.as_ref(),
+            HarnessId::OpenCode => None,
+        }.ok_or_else(|| anyhow::anyhow!("a destination root is required with --dest-path"))?;
+        anyhow::ensure!(path.is_absolute() && path.starts_with(root), "--dest-path must stay inside the destination root");
+        anyhow::ensure!(!path.components().any(|component| matches!(component, std::path::Component::ParentDir)), "--dest-path must not contain parent traversal");
     }
     if let Some(id) = opts.dest_id.as_deref() {
-        opencode::validate_session_id(id)?;
+        if harness == HarnessId::OpenCode {
+            opencode::validate_session_id(id)?;
+        } else {
+            uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination session ID"))?;
+        }
     }
     if let Some(agent) = opts.dest_agent.as_deref() {
         opencode::validate_agent(agent)?;
@@ -121,7 +147,7 @@ pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<(
 pub trait Writer {
     fn harness(&self) -> HarnessId;
 
-    /// The tools this destination offers for the pinned version (tables §2, L11).
+    /// The tools this destination offers for the pinned version (tables Â§2, L11).
     fn offered(&self) -> ToolSet {
         offered(self.harness())
     }
@@ -155,6 +181,7 @@ pub fn for_harness(harness: HarnessId) -> Box<dyn Writer> {
 /// Write a session's rows to a file, as JSON Lines with a trailing newline.
 pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) -> Result<()> {
     use anyhow::Context;
+    anyhow::ensure!(!path.exists(), "destination already exists: {}", path.display());
     let _span = crate::timing::span("serialize + write file");
     let mut text = String::new();
     for row in rows {
@@ -180,7 +207,8 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
             file.sync_all()
                 .with_context(|| format!("flush {}", temporary.display()))?;
         }
-        std::fs::rename(&temporary, path).with_context(|| format!("publish {}", path.display()))?;
+        std::fs::hard_link(&temporary, path).with_context(|| format!("publish {} without overwriting", path.display()))?;
+        let _ = std::fs::remove_file(&temporary);
         Ok(())
     })();
     if result.is_err() {

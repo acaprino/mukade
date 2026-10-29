@@ -407,7 +407,7 @@ fn import_uses_the_reserved_session_id_and_provenance() {
 }
 
 #[test]
-fn a_non_opencode_writer_refuses_reserved_opencode_options_without_writing() {
+fn a_file_writer_honors_a_reserved_destination_and_refuses_to_overwrite_it() {
     use mukade::model::HarnessId;
     use mukade::writer::{WriteOpts, plan};
     let scratch = Scratch::new();
@@ -420,17 +420,16 @@ fn a_non_opencode_writer_refuses_reserved_opencode_options_without_writing() {
             ..Default::default()
         },
         cwd: Some(scratch.0.to_string_lossy().into_owned()),
-        dest_id: Some("ses_reserved".into()),
+        dest_id: Some("00000000-0000-4000-8000-000000000001".into()),
+        dest_path: Some(scratch.0.join("sessions").join("reserved.jsonl")),
         ..Default::default()
     };
     let planned = plan::plan(&source, HarnessId::Pi, &options);
-    let result =
-        mukade::writer::for_harness(HarnessId::Pi).write_planned(&source, &planned, &options);
-    assert!(
-        result.is_err(),
-        "the writer must never silently ignore a reserved ID"
-    );
-    assert!(!scratch.0.join("sessions").exists());
+    let writer = mukade::writer::for_harness(HarnessId::Pi);
+    let written = writer.write_planned(&source, &planned, &options).unwrap();
+    assert_eq!(written.id, "00000000-0000-4000-8000-000000000001");
+    assert_eq!(written.location, scratch.0.join("sessions").join("reserved.jsonl").to_string_lossy());
+    assert!(writer.write_planned(&source, &planned, &options).is_err());
 }
 
 #[test]
@@ -609,7 +608,7 @@ fn invalid_reserved_id_is_rejected_before_starting_the_source_engine() {
         .unwrap();
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("invalid OpenCode destination session ID")
+        String::from_utf8_lossy(&output.stderr).contains("invalid destination session ID")
     );
     assert!(
         !observed.exists(),
@@ -820,4 +819,22 @@ fn an_out_of_order_chain_with_a_malformed_tool_is_not_silently_accepted() {
         json!({"type":"assistant", "uuid":"a2", "parentUuid":"u2", "message":{"id":"m2", "role":"assistant", "content":[{"type":"text", "text":"done"}]}}),
     ];
     assert!(mukade::reader::claude_code::parse(&rows, None).is_err());
+}
+
+#[test]
+fn document_opencode_returns_a_native_import_document_without_starting_a_write() {
+    let scratch = Scratch::new();
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/opencode/source/session-export.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_mukade"))
+        .args(["document", "opencode", "opencode", "fixture", "--from-file"]).arg(&fixture)
+        .arg("--cwd").arg(&scratch.0)
+        .args(["--dest-id", "ses_preview", "--dest-agent", "analyst", "--project-id", "global", "--model-provider", "tri-llm-gateway", "--model", "tritech-auto", "--without-tools"])
+        .env("MUKADE_DATA_DIR", scratch.0.join("data"))
+        .output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["document"]["info"]["id"], "ses_preview");
+    assert_eq!(result["document"]["info"]["agent"], "analyst");
+    assert!(result["counts"]["tools_omitted"].as_u64().unwrap() > 0);
+    assert!(!scratch.0.join("destination.db").exists());
 }

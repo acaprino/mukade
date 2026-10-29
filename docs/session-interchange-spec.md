@@ -212,6 +212,40 @@ Before a compaction: everything, thinking with its signature. After: summary + p
 later turns only; T1's tools and thinking are not sent; files read earlier come back as a system
 message. The resume prompt is the last user message.
 
+**Implemented history reconstruction (2026-10-29; local tests, not a new live harness
+verification).** The Claude Code reader reconstructs a selected branch using UUID parent links,
+compaction metadata, response IDs and tool call/result IDs. File position is not conversation
+order; it is a tie-breaker for otherwise independent recovered records. Timestamps are not used
+to sort the history.
+
+- **Branch selection.** `last-prompt.leafUuid` selects a checkpoint. A continuation descending
+  from that checkpoint can supersede it. A new user branch after the checkpoint can also
+  supersede it, provided the checkpoint's leaf was recorded before the checkpoint itself.
+  A checkpoint flushed before its own leaf does not establish a rewind ordering barrier.
+  Text beside tool results can start a new user turn. Without a checkpoint, the last
+  non-sidechain user or assistant row with a UUID selects the branch.
+- **Recovery and pairing.** Split assistant blocks sharing `message.id` become one step,
+  including blocks interleaved with results. Parallel results are paired by `tool_use_id`.
+  UUID-less blocks, results, expanded slash-command prompts and compaction summaries are
+  recovered only when their dependencies identify a safe position. An explicit conversational
+  parent on an abandoned branch takes precedence over `sourceToolAssistantUUID`; such a result
+  is not recovered into the active conversation.
+- **Compaction and preservation.** `logicalParentUuid` connects the earlier history to a
+  compaction boundary. Preserved-message lists and segments are checked, and a retained UUID
+  inside a merged response resolves to that response's entry for portable compaction.
+  Original source records remain in `Entry::raw`; excluded branch records become
+  `Meta(OffBranch)` and are counted in the destination manifest rather than replayed.
+- **Refusals and verification limits.** Missing parents, cycles, duplicate UUIDs, contradictory
+  preserved metadata and unplaceable or ambiguous conversation records are refused rather
+  than guessed. Regression tests cover the review's branch-selection and abandoned-result
+  cases, shuffled fixture rows, a 20,000-row reverse-written chain and native-format round trips
+  through all four destinations. These are local parser/writer checks, not proof of live
+  auto-compaction or rewind compatibility; those remain **[U]** against Claude Code itself.
+
+See [`usage.md`](usage.md#a-session-that-was-rewound-or-branched) for user-facing behavior and
+`tests/claude_code_order.rs` for the reconstruction regressions. The observed native records
+above retain their original **[V]** scope.
+
 ### 2.2 Codex CLI 0.164.0
 
 **Isolation [V].** `CODEX_HOME`, `USERPROFILE`, `HOME` → scratch; `config.toml`:

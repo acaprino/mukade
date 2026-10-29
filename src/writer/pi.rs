@@ -46,13 +46,13 @@ impl Writer for Pi {
             .clone()
             .or_else(|| session.meta.cwd.clone())
             .context("a working directory is required")?;
-        let id = crate::policy::new_session_id();
+        let id = opts.dest_id.clone().unwrap_or_else(crate::policy::new_session_id);
         let mut clock = Clock::new(opts.now.as_deref());
         let stamp = file_stamp(clock.base_millis());
 
         let dir = root.join("sessions").join(project_dir_name(&cwd));
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let file = dir.join(format!("{stamp}_{id}.jsonl"));
+        let file = opts.dest_path.clone().unwrap_or_else(|| dir.join(format!("{stamp}_{id}.jsonl")));
 
         let rows = rows(plan, session, &id, &cwd, opts, &mut clock);
         write_jsonl(&file, &rows)?;

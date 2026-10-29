@@ -128,6 +128,17 @@ pub fn translate(call: &ToolCall, dest: HarnessId, dest_shell: Option<Shell>) ->
     translate_with(call, dest, dest_shell, offered(dest))
 }
 
+/// Translate with explicit bindings derived from the host's real tool catalog.
+pub fn translate_with_map(
+    call: &ToolCall,
+    map: &[(String, String, Value, Value)],
+) -> Option<(String, Value)> {
+    if let Some((_, name, _, input)) = map.iter().find(|(source, _, original, _)| source == &call.source_name && original == &call.input) {
+        return Some((name.clone(), input.clone()));
+    }
+    None
+}
+
 /// The same, against an offered set the caller states. The destination's set is per version,
 /// settings and model (tables §6): Pi offers `grep`, `find` and `ls` only when it is told to, so a
 /// caller that knows the destination's configuration can widen the set instead of losing the call

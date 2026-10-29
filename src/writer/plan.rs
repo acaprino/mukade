@@ -377,6 +377,12 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         continue;
                     }
                     last_step_calls.push(call.id.clone());
+                    if let Some((name, input)) = tools::translate_with_map(call, &opts.tool_map) {
+                        counts.tools_translated += 1;
+                        last_step_native.push(call.id.clone());
+                        planned.calls.push(PlannedCall { id: ids.of(&call.id, &mut counts), name, source_name: call.source_name.clone(), input, source_input: call.input.clone() });
+                        continue;
+                    }
                     match tools::translate_with(call, dest, opts.dest_shell, offered) {
                         Translation::Call { name, input } => {
                             counts.tools_translated += 1;

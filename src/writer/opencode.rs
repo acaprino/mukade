@@ -94,7 +94,7 @@ impl Writer for Opencode {
             ".json",
             crate::portable::STALE_AFTER,
         );
-        let file = temp.join(format!("mukade-import-{id}.json"));
+        let file = temp.join(format!("mukade-import-{id}-{}.json", uuid::Uuid::new_v4().simple()));
         // The guard exists before the file does: a write that fails half-way leaves nothing behind.
         let temporary = ImportDocument(file.clone());
         write_private(
@@ -338,13 +338,13 @@ pub fn document_from_plan(
                     Some(PlannedBlock::Results { results }) => results,
                     _ => &[],
                 };
-                messages.push(assistant_message(
+                let mut assistant = assistant_message(
                     step,
                     results,
                     &model,
                     opts.dest_agent.as_deref().unwrap_or("build"),
                     clock,
-                ));
+                );
                 // A call that travelled as text has no tool part to answer it: its result follows
                 // as text, in the same place the result was.
                 let texts: Vec<Value> = results
@@ -355,14 +355,11 @@ pub fn document_from_plan(
                     })
                     .collect();
                 if !texts.is_empty() {
-                    messages.push(json!({
-                        "id": message_id(),
-                        "type": "user",
-                        "time": {"created": clock.next_millis()},
-                        "text": texts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n\n"),
-                        "files": [],
+                    assistant["content"].as_array_mut().expect("assistant content is an array").push(json!({
+                        "type": "text", "text": texts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n\n")
                     }));
                 }
+                messages.push(assistant);
                 if !results.is_empty() {
                     i += 1; // the results were folded into the tool parts above
                 }
