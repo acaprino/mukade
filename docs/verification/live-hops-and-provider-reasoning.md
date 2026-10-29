@@ -41,7 +41,7 @@ reasoning) travel so that the destination's provider accepts it?
 
 What the negative controls mean. Through Pi and OpenRouter the same kind of control **is**
 refused (`messages.1.content.0: Invalid signature in thinking block`,
-[2026-10-28-pi-reasoning-live.md](2026-10-28-pi-reasoning-live.md)): there Pi sends every earlier
+[Pi signed-reasoning verification](pi-session-and-reasoning-verification.md#signed-reasoning-with-a-real-provider)): there Pi sends every earlier
 turn's thinking and the provider checks it. Claude Code's plain resume and OpenCode's OpenRouter
 path do not reach that check, so for them a successful resume shows the session is accepted, not
 that its reasoning is.

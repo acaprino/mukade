@@ -84,9 +84,10 @@ mukade detect <dir>                          # which harness stores the director
 
 A `hop` reads the source and writes the destination in one process, so set **both** harnesses' store
 variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`):
-Claude Code, Codex and Pi require an explicit root (an empty variable is no root). OpenCode uses its
-configured store, and every OpenCode command that touches the store (`session export`, `list` and
-`import`, `run`) carries `--standalone`, because without it its CLI hands the work to a background
+Claude Code, Codex and Pi require an explicit root (an empty variable is no root). OpenCode's
+session listing requires an explicit `OPENCODE_DB` or `--root` and opens it read-only. Other
+OpenCode operations can use its configured store. Every OpenCode command that touches the store
+(`session export`, `import`, `run`, or a project probe) carries `--standalone`, because without it its CLI hands the work to a background
 service started with the user's own environment; an explicit `OPENCODE_DB` is passed to those
 commands. Temporary OpenCode import documents are removed on success and failure.
 
@@ -110,6 +111,21 @@ without one the command names the bare binary, which mukade itself looks up on `
 launchers included) when it runs it. An empty flag falls back to the default resolution. For
 OpenCode as a source, select its custom executable with `MUKADE_OPENCODE_EXE`.
 
+`--without-tools` on `hop` or `write` omits recorded tool calls and results; the manifest counts
+the omissions. An OpenCode destination may also receive `--dest-id`, `--dest-agent` and
+`--metadata-file`: a reserved ID or supplied metadata is checked in the explicitly selected
+database after the import. An external import whose outcome cannot be confirmed returns code 5 and names
+the reserved ID; reconcile it before retrying.
+
+For a `hop`, `--expect-sha256 <hash>` refuses a source whose captured fingerprint differs from
+the caller's. It compares the complete source selected by that read; it does not freeze an
+earlier prefix of a file that has since grown.
+
+Claude Code records flushed out of file order are reconstructed by their parent chain for plain
+conversations and fully paired, linear tool calls. Out-of-order chains containing system records,
+compaction, split responses, recovered siblings or unchained conversation records are refused
+rather than silently reordered; those cases still need full reconstruction support.
+
 When a destination write succeeds but its resume fails, `HopError::ResumeFailed` contains the written
 session's receipt and manifest, so callers can recover without blindly creating another session. The
 command line prints that receipt on stdout and saves `--manifest` before it exits with code 5; once a
@@ -119,8 +135,9 @@ through a Windows `.cmd` launcher. A resume prompt that starts with `-`, or one 
 `.cmd` launcher, is refused before anything is written. Exit codes: 0 done, 1 a command-line error,
 2 refused with a reason
 (nothing written: the session is not there, the request is not supported), 4 failed and nothing
-changed (the destination refused the write, or the plan would be refused by a provider), 5 failed and
-recovery needed (the source could not be read, or the resume failed after the write).
+changed (for example the plan would be refused by a provider), 5 failed and recovery is needed
+(the source could not be read, an external import has an uncertain outcome, or the resume failed
+after the write).
 
 ## One executable, nothing to install, and speed
 
@@ -129,16 +146,17 @@ mukade is a single command-line executable: `cargo build --release`, then copy
 C runtime in, so it needs no redistributable. There is no installer, no configuration file and no
 mode to switch on.
 
-It generates the files it needs in the folder where the executable is, and nowhere else: a
+By default it generates the files it needs in the folder where the executable is: a
 `mukade-data` folder, made the first time something is written to it, holding a small cache of the
 versions and OpenCode project ids it learned from harness binaries (`cache/`) and its temporary
 files (`tmp/`): the document an OpenCode import needs, and the folder of a `--compaction summary`
 run (Codex's last message, Pi's fork), each removed when its work ends; a killed run's leftovers
-are swept an hour later. Nothing goes to the user profile, the application-data folders, the
+are swept an hour later. By default nothing goes to the user profile, the application-data folders, the
 registry or the system's temporary folder; where the folder cannot be made (an executable in a
 read-only place) the cache is simply not kept, and an OpenCode import or a summary says why it
-cannot run. Delete
-the executable's folder and nothing is left. An automated test runs the real binary with all of
+cannot run. A host can set `MUKADE_DATA_DIR` to an absolute writable folder instead; a relative or
+empty override is refused, never silently redirected. Delete the default
+executable's folder and nothing is left. An automated test runs the real binary with all of
 those places pointed at an empty sandbox and asserts it stays empty.
 
 A hop is quick: 30–35 ms for a 1 MB session, 185–240 ms for 10 MB, 440–630 ms for 30 MB (it was
@@ -169,12 +187,11 @@ The documentation ships here too: the specification
 tables ([`docs/tool-conversion-tables.md`](docs/tool-conversion-tables.md)), one page per harness
 ([`docs/harnesses/`](docs/harnesses/)), the reference notes on the four harnesses' stores
 ([`docs/reference/harness-session-persistence-reference.md`](docs/reference/harness-session-persistence-reference.md))
-the conformance bench report
-([`docs/verification/2026-10-27-H27.md`](docs/verification/2026-10-27-H27.md)) and the live run of
-mukade-written sessions against Pi 1.2.0 and 1.4.0
-([`docs/verification/2026-10-28-pi-live.md`](docs/verification/2026-10-28-pi-live.md)). The benches
-themselves — the scripts that run the real harnesses against a mock model — are not part of this
-repository.
+and the verification of mukade-written sessions against Pi 1.2.0 and 1.4.0
+([`docs/verification/pi-session-and-reasoning-verification.md`](docs/verification/pi-session-and-reasoning-verification.md)).
+
+See the [documentation index](docs/README.md) for guides, reference material, verification records
+and archived design documents.
 
 ## License
 

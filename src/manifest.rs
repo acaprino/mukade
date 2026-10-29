@@ -26,6 +26,7 @@ pub struct Manifest {
     pub summary: Option<crate::summary::SummaryFacts>,
     pub reasoning: String,
     pub resume_prompt: bool,
+    pub without_tools: bool,
     pub counts: Counts,
     pub losses: Vec<String>,
     pub strict_checked: bool,
@@ -39,6 +40,7 @@ impl Manifest {
         counts.insert("messages_in".into(), json!(self.counts.messages_in));
         counts.insert("messages_out".into(), json!(self.counts.messages_out));
         counts.insert("tool_calls".into(), json!(self.counts.tools_translated));
+        counts.insert("tools_omitted".into(), json!(self.counts.tools_omitted));
         counts.insert("tools_text_form".into(), json!(self.counts.tools_text_form));
         counts.insert(
             "reasoning_dropped".into(),
@@ -126,6 +128,7 @@ impl Manifest {
                 })),
                 "reasoning": self.reasoning,
                 "resume_prompt": self.resume_prompt,
+                "without_tools": self.without_tools,
             },
             "counts": Value::Object(counts),
             "losses": self.losses,
@@ -140,6 +143,12 @@ impl Manifest {
         compaction_carried: bool,
     ) -> Vec<String> {
         let mut losses = Vec::new();
+        if counts.tools_omitted > 0 {
+            losses.push(format!(
+                "tool calls and their results omitted by request ({})",
+                counts.tools_omitted
+            ));
+        }
         // One line per reason; a count set without its reasons (a caller's own) still has a line.
         if counts.reasoning_dropped_why.is_empty() && counts.reasoning_dropped > 0 {
             losses.push(format!("reasoning dropped ({})", counts.reasoning_dropped));
@@ -246,7 +255,8 @@ mod tests {
     #[test]
     fn every_loss_count_has_a_loss_line_and_a_key() {
         type Set = fn(&mut Counts);
-        let losses: [(&str, Set); 14] = [
+        let losses: [(&str, Set); 15] = [
+            ("tools_omitted", |c| c.tools_omitted = 1),
             ("tools_text_form", |c| c.tools_text_form = 1),
             ("reasoning_dropped", |c| c.reasoning_dropped = 1),
             ("reasoning_as_text", |c| c.reasoning_as_text = 1),
@@ -308,6 +318,7 @@ mod tests {
             summary: None,
             reasoning: "drop_foreign".into(),
             resume_prompt: false,
+            without_tools: false,
             counts: counts.clone(),
             losses: vec!["reasoning dropped: foreign provider (1)".into()],
             strict_checked: true,

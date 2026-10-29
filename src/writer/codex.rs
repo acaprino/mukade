@@ -36,6 +36,7 @@ impl Writer for Codex {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
+        super::validate_options(HarnessId::Codex, opts)?;
         let root = opts
             .roots
             .codex_home

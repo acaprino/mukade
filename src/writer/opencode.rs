@@ -63,7 +63,14 @@ impl Writer for Opencode {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
-        let id = new_session_id();
+        super::validate_options(HarnessId::OpenCode, opts)?;
+        let id = match opts.dest_id.as_deref() {
+            Some(id) => {
+                validate_session_id(id)?;
+                id.to_string()
+            }
+            None => new_session_id(),
+        };
         let cwd = opts
             .cwd
             .clone()
@@ -107,27 +114,77 @@ impl Writer for Opencode {
         let mut command = Command::new(&argv[0]);
         command.args(&argv[1..]);
         crate::reader::opencode::opencode_environment(&mut command, &opts.roots);
-        let output = crate::exe::run_within(&mut command, IMPORT_TIMEOUT)
-            .with_context(|| format!("run {}", argv.join(" ")))?;
+        let output = crate::exe::run_within(&mut command, IMPORT_TIMEOUT).map_err(|error| {
+            failed_import(
+                &id,
+                &opts.roots,
+                format!("could not complete the import process: {error}"),
+            )
+        })?;
         let Some(status) = output.status else {
-            anyhow::bail!("opencode session import did not finish within {IMPORT_TIMEOUT:?}");
+            return Err(failed_import(
+                &id,
+                &opts.roots,
+                format!("opencode session import did not finish within {IMPORT_TIMEOUT:?}"),
+            ));
         };
         if !status.success() {
-            anyhow::bail!(
-                "opencode session import failed ({status}): {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            return Err(failed_import(
+                &id,
+                &opts.roots,
+                format!(
+                    "opencode session import failed ({status}): {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ));
         }
         drop(temporary);
         // `Imported session: <id>` (OC2). The id the document asked for is the one that lands.
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let imported = stdout
-            .lines()
-            .find_map(|l| {
-                l.strip_prefix("Imported session:")
-                    .map(|s| s.trim().to_string())
-            })
-            .unwrap_or_else(|| id.clone());
+        let imported = stdout.lines().find_map(|l| {
+            l.strip_prefix("Imported session:")
+                .map(|s| s.trim().to_string())
+        });
+        let Some(imported) = imported.filter(|value| !value.is_empty()) else {
+            return Err(super::WriteOutcomeUnknown {
+                id,
+                location: opts
+                    .roots
+                    .opencode_db
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                reason: format!(
+                    "the engine did not confirm an import: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            }
+            .into());
+        };
+        if (opts.dest_id.is_some() || opts.metadata.is_some()) && imported != id {
+            return Err(super::WriteOutcomeUnknown {
+                id,
+                location: opts
+                    .roots
+                    .opencode_db
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                reason: format!("the engine reported a different session ID: {imported}"),
+            }
+            .into());
+        }
+        if opts.dest_id.is_some() || opts.metadata.is_some() {
+            confirm_import(&id, &opts.roots, opts.metadata.as_ref()).map_err(|error| {
+                super::WriteOutcomeUnknown {
+                    id: id.clone(),
+                    location: opts
+                        .roots
+                        .opencode_db
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    reason: format!("could not verify the imported session: {error:#}"),
+                }
+            })?;
+        }
 
         Ok(Written {
             id: imported.clone(),
@@ -145,6 +202,69 @@ impl Writer for Opencode {
             ],
         })
     }
+}
+
+/// Confirm the requested ID and supplied provenance in the selected destination, without writing.
+fn confirm_import(
+    id: &str,
+    roots: &crate::roots::StoreRoots,
+    expected: Option<&Value>,
+) -> Result<()> {
+    use rusqlite::{Connection, OpenFlags, OptionalExtension};
+    let path = roots
+        .opencode_db
+        .as_ref()
+        .context("the destination database was not explicitly selected")?;
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open {} read-only", path.display()))?;
+    db.busy_timeout(std::time::Duration::from_secs(2))?;
+    if let Some(expected) = expected {
+        let raw: Option<Option<String>> = db
+            .query_row(
+                "SELECT metadata FROM session_v2 WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let raw = raw.flatten().context("session or metadata not found")?;
+        let actual: Value = serde_json::from_str(&raw).context("invalid stored metadata")?;
+        let expected = expected
+            .as_object()
+            .context("session metadata must be a JSON object")?;
+        let actual = actual
+            .as_object()
+            .context("stored metadata is not a JSON object")?;
+        anyhow::ensure!(
+            expected
+                .iter()
+                .all(|(key, value)| actual.get(key) == Some(value)),
+            "stored metadata does not match the requested provenance"
+        );
+    } else {
+        let found: Option<i32> = db
+            .query_row("SELECT 1 FROM session_v2 WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        anyhow::ensure!(found.is_some(), "session not found");
+    }
+    Ok(())
+}
+
+/// A started subprocess may still be committing or may have written before it reported failure.
+fn failed_import(id: &str, roots: &crate::roots::StoreRoots, reason: String) -> anyhow::Error {
+    super::WriteOutcomeUnknown {
+        id: id.to_string(),
+        location: roots
+            .opencode_db
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        reason,
+    }
+    .into()
 }
 
 /// L1: the exact argv every spawned `opencode` command carries.
@@ -218,7 +338,13 @@ pub fn document_from_plan(
                     Some(PlannedBlock::Results { results }) => results,
                     _ => &[],
                 };
-                messages.push(assistant_message(step, results, &model, clock));
+                messages.push(assistant_message(
+                    step,
+                    results,
+                    &model,
+                    opts.dest_agent.as_deref().unwrap_or("build"),
+                    clock,
+                ));
                 // A call that travelled as text has no tool part to answer it: its result follows
                 // as text, in the same place the result was.
                 let texts: Vec<Value> = results
@@ -263,7 +389,18 @@ pub fn document_from_plan(
     if let Some(title) = opts.title.as_ref().or(session.meta.title.as_ref()) {
         info.insert("title".into(), Value::String(title.clone()));
     }
+    if let Some(metadata) = &opts.metadata {
+        anyhow::ensure!(
+            metadata.is_object(),
+            "session metadata must be a JSON object"
+        );
+        info.insert("metadata".into(), metadata.clone());
+    }
     info.insert("model".into(), model);
+    if let Some(agent) = &opts.dest_agent {
+        validate_agent(agent)?;
+        info.insert("agent".into(), Value::String(agent.clone()));
+    }
     Ok(json!({"info": Value::Object(info), "messages": messages}))
 }
 
@@ -323,6 +460,7 @@ fn assistant_message(
     step: &PlannedStep,
     results: &[PlannedResult],
     model: &Value,
+    agent: &str,
     clock: &mut Clock,
 ) -> Value {
     // Times follow the conversation: the message after the one it answers, each part inside it.
@@ -407,7 +545,7 @@ fn assistant_message(
     let mut message = Map::new();
     message.insert("id".into(), Value::String(message_id()));
     message.insert("type".into(), Value::String("assistant".into()));
-    message.insert("agent".into(), Value::String("build".into()));
+    message.insert("agent".into(), Value::String(agent.to_string()));
     message.insert("model".into(), model.clone());
     message.insert("content".into(), Value::Array(content));
     message.insert(
@@ -443,6 +581,29 @@ fn assistant_message(
 /// OpenCode ids are prefixed; the suffix is opaque.
 fn new_session_id() -> String {
     format!("ses_{}", uuid::Uuid::new_v4().simple())
+}
+
+/// A caller-provided ID also enters a temporary filename; do not permit paths or flags.
+pub fn validate_session_id(id: &str) -> Result<()> {
+    let suffix = id.strip_prefix("ses_").unwrap_or("");
+    anyhow::ensure!(
+        !suffix.is_empty()
+            && id.len() <= 128
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'),
+        "invalid OpenCode destination session ID"
+    );
+    Ok(())
+}
+
+/// An agent name is a bounded, non-empty identifier, never a control sequence.
+pub fn validate_agent(agent: &str) -> Result<()> {
+    anyhow::ensure!(
+        !agent.trim().is_empty() && agent.len() <= 256 && !agent.chars().any(char::is_control),
+        "invalid OpenCode destination agent"
+    );
+    Ok(())
 }
 
 fn message_id() -> String {

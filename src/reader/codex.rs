@@ -110,7 +110,7 @@ fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
     // (their prefixes, or all of them), then the page.
     let mut digest = crate::sha256::Sha256::new();
     digest.update(&prefix.bytes);
-    digest.update(&std::fs::read(path).with_context(|| format!("read {}", path.display()))?);
+    digest.update(file.source_bytes.as_bytes());
     session.meta.source_sha256 = Some(digest.finalize_hex());
     for (index, row) in prefix.left.into_iter().enumerate() {
         session.entries.push(Entry {

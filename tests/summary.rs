@@ -1,6 +1,6 @@
 //! A summary written by the source harness's own model: the command each harness is asked with,
 //! where its reply is read, and what a failure leaves (design 2026-10-28, live record
-//! `docs/verification/2026-10-28-summary-live.md`).
+//! `docs/verification/source-model-summary-live.md`).
 //!
 //! No real harness is reached: the runs go to fake launchers in a scratch folder.
 

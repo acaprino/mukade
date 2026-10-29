@@ -9,12 +9,8 @@
 | **Per-harness pages** | [Claude Code](harnesses/claude-code.md) · [Codex CLI](harnesses/codex.md) · [OpenCode](harnesses/opencode.md) · [Pi](harnesses/pi.md) — each lists its own tools and links back here; this file is the one place that says how a call of one harness becomes a call of another |
 | **Review when** | any of the four harnesses changes version (register item E1 records drift), or a destination's offered tool list changes (§6) |
 
-Evidence labels as in the spec: **[V]** seen on this machine (file given), **[S]** read in source,
-**[U]** not established. Paths without a prefix are under `verify/H27/out/2026-10-27/`.
-
-Sources of these tables:
-- the tool lists each harness **offered to the model** in the H27 bench (`<h>/source/capture-gen.jsonl`, the request with the most tools) [V];
-- a **census of the user's real stores**, structure only (tool name, argument key set, count; no values): `tool-census.json`, produced by `python -I verify/H27/tool-census.py` [V]. Read: Claude 400 newest transcripts (8,506 calls), Codex 400 newest rollouts (4,908 calls), OpenCode 2 databases (10,198 calls), Pi 113 sessions (10,488 calls);
+Evidence labels as in the spec: **[V]** a reported observation, **[S]** read in source,
+**[U]** not established. Verify tool availability against the harness version and configuration in use.
 
 ## 1. Policy (decided 2026-10-27)
 
@@ -63,12 +59,13 @@ exists and the call can be expressed without changing what it did**; otherwise i
 
 ## 2. Tools each harness offers and really uses
 
-**Offered to the model** in the bench (default settings, no plugins, mock model) [V]:
+**Representative tool names** for the versions listed above. Availability depends on the model,
+configuration and enabled extensions; verify the destination's offered set before use.
 
 | harness | tools offered |
 |---|---|
 | Claude Code 2.1.311 (23) | `Agent`, `Bash`, `CronCreate`, `CronDelete`, `CronList`, `Edit`, `EnterWorktree`, `ExitWorktree`, `Glob`, `Grep`, `ListAgents`, `Monitor`, `NotebookEdit`, `Read`, `ReportFindings`, `ScheduleWakeup`, `SendMessage`, `Skill`, `TaskStop`, `WebFetch`, `WebSearch`, `Workflow`, `Write` |
-| Codex 0.164.0 `exec` (9) | `exec_command`, `write_stdin`, `request_user_input`, `view_image`, `multi_agent_v1` (namespace), `get_goal`, `create_goal`, `update_goal`, built-in `web_search` — **no read, edit or apply_patch tool** with the bench's unknown model (fallback metadata) |
+| Codex 0.164.0 `exec` (9) | `exec_command`, `write_stdin`, `request_user_input`, `view_image`, `multi_agent_v1` (namespace), `get_goal`, `create_goal`, `update_goal`, built-in `web_search` |
 | OpenCode 2.1.4 (12) | `edit`, `glob`, `grep`, `question`, `read`, `shell`, `skill`, `subagent`, `webfetch`, `websearch`, `write`, `execute` |
 | Pi 1.2.0 (4) | `read`, `bash`, `edit`, `write` (default set; `grep`, `find`, `ls` appear when enabled; a `powershell` tool exists in its source) |
 
@@ -207,8 +204,8 @@ script verbatim.
 
 ## 6. The destination's tool set is per version and model
 
-What a destination offers depends on its version, its settings and the model: the bench's Codex
-with an unknown model offered no `apply_patch` [V], Codex Desktop uses it inside `exec` [V],
+What a destination offers depends on its version, its settings and the model: Codex Desktop uses
+`apply_patch` inside `exec` [V],
 Pi offers `grep`/`find`/`ls` only when enabled, Claude offers `PowerShell` only where it is
 enabled. The library therefore takes the destination's offered set from the destination itself
 before translating (spec L11):
@@ -232,13 +229,11 @@ listed there as not offered (text form).
 | date | change |
 |---|---|
 | 2026-10-28 | Claude Code added as a destination column; argument policy made explicit (any key outside the translation's list is text form) and implemented; every harness's spelling accepted; Pi `grep`/`find`/`ls` schemas read from source; OpenCode `background`/`replaceAll`, single-entry Pi edits, unanswered calls, id rewriting toward Anthropic. |
-| 2026-10-27 | Rewritten for Shinatama's own library: the column on the external converter and its references removed. |
-| 2026-10-27 | First version. Policy decided ("translate to the equivalent where possible, else text form"). Tables from the H27 bench captures and the real-store census. |
+| 2026-10-27 | First version. Policy decided ("translate to the equivalent where possible, else text form"). |
 
 ## 9. How to update this file
 
-1. Rerun the bench legs for the new version: `verify/H27/<h>/gen-source.ps1` (the capture holds the offered tools).
-2. Rerun the census: `python -I verify/H27/tool-census.py > verify/H27/out/<date>/tool-census.json`.
-3. Diff the offered lists and argument schemas against §2 and §4; update the tables, the
+1. Check the offered tool lists and argument schemas for the new harness version.
+2. Diff the offered lists and argument schemas against §2 and §4; update the tables, the
    "Verified against" row, **Last updated**, and add a changelog line.
-4. Update the writers' tables in the crate and their fixtures in the same change.
+3. Update the writers' tables in the crate and their fixtures in the same change.

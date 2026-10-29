@@ -58,15 +58,192 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
         let _span = crate::timing::span("resumed branch");
         active_branch(&rows)
     };
+    let order = conversation_order(&rows, &on_branch)?;
     let mut b = Builder::default();
     {
         let _span = crate::timing::span("entries");
-        for (i, row) in rows.into_iter().enumerate() {
-            b.push(i, row, on_branch[i]);
+        let mut source: Vec<Option<Value>> = rows.into_iter().map(Some).collect();
+        for i in order {
+            b.push(
+                i,
+                source[i].take().expect("each source row is used once"),
+                on_branch[i],
+            );
         }
     }
     let _span = crate::timing::span("finish");
     b.finish(source_path)
+}
+
+/// The active parent chain wins over physical write order. Until recovered parallel calls and
+/// compaction links can be ordered with the same guarantee, refuse those out-of-order cases
+/// instead of silently inventing a conversation.
+fn conversation_order(rows: &[Value], on_branch: &[bool]) -> Result<Vec<usize>> {
+    use std::collections::HashMap;
+    let in_tree = |row: &Value| {
+        row.get("uuid").and_then(Value::as_str).is_some() && !truthy(row.get("isSidechain"))
+    };
+    let Some(leaf) = rows.iter().rposition(&in_tree) else {
+        return Ok((0..rows.len()).collect());
+    };
+    let by_uuid: HashMap<&str, usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| in_tree(row))
+        .filter_map(|(index, row)| {
+            row.get("uuid")
+                .and_then(Value::as_str)
+                .map(|id| (id, index))
+        })
+        .collect();
+    let mut seen = vec![false; rows.len()];
+    let mut chain = Vec::new();
+    let mut next = Some(leaf);
+    while let Some(index) = next {
+        anyhow::ensure!(!seen[index], "cycle in Claude Code parent chain");
+        seen[index] = true;
+        chain.push(index);
+        let parent = rows[index]
+            .get("parentUuid")
+            .and_then(Value::as_str)
+            .or_else(|| rows[index].get("logicalParentUuid").and_then(Value::as_str))
+            .filter(|id| !id.is_empty());
+        next = match parent {
+            Some(id) => Some(
+                *by_uuid
+                    .get(id)
+                    .with_context(|| format!("missing Claude Code parent {id}"))?,
+            ),
+            None => None,
+        };
+    }
+    chain.reverse();
+    if !chain.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Ok((0..rows.len()).collect());
+    }
+    let has_complex_chain = !simple_chain(rows, &chain);
+    let has_recovered = rows.iter().enumerate().any(|(index, row)| {
+        on_branch[index]
+            && !seen[index]
+            && in_tree(row)
+            && matches!(
+                row.get("type").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+    });
+    let has_unchained = rows.iter().any(|row| {
+        !in_tree(row)
+            && !truthy(row.get("isSidechain"))
+            && matches!(
+                row.get("type").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+    });
+    anyhow::ensure!(
+        !has_complex_chain && !has_recovered && !has_unchained,
+        "out-of-order Claude Code history contains a complex chain, recovered or unchained records and cannot be reconstructed safely"
+    );
+    chain.extend((0..rows.len()).filter(|&index| !seen[index]));
+    Ok(chain)
+}
+
+/// A linear chain is safe to reorder when each tool call has exactly one following result and
+/// assistant blocks are not split across multiple records of the same model response.
+fn simple_chain(rows: &[Value], chain: &[usize]) -> bool {
+    use std::collections::HashSet;
+    let mut pending = HashSet::new();
+    let mut response_ids = HashSet::new();
+    for &index in chain {
+        let row = &rows[index];
+        match row.get("type").and_then(Value::as_str) {
+            Some("assistant") => {
+                if !pending.is_empty() {
+                    return false;
+                }
+                let Some(id) = row
+                    .pointer("/message/id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                else {
+                    return false;
+                };
+                if !response_ids.insert(id) {
+                    return false;
+                }
+                let Some(blocks) = row.pointer("/message/content").and_then(Value::as_array) else {
+                    return false;
+                };
+                for block in blocks {
+                    match block.get("type").and_then(Value::as_str) {
+                        Some("tool_use") => {
+                            let Some(id) = block
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .filter(|id| !id.is_empty())
+                            else {
+                                return false;
+                            };
+                            if !block
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|name| !name.is_empty())
+                                || !block.get("input").is_some_and(Value::is_object)
+                                || !pending.insert(id)
+                            {
+                                return false;
+                            }
+                        }
+                        Some("text") if block.get("text").is_some_and(Value::is_string) => {}
+                        Some("thinking") if block.get("thinking").is_some_and(Value::is_string) => {
+                        }
+                        Some("redacted_thinking")
+                            if block.get("data").is_some_and(Value::is_string) => {}
+                        _ => return false,
+                    }
+                }
+            }
+            Some("user") => {
+                if !row
+                    .pointer("/message/content")
+                    .is_some_and(|content| content.is_string() || content.is_array())
+                {
+                    return false;
+                }
+                let blocks = row.pointer("/message/content").and_then(Value::as_array);
+                if blocks.is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| item.get("type").and_then(Value::as_str).is_none())
+                }) {
+                    return false;
+                }
+                let is_result = blocks.is_some_and(|blocks| {
+                    blocks.iter().any(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    })
+                });
+                if !is_result {
+                    if !pending.is_empty() {
+                        return false;
+                    }
+                    continue;
+                }
+                for block in blocks.expect("a result has blocks") {
+                    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                        return false;
+                    }
+                    let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
+                        return false;
+                    };
+                    if !pending.remove(id) {
+                        return false;
+                    }
+                }
+            }
+            _ => return false,
+        }
+    }
+    pending.is_empty()
 }
 
 /// Which rows belong to the branch Claude Code resumes. A rewind or an edited prompt starts a new

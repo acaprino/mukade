@@ -1,5 +1,5 @@
 //! A summary of a session written by the source harness's own model (design
-//! `docs/superpowers/specs/2026-10-28-source-model-summary-design.md`).
+//! `docs/archive/design/source-model-summary.md`).
 //!
 //! mukade holds no API key and calls no provider: the summary is asked of the source harness's own
 //! binary, with its own credentials and configuration, in a run that saves nothing in its store.
@@ -90,7 +90,7 @@ pub struct SummaryCommand {
 }
 
 /// The command that asks `session`'s own harness for a summary and saves nothing in its store
-/// (live record `docs/verification/2026-10-28-summary-live.md`, "Final commands"). `scratch` is the
+/// (live record `docs/verification/source-model-summary-live.md`, "Final commands"). `scratch` is the
 /// folder of this run, for what a harness has to write somewhere: Codex's last message, Pi's fork.
 pub fn summary_command(
     session: &Session,

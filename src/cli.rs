@@ -53,6 +53,11 @@ options:
   --model-provider <id>    the destination's provider id
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
+  --dest-id <id>           a reserved destination session ID (OpenCode only)
+  --dest-agent <name>      the destination's primary agent (OpenCode only)
+  --metadata-file <path>   a JSON object to store as session metadata (OpenCode only)
+  --without-tools          omit historical tool calls and results (hop and write)
+  --expect-sha256 <hash>   refuse a hop when the captured source fingerprint changed
   --reasoning <mode>       drop_foreign (default) | as_text | drop
   --compaction <mode>      none (default) | portable (the source's own summary, then its tail) |
                            summary (the source's model writes one now; dump and hop)
@@ -88,6 +93,11 @@ pub fn run(args: &[String]) -> Result<()> {
         print!("{USAGE}");
         return Ok(());
     }
+    if std::env::var_os("MUKADE_DATA_DIR")
+        .is_some_and(|path| !std::path::Path::new(&path).is_absolute())
+    {
+        anyhow::bail!("MUKADE_DATA_DIR must be absolute");
+    }
     let mut positional: Vec<&str> = Vec::new();
     let mut flags = Flags::default();
     let mut i = 0;
@@ -110,6 +120,11 @@ pub fn run(args: &[String]) -> Result<()> {
             "--model-provider" => flags.model_provider = Some(next(rest, &mut i)?),
             "--model" => flags.model = Some(next(rest, &mut i)?),
             "--project-id" => flags.project_id = Some(next(rest, &mut i)?),
+            "--dest-id" => flags.dest_id = Some(next(rest, &mut i)?),
+            "--dest-agent" => flags.dest_agent = Some(next(rest, &mut i)?),
+            "--metadata-file" => flags.metadata_file = Some(next(rest, &mut i)?),
+            "--without-tools" => flags.without_tools = true,
+            "--expect-sha256" => flags.expect_sha256 = Some(next(rest, &mut i)?),
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
             "--keep-turns" => flags.keep_turns = Some(next(rest, &mut i)?),
             "--summary-model" => flags.summary_model = Some(next(rest, &mut i)?),
@@ -136,6 +151,29 @@ pub fn run(args: &[String]) -> Result<()> {
         i += 1;
     }
 
+    if flags.without_tools && !matches!(command.as_str(), "hop" | "write") {
+        anyhow::bail!("--without-tools is supported only by hop and write");
+    }
+    if let Some(hash) = flags.expect_sha256.as_deref() {
+        anyhow::ensure!(command == "hop", "--expect-sha256 is supported only by hop");
+        anyhow::ensure!(
+            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "--expect-sha256 must be a 64-digit SHA-256"
+        );
+    }
+    if (flags.dest_id.is_some() || flags.dest_agent.is_some() || flags.metadata_file.is_some())
+        && !matches!(command.as_str(), "hop" | "write")
+    {
+        anyhow::bail!(
+            "--dest-id, --dest-agent and --metadata-file are supported only by hop and write"
+        );
+    }
+    if let Some(id) = flags.dest_id.as_deref() {
+        crate::writer::opencode::validate_session_id(id)?;
+    }
+    if let Some(agent) = flags.dest_agent.as_deref() {
+        crate::writer::opencode::validate_agent(agent)?;
+    }
     if command == "detect" {
         let path = positional.first().context("detect needs a directory")?;
         let found = crate::detect::detect_store(std::path::Path::new(path));
@@ -178,6 +216,8 @@ pub fn run(args: &[String]) -> Result<()> {
         &positional
     };
     let mut roots = StoreRoots::from_env();
+    // A hop's --root selects only the source, including when both ends use the same harness.
+    let destination_roots = roots.clone();
     let harness = match explicit {
         Some(harness) => harness,
         None => {
@@ -217,6 +257,7 @@ pub fn run(args: &[String]) -> Result<()> {
                         "cwd": info.cwd,
                         "timestamp": info.updated,
                         "location": info.path,
+                        "archived": info.archived,
                     })
                 );
             }
@@ -286,6 +327,15 @@ pub fn run(args: &[String]) -> Result<()> {
                 .get(1)
                 .context("hop needs a destination harness")?
                 .parse()?;
+            if dest != HarnessId::OpenCode
+                && (flags.dest_id.is_some()
+                    || flags.dest_agent.is_some()
+                    || flags.metadata_file.is_some())
+            {
+                anyhow::bail!(
+                    "--dest-id, --dest-agent and --metadata-file are supported only for an OpenCode destination"
+                );
+            }
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
             let selection = flags.compaction(harness)?;
@@ -305,8 +355,22 @@ pub fn run(args: &[String]) -> Result<()> {
                 }
             }
             .map_err(anyhow::Error::new)?;
-            let opts = flags.import_opts(harness, dest, &source, &roots)?;
-            let result = crate::hop::hop_session(dest, &source, &selection, &opts);
+            if let Some(expected) = flags.expect_sha256.as_deref() {
+                let actual = SourceFacts::of(&source).content_sha256;
+                if !expected.eq_ignore_ascii_case(&actual) {
+                    return Err(anyhow::Error::new(HopError::SourceChanged {
+                        expected: expected.to_string(),
+                        actual,
+                    }));
+                }
+            }
+            // Compaction (including a source-model summary) uses the source store. The writer and
+            // optional resume use the destination's environment, never the source override.
+            let mut opts = flags.import_opts(harness, dest, &source, &destination_roots)?;
+            let (selected, summary) =
+                crate::hop::compact(&source, &selection, &roots).map_err(anyhow::Error::new)?;
+            opts.summary = summary;
+            let result = crate::hop::import(dest, &selected, &opts);
             deliver(result, flags.manifest.as_deref())?;
         }
         other => anyhow::bail!("unknown command {other}\n\n{USAGE}"),
@@ -385,6 +449,11 @@ struct Flags {
     model_provider: Option<String>,
     model: Option<String>,
     project_id: Option<String>,
+    dest_id: Option<String>,
+    dest_agent: Option<String>,
+    metadata_file: Option<String>,
+    without_tools: bool,
+    expect_sha256: Option<String>,
     reasoning: Option<String>,
     compaction: Option<String>,
     keep_turns: Option<String>,
@@ -428,6 +497,10 @@ impl Flags {
                 model_provider: write.model_provider,
                 model: write.model,
                 project_id: write.project_id,
+                dest_id: write.dest_id,
+                dest_agent: write.dest_agent,
+                metadata: write.metadata,
+                without_tools: write.without_tools,
                 now: write.now,
                 exe: write.exe,
             },
@@ -446,6 +519,34 @@ impl Flags {
         session: &crate::model::Session,
         roots: &StoreRoots,
     ) -> Result<WriteOpts> {
+        if harness != HarnessId::OpenCode
+            && (self.dest_id.is_some() || self.dest_agent.is_some() || self.metadata_file.is_some())
+        {
+            anyhow::bail!(
+                "--dest-id, --dest-agent and --metadata-file are supported only for an OpenCode destination"
+            );
+        }
+        if let Some(id) = self.dest_id.as_deref() {
+            crate::writer::opencode::validate_session_id(id)?;
+        }
+        if let Some(agent) = self.dest_agent.as_deref() {
+            crate::writer::opencode::validate_agent(agent)?;
+        }
+        let metadata = match self.metadata_file.as_deref() {
+            None => None,
+            Some(file) => {
+                let info =
+                    std::fs::metadata(file).with_context(|| format!("metadata file {file}"))?;
+                anyhow::ensure!(
+                    info.is_file() && info.len() <= 1_048_576,
+                    "metadata file must be a regular file no larger than 1 MiB"
+                );
+                let value: serde_json::Value = serde_json::from_slice(&std::fs::read(file)?)
+                    .with_context(|| format!("parse metadata file {file}"))?;
+                anyhow::ensure!(value.is_object(), "session metadata must be a JSON object");
+                Some(value)
+            }
+        };
         let reasoning = match self.reasoning.as_deref() {
             None | Some("drop_foreign") => ReasoningPolicy::DropForeign,
             Some("as_text") => ReasoningPolicy::AsText,
@@ -523,6 +624,10 @@ impl Flags {
             model_provider,
             model,
             project_id,
+            dest_id: self.dest_id.clone(),
+            dest_agent: self.dest_agent.clone(),
+            metadata,
+            without_tools: self.without_tools,
             reasoning,
             title: session.meta.title.clone(),
             now: None,

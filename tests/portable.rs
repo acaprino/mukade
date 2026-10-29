@@ -75,6 +75,7 @@ impl Bench {
             .env("XDG_DATA_HOME", place("xdg-data"))
             .env("XDG_CONFIG_HOME", place("xdg-config"))
             .env("CLAUDE_CONFIG_DIR", &self.store)
+            .env_remove("MUKADE_DATA_DIR")
             .env_remove("OPENCODE_DB");
         let output = command.output().expect("mukade runs");
         (

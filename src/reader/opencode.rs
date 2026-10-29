@@ -11,9 +11,8 @@
 //! - an interrupted turn is an assistant row with no `finish` and an empty text block: the harness
 //!   was killed, and the export omits that row (L9).
 //!
-//! Reading OpenCode's SQLite store directly is **not implemented**: this reader takes the JSON the
-//! bench and `session export` produce (`docs/verification/2026-10-27-H27.md`), while
-//! [`Opencode::list`] and [`Opencode::read`] report the gap instead of guessing at the file.
+//! Listing opens an explicitly selected SQLite store read-only; reading a session uses the native
+//! `session export` command or a previously exported document.
 
 use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
@@ -351,7 +350,36 @@ impl Reader for Opencode {
     }
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
-        Err(sqlite_gap(roots))
+        use rusqlite::{Connection, OpenFlags};
+        let path = roots.opencode_db.as_ref().ok_or_else(|| {
+            super::Lookup::NoStore("OPENCODE_DB is not set: no OpenCode store to list".into())
+        })?;
+        let db = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .with_context(|| format!("open {} read-only", path.display()))?;
+        db.busy_timeout(std::time::Duration::from_secs(2))?;
+        let mut query = db
+            .prepare(
+                "SELECT id, title, directory, time_updated, time_archived FROM session_v2 \
+             WHERE parent_id IS NULL ORDER BY time_updated DESC, id ASC",
+            )
+            .with_context(|| format!("list sessions in {}", path.display()))?;
+        let rows = query.query_map([], |row| {
+            let updated: i64 = row.get(3)?;
+            Ok(SessionInfo {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                cwd: row.get(2)?,
+                updated: chrono::DateTime::from_timestamp_millis(updated)
+                    .map(|time| time.to_rfc3339()),
+                archived: row.get::<_, Option<i64>>(4)?.is_some(),
+                path: path.to_string_lossy().into_owned(),
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("read OpenCode session list")
     }
 
     /// OpenCode's own export path (OC2): `opencode session export <id> --standalone` prints the
@@ -414,18 +442,4 @@ pub fn export_command(exe: &str, id: &str) -> Vec<String> {
         id.to_string(),
         "--standalone".into(),
     ]
-}
-
-/// OpenCode's native store is SQLite. Reading it needs either a SQLite dependency (a decision this
-/// crate has not taken) or `opencode session export`; until then the gap is reported, not guessed.
-fn sqlite_gap(roots: &StoreRoots) -> anyhow::Error {
-    anyhow::anyhow!(
-        "OpenCode's native store is SQLite ({}): reading it directly is not implemented; \
-         export the session with `opencode session export <id> --standalone` and read that JSON",
-        roots
-            .opencode_db
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "OPENCODE_DB".into())
-    )
 }

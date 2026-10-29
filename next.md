@@ -54,7 +54,7 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
    the destination's own record (Claude `compact_boundary`, Codex `compacted`, Pi `compaction`;
    spec §4.4).
 2. **Summary written by the source's model: built** (`--compaction summary`, spec §4.5, live
-   record `docs/verification/2026-10-28-summary-live.md`). Still open:
+   record `docs/verification/source-model-summary-live.md`). Still open:
    - *Codex's real model [U].* Checked against a mock only (quota). *To settle:* after the reset,
      `mukade hop codex <thread id> pi --compaction summary --resume-prompt "What were we doing"` on
      a throwaway thread: the rollout's SHA-256 unchanged, the summary a summary (not a work log:

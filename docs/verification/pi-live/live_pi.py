@@ -10,7 +10,7 @@ Pi runs with its home, HOME and USERPROFILE inside <work dir>, PI_OFFLINE=1 and 
 baseUrl is a mock Anthropic endpoint on 127.0.0.1 (mock_anthropic.py), which checks every request
 against the provider rules and logs it. No real model API is reachable. Written for Windows
 (npm `pi.cmd` launchers); the process-tree kill uses taskkill there and a plain kill elsewhere.
-See docs/verification/2026-10-28-pi-live.md.
+See docs/verification/pi-session-and-reasoning-verification.md.
 """
 import itertools
 import json

@@ -1,16 +1,15 @@
 # Session interchange library: implementation spec (verified)
 
-Date: 2026-10-27 (rewritten the same day: the library is Shinatama's own; no third-party converter).
+Date: 2026-10-27.
 Status: draft, every behaviour below was run on this machine unless marked otherwise. Companion of Shinatama's technical design (5.3, 5.4, 5.4.1, 5.5, 6.4), which stays with that product's documentation.
-Verification record: [`verification/2026-10-27-H27.md`](verification/2026-10-27-H27.md).
+For available verification records, see the [documentation index](README.md#verification-records).
 Background reading (secondary sources, superseded here for the four harnesses below):
 [`reference/harness-session-persistence-reference.md`](reference/harness-session-persistence-reference.md).
 
-**Evidence labels.** **[V]** seen in the H27 bench run, with the file under
-`verify/H27/out/2026-10-27/` that shows it. **[S]** read in source code, not exercised. **[A]** a
-public API rule, not exercised against the real API (the bench uses a mock model). **[U]** not
-established. Paths are relative to `verify/H27/out/2026-10-27/` unless they start with
-`verify/`, `docs/` or a drive letter.
+**Evidence labels.** **[V]** indicates a reported observation, which does not by itself establish
+current behavior. **[S]** read in source code, not exercised. **[A]** a public API rule, not
+exercised against the real API. **[U]** not established. See the verification records for the
+scope and limitations of the tests they document.
 
 ## 0. What the library does, and what it does not
 
@@ -24,7 +23,7 @@ harness so that the destination can continue it as one of its own sessions:
 5. **optionally** compact it with the destination's own compaction;
 6. **optionally** resume it with a prompt (the "resume prompt"), non-interactively.
 
-Harnesses and pinned versions (the bench ran exactly these):
+Harnesses and versions described:
 
 | harness | version | binary on this machine |
 |---|---|---|
@@ -33,12 +32,8 @@ Harnesses and pinned versions (the bench ran exactly these):
 | OpenCode | 2.1.4 | `%APPDATA%\npm\node_modules\@opencode\cli\bin\opencode.exe` |
 | Pi | 1.2.0 (`@earendil-works/pi-coding-agent`) | `node …\pi-coding-agent\dist\bundle\cli.js` |
 
-**The library is Shinatama's own** (decision of 2026-10-27): it reads and writes the four native
-formats itself, with one reader and one writer per harness, in a Rust crate of this repository
-(working name `shinatama-interchange`, `crates/interchange/`). No third-party session converter is
-a dependency. The H27 bench drove an external converter only as a **probe** of the destinations:
-the way each destination reacted to wrongly shaped sessions (section 6) is evidence about the
-harnesses, and the requirements of section 8 make sure our writers never produce those shapes.
+**The library is Shinatama's own**: it reads and writes the four native formats itself, with one
+reader and one writer per harness.
 
 Where a harness has its **own** import path, the writer uses it instead of writing the store:
 OpenCode `session import` (lossless round trip, OC2 [V]). Codex's importer (`externalAgentConfig`,
@@ -129,10 +124,14 @@ pub fn compact(s: &Session, c: &Compaction, roots: &StoreRoots) -> Result<(Cow<S
 
 `HopError` kinds map to the CLI exit codes of technical design 5.5.2: `NotFound` (2: the store is
 not configured, the session is not there or the id is ambiguous — a reader's typed `Lookup`),
-`Unsupported` (2: a pair or option this spec marks blocked), `WriteFailed` (4), `StrictCheckFailed`
+`Unsupported` (2: a pair or option this spec marks blocked), `SourceChanged` (2: a reviewed source
+fingerprint no longer matches), `WriteFailed` (4), `StrictCheckFailed`
 (4, §7), `SummaryFailed` (4, §4.5: the source's model wrote no usable summary; nothing was written),
-`VerifyFailed` (5: the source is there but could not be read), `ResumeFailed` (5: the
-session was written; the error carries its receipt and manifest).
+`VerifyFailed` (5: the source is there but could not be read), `WriteUncertain` (5: an external
+import may have written; the error carries its ID and destination), and `ResumeFailed` (5: the
+session was written; the error carries its receipt and manifest). OpenCode IDs and metadata supplied
+by a host are checked in the explicitly selected destination after import; an unconfirmed result
+must be reconciled before retrying.
 
 ### 1.3 Rules that hold for every hop
 
@@ -144,29 +143,29 @@ session was written; the error carries its receipt and manifest).
    `*/source/isolation*`, `gen-source.log.txt`, `resume/*.meta.json` `real store unchanged: True`].
 3. **No foreign process reaches the real home.** OpenCode's CLI hands work to a background
    service that runs with the user's real environment unless `--standalone` (or `--server`) is
-   passed [V: `verify/H27/opencode/env.ps1` header; matrix `opencode-shim.log`]. Every OpenCode
+   passed. Every OpenCode
    command the library spawns that touches the store (`session export`, `list`, `import`, `run`)
-   carries `--standalone` (L1; the probe needed a shim for this, `verify/H27/shim`); only the version
+   carries `--standalone` (L1); only the version
    probe, `opencode --version`, runs without it.
 4. **Order is the native order**, never timestamps (OpenCode `seq`, Codex `ordinal`, Claude
    and Pi parent links).
 5. **Every loss is written into the manifest** (§6.3); none is silent.
-6. **No stray files; one executable.** mukade is a single executable with no mode and no setting.
+6. **No stray files; one executable.** mukade is a single executable with no installer.
    Its own files are the session it writes (a `.mukade-*.tmp` beside it, renamed into place), what
-   `--output` / `--manifest` name, and one folder beside the executable, `mukade-data`: a probe
+   `--output` / `--manifest` name, and one data folder: by default `mukade-data` beside the
+   executable, or the absolute path explicitly selected by `MUKADE_DATA_DIR`. It contains a probe
    cache in `cache/` and, for OpenCode, the document `session import` needs as a file in `tmp/`
    (mode 0600, removed when the import ends, on failure too; a killed run's leftovers older than an
    hour are swept by the next run). Where that folder cannot be made there is no cache and an
-   OpenCode import is refused with a reason; no other place is used. Nothing goes to the user
+   OpenCode import is refused with a reason; no other place is used. By default nothing goes to the user
    profile, the application-data folders, the registry or the system's temporary folder [V:
    `tests/portable.rs` runs the real binary alone in a folder with every such location pointed at an
    empty sandbox and asserts it stays empty].
 
 ## 2. The four harnesses (verified facts the library depends on)
 
-Each subsection gives: isolation, the commands, the native records the library must read and
-write, and what the model receives on resume. Full detail, with record excerpts, is in each
-leg's findings: `verify/H27/<harness>/FINDINGS.txt`.
+Each subsection gives isolation, commands, native records the library must read and write, and
+what the model receives on resume.
 
 ### 2.1 Claude Code 2.1.311
 
@@ -175,7 +174,7 @@ leg's findings: `verify/H27/<harness>/FINDINGS.txt`.
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1`,
 `DISABLE_AUTOUPDATER=1`. Scratch `home\.claude.json` with `hasCompletedOnboarding`,
 `customApiKeyResponses.approved`, `projects[<cwd>].hasTrustDialogAccepted`. stdin from an empty
-file (otherwise a 3 s wait). [`verify/H27/claude_code/env.ps1`]
+file (otherwise a 3 s wait).
 
 **Commands [V]** (from the project dir, `--output-format json --dangerously-skip-permissions`):
 
@@ -237,10 +236,10 @@ plugins = false   # with plugins on, every process contacts chatgpt.com and gith
 |---|---|---|
 | new | `codex exec "<prompt>"` | thread id on stdout line 1 (`thread.started`) |
 | resume + prompt | `codex exec resume <id> "<prompt>"` | appends to the same rollout; header `history_initialization:"cold_resume"` |
-| compaction | `codex app-server` over stdio: `initialize`, `initialized`, `thread/resume {threadId,cwd}`, `thread/compact/start {threadId}`, wait for item `contextCompaction` and `turn/completed` | `exec` has no compaction; driver `verify/H27/codex/app-server-drive.mjs --action compact` |
+| compaction | `codex app-server` over stdio: `initialize`, `initialized`, `thread/resume {threadId,cwd}`, `thread/compact/start {threadId}`, wait for item `contextCompaction` and `turn/completed` | `exec` has no compaction |
 | interrupt | app-server `turn/start` then `turn/interrupt {threadId, turnId}` | |
 
-**Store [V: `codex/probe/`, `codex/FINDINGS.txt` P1–P6].**
+**Store.**
 - `sessions\YYYY\MM\DD\rollout-<local ts>-<uuid>.jsonl`; lines `{timestamp, ordinal, type, payload[, metadata]}`.
 - A rollout alone resumes by id (Codex rebuilds its SQLite stores); a wrong date folder still works.
 - **`state_5.sqlite` `threads.rollout_path` wins over the file on disk**; a row pointing at a
@@ -356,7 +355,7 @@ API-key variables from the environment. RPC stdin must be UTF-8 **without BOM**.
   leaves the abandoned branch in the file. Pi builds the context from the last entry back through
   `parentId`, and shows a `branch_summary` on that path to the model as a user message
   `The following is a summary of a branch that this conversation came back from:\n\n<summary>\n…</summary>`
-  [pi-coding-agent 1.2.0 `buildSessionPath`, `BRANCH_SUMMARY_PREFIX`; not a bench run].
+  [pi-coding-agent 1.2.0 `buildSessionPath`, `BRANCH_SUMMARY_PREFIX`].
 
 **On resume [V].** After a compaction: system + user `The conversation history before this point
 was compacted into the following summary:\n\n<summary>…</summary>` + entries from
@@ -366,7 +365,7 @@ was compacted into the following summary:\n\n<summary>…</summary>` + entries f
 
 ### 3.1 The library's own model (`Session`)
 
-Three layers, as the reference report recommends and the bench confirms: a **semantic core**
+Three layers: a **semantic core**
 that every writer understands, the **source record kept verbatim** in each entry (nothing is
 lost by reading), and the **target-specific** choices made by the writer.
 
@@ -403,7 +402,7 @@ pub struct Opaque     { pub protocol: Protocol,              // anthropic-messag
 
 | part | why [V] |
 |---|---|
-| `Compaction` entry | all four harnesses store a compaction record and resume from it (§2); the probe's converter dropped it and the destination got the whole old history (0/12 summaries carried) |
+| `Compaction` entry | all four harnesses store a compaction record and resume from it (§2) |
 | `Step.calls: Vec` and `Results` | Claude Code and Pi reject or repair split parallel calls (§6.2); Codex and OpenCode store them as one step |
 | `Meta` entries | Claude `/compact` command rows read as conversation became an orphan `tool_result` in Pi and `function_call "{}"` in Codex; Codex `<turn_aborted>` and Claude's synthetic `No response requested.` became ordinary text |
 | `Opaque` with protocol and model | decides replay vs drop (§3.3); every native store keeps it |
@@ -418,14 +417,7 @@ Tool calls follow [`tool-conversion-tables.md`](tool-conversion-tables.md) (last
 
 [V] Every native store keeps the opaque part: Claude `signature`, Codex `encrypted_content`,
 OpenCode `native.signature` (through OpenRouter `native.reasoningDetails`), Pi `thinkingSignature`; and every harness sends it back on its own
-resume (all four `capture-gen.jsonl`). Across harnesses the bench saw:
-
-| into | what the model received (full variant) | real API |
-|---|---|---|
-| Claude Code | from OpenCode, Pi: `thinking` **without signature**; from Codex: nothing | **rejected [A]**: a `thinking` block needs its `signature` |
-| Codex | `reasoning` with summary text and `encrypted_content: null` (`store:false`) | [U] warning R3 |
-| OpenCode | reasoning as a **plain text** block | accepted; the model sees its old reasoning as visible text |
-| Pi | reasoning as a **plain text** block | accepted; same |
+resume (all four `capture-gen.jsonl`).
 
 Policy (default `DropForeign`): carry a reasoning block only when the destination speaks the
 same provider protocol as the block's provenance **and** the opaque payload is present
@@ -437,13 +429,11 @@ synthesize, edit or concatenate a signed or encrypted payload.
 
 ## 4. Compaction between hops (optional)
 
-Three modes, all reachable through `HopRequest.compaction`. Bench numbers are for the scenario
-T1 (two parallel reads, thinking) → T2 → native compaction → T3 → interrupted T4.
+Compaction options are selected through `HopRequest.compaction`.
 
 ### 4.1 `None`
 
-The whole selected history is written. 12/12 pairs written and resumed [V: `matrix/results.jsonl`,
-variant `full`]. The destination sends everything back on resume, so the context the destination
+The whole selected history is written. The destination sends the history back on resume, so the context the destination
 starts with is as large as the source's **pre**-compaction history: the source's own compaction
 is lost unless the reader keeps it (L4).
 
@@ -456,25 +446,10 @@ followed by the tail from the boundary on. Summary source: the source's native c
 `retained_context`/`replacement_history`, OpenCode `metadata.keepID`, Pi `firstKeptEntryId`) or a
 caller-supplied text (`Supplied`, e.g. produced by a low-cost model per technical design 6.4).
 
-[V: variant `portable`, 12/12 pairs] written, resumed, strict check clean in 12/12
-(`matrix/strict.txt`); the model received 7–12 items: the handoff message with the summary, then
-T3 onwards; no T1 tool calls or reasoning; the resume prompt last. The `tail` variant (marker
-"N earlier messages were left out" + tail from T2) is clean in 11/12; `claude_code>pi` is
-rejected because the tail starts after Claude's `/compact` command rows (orphan `tool_result`; L5 classifies those rows as `Meta`).
-
 ### 4.3 `DestinationNative` (the destination compacts the imported session)
 
 Write the whole history, then run the destination's own compaction (§2 commands), then resume.
-[V: `verify/H27/compact-native.ps1`, `<dest>/compact/native-from-*.capture.jsonl`, `<dest>/resume/native-from-*-after.capture.jsonl`]:
-
-| destination (imported from) | compaction | resume request after it |
-|---|---|---|
-| Claude Code (Codex) | `claude -p --resume <id> "/compact"`, exit 0 | 7 messages: summary, preserved reply, … , prompt; no tool calls |
-| Codex (Claude Code) | app-server `thread/compact/start`, exit 0 | 11 items: base developer + `replacement_history` (user texts kept) + prompt |
-| OpenCode (Pi) | HTTP compact 200, wait 204 | 2 messages: `<conversation-checkpoint>` + prompt |
-| Pi (Codex) | RPC `compact` completed | 3 messages: summary, kept tail, prompt |
-
-So an imported session can be compacted by each destination exactly like a native one. Costs:
+Costs:
 one extra model call on the destination's model, and the destination must accept the full
 history once (the context window must hold it). Prefer `Portable` when the source already has a
 compaction (its summary is free and already written) or when the full history does not fit the
@@ -500,7 +475,7 @@ Codex's native summary is encrypted. The run goes through the source's binary, c
 configuration, and saves nothing in its store: Claude Code `--no-session-persistence`, Codex
 `exec fork --ephemeral`, Pi `--fork` into a temporary folder, OpenCode a fork deleted afterwards
 whatever came of the run (with every tool denied through `OPENCODE_CONFIG_CONTENT`)
-[V: `docs/verification/2026-10-28-summary-live.md`; Codex against a mock].
+[V: `docs/verification/source-model-summary-live.md`; Codex against a mock].
 
 The result is the shape of §4.2 with its own handoff line,
 `[mukade handoff v1] Summary of the earlier conversation, written by the source agent's model when the session was moved:`,
@@ -514,9 +489,7 @@ written. Refused (exit 2): `--all-branches`, and `--from-file` for a source othe
 
 ## 5. Resume prompt (optional)
 
-[V: every `*/resume/*.capture.jsonl`] For all four destinations the commands of section 2 resume a
-session written by the probe and send the prompt as **the last user message** of one request; the
-destination's reply is on stdout. The library runs them from the session's working directory, with
+The library runs the destination's resume command from the session's working directory, with
 the caller's environment (the destination's store variables must be set there), stdin closed and a
 timeout that stops the harness, including one behind a Windows `.cmd` launcher. On success the receipt keeps stdout as
 `resume_output`; on failure `ResumeFailed` carries the written receipt, its reason names the
@@ -532,56 +505,15 @@ Cautions [V]:
   resume Codex, OpenCode and Pi send two consecutive user messages; Claude Code inserts its
   synthetic `No response requested.`. Both are accepted. The manifest records `interrupted_last_turn`.
 
-## 6. Results per pair (probe run of 2026-10-27)
+## 6. Destination constraints and manifest
 
-These sessions were written by the external converter used as a probe (section 0), not by our
-library. They show which shapes each destination accepts, repairs or refuses.
+### 6.2 Tool and reasoning constraints
 
-### 6.1 Matrix (variant `full`, 12 ordered pairs) [V: `matrix/results.jsonl`, `matrix/strict.txt`]
-
-Legend: **tools** = calls/results the destination sent back; **grouped** = the two parallel calls
-stayed in one assistant message; **strict** = would a real API accept the request (§7).
-
-| source → dest | written + resumed | tools | grouped | reasoning sent as | strict | notable loss |
-|---|---|---|---|---|---|---|
-| Claude → Codex | yes | 3/3 | yes | reasoning, no encrypted | ok (R3 warn) | `/compact` rows as `function_call "{}"` |
-| Claude → OpenCode | yes | 2/2 | no | text | ok | reasoning visible as text |
-| Claude → Pi | yes | 2/4 | no | text | **reject** | Pi adds `No result provided` + duplicate result; orphan `/compact` result |
-| Codex → Claude | yes | 2/2 | no | — (dropped) | ok | **alpha result replaced by `[Tool result missing due to internal error]`** |
-| Codex → OpenCode | yes | 2/2 | no | text | ok | |
-| Codex → Pi | yes | 2/3 | no | text | **reject** | `No result provided` + duplicate result |
-| OpenCode → Claude | yes | 2/2 | no | thinking, no signature | **reject** | |
-| OpenCode → Codex | yes | 2/2 | no | reasoning, no encrypted | ok (R3 warn) | |
-| OpenCode → Pi | yes | 2/2 | no | text | ok | |
-| Pi → Claude | yes | 2/2 | yes | thinking, no signature | **reject** | |
-| Pi → Codex | yes | 2/2 | yes | reasoning, no encrypted | ok (R3 warn) | |
-| Pi → OpenCode | yes | 2/2 | yes | text | ok | |
-
-In every pair: user texts, assistant texts and tool inputs/outputs arrived (except the one lost
-result in Codex → Claude); the **source's compaction summary arrived in none** (L4); the
-interrupted last turn arrived as a user message.
-
-### 6.2 Why the failures happen (mechanism, verified)
-
-These are the destinations' own reactions to wrongly shaped sessions written by the probe;
-each is a rule for our writers (§8.2).
-
-- **Codex → Claude, lost result.** The probe chained every row on the previous one:
-  `tool_use x0 → tool_use x1 → result x0 → result x1`; Claude Code's loader pairs a result with
-  the tool_use it hangs under, so `x0` has no result in its chain and Claude Code substitutes
-  `[Tool result missing due to internal error]` [V: the written file `…\claude_code\home\projects\…\cfbd8c3d-….jsonl` rows 5–8;
-  `claude_code/resume/full-from-codex.capture.jsonl`]. Native Claude parents each result on its
-  own tool_use row (§2.1). Rule L2.
-- **→ Pi, rejected.** The probe wrote each tool call as its own assistant message
-  [V: `…\pi\home\sessions\…\…_0a024735-….jsonl` rows 5–6]; Pi, finding an assistant tool call not
-  followed by its result, inserts an error result `No result provided` and later sends the real
-  one too (A2/A3). Native Pi keeps both calls in one message (§2.4). Rule L3.
-- **→ Claude from OpenCode/Pi, rejected.** The signature was dropped on reading and a `thinking`
-  block was still written (A4). Rules L6 + `DropForeign`.
-- **Into OpenCode, split and text.** The probe emitted one assistant row per block
-  (reasoning row, text row, one row per tool) [V: `opencode/resume/full-from-claude_code.rows-before.json`];
-  OpenCode then sends each as its own message, and reasoning without a matching signature as text.
-  Rule L8.
+- Claude Code associates each tool result with its own tool call (L2).
+- Pi groups parallel calls in one assistant message followed by their results (L3).
+- Signed reasoning needs its original compatible payload; otherwise the configured reasoning
+  policy determines whether it is dropped or carried as text (L6).
+- OpenCode groups an assistant step's content and tool calls in one message (L8).
 
 ### 6.3 Manifest (written with every hop)
 
@@ -608,8 +540,7 @@ summary with no readable text). Every count above zero also has its line in
 
 ## 7. Strict check (what a real API would refuse)
 
-The bench's mock accepts anything, so `verify/H27/strict.py` checks every resume request against
-the provider rules [A]: Anthropic **A1** every `tool_use` answered in the next message, **A2**
+The provider rules [A] include: Anthropic **A1** every `tool_use` answered in the next message, **A2**
 every `tool_result` answers the previous assistant message, **A3** no double answer, **A4**
 `thinking` carries `signature`; Responses **R1/R2** every `function_call` has its output and vice
 versa, **R3** (warning) reasoning without `encrypted_content` under `store:false`.
@@ -627,29 +558,29 @@ destination's format (a Claude signature as `thinking`, an encrypted payload as
 
 ## 8. Reader and writer requirements
 
-Ids **L1–L14**. Each lands with the bench case that proves it (section 9) as a fixture of the
-crate. "Probe" = what the bench saw when an external converter wrote the session.
+Ids **L1–L14** describe reader and writer requirements; consult the tests and verification records
+for evidence about individual behaviors.
 
 ### 8.1 Readers
 
-| id | requirement | evidence | acceptance (bench) |
+| id | requirement | evidence | acceptance |
 |---|---|---|---|
-| L4 | every reader turns the native compaction record into a `Compaction` entry (Claude `compact_boundary` + `isCompactSummary` row + `preservedSegment`; Codex `compacted` + `replacement_history`; OpenCode `compaction` + `metadata.keepID`; Pi `compaction` + `firstKeptEntryId`) | §2; probe carried 0/12 summaries | `Portable{SourceRecord}` works for all 12 pairs without a supplied summary |
+| L4 | every reader turns the native compaction record into a `Compaction` entry (Claude `compact_boundary` + `isCompactSummary` row + `preservedSegment`; Codex `compacted` + `replacement_history`; OpenCode `compaction` + `metadata.keepID`; Pi `compaction` + `firstKeptEntryId`) | §2 | `Portable{SourceRecord}` works for all 12 pairs without a supplied summary |
 | L5 | Claude reader: `isMeta`, `<local-command-*>`/`<command-name>` rows, `isCompactSummary`, `isVisibleInTranscriptOnly`, attachment rows → `Meta`; rows merged by `message.id`; results paired by `tool_use_id`, not by the parent chain | §2.1 | Claude → Pi tail strict clean; no `function_call "{}"` into Codex |
-| L6 | readers keep `signature`/`encrypted` with protocol + model (`Opaque`) | §3.3; probe kept 0 | OpenCode/Pi → Claude strict clean with `DropForeign` |
+| L6 | readers keep `signature`/`encrypted` with protocol + model (`Opaque`) | §3.3 | OpenCode/Pi → Claude strict clean with `DropForeign` |
 | L9 | Codex `<turn_aborted>`/`turn_aborted` and a hard-killed last turn → `StepEnd::aborted`/`killed`; Claude `<synthetic>` reply → `Meta`; OpenCode empty assistant without `finish` → `killed` | §2 | manifest `interrupted_last_turn`; no marker text in the destination |
 | L10 | Codex Desktop code-mode `exec`: a script that is exactly one `tools.exec_command` / `tools.apply_patch` call → that call; any other script → one text-form call | census: 4844 of 4908 real Codex calls are `exec` | a Codex Desktop rollout converts with shell and patch calls translated |
 
 ### 8.2 Writers
 
-| id | requirement | evidence | acceptance (bench) |
+| id | requirement | evidence | acceptance |
 |---|---|---|---|
-| L1 | every `opencode` command spawned with `--standalone` | §1.3 rule 3 | matrix without the shim; real `opencode.db` fingerprint unchanged |
+| L1 | every `opencode` command spawned with `--standalone` | §1.3 rule 3 | intended `opencode.db` is used |
 | L2 | Claude writer: one row per content block sharing `message.id`; each result row parented on its own tool_use row | §6.2 | Codex → Claude full: both results present |
 | L3 | Pi writer: all calls of one `Step` in one assistant `message`, then one `toolResult` entry per result | §6.2 | any → Pi full: strict clean, no `No result provided` |
-| L7 | Codex writer: `session_meta` with Codex's own fields (`originator`, `cli_version` of the destination, `model_provider` of the destination config); no stale `threads` row in `state_5.sqlite` | probe wrote the source's `cli_version` and `model_provider:"openai"`; P5 | `codex resume` lists and resumes the thread |
+| L7 | Codex writer: `session_meta` with Codex's own fields (`originator`, `cli_version` of the destination, `model_provider` of the destination config); no stale `threads` row in `state_5.sqlite` | P5 | `codex resume` lists and resumes the thread |
 | L8 | OpenCode writer: one assistant row per `Step` (`[reasoning, text, tool, tool]`), through `session import` | §6.2; OC2 | any → OpenCode full: calls grouped |
-| L11 | translate tools only into tools the destination offers, else text form | [`tool-conversion-tables.md`](tool-conversion-tables.md) §1, §2, §6; probe sent Codex `function_call "Read"` | no destination request carries a tool name outside its offered set |
+| L11 | translate tools only into tools the destination offers, else text form | [`tool-conversion-tables.md`](tool-conversion-tables.md) §1, §2, §6 | no destination request carries a tool name outside its offered set |
 | L12 | Pi `bash.timeout` seconds ↔ canonical milliseconds | tool schemas [V captures] | Claude → Pi → Claude keeps the timeout |
 | L13 | argument-level equivalence decides translate vs text form (`replace_all`, `output_mode`, context lines, `pages`, background, shell dialect) | conversion tables §4 | a `replace_all: true` edit reaches Pi as text form |
 | L14 | subagent, skill, question, MCP and harness-internal tools → text form in every direction | conversion tables §3 | no such call is translated |
@@ -657,29 +588,10 @@ crate. "Probe" = what the bench saw when an external converter wrote the session
 Writers also apply `ReasoningPolicy` (§3.3) and the compaction mode (§4); the native compaction
 record forms of §4.4 are written only after a fixture proves the destination accepts them.
 
-## 9. Conformance suite (the bench is the test)
+## 9. Verification
 
-Scripts in `verify/H27/` (PowerShell 5.1, rerunnable, scratch only, no real model call):
-
-| script | does |
-|---|---|
-| `mock/server.mjs --port P --capture F` | mock model: Anthropic Messages, OpenAI Responses, Chat Completions; scripted replies (two parallel reads, reasoning with opaque payload, summary for compaction requests, hang); logs every request |
-| `<h>/env.ps1` | isolation of harness `h` (§2) |
-| `<h>/gen-source.ps1` | a native source session: T1 parallel tools + reasoning, T2, native compaction, T3, interrupted T4 |
-| `<h>/resume-capture.ps1 -SessionId -Prompt -Tag` | resume with a prompt, capture what the model received |
-| `driver/` (`h27-driver list|dump|write`) | the probe used in the 2026-10-27 run; **to be replaced by the library's CLI with the same three commands** (`list <h>`, `dump <h> <id>`, `write <h> <session.json>`), so `matrix.ps1` runs unchanged against our crate |
-| `transform.py` | variants `full`, `portable`, `tail` |
-| `matrix.ps1 [-Only s>d,…] [-Variants …]` | every ordered pair × variant: dump, transform, write, resume, analyze |
-| `compact-native.ps1 -Harness -SessionId -Tag` | destination-native compaction, then resume |
-| `analyze.py`, `strict.py`, `summarize.py` | what arrived; would a real API accept it |
-
-Pass criteria for a library release: all 12 pairs × {`full`, `portable`} written and resumed;
-`strict.py` clean (warnings allowed only for R3); `ALPHA-CONTENT-42`, `BETA-CONTENT-17`, `H27-PRE`,
-`H27-FINAL`, `H27-T2` present in `full`; the source summary present in `portable` with
-`SourceRecord`; 4/4 destination-native compactions resume; the real stores' fingerprints unchanged.
-Probe run of 2026-10-27 (external converter, not our library): written+resumed 36/36 and 4/4;
-strict 31/36 clean (5 rejects: four in §6.1, one in §4.2); the source summary carried 0/12. Our
-library must pass all criteria above.
+Run `cargo test` for automated checks. The [verification records](README.md#verification-records)
+describe additional harness runs, their environments and their coverage limitations.
 
 ## 10. Open
 
@@ -695,7 +607,7 @@ library must pass all criteria above.
   call and travels in text form in every direction; an `apply_patch` call reads as an edit but
   carries no path, so it is text form too. Most calls of a Codex Desktop rollout are of this kind
   (tables §2).
-- Not exercised by a bench run: auto-compaction by threshold, a second compaction, a rewind or
+- Open verification: auto-compaction by threshold, a second compaction, a rewind or
   tree navigation in the source (the readers follow the resumed branch, tested on hand-made
   records; Claude `--fork-session` and Pi fork shapes are recorded, not converted), subagent
   sessions, images and attachments (converted between the four shapes; only OpenCode's verified by

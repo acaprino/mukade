@@ -93,6 +93,8 @@ fn decode_in_parallel(text: &str) -> Option<Vec<Value>> {
 /// A JSON Lines file, read and decoded.
 pub struct Jsonl {
     pub rows: Vec<Value>,
+    /// The exact UTF-8 bytes decoded into `rows`, retained for combined fingerprints.
+    pub source_bytes: std::sync::Arc<String>,
     /// The file's last line when a hard kill cut it off mid-write.
     pub unfinished: Option<String>,
     /// The SHA-256 of the file's bytes, still being computed.
@@ -126,6 +128,7 @@ pub fn read_jsonl(path: &std::path::Path) -> Result<Jsonl> {
     let (rows, unfinished) = rows_from_lines(&text, &path.display().to_string())?;
     Ok(Jsonl {
         rows,
+        source_bytes: text,
         unfinished,
         sha256,
     })

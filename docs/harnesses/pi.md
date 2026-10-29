@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Documentation updated** | 2026-10-28 |
-| **Version described** | 1.2.0 (the version mukade's readers and writers were built against); mukade-written sessions were also run live against 1.4.0, npm's `latest` on 2026-10-28 — see [`../verification/2026-10-28-pi-live.md`](../verification/2026-10-28-pi-live.md) |
+| **Version described** | 1.2.0 (the version mukade's readers and writers were built against); mukade-written sessions were also run live against 1.4.0, npm's `latest` on 2026-10-28 — see [`../verification/pi-session-and-reasoning-verification.md`](../verification/pi-session-and-reasoning-verification.md) |
 | **Vendor** | Earendil Inc. ("Earendil Inc. & Contributors") [24]; package author Mario Zechner [1] |
 | **Website** | <https://pi.dev>, documentation <https://pi.dev/docs/latest> [24] |
 | **License / source** | MIT; <https://github.com/earendil-works/pi>, package directory `packages/coding-agent` [1][21] |
@@ -343,4 +343,4 @@ repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28.
 31. `src/exe.rs`, `src/roots.rs`, `src/cli.rs`.
 32. `README.md`, `docs/usage.md`.
 33. `src/model/tool.rs` (`CanonicalTool::from_pi`).
-34. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+34. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)

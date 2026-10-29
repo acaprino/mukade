@@ -1,7 +1,7 @@
 # A summary written by the source's model, instead of the whole history
 
-Status: built (plan `docs/superpowers/plans/2026-10-28-source-model-summary.md`; live record
-`docs/verification/2026-10-28-summary-live.md`, which changed two commands: Codex forks instead of
+Status: built (plan `docs/archive/plans/source-model-summary-implementation.md`; live record
+`docs/verification/source-model-summary-live.md`, which changed two commands: Codex forks instead of
 resuming, Claude's `--tools ""` comes first). Date: 2026-10-28.
 
 ## Why

@@ -31,9 +31,9 @@ D:\tools\mukade.exe --help
 The Windows executable has the C runtime built in, so it runs on a machine with no Visual C++
 redistributable. Run it from a shell, by its path or from a folder on `PATH`; in the examples below
 `mukade` stands for whichever you use (`D:\tools\mukade.exe`, say). It has no installer, no
-configuration file and no first-run step. The files it needs it generates in the folder where the
-executable is, and nowhere else: a folder `mukade-data`, made only when something is first written
-to it. See [Where its files go](#6-where-its-files-go) for what is in it and what it costs.
+configuration file and no first-run step. By default it generates its files in a `mukade-data`
+folder beside the executable, made only when something is first written. A host may set an absolute
+`MUKADE_DATA_DIR` instead. See [Where its files go](#6-where-its-files-go).
 
 Install and configure the harnesses you intend to use separately: mukade moves sessions, it does
 not install harnesses or transfer their credentials.
@@ -170,6 +170,11 @@ history in the destination. They stay in the source untouched, and the manifest 
 (`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`, `custom_message` and `context_edit`
 entries reach the destination the way Pi shows them to its model.
 
+For Claude Code, a plain conversation or fully paired, linear tool calls flushed out of file order
+are ordered by `parentUuid`. Out-of-order chains with system records, compaction, split responses,
+recovered siblings or unchained conversation records are refused: they are not yet reconstructed.
+Missing parents and cycles are refused too.
+
 Codex Desktop 0.165 keeps such a thread over two files: the earlier one, and a page that continues
 from part of it, which is what Codex resumes (redone again, a thread gets a further page that
 continues from the previous one). mukade reads the latest version, the way Codex resumes it: each
@@ -183,6 +188,22 @@ mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project'
 ```
 
 `--all-branches` is read for Codex only; for another harness it is refused (exit 2).
+
+To omit historical calls and their results, use `--without-tools` with `hop` or `write`. The
+manifest records `options.without_tools`, the `tools_omitted` count and the loss. It is not a
+`dump` or `list` option.
+
+`--expect-sha256 <hash>` on `hop` checks the captured source fingerprint before writing or
+starting a source-model summary. A mismatch is refused with exit 2. It checks the selected source
+in its entirety; an appended file changes the fingerprint rather than automatically freezing the
+previous prefix.
+
+A host importing into OpenCode can reserve an ID with `--dest-id ses_<id>`, select the primary
+agent with `--dest-agent <name>`, and supply a JSON object with `--metadata-file <path>`. When an
+ID or metadata is supplied, `OPENCODE_DB` must identify the destination explicitly: mukade checks
+the resulting ID and metadata there after the native import. If the process fails or the check
+cannot confirm the write, exit 5 reports an uncertain result and its ID; inspect the destination
+before retrying. A metadata file may be at most 1 MiB and should be protected by the host.
 
 ### Use it from a task runner or another program
 
@@ -352,10 +373,10 @@ What makes it fast, and what you can do:
 
 ## 6. Where its files go
 
-mukade is portable by construction: there is no installer, no configuration file, no mode and no
-setting. It generates what it needs in **the folder where the executable is**, and nowhere else.
-Everything it keeps for itself is in one folder, `mukade-data`, made the first time something is
-written to it (never at start-up):
+mukade has no installer or configuration file. By default it keeps its own files in `mukade-data`
+beside the executable. `MUKADE_DATA_DIR` can select a different **absolute** data folder for a host;
+an invalid override is refused rather than redirected. The selected folder is made the first time
+something is written to it (never at start-up):
 
 | file | what for |
 |---|---|
@@ -370,10 +391,11 @@ next run once it is an hour old. The files that *are* yours stay yours: the sess
 stores, and what you ask for with `--output` and `--manifest`. To remove mukade, delete the folder
 it is in.
 
-If the executable is in a place it cannot write to (a read-only install), the folder cannot be made.
+If the selected data folder is in a place it cannot write to, the folder cannot be made.
 mukade does not look for another place: the cache is not kept (every hop asks the harness, which
 costs time but works), and a hop to OpenCode stops with an error that names the folder, before
-anything is written. Copy `mukade.exe` to a folder you can write to.
+anything is written. Set `MUKADE_DATA_DIR` to an absolute writable folder, or run the executable
+from a writable location without the override.
 
 **What it looks like.** A real run: the executable copied alone into an empty folder, then two hops
 to Claude Code whose launcher answers `--version` (`--timing` shows the cost of asking):
@@ -408,8 +430,8 @@ variable and `--<harness>-exe`: see [section 8](#8-stores-and-executables) and t
 | 0 | done |
 | 1 | a command-line mistake (unknown option, a flag without its value, an unexpected argument) |
 | 2 | refused with a reason; nothing was written: the session is not there, the store is not configured, the id is ambiguous, or the request is not supported (a resume prompt starting with `-`, `--compaction portable` on a source that never compacted, …) |
-| 4 | failed and nothing changed: the destination refused the write, the plan would be refused by a provider, or the source's model could not write the summary (`--compaction summary`) |
-| 5 | failed and recovery is needed: the source exists but could not be read, **or the session was written but the resume failed** — then the receipt is still printed and `--manifest` saved |
+| 4 | failed and nothing changed: the plan would be refused by a provider, the source's model could not write the summary, or the write failed before starting the destination import |
+| 5 | recovery is needed: the source could not be read, an external import has an uncertain outcome, or the session was written but the resume failed. A failed resume still prints its receipt and saves `--manifest`; an uncertain import names its destination ID |
 
 ## 8. Stores and executables
 
@@ -432,8 +454,8 @@ OpenCode is special: when it is the **source**, its export reader uses `MUKADE_O
 default resolution, not the `--opencode-exe` flag. The flag applies to OpenCode as a destination.
 
 `--root` changes the selected harness's store for `list`, `dump` or `write`. For `hop`, it applies
-to the **source**, not a separate destination root; if source and destination are the same harness,
-they share that overridden root. Set the destination variable in the environment. For OpenCode,
+to the **source**, including when both ends use the same harness; set the destination variable in
+the environment. For OpenCode,
 an existing directory passed as `--root` means its `opencode.db`; a file path is used as-is.
 
 A `--resume-prompt` runs the destination with its store variable set to the root the session was
@@ -534,14 +556,14 @@ What to expect from such a thread:
 
 ### OpenCode
 
-Read OpenCode and write Pi. Use OpenCode's own listing to obtain the ID, from the relevant project
-directory; Mukade's `list opencode` returns an unsupported-listing error.
+Read OpenCode and write Pi. `list opencode` requires the selected database via `OPENCODE_DB` or
+`--root`, reads it without starting OpenCode, and includes top-level archived sessions.
 
 ```powershell
 $env:OPENCODE_DB = 'C:\path\to\opencode.db'
 $env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
 Set-Location 'C:\work\my-project'
-opencode session list --standalone
+mukade list opencode
 mukade hop opencode YOUR_OPENCODE_SESSION_ID pi --cwd 'C:\work\my-project'
 ```
 
@@ -605,7 +627,7 @@ would use for the project. The receipt's `resume` contains the chosen launcher a
 file path. Keep `PI_CODING_AGENT_DIR` set when running it; separately verify that Pi
 installation's provider credentials and configuration. A separate agent directory does not by itself
 prove that every resource Pi reads is isolated. Sessions written this way were run against Pi 1.2.0
-and 1.4.0 (see `docs/verification/2026-10-28-pi-live.md`).
+and 1.4.0 (see `docs/verification/pi-session-and-reasoning-verification.md`).
 
 Each harness has its own reference page, with how it is installed and launched, its store,
 compaction, tools, plugins and hooks: [`docs/harnesses/`](harnesses/).
@@ -638,16 +660,18 @@ the directory's own layout when exactly one harness is recognized. `write` alway
   OpenCode source requires `MUKADE_OPENCODE_EXE`; a destination uses its corresponding flag or env var.
 - **Codex version or OpenCode project/model missing:** provide the actual destination version,
   project ID, provider or model using the flags described above.
-- **"mukade keeps its temporary files in … mukade-data beside its executable and could not make it"**
-  (exit 4, from a hop to OpenCode): the executable is in a folder it cannot write to, or something
-  that is not a folder is named `mukade-data` there. Nothing was written. Copy `mukade.exe` to a
-  folder you can write to; see [section 6](#6-where-its-files-go).
+- **"mukade could not create its temporary directory"** (exit 4, from a hop to OpenCode): the
+  selected data folder cannot be written. Nothing was imported; set `MUKADE_DATA_DIR` to an
+  absolute writable folder or use the default beside a writable executable.
 - **"summary failed: …"** (exit 4, `--compaction summary`): the source harness could not write the
   summary, and nothing was written. The message names the command (the prompt shown as
   `<summary prompt v1>`), its exit status and what it printed: a login or quota problem of the
   source harness, a model it cannot reach (name another with `--summary-model`), a run longer than
   `--summary-timeout`, or a model that called a tool instead of summarizing. When OpenCode's fork
   could not be deleted, the message ends with the command that removes it.
+- **External OpenCode import is uncertain** (exit 5): the error names the attempted session ID.
+  Check that ID and its provenance in the selected database before retrying; a zero exit from the
+  underlying command alone is not enough to prove that it imported the session.
 - **Resume fails after a successful write** (exit 5): the session already exists. Mukade still
   prints its receipt on stdout and saves `--manifest`: use that `id` and `location` instead of
   retrying, which would create another session. A resume that outlives its timeout is stopped,

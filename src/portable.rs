@@ -1,15 +1,14 @@
-//! mukade is portable by construction: it runs from any folder, a USB stick included, and keeps
-//! nothing anywhere else. There is no mode to switch on, no marker file and no setting.
+//! mukade is portable by default: it runs from any folder, a USB stick included, and keeps its
+//! own files beside the executable. A host can set an absolute `MUKADE_DATA_DIR` instead.
 //!
-//! Everything mukade keeps for itself lives in one folder, `mukade-data`, beside the executable:
-//! its cache in `mukade-data/cache`, its temporary files in `mukade-data/tmp`. The folder is made
-//! when something is first written to it, never at start-up, and moving or deleting the folder
-//! that holds the executable moves or deletes all of it. What mukade writes outside that folder is
-//! what it was asked to write: the session in the destination harness's store, and the files named
-//! by `--output` and `--manifest`.
+//! Its cache lives in `cache`, its temporary files in `tmp`, under that selected data folder. The
+//! default folder is `mukade-data` beside the executable. The folder is made when something is
+//! first written, never at start-up. What mukade writes outside that folder is what it was asked
+//! to write: the session in the destination harness's store, and the files named by `--output` and
+//! `--manifest`.
 //!
-//! Where the folder cannot be made (an executable in a read-only location) mukade does not look
-//! for another place: the cache is simply not kept, and the temporary files that must exist, the
+//! Where the selected folder cannot be made, mukade does not look for another place: the cache is
+//! simply not kept, and the temporary files that must exist, the
 //! document OpenCode's `session import` reads and the folder of a summarizing run
 //! (`crate::summary`), are an error that says so. The system's
 //! temporary folder, the user profile and the application-data folders are never used. A
@@ -24,8 +23,13 @@ const DATA_DIR: &str = "mukade-data";
 /// A temporary file this old belongs to a process that is gone.
 pub const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
 
-/// The folder beside the executable that holds everything mukade keeps.
+/// The host's explicitly selected data folder, or the portable folder beside the executable.
+/// An invalid override is refused rather than silently writing to another location.
 pub fn data_dir() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("MUKADE_DATA_DIR") {
+        let path = PathBuf::from(value);
+        return path.is_absolute().then_some(path);
+    }
     let exe = std::env::current_exe().ok()?;
     data_dir_in(exe.parent())
 }
@@ -53,7 +57,7 @@ pub fn temp_dir() -> std::io::Result<PathBuf> {
 pub fn temp_dir_in(data: Option<&Path>) -> std::io::Result<PathBuf> {
     let Some(data) = data else {
         return Err(std::io::Error::other(
-            "mukade keeps its temporary files beside its executable, and cannot tell where that is",
+            "mukade cannot determine its data directory: MUKADE_DATA_DIR must be absolute",
         ));
     };
     let dir = data.join("tmp");
@@ -61,7 +65,7 @@ pub fn temp_dir_in(data: Option<&Path>) -> std::io::Result<PathBuf> {
         std::io::Error::new(
             error.kind(),
             format!(
-                "mukade keeps its temporary files in {} beside its executable and could not make it ({error}): run mukade from a folder you can write to",
+                "mukade could not create its temporary directory {} ({error}): select a writable MUKADE_DATA_DIR or run from a writable folder",
                 dir.display()
             ),
         )

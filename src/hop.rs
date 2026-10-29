@@ -122,6 +122,10 @@ pub struct WriteDetails {
     pub model_provider: Option<String>,
     pub model: Option<String>,
     pub project_id: Option<String>,
+    pub dest_id: Option<String>,
+    pub dest_agent: Option<String>,
+    pub metadata: Option<Value>,
+    pub without_tools: bool,
     pub now: Option<String>,
     /// The destination harness's executable override (`crate::exe` resolves the default).
     pub exe: Option<String>,
@@ -203,10 +207,18 @@ pub struct Receipt {
 pub enum HopError {
     /// The source is not there, or its store is not configured. Nothing was written.
     NotFound(String),
+    /// The captured source does not match the fingerprint reviewed by the caller.
+    SourceChanged { expected: String, actual: String },
     /// A pair or an option this library does not do. Nothing was written.
     Unsupported(String),
     /// The destination refused the write, or we could not write it. Nothing changed.
     WriteFailed(String),
+    /// A destination may have committed before its import process failed; reconcile this ID.
+    WriteUncertain {
+        reason: String,
+        dest_id: String,
+        location: Option<String>,
+    },
     /// The source could not be read as the harness it claims to be.
     VerifyFailed(String),
     /// The write happened but the caller cannot use it (a resume that failed, a timed out prompt).
@@ -223,11 +235,13 @@ pub enum HopError {
 impl HopError {
     pub fn exit_code(&self) -> i32 {
         match self {
-            HopError::NotFound(_) | HopError::Unsupported(_) => 2,
+            HopError::NotFound(_) | HopError::SourceChanged { .. } | HopError::Unsupported(_) => 2,
             HopError::WriteFailed(_)
             | HopError::StrictCheckFailed(_)
             | HopError::SummaryFailed(_) => 4,
-            HopError::VerifyFailed(_) | HopError::ResumeFailed { .. } => 5,
+            HopError::VerifyFailed(_)
+            | HopError::ResumeFailed { .. }
+            | HopError::WriteUncertain { .. } => 5,
         }
     }
 }
@@ -236,8 +250,24 @@ impl std::fmt::Display for HopError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HopError::NotFound(what) => write!(f, "not found: {what}"),
+            HopError::SourceChanged { expected, actual } => write!(
+                f,
+                "source changed: expected sha256 {expected}, found {actual}"
+            ),
             HopError::Unsupported(what) => write!(f, "unsupported: {what}"),
             HopError::WriteFailed(what) => write!(f, "write failed: {what}"),
+            HopError::WriteUncertain {
+                reason,
+                dest_id,
+                location,
+            } => write!(
+                f,
+                "write outcome unknown for session {dest_id}{}: {reason}",
+                location
+                    .as_ref()
+                    .map(|value| format!(" in {value}"))
+                    .unwrap_or_default()
+            ),
             HopError::VerifyFailed(what) => write!(f, "could not read the source: {what}"),
             HopError::SummaryFailed(what) => write!(f, "summary failed: {what}"),
             HopError::ResumeFailed { reason, receipt } => write!(
@@ -268,6 +298,16 @@ pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopErr
 
 /// Write a session we hold into a destination.
 pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
+    if dest != HarnessId::OpenCode
+        && (opts.write.dest_id.is_some()
+            || opts.write.dest_agent.is_some()
+            || opts.write.metadata.is_some())
+    {
+        return Err(HopError::Unsupported(
+            "a reserved destination ID, agent and metadata are currently supported only for OpenCode"
+                .into(),
+        ));
+    }
     let write_opts = WriteOpts {
         roots: opts.roots.clone(),
         cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
@@ -278,6 +318,10 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         model_provider: opts.write.model_provider.clone(),
         model: opts.write.model.clone(),
         project_id: opts.write.project_id.clone(),
+        dest_id: opts.write.dest_id.clone(),
+        dest_agent: opts.write.dest_agent.clone(),
+        metadata: opts.write.metadata.clone(),
+        without_tools: opts.write.without_tools,
         reasoning: opts.reasoning,
         title: session.meta.title.clone(),
         now: opts.write.now.clone(),
@@ -307,7 +351,16 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
     let write_span = crate::timing::span("write files");
     let written: Written = writer::for_harness(dest)
         .write_planned(session, &plan, &write_opts)
-        .map_err(|error| HopError::WriteFailed(format!("{error:#}")))?;
+        .map_err(
+            |error| match error.downcast_ref::<writer::WriteOutcomeUnknown>() {
+                Some(unknown) => HopError::WriteUncertain {
+                    reason: unknown.reason.clone(),
+                    dest_id: unknown.id.clone(),
+                    location: unknown.location.clone(),
+                },
+                None => HopError::WriteFailed(format!("{error:#}")),
+            },
+        )?;
     drop(write_span);
 
     let mut receipt = Receipt {
@@ -634,6 +687,7 @@ fn manifest_of(
         }
         .to_string(),
         resume_prompt: opts.resume.is_some(),
+        without_tools: opts.write.without_tools,
         counts: plan.counts.clone(),
         losses: {
             let mut losses = losses;

@@ -573,9 +573,9 @@ fn dump_writes_utf8_to_a_file() {
     );
 }
 
-/// Exit code 4: the destination refused the write and nothing changed.
+/// A failed external import may have written before failing, so its outcome needs reconciliation.
 #[test]
-fn a_write_the_destination_refuses_exits_4() {
+fn a_failed_external_import_reports_an_unknown_outcome() {
     let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
     let scratch = support::scratch(HarnessId::OpenCode, "cli-exit-4");
     let file = scratch.join("document.json");
@@ -599,7 +599,8 @@ fn a_write_the_destination_refuses_exits_4() {
             "m1",
         ],
     );
-    assert_eq!(code, Some(4), "{stderr}");
+    assert_eq!(code, Some(5), "{stderr}");
+    assert!(stderr.contains("outcome unknown"), "{stderr}");
     assert!(
         stdout.trim().is_empty(),
         "no receipt for a write that did not happen"

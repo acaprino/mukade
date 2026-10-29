@@ -34,7 +34,7 @@ the npm package `@opencode/cli` 2.1.4. The way this was established:
   [10][14]. `--standalone` runs a private server instead; `--server <url>` connects to a named one
   [10]. The server listens on localhost only: port 49374 on macOS, Linux and WSL, 28894 on Windows [11].
 - **The shared service runs with the user's own environment.** A command without `--standalone`
-  works on the real home and store, whatever variables the caller set [27 §1.3 rule 3][29]. Manage
+  works on the real home and store, whatever variables the caller set [27 §1.3 rule 3]. Manage
   it with `opencode service start|stop|restart|status|get|set|unset`; `opencode service set
   disabled true` makes private servers the default [1][10].
 - **Agent loop.** The server calls the model, runs the requested tools and continues until the turn
@@ -256,8 +256,7 @@ The V1 plugin "object form" is supported from OpenCode `1.18.29` [22]. The V1-st
 | `--standalone` | on every command mukade spawns (export, import, `session list`, the resume command), so that no work reaches the user's background service (L1) [31][32][34] |
 
 **The npm launcher.** `%APPDATA%\npm\opencode.cmd` only forwards `%*` to the real binary [36]; it does
-not add `--standalone`. (The shim that does is the H27 bench's own, `verify/H27/shim`, copied to
-`%LOCALAPPDATA%\shinatama-verify\H27\shim-bin\` [29].) Two things hold for any `.cmd` launcher:
+not add `--standalone`. Two things hold for any `.cmd` launcher:
 Rust cannot pass a line break to a batch file, so mukade refuses a multi-line resume prompt for one
 before it writes anything [34 `check_resume_prompt`][33 `is_batch`]; and on a timeout the child is
 `cmd.exe`, so the whole process tree has to be killed with `taskkill` [33 `run_within`, `kill_tree`].
@@ -265,8 +264,8 @@ before it writes anything [34 `check_resume_prompt`][33 `is_batch`]; and on a ti
 **Reader** (`src/reader/opencode.rs`) [31]. `read` runs `<exe> session export <id> --standalone`
 (stdin closed, 120 s `EXPORT_TIMEOUT`; stderr with `not found` → not-found error) and parses
 `{info, messages}`; `--from-file` also takes a `{session_v2, session_message}` row dump or a bare
-message array. `list` is not implemented (no SQLite read); find ids with
-`opencode session list --standalone` [35]. Mapping:
+message array. `list` opens the explicitly selected `OPENCODE_DB` read-only, returning root
+sessions including archived ones, without starting an OpenCode process. Mapping:
 
 | OpenCode record | mukade entry |
 |---|---|
@@ -276,11 +275,13 @@ message array. `list` is not implemented (no SQLite read); find ids with
 | failed `compaction`, `idle`, unknown types | Meta (not conversation) |
 
 **Writer** (`src/writer/opencode.rs`) [32]:
-1. Build `{info, messages}` (new id `ses_<uuid>`, message ids `msg_<uuid>`) and write it as
-   `mukade-import-<id>.json` (created new, 0600 on Unix) beside `OPENCODE_DB`, else in the temp folder.
+1. Build `{info, messages}` (new or reserved id `ses_<id>`, message ids `msg_<uuid>`) and write it
+   as `mukade-import-<id>.json` (created new, 0600 on Unix) in the selected Mukade data folder.
 2. Run `<exe> session import <file> --directory <cwd> --standalone` (120 s `IMPORT_TIMEOUT`); a
    `cwd` starting with `-` is refused. The document is removed on success and on failure.
-3. Take the id from `Imported session: <id>`. Receipt `location`: the `OPENCODE_DB` path, else
+3. Require `Imported session: <id>` rather than treating a zero exit as proof. A reserved ID is also
+   checked in the selected database with the supplied metadata; an uncertain result reports code 5.
+   Receipt `location`: the `OPENCODE_DB` path, else
    `opencode's configured store, session <id>`; resume: `<exe> run --standalone --session <id>`,
    a resume prompt appended as the last argument [34 `hop.rs`].
 
@@ -367,7 +368,6 @@ All accessed 2026-10-28.
 26. OpenCode docs index, <https://opencode.ai/v2/llms.txt>.
 27. Repository: [`docs/session-interchange-spec.md`](../session-interchange-spec.md) §1.3, §2.3, §3.3, §4, §5.
 28. Repository: [`docs/reference/harness-session-persistence-reference.md`](../reference/harness-session-persistence-reference.md), OpenCode dossier and version table (secondary source).
-29. Repository: [`docs/verification/2026-10-27-H27.md`](../verification/2026-10-27-H27.md) (bench setup, OpenCode shim).
 30. Repository: [`docs/tool-conversion-tables.md`](../tool-conversion-tables.md) §2, §3.
 31. Repository: [`src/reader/opencode.rs`](../../src/reader/opencode.rs).
 32. Repository: [`src/writer/opencode.rs`](../../src/writer/opencode.rs), [`src/writer/media.rs`](../../src/writer/media.rs).
@@ -375,4 +375,4 @@ All accessed 2026-10-28.
 34. Repository: [`src/cli.rs`](../../src/cli.rs) (`apply_root`, `opencode_project_id`, `opencode_config_model`), [`src/roots.rs`](../../src/roots.rs), [`src/hop.rs`](../../src/hop.rs).
 35. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md), `src/detect.rs`.
 36. Local npm launcher `C:\Users\alfio\AppData\Roaming\npm\opencode.cmd` (150 bytes, generated by npm for `@opencode/cli`).
-37. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+37. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)

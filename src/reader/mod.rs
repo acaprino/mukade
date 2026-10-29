@@ -16,6 +16,8 @@ pub struct SessionInfo {
     pub title: Option<String>,
     pub cwd: Option<String>,
     pub updated: Option<String>,
+    /// Whether the source marked this session archived.
+    pub archived: bool,
     /// The native file (or store record) the session lives in.
     pub path: String,
 }

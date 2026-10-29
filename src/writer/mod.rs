@@ -41,6 +41,14 @@ pub struct WriteOpts {
     /// The destination's project: OpenCode's interchange format requires `info.projectID`, and the
     /// project is the destination's own (it derives one per directory).
     pub project_id: Option<String>,
+    /// A previously reserved OpenCode session ID, for retry-safe callers.
+    pub dest_id: Option<String>,
+    /// The destination's primary agent for an OpenCode session.
+    pub dest_agent: Option<String>,
+    /// Metadata supplied by the caller for the new OpenCode session.
+    pub metadata: Option<serde_json::Value>,
+    /// Omit recorded tool calls and their results, retaining only conversation text.
+    pub without_tools: bool,
     /// §3.3. The default drops reasoning the destination cannot replay.
     pub reasoning: ReasoningPolicy,
     /// A title, where the destination has one.
@@ -63,6 +71,50 @@ pub struct Written {
     pub location: String,
     /// The destination's own resume command, without the prompt.
     pub resume: Vec<String>,
+}
+
+/// A started external import may have written its session before its process failed.
+#[derive(Debug)]
+pub struct WriteOutcomeUnknown {
+    pub id: String,
+    pub location: Option<String>,
+    pub reason: String,
+}
+
+impl std::fmt::Display for WriteOutcomeUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "write outcome unknown for session {}: {}",
+            self.id, self.reason
+        )
+    }
+}
+
+impl std::error::Error for WriteOutcomeUnknown {}
+
+/// Options for another destination must never be silently ignored by a writer.
+pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<()> {
+    if harness != HarnessId::OpenCode
+        && (opts.dest_id.is_some() || opts.dest_agent.is_some() || opts.metadata.is_some())
+    {
+        anyhow::bail!(
+            "a reserved destination ID, agent and metadata are currently supported only for OpenCode"
+        );
+    }
+    if let Some(id) = opts.dest_id.as_deref() {
+        opencode::validate_session_id(id)?;
+    }
+    if let Some(agent) = opts.dest_agent.as_deref() {
+        opencode::validate_agent(agent)?;
+    }
+    if let Some(metadata) = &opts.metadata {
+        anyhow::ensure!(
+            metadata.is_object(),
+            "session metadata must be a JSON object"
+        );
+    }
+    Ok(())
 }
 
 /// One writer per harness.

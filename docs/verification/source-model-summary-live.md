@@ -5,7 +5,7 @@
 | **Date** | 2026-10-28 |
 | **Harnesses** | Claude Code 2.1.312, Codex CLI 0.164.0, OpenCode 2.1.4, Pi 1.4.0 (the installed ones) |
 | **mukade** | `master` at `5ea3cce` (plan of the source-model summary) |
-| **Design** | [`docs/superpowers/specs/2026-10-28-source-model-summary-design.md`](../superpowers/specs/2026-10-28-source-model-summary-design.md) |
+| **Design** | [`docs/archive/design/source-model-summary.md`](../archive/design/source-model-summary.md) |
 | **Result** | one command per harness that summarizes a session and leaves the session as it was; Codex's real model not reached (usage limit), its commands checked against a local mock |
 
 ## Why
@@ -42,6 +42,9 @@ switched off over a history that holds tool calls.
   `codex delete --force <id>` (the two real Codex sessions the failed runs had made).
 
 ## Results
+
+This table records the initial harness probes. OpenCode's later deny-all check and the final
+command used by mukade are recorded separately below; the initial probe did not deny its tools.
 
 | harness | command | source after the run | tools off over a history with tool calls | reply read from |
 |---|---|---|---|---|

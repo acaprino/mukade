@@ -371,4 +371,4 @@ All accessed 2026-10-28.
 23. Repository: [`src/writer/codex.rs`](../../src/writer/codex.rs), `src/writer/plan.rs`, `src/policy.rs`, `src/tools.rs`, `src/model/tool.rs`, `src/hop.rs`
 24. Repository: [`src/exe.rs`](../../src/exe.rs), [`src/cli.rs`](../../src/cli.rs) (`codex_config_provider`, `top_level_string`, `destination_version`), `src/detect.rs`
 25. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md) §2
-27. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)

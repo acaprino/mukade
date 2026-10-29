@@ -88,6 +88,8 @@ pub struct Counts {
     /// Blocks the destination will receive.
     pub messages_out: usize,
     pub tools_translated: usize,
+    /// Tool calls deliberately omitted with their results.
+    pub tools_omitted: usize,
     pub tools_text_form: usize,
     pub text_form_tools: Vec<String>,
     /// Reasoning blocks not carried, in all.
@@ -370,6 +372,10 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 last_step_native.clear();
                 step_answered.clear();
                 for call in calls {
+                    if opts.without_tools {
+                        counts.tools_omitted += 1;
+                        continue;
+                    }
                     last_step_calls.push(call.id.clone());
                     match tools::translate_with(call, dest, opts.dest_shell, offered) {
                         Translation::Call { name, input } => {
@@ -397,6 +403,9 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 blocks.push(PlannedBlock::Step(planned));
             }
             Kind::Results { results } => {
+                if opts.without_tools {
+                    continue;
+                }
                 let mut planned = Vec::new();
                 for result in results {
                     // A3: the first answer to a call is the one that travels.

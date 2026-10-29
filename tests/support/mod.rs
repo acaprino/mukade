@@ -56,8 +56,15 @@ pub fn scratch(harness: HarnessId, tag: &str) -> PathBuf {
     let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // Inside the build folder (cargo's own scratch area for integration tests): running the tests
     // leaves nothing in the user's profile or the system's temporary folder.
-    let area = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mukade-tests");
-    SWEPT.call_once(|| sweep(&area));
+    let override_root = std::env::var_os("MUKADE_TEST_SCRATCH_ROOT");
+    let area = override_root
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("mukade-tests"));
+    // An explicitly supplied root belongs to the caller: never sweep its pre-existing content.
+    if override_root.is_none() {
+        SWEPT.call_once(|| sweep(&area));
+    }
     let base = area
         .join(harness.as_str())
         .join(format!("{tag}-{}-{unique}", std::process::id()));
@@ -137,6 +144,10 @@ pub fn opts(harness: HarnessId, scratch: &Path) -> WriteOpts {
         model_provider: Some("h27".to_string()),
         model: None,
         project_id: None,
+        dest_id: None,
+        dest_agent: None,
+        metadata: None,
+        without_tools: false,
         reasoning: ReasoningPolicy::DropForeign,
         title: Some("interchange test".to_string()),
         now: Some(NOW.to_string()),

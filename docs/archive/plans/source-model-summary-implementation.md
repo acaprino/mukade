@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (crate as is), `serde_json`, `anyhow`; no new crates. Tests: `cargo test`, fake harness launchers (`tests/support::launcher`).
 
-**Spec:** `docs/superpowers/specs/2026-10-28-source-model-summary-design.md` (and `docs/session-interchange-spec.md` §4 for the portable shape it extends).
+**Spec:** `docs/archive/design/source-model-summary.md` (and `docs/session-interchange-spec.md` §4 for the portable shape it extends).
 
 ## Global Constraints
 
@@ -39,7 +39,7 @@
 No product code. This task settles the four **[U]** points of the spec, and the argv that Task 3 will pin.
 
 **Files:**
-- Create: `docs/verification/2026-10-28-summary-live.md` (the record, in the style of `docs/verification/2026-10-28-pi-live.md`)
+- Create: `docs/verification/source-model-summary-live.md` (the record, in the style of `docs/verification/pi-session-and-reasoning-verification.md`)
 - Create: `fixtures/claude_code/summary-print.json` (one real `--output-format json` reply, from the throwaway session's synthetic content)
 - Create: `fixtures/opencode/summary-run.jsonl` (the real `run --format json` events of the probe)
 - Modify: `docs/harnesses/claude-code.md`, `codex.md`, `opencode.md`, `pi.md`: §5, a new `### Ephemeral runs` subsection right after `### Compaction`; `### Compaction` amended with how to compact non-interactively and what that writes; §9 sources (`--help` of the installed binary, the verification record).
@@ -80,7 +80,7 @@ Candidate commands (from the spec, flags read from `--help` on Claude Code 2.1.3
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/verification/2026-10-28-summary-live.md docs/harnesses fixtures/claude_code/summary-print.json fixtures/opencode/summary-run.jsonl
+git add docs/verification/source-model-summary-live.md docs/harnesses fixtures/claude_code/summary-print.json fixtures/opencode/summary-run.jsonl
 git commit -m "Verify live how each harness runs without saving, and record it per harness"
 git push origin master
 ```
@@ -346,11 +346,11 @@ git push origin master
 ### Task 5: End-to-end live run, and the documentation
 
 **Files:**
-- Modify: `docs/verification/2026-10-28-summary-live.md` (a section "End to end")
+- Modify: `docs/verification/source-model-summary-live.md` (a section "End to end")
 - Modify: `docs/harnesses/*.md` §8: a `### How mukade summarizes it` subsection (the exact command from `src/summary.rs`, what it saves, what it leaves behind, the output it reads)
 - Modify: `docs/session-interchange-spec.md` (new §4.5 "`Portable` with a summary from the source's model", §1.2 surface, §10 open items that are still open)
 - Modify: `README.md` ("Compaction and reasoning between hops"), `docs/usage.md` (one use case: export a summary, import it later)
-- Modify: `docs/superpowers/specs/2026-10-28-source-model-summary-design.md` (Status: built, with the commit)
+- Modify: `docs/archive/design/source-model-summary.md` (Status: built, with the commit)
 
 - [ ] **Step 1: Run a real hop per source harness with `--compaction summary` on a throwaway session**
 

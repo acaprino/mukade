@@ -35,6 +35,7 @@ impl Writer for Pi {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
+        super::validate_options(HarnessId::Pi, opts)?;
         let root = opts
             .roots
             .pi_agent_dir

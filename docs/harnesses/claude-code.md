@@ -283,4 +283,4 @@ Web:
 24. Release v2.1.311, https://github.com/anthropics/claude-code/releases/tag/v2.1.311 (commit `08c6a4f5121ae140d3c1b5c96e3e5ae53587b54b`)
 25. License file, https://raw.githubusercontent.com/anthropics/claude-code/main/LICENSE.md
 26. npm registry, https://registry.npmjs.org/@anthropic-ai/claude-code/latest (`version` 2.1.312, `license` "SEE LICENSE IN README.md", `engines.node` ">=22.0.0", `bin.claude` "bin/claude.exe")
-27. `docs/verification/2026-10-28-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
