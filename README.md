@@ -141,10 +141,10 @@ after the write).
 
 ## One executable, nothing to install, and speed
 
-mukade is a single command-line executable: `cargo build --release`, then copy
-`target/release/mukade.exe` anywhere (a USB stick included) and run it. The Windows build links the
-C runtime in, so it needs no redistributable. There is no installer, no configuration file and no
-mode to switch on.
+mukade is a single command-line executable: run `build.bat` on Windows or `sh build.sh` on Linux,
+then copy `target/release/mukade.exe` or `target/release/mukade` anywhere (a USB stick included)
+and run it. The Windows executable includes the Musashi icon and links the C runtime in, so it
+needs no redistributable. There is no installer, no configuration file and no mode to switch on.
 
 By default it generates the files it needs in the folder where the executable is: a
 `mukade-data` folder, made the first time something is written to it, holding a small cache of the

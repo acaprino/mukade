@@ -8,6 +8,7 @@ repository = "https://github.com/acaprino/mukade"
 readme = "README.md"
 keywords = ["session", "claude-code", "codex", "opencode", "interchange"]
 categories = ["development-tools"]
+build = "build.rs"
 
 # The dependency list is closed on purpose: adding one is a decision, not a side effect. It is
 # also why the manifest's content fingerprint is a SHA-256 written by hand in `src/sha256.rs`
@@ -19,6 +20,9 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
+
+[build-dependencies]
+embed-resource = "3"
 
 [[bin]]
 name = "mukade"
