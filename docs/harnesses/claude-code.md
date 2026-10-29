@@ -207,12 +207,12 @@ Sources: `src/reader/claude_code.rs`, `src/writer/claude_code.rs`, `src/writer/p
 | Detection | a directory with at least one `projects/<project>/*.jsonl` is Claude Code [7] |
 | Resume command written | `claude -p --resume <id>` (the resolved executable replaces `claude`) [5] |
 
-**Reader (`src/reader/claude_code.rs`)** [4]:
+**Reader (`src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`)** [4]:
 - `list` reads `projects/*/*.jsonl` and peeks at the first 20 lines (`sessionId`, `cwd`, `slug` as title, timestamp); `read` matches the file name by prefix of the id and refuses an ambiguous prefix. Subagent folders are not listed.
-- **Resumed branch only.** It walks back from the last row (last row with a `uuid` that is not a sidechain row) by `parentUuid`, and by `logicalParentUuid` across a compaction boundary whose `parentUuid` is null; rows of parallel calls (same `message.id`, results hanging off a `tool_use` row) are taken with the chain. Rows outside that branch are **kept as `Meta(OffBranch)`** and counted as `dropped_off_branch`; they are not written to the destination.
-- **Rows merged by `message.id`** into one `Step`; results are paired by `tool_use_id`, never by walking parents (L5).
+- **Selected branch only.** `last-prompt.leafUuid` is the checkpoint; a later continuation or a new user branch can supersede it. A new branch only overrides a checkpoint whose leaf was already recorded before it; a checkpoint flushed before its own leaf is not a rewind ordering barrier. Mixed result/text user rows can start a new branch too. Without a checkpoint the last non-sidechain user or assistant with a UUID selects the branch. The reader walks `parentUuid`, and `logicalParentUuid` across compaction; rows outside the branch are kept as `Meta(OffBranch)` and counted as `dropped_off_branch`. This selection is covered by synthetic tests, not a new live rewind verification.
+- **Rows merged by `message.id`** into one `Step`, including a response interleaved with its tool results; results are paired by `tool_use_id` (L5). Recovered siblings and UUID-less blocks/results are placed using their dependencies, with file position only as a tie-breaker. Unanchored conversation records, missing parents, cycles, duplicate UUIDs and ambiguous recovered results are refused.
 - **Meta, never conversation:** `<synthetic>` assistant replies (`Meta(Synthetic)`), `isMeta` and `isVisibleInTranscriptOnly` rows and `<local-command-*>` / `<command-name>` / `<command-message>` rows (`Meta(Command)`; the `isMeta` row after a prompt-type slash command is the expanded prompt and becomes a user turn), `attachment` rows, other `system` rows, unknown row types, and subagent (`isSidechain`) rows. A last line cut off mid-write is kept as an unfinished record.
-- **Compaction:** `compact_boundary` plus the `isCompactSummary` row become one `Compaction` entry (`summary`, `trigger` manual/auto, `tokens_before` = `preTokens`, `kept_from` = `preservedSegment.headUuid`, or the first conversation entry after the boundary when that id is not an entry).
+- **Compaction:** `compact_boundary` plus the `isCompactSummary` row become one `Compaction` entry (`summary`, `trigger`, `tokens_before`, `kept_from`). Preserved message lists and segments are checked; a retained UUID inside a merged response resolves to that response. A uniquely linked summary without a UUID can be recovered. Malformed, missing or contradictory preserved conversation records are refused.
 - **Reasoning:** `thinking` keeps its `signature`; `redacted_thinking` keeps its `data` as the opaque payload; both are tagged `anthropic-messages` with the step's model.
 - **Step end** from `stop_reason`: `tool_use`, `end_turn`/`stop_sequence`/`max_tokens`/`length` completed, `refusal` error. Session metadata (`sessionId`, `cwd`, `gitBranch`, `version`, `slug`, models) comes from the rows; `parent` is always empty because `--fork-session` leaves no lineage.
 
@@ -257,7 +257,7 @@ Local (this repository and this machine):
 1. `docs/session-interchange-spec.md` §0, §2.1, §3, §4, §5, §6, §7, §8, §10 (Claude Code 2.1.311 verified records and commands).
 2. `docs/reference/harness-session-persistence-reference.md` (Claude Code dossier, secondary research report).
 3. `docs/tool-conversion-tables.md` §2 to §4 (tools offered and used, name and argument tables).
-4. `src/reader/claude_code.rs`.
+4. `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`.
 5. `src/writer/claude_code.rs`, `src/writer/plan.rs`.
 6. `src/exe.rs`, `src/roots.rs` (`claude_project_dir_name`).
 7. `src/policy.rs`, `src/detect.rs`, `src/hop.rs`, `src/cli.rs`.

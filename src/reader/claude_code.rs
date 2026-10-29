@@ -25,6 +25,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+mod order;
+
 /// The Claude Code reader.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClaudeCode;
@@ -54,282 +56,24 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
 /// instead of being copied there.
 pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
-    let on_branch = {
+    let reconstruction = {
         let _span = crate::timing::span("resumed branch");
-        active_branch(&rows)
+        order::reconstruct(&rows)?
     };
-    let order = conversation_order(&rows, &on_branch)?;
     let mut b = Builder::default();
     {
         let _span = crate::timing::span("entries");
         let mut source: Vec<Option<Value>> = rows.into_iter().map(Some).collect();
-        for i in order {
+        for i in reconstruction.order {
             b.push(
                 i,
                 source[i].take().expect("each source row is used once"),
-                on_branch[i],
+                reconstruction.on_branch[i],
             );
         }
     }
     let _span = crate::timing::span("finish");
     b.finish(source_path)
-}
-
-/// The active parent chain wins over physical write order. Until recovered parallel calls and
-/// compaction links can be ordered with the same guarantee, refuse those out-of-order cases
-/// instead of silently inventing a conversation.
-fn conversation_order(rows: &[Value], on_branch: &[bool]) -> Result<Vec<usize>> {
-    use std::collections::HashMap;
-    let in_tree = |row: &Value| {
-        row.get("uuid").and_then(Value::as_str).is_some() && !truthy(row.get("isSidechain"))
-    };
-    let Some(leaf) = rows.iter().rposition(&in_tree) else {
-        return Ok((0..rows.len()).collect());
-    };
-    let by_uuid: HashMap<&str, usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| in_tree(row))
-        .filter_map(|(index, row)| {
-            row.get("uuid")
-                .and_then(Value::as_str)
-                .map(|id| (id, index))
-        })
-        .collect();
-    let mut seen = vec![false; rows.len()];
-    let mut chain = Vec::new();
-    let mut next = Some(leaf);
-    while let Some(index) = next {
-        anyhow::ensure!(!seen[index], "cycle in Claude Code parent chain");
-        seen[index] = true;
-        chain.push(index);
-        let parent = rows[index]
-            .get("parentUuid")
-            .and_then(Value::as_str)
-            .or_else(|| rows[index].get("logicalParentUuid").and_then(Value::as_str))
-            .filter(|id| !id.is_empty());
-        next = match parent {
-            Some(id) => Some(
-                *by_uuid
-                    .get(id)
-                    .with_context(|| format!("missing Claude Code parent {id}"))?,
-            ),
-            None => None,
-        };
-    }
-    chain.reverse();
-    if !chain.windows(2).any(|pair| pair[0] > pair[1]) {
-        return Ok((0..rows.len()).collect());
-    }
-    let has_complex_chain = !simple_chain(rows, &chain);
-    let has_recovered = rows.iter().enumerate().any(|(index, row)| {
-        on_branch[index]
-            && !seen[index]
-            && in_tree(row)
-            && matches!(
-                row.get("type").and_then(Value::as_str),
-                Some("user" | "assistant")
-            )
-    });
-    let has_unchained = rows.iter().any(|row| {
-        !in_tree(row)
-            && !truthy(row.get("isSidechain"))
-            && matches!(
-                row.get("type").and_then(Value::as_str),
-                Some("user" | "assistant")
-            )
-    });
-    anyhow::ensure!(
-        !has_complex_chain && !has_recovered && !has_unchained,
-        "out-of-order Claude Code history contains a complex chain, recovered or unchained records and cannot be reconstructed safely"
-    );
-    chain.extend((0..rows.len()).filter(|&index| !seen[index]));
-    Ok(chain)
-}
-
-/// A linear chain is safe to reorder when each tool call has exactly one following result and
-/// assistant blocks are not split across multiple records of the same model response.
-fn simple_chain(rows: &[Value], chain: &[usize]) -> bool {
-    use std::collections::HashSet;
-    let mut pending = HashSet::new();
-    let mut response_ids = HashSet::new();
-    for &index in chain {
-        let row = &rows[index];
-        match row.get("type").and_then(Value::as_str) {
-            Some("assistant") => {
-                if !pending.is_empty() {
-                    return false;
-                }
-                let Some(id) = row
-                    .pointer("/message/id")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.is_empty())
-                else {
-                    return false;
-                };
-                if !response_ids.insert(id) {
-                    return false;
-                }
-                let Some(blocks) = row.pointer("/message/content").and_then(Value::as_array) else {
-                    return false;
-                };
-                for block in blocks {
-                    match block.get("type").and_then(Value::as_str) {
-                        Some("tool_use") => {
-                            let Some(id) = block
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .filter(|id| !id.is_empty())
-                            else {
-                                return false;
-                            };
-                            if !block
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .is_some_and(|name| !name.is_empty())
-                                || !block.get("input").is_some_and(Value::is_object)
-                                || !pending.insert(id)
-                            {
-                                return false;
-                            }
-                        }
-                        Some("text") if block.get("text").is_some_and(Value::is_string) => {}
-                        Some("thinking") if block.get("thinking").is_some_and(Value::is_string) => {
-                        }
-                        Some("redacted_thinking")
-                            if block.get("data").is_some_and(Value::is_string) => {}
-                        _ => return false,
-                    }
-                }
-            }
-            Some("user") => {
-                if !row
-                    .pointer("/message/content")
-                    .is_some_and(|content| content.is_string() || content.is_array())
-                {
-                    return false;
-                }
-                let blocks = row.pointer("/message/content").and_then(Value::as_array);
-                if blocks.is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|item| item.get("type").and_then(Value::as_str).is_none())
-                }) {
-                    return false;
-                }
-                let is_result = blocks.is_some_and(|blocks| {
-                    blocks.iter().any(|block| {
-                        block.get("type").and_then(Value::as_str) == Some("tool_result")
-                    })
-                });
-                if !is_result {
-                    if !pending.is_empty() {
-                        return false;
-                    }
-                    continue;
-                }
-                for block in blocks.expect("a result has blocks") {
-                    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-                        return false;
-                    }
-                    let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
-                        return false;
-                    };
-                    if !pending.remove(id) {
-                        return false;
-                    }
-                }
-            }
-            _ => return false,
-        }
-    }
-    pending.is_empty()
-}
-
-/// Which rows belong to the branch Claude Code resumes. A rewind or an edited prompt starts a new
-/// branch from an earlier row and leaves the abandoned one in the file; Claude Code resumes the
-/// branch of the last row, walking `parentUuid` back from it (and `logicalParentUuid` across a
-/// compaction boundary, whose `parentUuid` is null). Walking parents alone loses a parallel call:
-/// its `tool_use` row shares the `message.id` of a row on the chain, and its `tool_result` row hangs
-/// off that `tool_use` row, so both are taken by those ids. Rows outside the tree (no `uuid`) and
-/// subagent rows are left as they are.
-fn active_branch(rows: &[Value]) -> Vec<bool> {
-    let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
-    let in_tree = |row: &Value| {
-        row.get("uuid").and_then(Value::as_str).is_some() && !truthy(row.get("isSidechain"))
-    };
-    let Some(leaf) = rows.iter().rposition(&in_tree) else {
-        return vec![true; rows.len()];
-    };
-    let by_uuid: std::collections::HashMap<String, usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| in_tree(row))
-        .filter_map(|(i, row)| text(row, "uuid").map(|uuid| (uuid, i)))
-        .collect();
-
-    let mut active = vec![false; rows.len()];
-    let mut at = Some(leaf);
-    while let Some(i) = at {
-        if active[i] {
-            break;
-        }
-        active[i] = true;
-        let parent = text(&rows[i], "parentUuid").or_else(|| text(&rows[i], "logicalParentUuid"));
-        at = parent.and_then(|uuid| by_uuid.get(&uuid).copied());
-    }
-
-    let message_ids: std::collections::HashSet<String> = rows
-        .iter()
-        .zip(&active)
-        .filter(|(_, on)| **on)
-        .filter_map(|(row, _)| {
-            row.pointer("/message/id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .collect();
-    for (i, row) in rows.iter().enumerate() {
-        if in_tree(row)
-            && row.get("type").and_then(Value::as_str) == Some("assistant")
-            && row
-                .pointer("/message/id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| message_ids.contains(id))
-        {
-            active[i] = true;
-        }
-    }
-    let call_ids: std::collections::HashSet<&str> = rows
-        .iter()
-        .zip(&active)
-        .filter(|(_, on)| **on)
-        .filter_map(|(row, _)| row.pointer("/message/content").and_then(Value::as_array))
-        .flatten()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-        .filter_map(|block| block.get("id").and_then(Value::as_str))
-        .collect();
-    for (i, row) in rows.iter().enumerate() {
-        let answers_a_call = row
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-            .is_some_and(|blocks| {
-                blocks.iter().any(|block| {
-                    block
-                        .get("tool_use_id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| call_ids.contains(id))
-                })
-            });
-        if in_tree(row) && answers_a_call {
-            active[i] = true;
-        }
-    }
-
-    rows.iter()
-        .zip(active)
-        .map(|(row, on)| on || !in_tree(row))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -407,6 +151,30 @@ fn is_prompt_command(text: &str) -> bool {
     text.starts_with("<command-name>") || text.starts_with("<command-message>")
 }
 
+/// A prompt-type slash command is followed by an `isMeta` row containing the actual user prompt.
+fn with_command_context(
+    row: &Value,
+    mut class: Class,
+    text: Option<&str>,
+    after_prompt_command: &mut bool,
+) -> Class {
+    if matches!(class, Class::Meta(MetaKind::Command))
+        && *after_prompt_command
+        && truthy(row.get("isMeta"))
+        && text.is_some_and(|text| !is_command_row(text))
+    {
+        class = Class::User;
+    }
+    match &class {
+        Class::Meta(MetaKind::Command) => {
+            *after_prompt_command = text.is_some_and(is_prompt_command);
+        }
+        Class::Meta(_) => {}
+        _ => *after_prompt_command = false,
+    }
+    class
+}
+
 fn truthy(v: Option<&Value>) -> bool {
     matches!(v, Some(Value::Bool(true)))
 }
@@ -444,6 +212,7 @@ fn has_tool_result(row: &Value) -> bool {
 fn row_id(row: &Value, index: usize) -> String {
     row.get("uuid")
         .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| format!("row-{index}"))
 }
@@ -490,9 +259,9 @@ struct OpenCompaction {
 struct Builder {
     entries: Vec<Entry>,
     meta: MetaBuilder,
-    /// The step currently being appended to, if the last entry is one.
+    /// The step collecting blocks, including when bookkeeping or results arrived between them.
     open_step: Option<OpenStep>,
-    /// The results entry currently being appended to, if the last entry is one.
+    /// The current step's results, including when later blocks of that step are still arriving.
     open_results: Option<usize>,
     /// A boundary row waiting for its summary row.
     open_compaction: Option<OpenCompaction>,
@@ -563,7 +332,7 @@ impl Builder {
         self.meta.observe(&row);
         if truthy(row.get("isSidechain")) {
             // A subagent's transcript: kept, never conversation (§10 "not exercised").
-            self.flush();
+            self.flush_compaction();
             self.entries.push(Entry {
                 id: row_id(&row, index),
                 kind: Kind::Meta {
@@ -573,34 +342,25 @@ impl Builder {
             });
             return;
         }
-        let mut class = class_of(&row);
-        let text = content_text(&row);
-        if matches!(class, Class::Meta(MetaKind::Command))
-            && self.after_prompt_command
-            && truthy(row.get("isMeta"))
-            && text.as_deref().is_some_and(|text| !is_command_row(text))
-        {
-            class = Class::User;
-        }
-        match &class {
-            Class::Meta(MetaKind::Command) => {
-                self.after_prompt_command = text.as_deref().is_some_and(is_prompt_command);
-            }
-            Class::Meta(_) => {}
-            _ => self.after_prompt_command = false,
-        }
-        if !on_branch && !matches!(class, Class::Meta(_)) {
-            // A row of a branch the conversation left: kept, not resumed.
-            self.flush();
+        let class = class_of(&row);
+        if !on_branch {
+            // An abandoned row cannot change slash-command state or split an active response.
+            self.flush_compaction();
             self.entries.push(Entry {
                 id: row_id(&row, index),
                 kind: Kind::Meta {
-                    kind: MetaKind::OffBranch,
+                    kind: match class {
+                        Class::Meta(kind) => kind,
+                        _ => MetaKind::OffBranch,
+                    },
                 },
                 raw: vec![row],
             });
             return;
         }
+        let text = content_text(&row);
+        let class =
+            with_command_context(&row, class, text.as_deref(), &mut self.after_prompt_command);
         match class {
             Class::Assistant(message_id) => {
                 self.flush_unless_step(&message_id);
@@ -639,6 +399,11 @@ impl Builder {
                     kept_from: compact
                         .pointer("/preservedSegment/headUuid")
                         .and_then(Value::as_str)
+                        .or_else(|| {
+                            compact
+                                .pointer("/preservedMessages/uuids/0")
+                                .and_then(Value::as_str)
+                        })
                         .map(str::to_owned),
                 });
             }
@@ -697,7 +462,9 @@ impl Builder {
                 });
             }
             Class::Meta(kind) => {
-                self.flush();
+                // Bookkeeping is not a conversation boundary: a streaming response or its
+                // results may continue after it.
+                self.flush_compaction();
                 self.entries.push(Entry {
                     id: row_id(&row, index),
                     kind: Kind::Meta { kind },
@@ -711,6 +478,10 @@ impl Builder {
     fn flush(&mut self) {
         self.flush_step();
         self.open_results = None;
+        self.flush_compaction();
+    }
+
+    fn flush_compaction(&mut self) {
         if let Some(open) = self.open_compaction.take() {
             self.unsummarized = Some(self.entries.len());
             self.entries.push(Entry {
@@ -736,14 +507,12 @@ impl Builder {
             .as_ref()
             .is_some_and(|s| s.message_id == message_id)
         {
-            self.open_results = None;
             return;
         }
         self.flush();
     }
 
     fn flush_unless_results(&mut self) {
-        self.flush_step();
         if self.open_compaction.is_some() {
             self.flush();
         }
@@ -840,7 +609,9 @@ impl Builder {
                     }
                 }
             }
-            *end = step_end(row.pointer("/message/stop_reason").and_then(Value::as_str));
+            if let Some(stop) = row.pointer("/message/stop_reason").and_then(Value::as_str) {
+                *end = step_end(Some(stop));
+            }
         }
         entry.raw.push(row);
     }
@@ -878,24 +649,70 @@ impl Builder {
 
     fn finish(mut self, source_path: Option<&Path>) -> Result<Session> {
         self.flush();
-        // A compaction names the entry it kept by the source's own id. Resolve it; when the id is
-        // not an entry (Claude points at the *logical* leaf), fall back to the first conversation
-        // entry that follows the boundary.
-        let ids: Vec<String> = self.entries.iter().map(|e| e.id.clone()).collect();
-        for i in 0..self.entries.len() {
-            let Kind::Compaction { kept_from, .. } = &self.entries[i].kind else {
-                continue;
-            };
-            let kept = kept_from.clone();
-            let resolved = match &kept {
-                Some(id) if ids.contains(id) => Some(id.clone()),
-                _ => self.entries[i + 1..]
-                    .iter()
-                    .find(|e| !matches!(e.kind, Kind::Meta { .. }))
-                    .map(|e| e.id.clone()),
-            };
-            if let Kind::Compaction { kept_from, .. } = &mut self.entries[i].kind {
-                *kept_from = resolved;
+        // Resolve source UUIDs through merged records and the preserved list. When neither names a
+        // conversation entry, fall back to the first conversation entry after the boundary.
+        if self
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.kind, Kind::Compaction { .. }))
+        {
+            let mut aliases = std::collections::HashMap::new();
+            for (index, entry) in self.entries.iter().enumerate() {
+                aliases.insert(entry.id.clone(), index);
+                for row in &entry.raw {
+                    if let Some(id) = row.get("uuid").and_then(Value::as_str) {
+                        aliases.insert(id.to_owned(), index);
+                    }
+                }
+            }
+            let mut next = vec![None; self.entries.len() + 1];
+            for index in (0..self.entries.len()).rev() {
+                next[index] = if matches!(self.entries[index].kind, Kind::Meta { .. }) {
+                    next[index + 1]
+                } else {
+                    Some(index)
+                };
+            }
+            let resolved: Vec<_> = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    let Kind::Compaction { kept_from, .. } = &entry.kind else {
+                        return None;
+                    };
+                    // A preserved list may start with a bookkeeping sibling that is not itself on
+                    // the resumed chain. Prefer its first retained conversation row to a position
+                    // guessed from where that sibling happened to be written.
+                    let listed = entry
+                        .raw
+                        .iter()
+                        .find_map(|row| {
+                            row.pointer("/compactMetadata/preservedMessages/uuids")
+                                .and_then(Value::as_array)
+                        })
+                        .and_then(|ids| {
+                            ids.iter()
+                                .filter_map(Value::as_str)
+                                .filter_map(|id| aliases.get(id).copied())
+                                .find(|&at| !matches!(self.entries[at].kind, Kind::Meta { .. }))
+                        });
+                    let position = match kept_from.as_ref().and_then(|id| aliases.get(id)).copied()
+                    {
+                        Some(at) if matches!(self.entries[at].kind, Kind::Meta { .. }) => {
+                            listed.or(next[at])
+                        }
+                        Some(at) => Some(at),
+                        None => listed,
+                    }
+                    .or(next[index + 1]);
+                    Some((index, position.map(|at| self.entries[at].id.clone())))
+                })
+                .collect();
+            for (index, resolved) in resolved {
+                if let Kind::Compaction { kept_from, .. } = &mut self.entries[index].kind {
+                    *kept_from = resolved;
+                }
             }
         }
         let m = self.meta;

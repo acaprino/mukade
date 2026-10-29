@@ -164,16 +164,22 @@ was carried. See [section 4](#4-reading-the-receipt-and-the-manifest).
 
 ### A session that was rewound or branched
 
-*You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* The harness
-resumes only the branch of its latest entry, and so does mukade: the abandoned turns do not become
-history in the destination. They stay in the source untouched, and the manifest counts them
+*You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* Mukade reads the
+selected branch: the abandoned turns do not become history in the destination. They stay in the
+source untouched, and the manifest counts them
 (`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`, `custom_message` and `context_edit`
 entries reach the destination the way Pi shows them to its model.
 
-For Claude Code, a plain conversation or fully paired, linear tool calls flushed out of file order
-are ordered by `parentUuid`. Out-of-order chains with system records, compaction, split responses,
-recovered siblings or unchained conversation records are refused: they are not yet reconstructed.
-Missing parents and cycles are refused too.
+For Claude Code, `last-prompt.leafUuid` selects a checkpoint when present; a later continuation or
+a new user branch can supersede it when the checkpoint's leaf was already recorded before the
+checkpoint. A checkpoint flushed before its own leaf is not treated as a rewind ordering barrier.
+Without a checkpoint, the last non-sidechain user or assistant
+row selects the branch. Parent links and compaction metadata reconstruct its order; split responses
+and parallel results are grouped by message and call IDs, even if written late. A UUID-less block,
+result or compaction summary is recovered only when those identities establish its position.
+Missing parents, cycles, duplicate UUIDs, contradictory compaction metadata and genuinely ambiguous
+records are refused, not silently assigned to a branch. Real automatic compaction and rewind
+remain to be verified against Claude Code itself.
 
 Codex Desktop 0.165 keeps such a thread over two files: the earlier one, and a page that continues
 from part of it, which is what Codex resumes (redone again, a thread gets a further page that

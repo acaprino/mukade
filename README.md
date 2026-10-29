@@ -121,10 +121,11 @@ For a `hop`, `--expect-sha256 <hash>` refuses a source whose captured fingerprin
 the caller's. It compares the complete source selected by that read; it does not freeze an
 earlier prefix of a file that has since grown.
 
-Claude Code records flushed out of file order are reconstructed by their parent chain for plain
-conversations and fully paired, linear tool calls. Out-of-order chains containing system records,
-compaction, split responses, recovered siblings or unchained conversation records are refused
-rather than silently reordered; those cases still need full reconstruction support.
+Claude Code histories are reconstructed from the selected branch and its dependencies, even when
+compaction, split responses or parallel tool results were flushed out of file order. Records without
+a UUID are recovered when their response, call or compaction boundary identifies them unambiguously.
+Missing parents, cycles, conflicting identifiers and records that cannot be placed safely are
+refused rather than guessed. Automatic compaction and rewind on real sources remain unverified.
 
 When a destination write succeeds but its resume fails, `HopError::ResumeFailed` contains the written
 session's receipt and manifest, so callers can recover without blindly creating another session. The
