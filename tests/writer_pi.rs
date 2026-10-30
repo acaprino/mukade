@@ -10,17 +10,6 @@ use mukade::writer::for_harness;
 use serde_json::{Value, json};
 use std::path::Path;
 
-fn write_fixture(tag: &str) -> (mukade::writer::Written, Vec<Value>) {
-    let scratch = support::scratch(HarnessId::Pi, tag);
-    let session = support::read_source(HarnessId::Pi);
-    let opts = support::opts(HarnessId::Pi, &scratch);
-    let written = for_harness(HarnessId::Pi)
-        .write(&session, &opts)
-        .expect("write");
-    let rows = support::read_jsonl(Path::new(&written.location));
-    (written, rows)
-}
-
 fn messages(rows: &[Value]) -> Vec<&Value> {
     rows.iter().filter(|r| r["type"] == "message").collect()
 }
@@ -29,7 +18,7 @@ fn messages(rows: &[Value]) -> Vec<&Value> {
 /// own `toolResult` record — Pi otherwise inserts `No result provided` and sends the result twice.
 #[test]
 fn both_parallel_calls_are_in_one_assistant_message_with_one_result_each() {
-    let (_, rows) = write_fixture("writer-pi-grouping");
+    let (_, rows) = support::write_fixture(HarnessId::Pi, "writer-pi-grouping");
     let assistant = messages(&rows)
         .into_iter()
         .find(|r| r["message"]["role"] == "assistant")
@@ -75,7 +64,7 @@ fn both_parallel_calls_are_in_one_assistant_message_with_one_result_each() {
 
 #[test]
 fn the_session_file_lands_where_pi_looks_for_it() {
-    let (written, rows) = write_fixture("writer-pi-path");
+    let (written, rows) = support::write_fixture(HarnessId::Pi, "writer-pi-path");
     let path = written.location.replace('\\', "/");
     let project = pi_project_dir_name(std::path::Path::new(&support::cwd_for(HarnessId::Pi)));
     assert!(path.contains(&format!("/sessions/{project}/")), "{path}");
@@ -404,4 +393,56 @@ fn redacted_anthropic_reasoning_is_written_in_pis_redacted_shape() {
         .unwrap();
     assert_eq!(opaque.encrypted.as_deref(), Some("REDACTED-DATA"));
     assert_eq!(opaque.signature, None);
+}
+
+/// A caller that reserved a destination id and path gets exactly those, and a second write to the
+/// same reserved file is refused instead of overwriting it.
+#[test]
+fn a_file_writer_honors_a_reserved_destination_and_refuses_to_overwrite_it() {
+    let scratch = support::scratch(HarnessId::Pi, "writer-pi-reserved");
+    let source = support::read_source(HarnessId::OpenCode);
+    let reserved_id = "00000000-0000-4000-8000-000000000001";
+    let reserved_path = scratch.join("home").join("sessions").join("reserved.jsonl");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.dest_id = Some(reserved_id.into());
+    opts.dest_path = Some(reserved_path.clone());
+    let planned = mukade::writer::plan::plan(&source, HarnessId::Pi, &opts);
+    let writer = for_harness(HarnessId::Pi);
+    let written = writer.write_planned(&source, &planned, &opts).unwrap();
+    assert_eq!(written.id, reserved_id);
+    assert_eq!(Path::new(&written.location), reserved_path);
+    assert!(
+        writer.write_planned(&source, &planned, &opts).is_err(),
+        "a reserved file is never overwritten"
+    );
+}
+
+/// A reserved file the caller names outside the destination root, or through `..`, would write a
+/// session where its harness never looks for one: it is refused before anything is written.
+#[test]
+fn a_reserved_destination_outside_the_root_is_refused() {
+    let scratch = support::scratch(HarnessId::Pi, "writer-pi-outside-root");
+    let source = support::read_source(HarnessId::OpenCode);
+    let writer = for_harness(HarnessId::Pi);
+    let root = scratch.join("home");
+    let cases = [
+        ("outside the root", scratch.join("outside.jsonl")),
+        (
+            "through a parent",
+            root.join("sessions").join("..").join("escape.jsonl"),
+        ),
+    ];
+    for (what, path) in cases {
+        let mut opts = support::opts(HarnessId::Pi, &scratch);
+        opts.dest_path = Some(path.clone());
+        let planned = mukade::writer::plan::plan(&source, HarnessId::Pi, &opts);
+        let error = writer
+            .write_planned(&source, &planned, &opts)
+            .expect_err(what);
+        assert!(
+            error.to_string().contains("dest-path"),
+            "{what}: {error}"
+        );
+        assert!(!path.exists(), "{what}: nothing was written");
+    }
 }

@@ -7,17 +7,6 @@ use mukade::writer::for_harness;
 use serde_json::Value;
 use std::path::Path;
 
-fn write_fixture(tag: &str) -> (mukade::writer::Written, Vec<Value>) {
-    let scratch = support::scratch(HarnessId::Codex, tag);
-    let session = support::read_source(HarnessId::Codex);
-    let opts = support::opts(HarnessId::Codex, &scratch);
-    let written = for_harness(HarnessId::Codex)
-        .write(&session, &opts)
-        .expect("write");
-    let rows = support::read_jsonl(Path::new(&written.location));
-    (written, rows)
-}
-
 /// The first payload of a given `type`.
 fn payload(rows: &[Value], kind: &str) -> Value {
     rows.iter()
@@ -37,7 +26,7 @@ fn payloads(rows: &[Value], kind: &str) -> Vec<Value> {
 /// L7: `session_meta` carries Codex's own fields, with the **destination's** version and provider.
 #[test]
 fn session_meta_states_the_destination_and_never_the_source() {
-    let (written, rows) = write_fixture("writer-codex-meta");
+    let (written, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-meta");
     let meta = &rows[0];
     assert_eq!(meta["type"], "session_meta", "the rollout starts with it");
     let payload = &meta["payload"];
@@ -93,7 +82,7 @@ fn a_git_branch_is_carried_when_the_source_has_one() {
 
 #[test]
 fn the_rollout_lands_in_the_date_folder_codex_scans() {
-    let (written, _) = write_fixture("writer-codex-path");
+    let (written, _) = support::write_fixture(HarnessId::Codex, "writer-codex-path");
     let path = written.location.replace('\\', "/");
     assert!(path.contains("/sessions/2026/10/27/"), "{path}");
     assert!(
@@ -113,7 +102,7 @@ fn the_rollout_lands_in_the_date_folder_codex_scans() {
 /// L7: a writer must not leave a stale `threads` row behind. It writes no SQLite at all.
 #[test]
 fn no_database_is_touched() {
-    let (written, _) = write_fixture("writer-codex-nodb");
+    let (written, _) = support::write_fixture(HarnessId::Codex, "writer-codex-nodb");
     let home = Path::new(&written.location)
         .ancestors()
         .nth(5)
@@ -139,7 +128,7 @@ fn no_database_is_touched() {
 
 #[test]
 fn the_conversation_is_response_items_with_a_turn_context_per_step() {
-    let (_, rows) = write_fixture("writer-codex-items");
+    let (_, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-items");
     let contexts = rows.iter().filter(|r| r["type"] == "turn_context").count();
     assert_eq!(contexts, 4, "one turn per model step");
     assert_eq!(payload(&rows, "message")["role"], "user");
@@ -164,7 +153,7 @@ fn the_conversation_is_response_items_with_a_turn_context_per_step() {
 
 #[test]
 fn calls_and_results_are_paired_by_call_id() {
-    let (_, rows) = write_fixture("writer-codex-tools");
+    let (_, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-tools");
     let calls = payloads(&rows, "function_call");
     assert_eq!(calls.len(), 2, "both parallel calls");
     // The source's commands ran in the shell its environment block names (powershell), so the

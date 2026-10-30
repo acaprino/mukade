@@ -12,12 +12,10 @@ use mukade::reader::codex;
 use serde_json::Value;
 use std::path::PathBuf;
 
-const ROLLOUT: &str = "rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl";
+mod support;
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/codex/source")
-        .join(ROLLOUT)
+    support::source_path(HarnessId::Codex)
 }
 
 fn read() -> Session {
@@ -26,16 +24,6 @@ fn read() -> Session {
 
 fn conversation(s: &Session) -> Vec<&mukade::model::Entry> {
     s.conversation().collect()
-}
-
-fn kind_name(k: &Kind) -> &'static str {
-    match k {
-        Kind::User { .. } => "user",
-        Kind::Step { .. } => "step",
-        Kind::Results { .. } => "results",
-        Kind::Compaction { .. } => "compaction",
-        Kind::Meta { .. } => "meta",
-    }
 }
 
 #[test]
@@ -99,7 +87,7 @@ fn conversation_is_the_expected_entry_sequence() {
     let s = read();
     let kinds: Vec<&str> = conversation(&s)
         .iter()
-        .map(|e| kind_name(&e.kind))
+        .map(|e| support::kind_name(&e.kind))
         .collect();
     assert_eq!(
         kinds,

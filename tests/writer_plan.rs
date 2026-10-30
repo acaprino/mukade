@@ -72,6 +72,47 @@ fn read_call(id: &str) -> ToolCall {
     }
 }
 
+/// A structured result a destination flattens loses the blocks it has no shape for, and the
+/// manifest says so: a count with a matching loss line, never a silent drop.
+#[test]
+fn flattened_structured_results_are_counted_and_reported() {
+    let mut s = session(vec![step(
+        "e1",
+        vec![ToolCall {
+            id: "call-1".into(),
+            source_name: "Read".into(),
+            canonical: None,
+            input: json!({}),
+        }],
+    )]);
+    s.entries.push(Entry {
+        id: "e2".into(),
+        kind: Kind::Results {
+            results: vec![ToolResult {
+                call_id: "call-1".into(),
+                content: ResultContent::Blocks(vec![
+                    json!({"type": "text", "text": "kept"}),
+                    json!({"type": "image", "data": "not-text"}),
+                ]),
+                is_error: false,
+                truncated_by_source: false,
+            }],
+        },
+        raw: Vec::new(),
+    });
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-flattened-result");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(plan.counts.dropped_result_blocks, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses
+            .iter()
+            .any(|loss| loss.contains("structured tool-result blocks")),
+        "{losses:?}"
+    );
+}
+
 /// §7: a provider refuses a `tool_use` that the next message does not answer, so a call the source
 /// never answered is written as text — with its id — and counted.
 #[test]

@@ -17,12 +17,12 @@ use mukade::model::{
 use mukade::reader::claude_code;
 use std::path::PathBuf;
 
+mod support;
+
 const SESSION_ID: &str = "c45db7bc-542c-4201-89de-b590c6fdb797";
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/claude_code/source")
-        .join(format!("{SESSION_ID}.jsonl"))
+    support::source_path(HarnessId::ClaudeCode)
 }
 
 fn read() -> Session {
@@ -31,16 +31,6 @@ fn read() -> Session {
 
 fn conversation(s: &Session) -> Vec<&Entry> {
     s.conversation().collect()
-}
-
-fn kind_name(k: &Kind) -> &'static str {
-    match k {
-        Kind::User { .. } => "user",
-        Kind::Step { .. } => "step",
-        Kind::Results { .. } => "results",
-        Kind::Compaction { .. } => "compaction",
-        Kind::Meta { .. } => "meta",
-    }
 }
 
 #[test]
@@ -97,7 +87,7 @@ fn conversation_is_the_expected_entry_sequence() {
     let s = read();
     let kinds: Vec<&str> = conversation(&s)
         .iter()
-        .map(|e| kind_name(&e.kind))
+        .map(|e| support::kind_name(&e.kind))
         .collect();
     assert_eq!(
         kinds,
@@ -130,7 +120,7 @@ fn parallel_calls_stay_in_one_step() {
         model,
     } = &conv[1].kind
     else {
-        panic!("expected a Step, got {}", kind_name(&conv[1].kind))
+        panic!("expected a Step, got {}", support::kind_name(&conv[1].kind))
     };
     assert_eq!(reasoning.len(), 1);
     assert_eq!(text, &vec!["H27-PRE: reading the files.".to_string()]);
@@ -603,7 +593,8 @@ fn an_internal_row_between_boundary_and_summary_keeps_the_summary() {
 #[test]
 fn a_cut_off_last_line_and_a_byte_order_mark_do_not_stop_the_read() {
     let text = std::fs::read_to_string(fixture()).unwrap();
-    let file = std::env::temp_dir().join(format!("mukade-cut-off-{}.jsonl", std::process::id()));
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-cut-off");
+    let file = scratch.join("session.jsonl");
     std::fs::write(
         &file,
         format!(
@@ -613,7 +604,6 @@ fn a_cut_off_last_line_and_a_byte_order_mark_do_not_stop_the_read() {
     )
     .unwrap();
     let s = claude_code::read_file(&file).unwrap();
-    let _ = std::fs::remove_file(&file);
     assert!(matches!(
         s.entries.last().unwrap().kind,
         Kind::Meta {
@@ -621,4 +611,101 @@ fn a_cut_off_last_line_and_a_byte_order_mark_do_not_stop_the_read() {
         }
     ));
     assert_eq!(s.conversation().count(), read().conversation().count());
+}
+
+/// Rows written out of file order are ordered by the parent chain, not by their line numbers: a
+/// resumed branch wins over the position a row happens to occupy.
+#[test]
+fn a_claude_branch_with_out_of_order_rows_follows_its_parent_chain() {
+    use serde_json::json;
+    let user = |uuid: &str, parent: serde_json::Value, text: &str| {
+        json!({
+            "type":"user", "uuid":uuid, "parentUuid":parent, "isSidechain":false,
+            "message":{"role":"user", "content":text}
+        })
+    };
+    let assistant = |uuid: &str, parent: &str, text: &str| {
+        json!({
+            "type":"assistant", "uuid":uuid, "parentUuid":parent, "isSidechain":false,
+            "message":{"id":format!("msg-{uuid}"), "role":"assistant", "model":"synthetic",
+                       "content":[{"type":"text", "text":text}], "stop_reason":"end_turn"}
+        })
+    };
+    let rows = vec![
+        user("u2", json!("a1"), "SECOND"),
+        user("u1", serde_json::Value::Null, "FIRST"),
+        assistant("a1", "u1", "ANSWER1"),
+        assistant("a2", "u2", "ANSWER2"),
+    ];
+    let session = claude_code::parse(&rows, None).unwrap();
+    let turns: Vec<String> = session
+        .conversation()
+        .filter_map(|entry| match &entry.kind {
+            Kind::User { text, .. } => Some(text.clone()),
+            Kind::Step { text, .. } => Some(text.join("")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns, ["FIRST", "ANSWER1", "SECOND", "ANSWER2"]);
+}
+
+/// A tool call and its result stay paired when their rows are written out of order, and the next
+/// prompt follows the result rather than the file position.
+#[test]
+fn out_of_order_claude_tool_history_follows_the_parent_chain() {
+    use serde_json::json;
+    let rows = vec![
+        json!({"type":"user", "uuid":"u2", "parentUuid":"r1", "message":{"role":"user", "content":"next"}}),
+        json!({"type":"user", "uuid":"u1", "parentUuid":null, "message":{"role":"user", "content":"first"}}),
+        json!({"type":"assistant", "uuid":"a1", "parentUuid":"u1", "message":{"id":"m1", "role":"assistant", "content":[{"type":"tool_use", "id":"call1", "name":"Read", "input":{}}]}}),
+        json!({"type":"user", "uuid":"r1", "parentUuid":"a1", "message":{"role":"user", "content":[{"type":"tool_result", "tool_use_id":"call1", "content":"result"}]}}),
+        json!({"type":"assistant", "uuid":"a2", "parentUuid":"u2", "message":{"id":"m2", "role":"assistant", "content":[{"type":"text", "text":"done"}]}}),
+    ];
+    let session = claude_code::parse(&rows, None).unwrap();
+    let entries: Vec<&Entry> = session.conversation().collect();
+    assert_eq!(entries.len(), 5);
+    assert!(matches!(&entries[0].kind, Kind::User { text, .. } if text == "first"));
+    assert!(
+        matches!(&entries[1].kind, Kind::Step { calls, .. } if calls.len() == 1 && calls[0].id == "call1")
+    );
+    assert!(
+        matches!(&entries[2].kind, Kind::Results { results } if results.len() == 1 && results[0].call_id == "call1")
+    );
+    assert!(matches!(&entries[3].kind, Kind::User { text, .. } if text == "next"));
+    assert!(matches!(&entries[4].kind, Kind::Step { text, .. } if text == &["done"]));
+}
+
+/// A parent that is not in the file, or a cycle in the chain, is refused: the reader does not
+/// guess a history it cannot reconstruct.
+#[test]
+fn a_dangling_or_cyclic_claude_chain_is_refused() {
+    use serde_json::json;
+    let missing = vec![
+        json!({"type":"user", "uuid":"u1", "parentUuid":"missing", "message":{"role":"user", "content":"hello"}}),
+    ];
+    let error = claude_code::parse(&missing, None).unwrap_err();
+    assert!(
+        error.to_string().contains("missing Claude Code parent"),
+        "{error}"
+    );
+    let cycle = vec![
+        json!({"type":"user", "uuid":"u1", "parentUuid":"a1", "message":{"role":"user", "content":"hello"}}),
+        json!({"type":"assistant", "uuid":"a1", "parentUuid":"u1", "message":{"id":"m1", "role":"assistant", "content":[{"type":"text", "text":"answer"}]}}),
+    ];
+    let error = claude_code::parse(&cycle, None).unwrap_err();
+    assert!(error.to_string().contains("cycle"), "{error}");
+}
+
+/// A malformed tool call in an out-of-order chain is an error, never silently accepted.
+#[test]
+fn an_out_of_order_chain_with_a_malformed_tool_is_not_silently_accepted() {
+    use serde_json::json;
+    let rows = vec![
+        json!({"type":"user", "uuid":"u2", "parentUuid":"r1", "message":{"role":"user", "content":"next"}}),
+        json!({"type":"user", "uuid":"u1", "parentUuid":null, "message":{"role":"user", "content":"first"}}),
+        json!({"type":"assistant", "uuid":"a1", "parentUuid":"u1", "message":{"id":"m1", "role":"assistant", "content":[{"type":"tool_use", "id":"call1", "input":{}}]}}),
+        json!({"type":"user", "uuid":"r1", "parentUuid":"a1", "message":{"role":"user", "content":[{"type":"tool_result", "tool_use_id":"call1", "content":"result"}]}}),
+        json!({"type":"assistant", "uuid":"a2", "parentUuid":"u2", "message":{"id":"m2", "role":"assistant", "content":[{"type":"text", "text":"done"}]}}),
+    ];
+    assert!(claude_code::parse(&rows, None).is_err());
 }

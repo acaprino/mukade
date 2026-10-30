@@ -1,13 +1,13 @@
 //! The hop pipeline (§1): read, plan, check, write, and say what happened.
 //!
 //! The source is the bench's own fixture, staged where its harness's reader looks for it; every
-//! store root points inside a scratch directory under the system temporary folder.
+//! store root points inside a scratch directory under Cargo's target tmp.
 
 mod support;
 
 use mukade::hop::{
-    self, Compaction, HopError, HopRequest, KeepFrom, SessionRef, SourceFacts, SummarySource,
-    WriteDetails,
+    self, Compaction, HopError, HopRequest, KeepFrom, ResumePrompt, SessionRef, SourceFacts,
+    SummarySource,
 };
 use mukade::model::{HarnessId, Kind, Session};
 use mukade::roots::StoreRoots;
@@ -15,58 +15,17 @@ use mukade::summary;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-const CLAUDE_ID: &str = "c45db7bc-542c-4201-89de-b590c6fdb797";
-const CODEX_ID: &str = "01a17e07-93f7-7a73-85c7-9f0205836600";
-
-fn source_id(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => CLAUDE_ID,
-        HarnessId::Codex => CODEX_ID,
-        HarnessId::OpenCode => "ses_e82023514ffe02y4T8OoUu99VZ",
-        HarnessId::Pi => "01a17e17-9f07-743d-8072-8b3b13d65ab5",
-    }
-}
-
-/// Copy a harness's fixture into the store layout its reader expects.
-fn stage(harness: HarnessId, scratch: &Path) {
-    let home = scratch.join("home");
-    let text = std::fs::read_to_string(support::source_path(harness)).expect("read the fixture");
-    let file = match harness {
-        HarnessId::ClaudeCode => home
-            .join("projects")
-            .join("claude-project")
-            .join(format!("{CLAUDE_ID}.jsonl")),
-        HarnessId::Codex => home
-            .join("sessions")
-            .join("2026")
-            .join("10")
-            .join("27")
-            .join(format!("rollout-2026-10-27T16-43-08-{CODEX_ID}.jsonl")),
-        HarnessId::Pi => home
-            .join("sessions")
-            .join("--pi-project--")
-            .join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
-        HarnessId::OpenCode => home.join("opencode-sessions.json"),
-    };
-    std::fs::create_dir_all(file.parent().unwrap()).expect("create the store directory");
-    std::fs::write(file, text).expect("stage the fixture");
-}
+use support::{read_destination, snapshot, source_id, stage_fixture, user_texts, written_text};
 
 /// One scratch root for both sides of the hop.
 fn roots(scratch: &Path) -> StoreRoots {
-    let home = scratch.join("home");
-    StoreRoots {
-        claude_config_dir: Some(home.clone()),
-        codex_home: Some(home.clone()),
-        opencode_db: Some(home.join("opencode.db")),
-        pi_agent_dir: Some(home),
-    }
+    support::roots(scratch)
 }
 
 /// A request that reads the harness's fixture from a scratch store and writes it into `dest`.
 fn request(source: HarnessId, dest: HarnessId, tag: &str) -> (HopRequest, PathBuf) {
     let scratch = support::scratch(dest, tag);
-    stage(source, &scratch);
+    stage_fixture(source, &scratch);
     let opts = support::opts(dest, &scratch);
     let request = HopRequest {
         source: SessionRef::id(source, source_id(source)),
@@ -76,56 +35,9 @@ fn request(source: HarnessId, dest: HarnessId, tag: &str) -> (HopRequest, PathBu
         resume: None,
         reasoning: opts.reasoning,
         roots: roots(&scratch),
-        write: WriteDetails {
-            dest_version: opts.dest_version,
-            dest_protocol: opts.dest_protocol,
-            dest_shell: opts.dest_shell,
-            offered: opts.offered,
-            model_provider: opts.model_provider,
-            model: opts.model,
-            project_id: opts.project_id,
-            dest_id: opts.dest_id,
-            dest_path: opts.dest_path,
-            dest_agent: opts.dest_agent,
-            metadata: opts.metadata,
-            tool_map: opts.tool_map,
-            without_tools: opts.without_tools,
-            now: opts.now,
-            exe: opts.exe,
-        },
+        write: support::details(&opts),
     };
     (request, scratch)
-}
-
-fn read_destination(harness: HarnessId, location: &str) -> Session {
-    let path = Path::new(location);
-    match harness {
-        HarnessId::ClaudeCode => mukade::reader::claude_code::read_file(path),
-        HarnessId::Codex => mukade::reader::codex::read_file(path),
-        HarnessId::OpenCode => mukade::reader::opencode::read_file(path),
-        HarnessId::Pi => mukade::reader::pi::read_file(path),
-    }
-    .expect("the destination session must read back")
-}
-
-fn user_texts(session: &Session) -> Vec<String> {
-    session
-        .conversation()
-        .filter_map(|entry| match &entry.kind {
-            Kind::User { text, .. } => Some(text.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn written_text(session: &Session) -> String {
-    session
-        .entries
-        .iter()
-        .flat_map(|entry| entry.raw.clone())
-        .map(|record| record.to_string())
-        .collect::<Vec<String>>()
-        .join("\n")
 }
 
 #[test]
@@ -135,7 +47,7 @@ fn a_hop_reads_the_source_writes_the_destination_and_reports_a_manifest() {
 
     let manifest: &Value = &receipt.manifest;
     assert_eq!(manifest["source"]["harness"], "claude_code");
-    assert_eq!(manifest["source"]["session_id"], CLAUDE_ID);
+    assert_eq!(manifest["source"]["session_id"], source_id(HarnessId::ClaudeCode));
     assert_eq!(manifest["source"]["version"], "2.1.311");
     assert_eq!(
         manifest["source"]["content_sha256"].as_str().unwrap().len(),
@@ -170,7 +82,7 @@ fn a_hop_reads_the_source_writes_the_destination_and_reports_a_manifest() {
     );
 
     // The destination session is new, and it holds the conversation the source had.
-    assert_ne!(receipt.dest_id, CLAUDE_ID);
+    assert_ne!(receipt.dest_id, source_id(HarnessId::ClaudeCode));
     let written = read_destination(HarnessId::Pi, &receipt.location);
     let source = support::read_source(HarnessId::ClaudeCode);
     assert_eq!(
@@ -219,6 +131,12 @@ fn portable_carries_the_source_summary_and_the_tail_from_its_boundary() {
         handoff.contains(summary.trim()),
         "the source's own summary travels, verbatim:\n{handoff}"
     );
+    let probe: String = summary.trim().chars().take(60).collect();
+    assert_eq!(
+        held.matches(&probe).count(),
+        1,
+        "the summary travels once, in the handoff: {probe}"
+    );
     let tail = tail.join("\n");
     assert!(
         !tail.contains("H27-TOOLS") && !tail.contains("H27-T2"),
@@ -251,6 +169,56 @@ fn portable_can_keep_only_the_last_turns() {
     let texts = user_texts(&written);
     assert_eq!(texts.len(), 2, "the handoff plus one user turn: {texts:?}");
     assert_eq!(texts[1], "H27-HANG", "the last turn is the one kept");
+}
+
+/// A tail can start at a named entry, by its id or by an unambiguous prefix: the handoff, then
+/// that entry and everything after it.
+#[test]
+fn a_portable_tail_can_start_at_a_named_entry() {
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let (index, id) = source
+        .entries
+        .iter()
+        .enumerate()
+        .find(|(_, entry)| matches!(&entry.kind, Kind::User { text, .. } if text.starts_with("H27-T3")))
+        .map(|(index, entry)| (index, entry.id.clone()))
+        .expect("the fixture's T3 turn");
+    for named in [id.clone(), id[..8].to_string()] {
+        let compaction = Compaction::Portable {
+            summary: SummarySource::Supplied("earlier turns".into()),
+            keep_from: KeepFrom::Message(named.clone()),
+        };
+        let (selection, facts) =
+            hop::compact(&source, &compaction, &StoreRoots::default()).expect("compact");
+        assert!(facts.is_none());
+        assert_eq!(selection.entries[0].id, "portable-handoff");
+        assert_eq!(selection.entries[1].id, id, "the tail starts at {named}");
+        assert_eq!(selection.entries.len(), 1 + source.entries.len() - index);
+    }
+}
+
+/// An id prefix that names more than one entry is refused, never resolved by position.
+#[test]
+fn an_ambiguous_entry_prefix_is_refused() {
+    let mut source = support::read_source(HarnessId::Pi);
+    source.entries = ["entry-a", "entry-b"]
+        .into_iter()
+        .map(|id| mukade::model::Entry {
+            id: id.into(),
+            kind: Kind::User {
+                text: id.into(),
+                attachments: Vec::new(),
+            },
+            raw: Vec::new(),
+        })
+        .collect();
+    let compaction = Compaction::Portable {
+        summary: SummarySource::Supplied("earlier turns".into()),
+        keep_from: KeepFrom::Message("entry-".into()),
+    };
+    let error = hop::compact(&source, &compaction, &StoreRoots::default()).expect_err("ambiguous");
+    assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
+    assert!(error.to_string().contains("ambiguous"), "{error}");
 }
 
 #[test]
@@ -287,22 +255,6 @@ fn a_source_that_is_not_there_is_a_refusal_not_a_failure() {
         2,
         "nothing was written, the caller may retry"
     );
-}
-
-#[test]
-fn the_source_facts_are_a_fingerprint_of_the_records() {
-    let source = support::read_source(HarnessId::Codex);
-    let facts = SourceFacts::of(&source);
-    assert_eq!(facts.harness, "codex");
-    assert_eq!(facts.session_id, CODEX_ID);
-    assert_eq!(facts.content_sha256.len(), 64);
-    assert_eq!(
-        facts,
-        SourceFacts::of(&support::read_source(HarnessId::Codex)),
-        "stable"
-    );
-    let other = SourceFacts::of(&support::read_source(HarnessId::Pi));
-    assert_ne!(facts.content_sha256, other.content_sha256);
 }
 
 /// §5: the resume command is the destination's own, and the prompt is the last argument.
@@ -417,26 +369,6 @@ fn a_timed_out_resume_stops_the_harness_behind_its_launcher() {
     );
 }
 
-/// §4.2: the source's summary travels once, in the handoff; the source's own compaction record in
-/// the tail is not written a second time.
-#[test]
-fn portable_writes_the_source_summary_once() {
-    let (mut request, _) = request(HarnessId::ClaudeCode, HarnessId::Pi, "hop-portable-once");
-    request.compaction = Compaction::Portable {
-        summary: SummarySource::SourceRecord,
-        keep_from: KeepFrom::SourceBoundary,
-    };
-    let receipt = hop::hop(&request).expect("the hop must complete");
-    let written = read_destination(HarnessId::Pi, &receipt.location);
-    let source = support::read_source(HarnessId::ClaudeCode);
-    let summary = match source.last_compaction().map(|entry| &entry.kind) {
-        Some(Kind::Compaction { summary, .. }) => summary.clone(),
-        other => panic!("the fixture must hold a compaction, found {other:?}"),
-    };
-    let probe: String = summary.trim().chars().take(60).collect();
-    assert_eq!(written_text(&written).matches(&probe).count(), 1, "{probe}");
-}
-
 /// Keeping no turns keeps none: only the handoff travels.
 #[test]
 fn portable_with_no_turns_keeps_only_the_handoff() {
@@ -448,25 +380,6 @@ fn portable_with_no_turns_keeps_only_the_handoff() {
     let receipt = hop::hop(&request).expect("the hop must complete");
     let written = read_destination(HarnessId::Pi, &receipt.location);
     assert_eq!(user_texts(&written).len(), 1, "{:?}", user_texts(&written));
-}
-
-/// Every file under a directory, with its bytes and modification time.
-fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                let modified = entry.metadata().unwrap().modified().unwrap();
-                out.push((path.clone(), std::fs::read(&path).unwrap(), modified));
-            }
-        }
-    }
-    out.sort();
-    out
 }
 
 /// §1.3: a hop into the source's own harness and project writes a new session beside the source
@@ -491,10 +404,27 @@ fn a_hop_into_the_same_harness_leaves_the_source_untouched() {
     assert_ne!(Path::new(&receipt.location), before[0].0);
 }
 
-/// SourceFacts fingerprint the source's own records: SHA-256 over each record's compact JSON, one
-/// per line (the expected digest computed with Python's hashlib).
+/// SourceFacts fingerprint the source's own records: the harness and session id it read, and a
+/// SHA-256 over each record's compact JSON, one per line (the expected digest computed with
+/// Python's hashlib). The fingerprint is stable across reads, and differs between sessions.
 #[test]
-fn the_source_fingerprint_is_the_digest_of_its_records() {
+fn the_source_facts_fingerprint_the_records_stably() {
+    let source = support::read_source(HarnessId::Codex);
+    let facts = SourceFacts::of(&source);
+    assert_eq!(facts.harness, "codex");
+    assert_eq!(facts.session_id, source_id(HarnessId::Codex));
+    assert_eq!(facts.content_sha256.len(), 64);
+    assert_eq!(
+        facts,
+        SourceFacts::of(&support::read_source(HarnessId::Codex)),
+        "stable"
+    );
+    assert_ne!(
+        facts.content_sha256,
+        SourceFacts::of(&support::read_source(HarnessId::Pi)).content_sha256,
+        "two sessions do not share a fingerprint"
+    );
+
     let mut session = support::read_source(HarnessId::Pi);
     // A session with no file digest (built by hand, or from a document) is fingerprinted by its
     // records.
@@ -659,4 +589,237 @@ fn a_model_summary_hop_says_where_the_summary_came_from() {
 #[test]
 fn a_failed_summary_is_a_failure_where_nothing_changed() {
     assert_eq!(HopError::SummaryFailed("x".into()).exit_code(), 4);
+}
+
+/// §4.4: a file source compacted by `--compaction portable` goes through the same selection as a
+/// store source, and the manifest counts the messages the cut left out.
+#[test]
+fn file_compaction_uses_the_same_selection_and_accurate_manifest() {
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let scratch = support::scratch(HarnessId::Pi, "hop-file-compaction");
+    let write_opts = support::opts(HarnessId::Pi, &scratch);
+    let compaction = Compaction::Portable {
+        summary: SummarySource::SourceRecord,
+        keep_from: KeepFrom::SourceBoundary,
+    };
+    let mut opts = support::import_opts(&write_opts, &source, None);
+    opts.compaction = compaction.name().into();
+    let receipt = hop::hop_session(HarnessId::Pi, &source, &compaction, &opts).unwrap();
+    assert!(
+        receipt.manifest["counts"]["messages_in"].as_u64().unwrap()
+            < source.conversation().count() as u64
+    );
+    assert_eq!(receipt.manifest["options"]["compaction"], "portable");
+}
+
+/// A boundary that names a record not in the conversation cannot say where the tail starts: the
+/// hop refuses instead of guessing.
+#[test]
+fn an_ambiguous_compaction_boundary_is_refused() {
+    let mut source = support::read_source(HarnessId::ClaudeCode);
+    source.entries.retain(|entry| matches!(entry.kind, Kind::Meta { .. }));
+    source.entries.push(mukade::model::Entry {
+        id: "compact".into(),
+        kind: Kind::Compaction {
+            summary: "summary".into(),
+            kept_from: Some("entry".into()),
+            trigger: Default::default(),
+            tokens_before: None,
+        },
+        raw: Vec::new(),
+    });
+    for text in ["a", "b"] {
+        source.entries.push(mukade::model::Entry {
+            id: format!("entry-{text}"),
+            kind: Kind::User {
+                text: text.into(),
+                attachments: Vec::new(),
+            },
+            raw: Vec::new(),
+        });
+    }
+    let scratch = support::scratch(HarnessId::Pi, "hop-ambiguous-boundary");
+    let write_opts = support::opts(HarnessId::Pi, &scratch);
+    let compaction = Compaction::Portable {
+        summary: SummarySource::SourceRecord,
+        keep_from: KeepFrom::SourceBoundary,
+    };
+    let opts = support::import_opts(&write_opts, &source, None);
+    let error =
+        hop::hop_session(HarnessId::Pi, &source, &compaction, &opts).expect_err("ambiguous");
+    assert!(matches!(error, HopError::Unsupported(_)), "{error}");
+}
+
+/// §5: a resume that fails after the write still hands back the receipt and the manifest, so the
+/// caller can recover without writing the session again.
+#[test]
+fn resume_failure_returns_the_written_receipt_and_manifest() {
+    let source = support::read_source(HarnessId::Pi);
+    let scratch = support::scratch(HarnessId::Pi, "hop-resume-failure");
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut write_opts = support::opts(HarnessId::Pi, &scratch);
+    write_opts.cwd = Some(work.to_string_lossy().into_owned());
+    write_opts.exe = Some(
+        support::launcher(&scratch.join("bin"), "pi", "exit /b 3", "exit 3")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let resume = ResumePrompt::new("hello").with_timeout(std::time::Duration::from_secs(10));
+    let opts = support::import_opts(&write_opts, &source, Some(resume));
+    let error = hop::import(HarnessId::Pi, &source, &opts).expect_err("the launcher fails");
+    let HopError::ResumeFailed { receipt, .. } = error else {
+        panic!("wrong failure: {error:?}")
+    };
+    assert!(!receipt.dest_id.is_empty());
+    assert!(Path::new(&receipt.location).exists());
+    assert!(
+        receipt.manifest["losses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|loss| loss.as_str().unwrap().contains("resume prompt"))
+    );
+}
+
+/// §5: the destination resumes from the session's own working directory, not from wherever the
+/// caller happens to run.
+#[test]
+fn a_resume_runs_in_the_sessions_working_directory() {
+    let source = support::read_source(HarnessId::Pi);
+    let scratch = support::scratch(HarnessId::Pi, "hop-resume-cwd");
+    // A name the test process's own working directory does not contain.
+    let work = scratch.join("resume-runs-here");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut write_opts = support::opts(HarnessId::Pi, &scratch);
+    write_opts.cwd = Some(work.to_string_lossy().into_owned());
+    write_opts.exe = Some(
+        support::launcher(&scratch.join("bin"), "pi", "echo %CD%", "pwd")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let opts = support::import_opts(&write_opts, &source, Some(ResumePrompt::new("hello")));
+    let receipt = hop::import(HarnessId::Pi, &source, &opts).unwrap();
+    let output = receipt.resume_output.unwrap();
+    assert!(
+        output.contains("resume-runs-here"),
+        "the resume ran in {output:?}"
+    );
+}
+
+/// §5: the destination resumes against the store the session was written to, not whatever the
+/// caller's own environment names.
+#[test]
+fn a_resume_uses_the_store_it_was_written_to() {
+    let source = support::read_source(HarnessId::Pi);
+    let scratch = support::scratch(HarnessId::Pi, "hop-resume-store");
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut write_opts = support::opts(HarnessId::Pi, &scratch);
+    write_opts.cwd = Some(work.to_string_lossy().into_owned());
+    write_opts.exe = Some(
+        support::launcher(
+            &scratch.join("bin"),
+            "pi",
+            "echo store=%PI_CODING_AGENT_DIR%",
+            "echo store=$PI_CODING_AGENT_DIR",
+        )
+        .to_string_lossy()
+        .into_owned(),
+    );
+    let opts = support::import_opts(&write_opts, &source, Some(ResumePrompt::new("hello")));
+    let output = hop::import(HarnessId::Pi, &source, &opts)
+        .unwrap()
+        .resume_output
+        .unwrap();
+    let home = scratch.join("home").to_string_lossy().into_owned();
+    assert!(output.contains(&home), "{output:?} should name {home}");
+}
+
+/// A resume prompt the destination would misread is refused before anything is written: one that
+/// starts with `-` is an option to every harness CLI.
+#[test]
+fn a_resume_prompt_that_looks_like_an_option_is_refused_before_the_write() {
+    let source = support::read_source(HarnessId::Pi);
+    let scratch = support::scratch(HarnessId::Pi, "hop-resume-dash");
+    let opts = support::import_opts(
+        &support::opts(HarnessId::Pi, &scratch),
+        &source,
+        Some(ResumePrompt::new("--help")),
+    );
+    let error = hop::import(HarnessId::Pi, &source, &opts).expect_err("a CLI option");
+    assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
+    assert!(
+        !scratch.join("home").join("sessions").exists(),
+        "nothing was written"
+    );
+}
+
+/// Rust refuses to pass a line break to a `.cmd` launcher; that is known before the write.
+#[cfg(windows)]
+#[test]
+fn a_multi_line_resume_prompt_for_a_cmd_launcher_is_refused_before_the_write() {
+    let source = support::read_source(HarnessId::Pi);
+    let scratch = support::scratch(HarnessId::Pi, "hop-resume-lines");
+    let mut write_opts = support::opts(HarnessId::Pi, &scratch);
+    write_opts.exe = Some(
+        support::launcher(&scratch.join("bin"), "pi", "echo hi", "echo hi")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let opts = support::import_opts(
+        &write_opts,
+        &source,
+        Some(ResumePrompt::new("first line\nsecond line")),
+    );
+    let error = hop::import(HarnessId::Pi, &source, &opts).expect_err("a line break");
+    assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
+    assert!(
+        !scratch.join("home").join("sessions").exists(),
+        "nothing was written"
+    );
+}
+
+/// A source whose bytes changed after the caller fingerprinted it is refused before the
+/// destination is written.
+#[test]
+fn a_changed_source_is_refused_before_the_destination_is_written() {
+    let scratch = support::scratch(HarnessId::Pi, "hop-changed-source");
+    let fixture = support::source_path(HarnessId::ClaudeCode);
+    let original = std::fs::read(&fixture).unwrap();
+    let run = |expected: &str| {
+        support::cli_in(
+            &scratch,
+            &scratch,
+            &[
+                "hop",
+                "claude_code",
+                "fixture",
+                "pi",
+                "--from-file",
+                fixture.to_str().unwrap(),
+                "--cwd",
+                scratch.to_str().unwrap(),
+                "--dest-version",
+                "1.4.0",
+                "--expect-sha256",
+                expected,
+            ],
+            &[
+                ("PI_CODING_AGENT_DIR", scratch.to_str().unwrap()),
+                (
+                    "MUKADE_DATA_DIR",
+                    scratch.join("data").to_str().unwrap(),
+                ),
+            ],
+        )
+    };
+    let (code, _, stderr) = run(&"0".repeat(64));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("source changed"), "{stderr}");
+    assert!(!scratch.join("sessions").exists());
+    let (code, _, stderr) = run(&mukade::sha256::sha256_hex(&original));
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(scratch.join("sessions").exists());
+    assert_eq!(std::fs::read(&fixture).unwrap(), original);
 }

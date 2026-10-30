@@ -10,12 +10,10 @@ use mukade::model::{
 use mukade::reader::pi;
 use std::path::PathBuf;
 
-const SESSION: &str = "2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl";
+mod support;
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/pi/source")
-        .join(SESSION)
+    support::source_path(HarnessId::Pi)
 }
 
 fn read() -> Session {
@@ -24,16 +22,6 @@ fn read() -> Session {
 
 fn conversation(s: &Session) -> Vec<&mukade::model::Entry> {
     s.conversation().collect()
-}
-
-fn kind_name(k: &Kind) -> &'static str {
-    match k {
-        Kind::User { .. } => "user",
-        Kind::Step { .. } => "step",
-        Kind::Results { .. } => "results",
-        Kind::Compaction { .. } => "compaction",
-        Kind::Meta { .. } => "meta",
-    }
 }
 
 #[test]
@@ -75,7 +63,7 @@ fn conversation_is_the_expected_entry_sequence() {
     let s = read();
     let kinds: Vec<&str> = conversation(&s)
         .iter()
-        .map(|e| kind_name(&e.kind))
+        .map(|e| support::kind_name(&e.kind))
         .collect();
     assert_eq!(
         kinds,

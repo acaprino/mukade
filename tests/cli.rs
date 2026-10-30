@@ -1,8 +1,7 @@
 //! The command line, end to end: the real binary over the fixtures, on a scratch store.
 //!
-//! Everything runs with the four store variables pointing inside
-//! scratch directory under the system temporary folder, so no real store is
-//! in reach.
+//! Everything runs with the four store variables pointing inside Cargo's scratch area, so no real
+//! store is in reach.
 
 mod support;
 
@@ -11,87 +10,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BIN: &str = env!("CARGO_BIN_EXE_mukade");
-
-/// A process with every harness root pointed at a scratch home.
-fn cli(scratch: &Path, args: &[&str]) -> (bool, String, String) {
-    let (code, stdout, stderr) = cli_code(scratch, args);
-    (code == Some(0), stdout, stderr)
-}
-
-/// [`cli`], keeping the exit code.
-fn cli_code(scratch: &Path, args: &[&str]) -> (Option<i32>, String, String) {
-    let home = scratch.join("home");
-    // No real harness can be reached: PATH holds an empty directory, and the homes the
-    // well-known install locations hang from point inside the scratch.
-    let isolated = scratch.join("isolated");
-    std::fs::create_dir_all(isolated.join("bin")).unwrap();
-    let output = Command::new(BIN)
-        .args(args)
-        .env("PATH", isolated.join("bin"))
-        .env("APPDATA", &isolated)
-        .env("LOCALAPPDATA", &isolated)
-        .env("USERPROFILE", &isolated)
-        .env("HOME", &isolated)
-        .env_remove("OPENCODE_CONFIG")
-        .env_remove("XDG_CONFIG_HOME")
-        .env_remove("XDG_DATA_HOME")
-        .env_remove("XDG_STATE_HOME")
-        .env_remove("XDG_CACHE_HOME")
-        .env("CLAUDE_CONFIG_DIR", &home)
-        .env("CODEX_HOME", &home)
-        .env("PI_CODING_AGENT_DIR", &home)
-        .env("OPENCODE_DB", home.join("opencode.db"))
-        // The developer's own overrides must not leak into the assertions.
-        .env_remove("MUKADE_CLAUDE_EXE")
-        .env_remove("MUKADE_CODEX_EXE")
-        .env_remove("MUKADE_OPENCODE_EXE")
-        .env_remove("MUKADE_PI_EXE")
-        .output()
-        .expect("the binary must run");
-    (
-        output.status.code(),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
-}
-
-/// Put a harness's fixture where that harness's reader looks for its sessions.
-fn stage_fixture(harness: HarnessId, scratch: &Path) -> String {
-    let home = scratch.join("home");
-    match harness {
-        HarnessId::ClaudeCode => {
-            let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
-            let dir = home.join("projects").join("claude-project");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("c45db7bc-542c-4201-89de-b590c6fdb797.jsonl"), file).unwrap();
-            "c45db7bc".to_string()
-        }
-        HarnessId::Pi => {
-            let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
-            let dir = home.join("sessions").join("--pi-project--");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(
-                dir.join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
-                file,
-            )
-            .unwrap();
-            "01a17e17".to_string()
-        }
-        HarnessId::Codex => {
-            let file = std::fs::read_to_string(support::source_path(harness)).unwrap();
-            let dir = home.join("sessions").join("2026").join("10").join("27");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(
-                dir.join("rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl"),
-                file,
-            )
-            .unwrap();
-            "01a17e07".to_string()
-        }
-        HarnessId::OpenCode => "ses_e82023514ffe02y4T8OoUu99VZ".to_string(),
-    }
-}
+use support::{BIN, cli, cli_code, stage_fixture};
 
 fn dump(harness: HarnessId, id: &str) -> (PathBuf, Value) {
     let scratch = support::scratch(harness, &format!("cli-dump-{}", harness.as_str()));
@@ -355,14 +274,14 @@ fn an_empty_root_is_rejected() {
 #[test]
 fn bad_arguments_fail_loudly() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "cli-bad");
-    let (ok, _, stderr) = cli(&scratch, &["dump", "nonesuch", "x"]);
-    assert!(!ok);
+    let (code, _, stderr) = cli_code(&scratch, &["dump", "nonesuch", "x"]);
+    assert_eq!(code, Some(1), "a usage error");
     assert!(stderr.contains("unknown harness"), "{stderr}");
-    let (ok, _, stderr) = cli(&scratch, &["fly", "pi"]);
-    assert!(!ok);
+    let (code, _, stderr) = cli_code(&scratch, &["fly", "pi"]);
+    assert_eq!(code, Some(1), "a usage error");
     assert!(stderr.contains("unknown command"), "{stderr}");
-    let (ok, _, stderr) = cli(&scratch, &["dump", "claude_code", "c45db7bc"]);
-    assert!(!ok, "nothing is staged in this home");
+    let (code, _, stderr) = cli_code(&scratch, &["dump", "claude_code", "c45db7bc"]);
+    assert_eq!(code, Some(2), "a session that is not there is refused");
     assert!(stderr.contains("no Claude Code session"), "{stderr}");
 }
 
@@ -571,6 +490,59 @@ fn dump_writes_utf8_to_a_file() {
         written.to_string().contains("—"),
         "the em dash of the fixture survives"
     );
+}
+
+/// A source can be read from a file alone: no store is staged, and the document still names the
+/// session it came from.
+#[test]
+fn dump_reads_a_source_from_a_file_without_a_store() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-dump-from-file");
+    let fixture = support::source_path(HarnessId::ClaudeCode);
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "dump",
+            "claude_code",
+            "--from-file",
+            fixture.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).expect("one document");
+    assert_eq!(doc["meta"]["id"], "c45db7bc-542c-4201-89de-b590c6fdb797");
+    assert!(!scratch.join("home").join("projects").exists(), "no store was needed");
+}
+
+/// `--timing` states where the time went, phase by phase, and leaves stdout for the receipt.
+#[test]
+fn timing_reports_each_phase_on_stderr() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-timing");
+    let fixture = support::source_path(HarnessId::ClaudeCode);
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "claude_code",
+            "fixture",
+            "pi",
+            "--from-file",
+            fixture.to_str().unwrap(),
+            "--cwd",
+            scratch.to_str().unwrap(),
+            "--dest-version",
+            "1.4.0",
+            "--timing",
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    for phase in ["read file", "plan", "strict check", "write files", "total"] {
+        assert!(
+            stderr.lines().any(|line| line.contains(phase)),
+            "no {phase:?} phase in:\n{stderr}"
+        );
+    }
+    let receipt: Value = serde_json::from_str(stdout.lines().last().unwrap()).expect("a receipt");
+    assert!(receipt["location"].is_string(), "{receipt}");
 }
 
 /// A failed external import may have written before failing, so its outcome needs reconciliation.
@@ -1310,4 +1282,271 @@ fn harnesses_rejects_options_it_does_not_define() {
     let (code, _, stderr) = cli_code(&scratch, &["harnesses", "--root", "elsewhere"]);
     assert_eq!(code, Some(1), "{stderr}");
     assert!(stderr.contains("harnesses takes no options"), "{stderr}");
+}
+
+/// `--identity` is machine-readable and takes no arguments.
+#[test]
+fn identity_prints_the_name_version_and_target() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-identity");
+    let (code, stdout, stderr) = cli_code(&scratch, &["--identity"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let identity: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(identity["name"], "mukade");
+    assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
+    let expected_target = if cfg!(all(
+        windows,
+        target_arch = "x86_64",
+        target_env = "msvc"
+    )) {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "other"
+    };
+    assert_eq!(identity["target"], expected_target);
+    let (code, _, stderr) = cli_code(&scratch, &["--identity", "extra"]);
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("takes no arguments"), "{stderr}");
+}
+
+/// Every option states which commands it belongs to, and every value is checked before a store is
+/// read: a caller cannot believe a typo took effect.
+#[test]
+fn options_are_refused_where_they_cannot_apply() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-option-refusals");
+    let (_, doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    let document = scratch.join("document.json");
+    std::fs::write(&document, serde_json::to_string(&doc).unwrap()).unwrap();
+    let document = document.to_str().unwrap();
+
+    let hash = "0".repeat(64);
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        (
+            vec!["list", "claude_code", "--without-tools"],
+            "--without-tools is supported only by hop, write and document",
+        ),
+        (
+            vec!["dump", "claude_code", "c45db7bc", "--expect-sha256", "abc"],
+            "--expect-sha256 is supported only by hop",
+        ),
+        (
+            vec!["hop", "claude_code", "x", "pi", "--expect-sha256", "zz"],
+            "--expect-sha256 must be a 64-digit SHA-256",
+        ),
+        (
+            vec!["list", "claude_code", "--tool-map", "tools.json"],
+            "--tool-map is supported only by hop, write and document",
+        ),
+        (
+            vec!["list", "claude_code", "--dest-id", "x"],
+            "--dest-id, --dest-path, --dest-agent and --metadata-file are supported only",
+        ),
+        (
+            vec!["write", "pi", document, "--dest-agent", "analyst"],
+            "--dest-agent and --metadata-file are supported only for an OpenCode destination",
+        ),
+        (
+            vec!["write", "pi", document, "--reasoning", "nope"],
+            "unknown --reasoning nope",
+        ),
+        (
+            vec!["write", "pi", document, "--dest-shell", "nope"],
+            "unknown --dest-shell nope",
+        ),
+        (
+            vec!["write", "pi", document, "--compaction", "bogus"],
+            "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop",
+        ),
+        (
+            vec!["write", "pi", document, "--summary-timeout", "5"],
+            "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop",
+        ),
+        (
+            vec!["write", "pi", document, "--dest-id", "not-a-uuid"],
+            "invalid destination session ID",
+        ),
+        (
+            vec![
+                "write",
+                "opencode",
+                document,
+                "--dest-id",
+                "../invalid",
+            ],
+            "invalid destination session ID",
+        ),
+        (
+            vec![
+                "hop",
+                "claude_code",
+                "x",
+                "pi",
+                "--compaction",
+                "summary",
+                "--summary-timeout",
+                "0",
+            ],
+            "not a number of seconds",
+        ),
+        (
+            vec![
+                "hop",
+                "claude_code",
+                "x",
+                "pi",
+                "--compaction",
+                "summary",
+                "--keep-turns",
+                "-1",
+            ],
+            "not a number of turns",
+        ),
+    ];
+    for (args, expected) in cases {
+        // A hash of zeros passes the syntax check, so the hop fails on the source, not the flag.
+        if args.contains(&hash.as_str()) {
+            continue;
+        }
+        let (code, _, stderr) = cli_code(&scratch, &args);
+        assert_eq!(code, Some(1), "{args:?} was not a usage error: {stderr}");
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+    }
+}
+
+/// A `dump` that cannot write its output file says why and prints no document to stdout.
+#[test]
+fn dump_output_to_an_unwritable_path_fails_with_a_reason() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-dump-unwritable");
+    stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let output = scratch.join("no-such-dir").join("document.json");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "dump",
+            "claude_code",
+            "c45db7bc",
+            "--output",
+            output.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(code, Some(0));
+    assert!(stdout.trim().is_empty(), "{stdout}");
+    assert!(stderr.contains("no-such-dir"), "{stderr}");
+    assert!(!output.exists());
+}
+
+/// A document whose content the interchange model does not know is refused before any write.
+#[test]
+fn write_refuses_a_document_with_an_unknown_block() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-write-unknown-block");
+    let (_, mut doc) = dump(HarnessId::ClaudeCode, "c45db7bc");
+    doc["messages"][0]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "hologram", "data": 1}));
+    let document = scratch.join("document.json");
+    std::fs::write(&document, serde_json::to_string(&doc).unwrap()).unwrap();
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            document.to_str().unwrap(),
+            "--dest-version",
+            "1.2.0",
+        ],
+    );
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("hologram"), "{stderr}");
+    assert!(
+        !scratch.join("home").join("sessions").exists(),
+        "nothing was written"
+    );
+}
+#[test]
+fn list_opencode_reads_root_sessions_from_the_selected_store_without_changing_it() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-list-opencode");
+    let database = scratch.join("sessions.db");
+    {
+        let db = rusqlite::Connection::open(&database).unwrap();
+        db.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT,
+                 directory TEXT, time_updated INTEGER, time_archived INTEGER);
+             INSERT INTO session_v2 VALUES ('ses_open', NULL, 'Open', 'D:/work', 2000, NULL);
+             INSERT INTO session_v2 VALUES ('ses_archived', NULL, 'Archived', 'D:/other', 1000, 1500);
+             INSERT INTO session_v2 VALUES ('ses_child', 'ses_open', 'Child', 'D:/work', 3000, NULL);",
+        )
+        .unwrap();
+    }
+    let before = std::fs::read(&database).unwrap();
+    let (code, stdout, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &["list", "opencode", "--root", database.to_str().unwrap()],
+        &[
+            (
+                "OPENCODE_DB",
+                scratch.join("wrong.db").to_str().unwrap(),
+            ),
+            (
+                "MUKADE_OPENCODE_EXE",
+                scratch.join("no-engine").to_str().unwrap(),
+            ),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let rows: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2, "two root sessions: {rows:?}");
+    assert_eq!(rows[0]["id"], "ses_open");
+    assert_eq!(rows[0]["title"], "Open");
+    assert_eq!(rows[0]["cwd"], "D:/work");
+    assert_eq!(rows[0]["archived"], false);
+    assert_eq!(rows[1]["id"], "ses_archived");
+    assert_eq!(rows[1]["archived"], true);
+    assert_eq!(
+        std::fs::read(&database).unwrap(),
+        before,
+        "the source database must stay unchanged"
+    );
+    assert!(!scratch.join("wrong.db").exists());
+}
+
+/// A live store may hold sessions only in its WAL: `list` sees them without checkpointing, and
+/// neither file is rewritten.
+#[test]
+fn list_opencode_sees_uncheckpointed_wal_without_modifying_the_store() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-list-opencode-wal");
+    let database = scratch.join("sessions.db");
+    let db = rusqlite::Connection::open(&database).unwrap();
+    db.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+         CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT,
+             directory TEXT, time_updated INTEGER, time_archived INTEGER);
+         INSERT INTO session_v2 VALUES ('ses_live', NULL, 'Live', 'D:/work', 2000, NULL);",
+    )
+    .unwrap();
+    let wal = PathBuf::from(format!("{}-wal", database.display()));
+    let before_db = std::fs::read(&database).unwrap();
+    let before_wal = std::fs::read(&wal).unwrap();
+    let (code, stdout, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &["list", "opencode", "--root", database.to_str().unwrap()],
+        &[(
+            "MUKADE_OPENCODE_EXE",
+            scratch.join("no-engine").to_str().unwrap(),
+        )],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let rows: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], "ses_live");
+    assert_eq!(std::fs::read(&database).unwrap(), before_db);
+    assert_eq!(std::fs::read(&wal).unwrap(), before_wal);
+    drop(db);
 }

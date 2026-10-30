@@ -87,25 +87,8 @@ impl Bench {
 
     /// Every file under the sandbox: there must be none.
     fn sandbox_files(&self) -> Vec<PathBuf> {
-        files_under(&self.sandbox)
+        support::files_under(&self.sandbox)
     }
-}
-
-fn files_under(dir: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
 }
 
 fn fixture() -> String {
@@ -229,9 +212,9 @@ fn mukade_keeps_every_file_it_makes_beside_its_executable() {
     );
     assert!(!imported.exists(), "and removed");
     assert!(
-        files_under(&tmp).is_empty(),
+        support::files_under(&tmp).is_empty(),
         "no temporary file is left: {:?}",
-        files_under(&tmp)
+        support::files_under(&tmp)
     );
 
     assert_eq!(
@@ -288,4 +271,76 @@ fn an_executable_that_cannot_make_its_folder_fails_where_it_needs_it_and_leaves_
     assert!(!seen.exists(), "opencode was never asked to import");
     assert_eq!(bench.sandbox_files(), Vec::<PathBuf>::new());
     assert!(data.is_file(), "what was there is untouched");
+}
+
+/// A relative `MUKADE_DATA_DIR` would put mukade's files wherever the caller happens to stand: it
+/// is refused before the hop reads or writes anything.
+#[test]
+fn a_relative_data_directory_is_refused_before_import() {
+    let scratch = support::scratch(HarnessId::OpenCode, "footprint-relative-data");
+    let (code, _, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &[
+            "hop",
+            "opencode",
+            "fixture",
+            "opencode",
+            "--from-file",
+            &fixture(),
+            "--cwd",
+            scratch.to_str().unwrap(),
+            "--dest-version",
+            "2.1.4",
+            "--project-id",
+            "global",
+            "--model-provider",
+            "h27",
+            "--model",
+            "m1",
+            "--opencode-exe",
+            "no-engine",
+        ],
+        &[
+            (
+                "OPENCODE_DB",
+                scratch.join("destination.db").to_str().unwrap(),
+            ),
+            ("MUKADE_DATA_DIR", "relative-data"),
+        ],
+    );
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("MUKADE_DATA_DIR must be absolute"), "{stderr}");
+    assert!(!scratch.join("relative-data").exists());
+    assert!(!scratch.join("destination.db").exists());
+}
+
+/// The check is not tied to a destination that needs a temporary file: any command refuses it,
+/// so a later step cannot write beside the current directory.
+#[test]
+fn a_relative_data_directory_is_refused_even_when_the_destination_needs_no_temporary_file() {
+    let scratch = support::scratch(HarnessId::Pi, "footprint-relative-data-pi");
+    let (code, _, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &[
+            "hop",
+            "opencode",
+            "fixture",
+            "pi",
+            "--from-file",
+            &fixture(),
+            "--cwd",
+            scratch.to_str().unwrap(),
+            "--dest-version",
+            "1.4.0",
+        ],
+        &[
+            ("PI_CODING_AGENT_DIR", scratch.to_str().unwrap()),
+            ("MUKADE_DATA_DIR", "relative-data"),
+        ],
+    );
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("MUKADE_DATA_DIR must be absolute"), "{stderr}");
+    assert!(!scratch.join("sessions").exists());
 }

@@ -41,6 +41,170 @@ fn the_import_command_always_carries_standalone() {
     assert_eq!(argv[argv.len() - 2], r"C:\work");
 }
 
+/// A launcher standing in for `opencode session import`: it records the store and the document it
+/// was given, then runs `windows`/`unix` (a failure or a successful import answer).
+fn mock_opencode(
+    dir: &Path,
+    capture: &Path,
+    windows: &str,
+    unix: &str,
+) -> String {
+    support::launcher(
+        dir,
+        "mock-opencode",
+        &format!(
+            "echo OPENCODE_DB=%OPENCODE_DB%>\"{0}\"\r\necho %3>\"{0}.file\"\r\n{windows}",
+            capture.display()
+        ),
+        &format!(
+            "echo \"OPENCODE_DB=$OPENCODE_DB\" > '{0}'\necho \"$3\" > '{0}.file'\n{unix}",
+            capture.display()
+        ),
+    )
+    .to_string_lossy()
+    .into_owned()
+}
+
+/// L1: the import runs against the requested database, and the temporary import document is gone
+/// afterwards whether the import failed or succeeded. No real OpenCode is started.
+#[test]
+fn opencode_import_cleans_its_document_and_uses_the_requested_root() {
+    let source = support::read_source(HarnessId::OpenCode);
+    for (tag, windows, unix, succeeds) in [
+        ("fails", "exit /b 3", "exit 3", false),
+        (
+            "succeeds",
+            "echo Imported session: ses_mock",
+            "echo 'Imported session: ses_mock'",
+            true,
+        ),
+    ] {
+        let scratch = support::scratch(HarnessId::OpenCode, &format!("opencode-import-{tag}"));
+        let root = scratch.join("configured-home");
+        let capture = scratch.join("environment.txt");
+        let mut opts = support::opts(HarnessId::OpenCode, &scratch);
+        opts.project_id = Some("project-under-test".into());
+        opts.roots.opencode_db = Some(root.join("custom.db"));
+        opts.exe = Some(mock_opencode(
+            &scratch.join("bin"),
+            &capture,
+            windows,
+            unix,
+        ));
+        let result = mukade::writer::for_harness(HarnessId::OpenCode).write(&source, &opts);
+        match (&result, succeeds) {
+            (Ok(written), true) => {
+                assert_eq!(written.id, "ses_mock");
+                assert_eq!(written.location, root.join("custom.db").to_string_lossy());
+            }
+            (Err(error), false) => assert!(
+                error.to_string().contains("opencode session import failed"),
+                "{error:#}"
+            ),
+            _ => panic!("{tag}: {result:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(&capture).unwrap().trim(),
+            format!("OPENCODE_DB={}", root.join("custom.db").to_string_lossy()),
+            "{tag}"
+        );
+        // The import document lives in mukade's own temporary folder (`mukade-data/tmp` beside
+        // the executable), not in the OpenCode store, and is gone.
+        let imported = std::fs::read_to_string(format!("{}.file", capture.display())).unwrap();
+        let imported = std::path::PathBuf::from(imported.trim());
+        assert_eq!(
+            imported.parent(),
+            Some(mukade::portable::temp_dir().unwrap().as_path()),
+            "{tag}"
+        );
+        assert!(
+            !imported.exists(),
+            "{tag}: the temporary import document was removed"
+        );
+        assert!(
+            !root.exists() || std::fs::read_dir(&root).unwrap().next().is_none(),
+            "{tag}: nothing was left in the OpenCode store folder"
+        );
+    }
+}
+
+/// A file a killed mukade left behind is removed by the next run once it is an hour old; a recent
+/// one, which may belong to a running mukade, and anything not ours stay.
+#[test]
+fn a_stale_import_document_of_a_killed_run_is_swept() {
+    let source = support::read_source(HarnessId::OpenCode);
+    let temp = mukade::portable::temp_dir().unwrap();
+    let name = |tag: &str| temp.join(format!("mukade-import-{tag}-{}.json", std::process::id()));
+    let age = |path: &Path, seconds: u64| {
+        std::fs::write(path, "{}").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
+            .unwrap();
+    };
+    let (stale, fresh) = (name("stale"), name("fresh"));
+    age(&stale, 48 * 60 * 60);
+    age(&fresh, 5);
+    let scratch = support::scratch(HarnessId::OpenCode, "opencode-import-sweep");
+    let mut opts = support::opts(HarnessId::OpenCode, &scratch);
+    opts.project_id = Some("project-under-test".into());
+    let capture = scratch.join("environment.txt");
+    opts.exe = Some(mock_opencode(
+        &scratch.join("bin"),
+        &capture,
+        "echo Imported session: ses_mock",
+        "echo 'Imported session: ses_mock'",
+    ));
+    mukade::writer::for_harness(HarnessId::OpenCode)
+        .write(&source, &opts)
+        .unwrap();
+    let (stale_left, fresh_left) = (stale.exists(), fresh.exists());
+    let _ = std::fs::remove_file(&stale);
+    let _ = std::fs::remove_file(&fresh);
+    assert!(!stale_left, "a day-old import document is swept");
+    assert!(fresh_left, "a recent one is left alone");
+}
+
+/// The `document` command returns the native import document without starting a write, so a host
+/// can show it (and its counts) before deciding to import.
+#[test]
+fn document_opencode_returns_a_native_import_document_without_starting_a_write() {
+    let scratch = support::scratch(HarnessId::OpenCode, "opencode-document-command");
+    let fixture = support::source_path(HarnessId::OpenCode);
+    let (code, stdout, stderr) = support::cli(
+        &scratch,
+        &[
+            "document",
+            "opencode",
+            "opencode",
+            "fixture",
+            "--from-file",
+            fixture.to_str().unwrap(),
+            "--cwd",
+            scratch.to_str().unwrap(),
+            "--dest-id",
+            "ses_preview",
+            "--dest-agent",
+            "analyst",
+            "--project-id",
+            "global",
+            "--model-provider",
+            "h27",
+            "--model",
+            "m1",
+            "--without-tools",
+        ],
+    );
+    assert!(code, "{stderr}");
+    let result: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(result["document"]["info"]["id"], "ses_preview");
+    assert_eq!(result["document"]["info"]["agent"], "analyst");
+    assert!(result["counts"]["tools_omitted"].as_u64().unwrap() > 0);
+    assert!(!scratch.join("home/opencode.db").exists());
+}
+
 /// L8: one assistant message per step, holding reasoning, text and **both** tool parts, with each
 /// call's result inside its own part.
 #[test]

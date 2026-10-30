@@ -170,6 +170,18 @@ pub fn run(args: &[String]) -> Result<()> {
     if flags.without_tools && !matches!(command.as_str(), "hop" | "write" | "document") {
         anyhow::bail!("--without-tools is supported only by hop, write and document");
     }
+    // Compaction is chosen on the source, before a document exists: `write` imports a document
+    // `dump` already compacted, so a compaction flag there would be silently ignored.
+    if (flags.compaction.is_some()
+        || flags.keep_turns.is_some()
+        || flags.summary_model.is_some()
+        || flags.summary_timeout.is_some())
+        && !matches!(command.as_str(), "dump" | "hop")
+    {
+        anyhow::bail!(
+            "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop"
+        );
+    }
     if let Some(hash) = flags.expect_sha256.as_deref() {
         anyhow::ensure!(command == "hop", "--expect-sha256 is supported only by hop");
         anyhow::ensure!(
@@ -288,14 +300,28 @@ pub fn run(args: &[String]) -> Result<()> {
             }
         }
         "dump" => {
-            no_more(operands, 1)?;
-            let id = operands.first().context("dump needs a session id")?;
-            let compaction = flags.compaction(harness)?;
-            let source = SessionRef::id(harness, *id);
-            let session = if flags.all_branches {
-                crate::hop::export_all_branches(&source, &roots)
+            if flags.from_file.is_some() {
+                no_more(operands, 0)?;
             } else {
-                crate::hop::export(&source, &roots)
+                no_more(operands, 1)?;
+            }
+            let compaction = flags.compaction(harness)?;
+            let session = match (flags.from_file.as_deref(), flags.all_branches) {
+                (Some(path), false) => {
+                    crate::hop::export_path(harness, std::path::Path::new(path))
+                }
+                (Some(path), true) => {
+                    crate::hop::export_path_all_branches(harness, std::path::Path::new(path))
+                }
+                (None, all) => {
+                    let id = operands.first().context("dump needs a session id")?;
+                    let source = SessionRef::id(harness, *id);
+                    if all {
+                        crate::hop::export_all_branches(&source, &roots)
+                    } else {
+                        crate::hop::export(&source, &roots)
+                    }
+                }
             }
             .map_err(anyhow::Error::new)?;
             // What `dump` exports is what `hop` would write: `write` imports it later.

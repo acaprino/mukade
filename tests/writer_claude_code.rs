@@ -8,20 +8,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-fn write_fixture(tag: &str) -> (mukade::writer::Written, Vec<Value>) {
-    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
-    let session = support::read_source(HarnessId::ClaudeCode);
-    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
-    let written = for_harness(HarnessId::ClaudeCode)
-        .write(&session, &opts)
-        .expect("write");
-    let rows = support::read_jsonl(Path::new(&written.location));
-    (written, rows)
-}
-
 #[test]
 fn the_session_lands_where_claude_code_looks_for_it() {
-    let (written, _) = write_fixture("writer-claude-path");
+    let (written, _) = support::write_fixture(HarnessId::ClaudeCode, "writer-claude-path");
     let path = written.location.replace('\\', "/");
     assert!(path.contains("/projects/"), "{path}");
     assert!(path.ends_with(&format!("{}.jsonl", written.id)), "{path}");
@@ -40,7 +29,7 @@ fn the_session_lands_where_claude_code_looks_for_it() {
 /// L2: one API response is one row per content block, all sharing `message.id`.
 #[test]
 fn each_step_is_one_row_per_block_sharing_a_message_id() {
-    let (_, rows) = write_fixture("writer-claude-rows");
+    let (_, rows) = support::write_fixture(HarnessId::ClaudeCode, "writer-claude-rows");
     let mut by_message: Vec<(String, Vec<Value>)> = Vec::new();
     for row in rows.iter().filter(|r| r["type"] == "assistant") {
         let id = row["message"]["id"]
@@ -88,7 +77,7 @@ fn each_step_is_one_row_per_block_sharing_a_message_id() {
 /// previous one is what made Claude Code report `[Tool result missing due to internal error]`.
 #[test]
 fn every_result_row_hangs_on_its_own_tool_use_row() {
-    let (_, rows) = write_fixture("writer-claude-results");
+    let (_, rows) = support::write_fixture(HarnessId::ClaudeCode, "writer-claude-results");
     let mut owner: HashMap<String, String> = HashMap::new();
     for row in &rows {
         if row["type"] != "assistant" {
@@ -127,7 +116,7 @@ fn every_result_row_hangs_on_its_own_tool_use_row() {
 
 #[test]
 fn user_turns_compaction_and_the_killed_turn_survive() {
-    let (_, rows) = write_fixture("writer-claude-turns");
+    let (_, rows) = support::write_fixture(HarnessId::ClaudeCode, "writer-claude-turns");
     let users: Vec<String> = rows
         .iter()
         .filter(|r| r["type"] == "user" && r["message"]["content"].is_string())
@@ -176,7 +165,7 @@ fn the_project_folder_name_is_the_one_claude_code_derives() {
 /// conversation ended on.
 #[test]
 fn the_session_ends_with_the_last_prompt_row_the_resume_picker_reads() {
-    let (written, rows) = write_fixture("writer-claude-last-prompt");
+    let (written, rows) = support::write_fixture(HarnessId::ClaudeCode, "writer-claude-last-prompt");
     let last = rows.last().expect("rows");
     assert_eq!(last["type"], "last-prompt", "{last}");
     assert_eq!(last["sessionId"], written.id.as_str());
