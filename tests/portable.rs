@@ -222,7 +222,7 @@ fn mukade_keeps_every_file_it_makes_beside_its_executable() {
         Vec::<PathBuf>::new(),
         "nothing reached the temporary folder, the home folder or the application-data folders"
     );
-    // The only thing beside the executable that mukade made is the folder `mukade-data`.
+    // Beside the executable mukade made `mukade-data` and the editable `intent-prompts` folder.
     let mut made: Vec<String> = std::fs::read_dir(&bench.bundle)
         .unwrap()
         .flatten()
@@ -235,7 +235,14 @@ fn mukade_keeps_every_file_it_makes_beside_its_executable() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    assert_eq!(made, ["mukade-data".to_string(), exe_name]);
+    assert_eq!(
+        made,
+        [
+            "intent-prompts".to_string(),
+            "mukade-data".to_string(),
+            exe_name
+        ]
+    );
 }
 
 /// An executable somewhere it cannot make its folder (a read-only install; staged here with a

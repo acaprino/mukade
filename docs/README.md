@@ -2,7 +2,7 @@
 
 ## Getting started
 
-- [Command-line usage](usage.md): setup, commands, compaction, examples and troubleshooting.
+- [Command-line usage](usage.md): setup, commands, compaction, summary intents, examples and troubleshooting.
 - [Open questions](../next.md): outstanding verification and known limitations.
 
 ## Technical reference

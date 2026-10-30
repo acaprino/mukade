@@ -33,6 +33,10 @@ pub struct SummarizeOpts {
     pub timeout: Duration,
     /// The source harness's executable override (`crate::exe` resolves the default).
     pub exe: Option<String>,
+    /// The prompt to ask with; `None` uses [`SUMMARY_PROMPT`] (the generic intent).
+    pub prompt: Option<String>,
+    /// The intent the prompt came from, when it was selected by name.
+    pub intent: Option<String>,
 }
 
 impl Default for SummarizeOpts {
@@ -41,6 +45,8 @@ impl Default for SummarizeOpts {
             model: None,
             timeout: Duration::from_secs(300),
             exe: None,
+            prompt: None,
+            intent: None,
         }
     }
 }
@@ -56,6 +62,9 @@ pub struct Summary {
     pub usage: Option<String>,
     /// The command that removes what the run could not clean up (an OpenCode fork it failed to delete).
     pub leftover: Option<String>,
+    /// The intent prompt used, when the run was given one instead of [`SUMMARY_PROMPT`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 /// A summary as a hop used it: the text, and how many source entries it stands for.
@@ -163,9 +172,20 @@ pub fn summary_command(
         .to_vec(),
     };
     args.extend(model);
-    args.push(SUMMARY_PROMPT.into());
+    let prompt = opts.prompt.as_deref().unwrap_or(SUMMARY_PROMPT);
+    let program = crate::exe::resolve(harness, opts.exe.as_deref());
+    // A Windows `.cmd` shim cannot receive every argument. Native executables take any text; a
+    // batch launcher is checked before it is spawned, never silently given a mangled prompt.
+    if crate::exe::is_batch(&program) && !batch_safe(prompt) {
+        return Err(HopError::Unsupported(format!(
+            "the summary prompt cannot be passed through the batch launcher {program}: it must be \
+             one line of ASCII letters, digits, spaces and .,;:() ; name the harness's native \
+             executable, or edit the intent prompt in the intent-prompts folder to that subset"
+        )));
+    }
+    args.push(prompt.into());
     Ok(SummaryCommand {
-        program: crate::exe::resolve(harness, opts.exe.as_deref()),
+        program,
         args,
         cwd: session
             .meta
@@ -181,6 +201,16 @@ pub fn summary_command(
             _ => Vec::new(),
         },
     })
+}
+
+/// The prompt a Windows `.cmd` launcher can take: one line, no `"%^&|<>!` and no leading dash.
+fn batch_safe(prompt: &str) -> bool {
+    !prompt.is_empty()
+        && !prompt.starts_with('-')
+        && !prompt.contains(['\n', '\r'])
+        && prompt
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || " .,;:()".contains(c))
 }
 
 /// The model the conversation was last having: that of its last step, else the last the session
@@ -440,6 +470,10 @@ fn summarize_in(
         model,
         usage: reply.usage,
         leftover,
+        prompt: opts
+            .prompt
+            .as_ref()
+            .map(|_| opts.intent.clone().unwrap_or_else(|| "custom".into())),
     })
 }
 

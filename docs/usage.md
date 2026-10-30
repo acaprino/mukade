@@ -30,10 +30,12 @@ D:\tools\mukade.exe --help
 
 The Windows executable has the C runtime built in, so it runs on a machine with no Visual C++
 redistributable. Run it from a shell, by its path or from a folder on `PATH`; in the examples below
-`mukade` stands for whichever you use (`D:\tools\mukade.exe`, say). It has no installer, no
-configuration file and no first-run step. By default it generates its files in a `mukade-data`
-folder beside the executable, made only when something is first written. A host may set an absolute
-`MUKADE_DATA_DIR` instead. See [Where its files go](#6-where-its-files-go).
+`mukade` stands for whichever you use (`D:\tools\mukade.exe`, say). It has no installer and no
+configuration file. On first start it copies the editable intent prompts to an `intent-prompts`
+folder beside the executable (an existing file is never replaced), and by default generates its
+other files in a `mukade-data` folder beside the executable, made only when something is first
+written. A host may set an absolute `MUKADE_DATA_DIR` instead. See
+[Where its files go](#6-where-its-files-go).
 
 Install and configure the harnesses you intend to use separately: mukade moves sessions, it does
 not install harnesses or transfer their credentials.
@@ -173,8 +175,39 @@ mukade write opencode 'C:\work\summary.json' --cwd 'C:\work\my-project'
 ```
 
 It costs one model call on the source's account; the manifest's `options.summary` says which model
-wrote it, how long it is and, for Claude Code, what it cost. If the summary cannot be written
-(an error, an empty reply, the deadline) nothing is written and the exit code is 4.
+wrote it, which intent prompt was used, how long it is and, for Claude Code, what it cost. If the
+summary cannot be written (an error, an empty reply, the deadline) nothing is written and the exit
+code is 4.
+
+#### Choose what the summary emphasizes
+
+`--intent <name>` selects a prompt for the source model. It implies `--compaction summary`, so the
+destination receives the summary alone unless `--keep-turns` adds turns:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --intent review
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --intent execute --keep-turns 2
+```
+
+The prompts are ordinary `.md` files in `intent-prompts` beside the executable, copied there on the
+first start. The file stem is the intent name, so `security.md` is selected with
+`--intent security`. `generic.md` is used when `--intent` is omitted. Files edited or added are
+picked up by the next run; mukade never overwrites one. List the folder and every available intent:
+
+```powershell
+mukade intents
+```
+
+The shipped intents are `generic`, `continue`, `execute`, `review`, `analyze`, `brainstorm` and
+`plan`. A prompt is read as plain text and its whitespace is folded to one line before it is passed
+to the harness. A Windows `.cmd` launcher can receive only ASCII letters, digits, spaces and
+`.,;:()`; a prompt outside that subset is refused before the harness starts. Name the harness's
+native executable to use a prompt with accents or richer punctuation. A host may set an absolute
+`MUKADE_INTENT_DIR` to keep the prompts elsewhere.
+
+The intent affects only the summary prompt. It does not start the destination, change its
+permissions, or add a second model call. `--intent` is accepted by `hop` and `dump`; `write`
+imports the summary a document already holds.
 
 ### Rehearse before touching the real store
 
@@ -453,13 +486,15 @@ What makes it fast, and what you can do:
 
 ## 6. Where its files go
 
-mukade has no installer or configuration file. By default it keeps its own files in `mukade-data`
-beside the executable. `MUKADE_DATA_DIR` can select a different **absolute** data folder for a host;
-an invalid override is refused rather than redirected. The selected folder is made the first time
-something is written to it (never at start-up):
+mukade has no installer or configuration file. On its first start it copies the editable intent
+prompts to `intent-prompts` beside the executable; an existing file is never replaced. By default it
+keeps its other files in `mukade-data` beside the executable. `MUKADE_DATA_DIR` can select a
+different **absolute** data folder for a host; an invalid override is refused rather than
+redirected. The data folder is made the first time something is written to it (never at start-up):
 
 | file | what for |
 |---|---|
+| `intent-prompts/*.md` | the editable summary prompts: `generic.md` is the default, every other file stem is an `--intent` name; copied on first start and never overwritten |
 | `mukade-data/cache/probes.json` | the versions and OpenCode project ids learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not start the harness to ask again |
 | `mukade-data/tmp/mukade-import-*.json` | the document `opencode session import` needs as a file; private, and removed when the import ends, even when it fails |
 | `mukade-data/tmp/summary-*/` | one folder per `--compaction summary` run: the file Codex writes its summary to, the session Pi forks; removed when the run ends, even when it fails |
@@ -484,6 +519,7 @@ to Claude Code whose launcher answers `--version` (`--timing` shows the cost of 
 before the first hop          after it
 tools\                          tools\
   mukade.exe                        mukade.exe
+                                    intent-prompts\
                                     mukade-data\cache\probes.json
 
 1st hop   probe destination version   70.8 ms   total  78.6 ms
@@ -492,12 +528,13 @@ tools\                          tools\
 probes.json: {"version|<dir>/claude.cmd|20|1793205746861450700":"2.9.9"}
 ```
 
-A hop that has nothing to ask writes nothing next to the executable at all: a hop to Pi, with no
-`pi` launcher to start, left the folder holding `mukade.exe` and nothing else.
+A hop that has nothing to ask adds nothing under `mukade-data`: a hop to Pi, with no `pi` launcher
+to start, left `mukade-data` absent.
 
 This is checked by an automated test that runs the real binary alone in a folder, with the
 temporary folder, the home folder and the application-data folders pointed at an empty sandbox, and
-asserts the sandbox stays empty and the folder holds only the executable and `mukade-data`.
+asserts the sandbox stays empty and the folder holds the executable, `intent-prompts` and
+`mukade-data`.
 
 **Harnesses are separate.** A harness installed in its own folder is reached with its store
 variable and `--<harness>-exe`: see [section 8](#8-stores-and-executables) and the examples in
@@ -721,6 +758,30 @@ executable. It can return zero or multiple candidates. An empty or ambiguous roo
 pass the harness explicitly when you know it. For a nonstandard OpenCode database filename, pass
 `opencode` and its file path explicitly rather than relying on detection.
 
+`intents` lists the editable summary prompts without reading a session or starting a harness. Its
+JSON gives the folder, the default intent, and every prompt with `name`, `path`, `builtin` (the name
+ships with mukade) and `custom` (a file in the folder supplies it):
+
+```powershell
+mukade intents
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --intent review
+mukade dump codex YOUR_CODEX_SESSION_ID --intent analyze --output 'C:\work\summary.json'
+```
+
+A trimmed answer (paths are illustrative):
+
+```json
+{
+  "directory": "D:\\tools\\intent-prompts",
+  "default": "generic",
+  "prompts": [
+    {"name": "generic", "path": "D:\\tools\\intent-prompts\\generic.md", "builtin": true, "custom": true},
+    {"name": "review", "path": "D:\\tools\\intent-prompts\\review.md", "builtin": true, "custom": true},
+    {"name": "security", "path": "D:\\tools\\intent-prompts\\security.md", "builtin": false, "custom": true}
+  ]
+}
+```
+
 ```powershell
 mukade detect 'D:\portable\pi\agent'
 mukade list --root 'D:\portable\pi\agent'
@@ -751,6 +812,10 @@ the directory's own layout when exactly one harness is recognized. `write` alway
   source harness, a model it cannot reach (name another with `--summary-model`), a run longer than
   `--summary-timeout`, or a model that called a tool instead of summarizing. When OpenCode's fork
   could not be deleted, the message ends with the command that removes it.
+- **"the summary prompt cannot be passed through the batch launcher â€¦"** (exit 2): the selected
+  `intent-prompts/<name>.md` contains a line break or a character an install's `.cmd` shim cannot
+  carry. Name the harness's native executable, or keep the prompt to ASCII letters, digits, spaces
+  and `.,;:()`.
 - **External OpenCode import is uncertain** (exit 5): the error names the attempted session ID.
   Check that ID and its provenance in the selected database before retrying; a zero exit from the
   underlying command alone is not enough to prove that it imported the session.

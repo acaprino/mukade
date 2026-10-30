@@ -28,6 +28,7 @@ use serde_json::json;
 pub const USAGE: &str = "\
 mukade harnesses
 mukade list  <harness> [options]
+mukade intents
 mukade dump  <harness> <session-id> [options]
 mukade document opencode <src-harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
@@ -37,6 +38,9 @@ mukade detect <dir>
 `harnesses` lists every supported harness with the executable and store mukade finds on this
 machine, its version, session/fork counts and lineage support. Store reads are read-only; discovered
 executables are asked for `--version`.
+
+`intents` lists the editable summary prompts (name, path, builtin/custom) as JSON, without reading a
+session or starting a harness.
 
 harnesses: claude_code | codex | opencode | pi
 
@@ -70,6 +74,8 @@ options:
   --compaction <mode>      none (default) | portable (the source's own summary, then its tail) |
                            summary (the source's model writes one now; dump and hop)
   --keep-turns <n>         summary: also keep the last n user turns verbatim (default 0)
+  --intent <name>          summary: the prompt in intent-prompts/<name>.md (default: generic);
+                           it implies --compaction summary
   --summary-model <id>     summary: the model to ask (default: the session's own)
   --summary-timeout <s>    summary: deadline of the summarizing run (default 300)
   --resume-prompt <text>   resume in the destination and keep its reply in the receipt
@@ -112,6 +118,11 @@ pub fn run(args: &[String]) -> Result<()> {
     {
         anyhow::bail!("MUKADE_DATA_DIR must be absolute");
     }
+    // The default intent prompts live beside the executable and are editable: they are copied
+    // once, and a file already there is never replaced.
+    if let Err(error) = crate::intent::install_defaults() {
+        eprintln!("mukade: {error}");
+    }
     let mut positional: Vec<&str> = Vec::new();
     let mut flags = Flags::default();
     let mut i = 0;
@@ -143,6 +154,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--expect-sha256" => flags.expect_sha256 = Some(next(rest, &mut i)?),
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
             "--keep-turns" => flags.keep_turns = Some(next(rest, &mut i)?),
+            "--intent" => flags.intent = Some(next(rest, &mut i)?),
             "--summary-model" => flags.summary_model = Some(next(rest, &mut i)?),
             "--summary-timeout" => flags.summary_timeout = Some(next(rest, &mut i)?),
             "--resume-prompt" => flags.resume_prompt = Some(next(rest, &mut i)?),
@@ -170,6 +182,21 @@ pub fn run(args: &[String]) -> Result<()> {
     if flags.without_tools && !matches!(command.as_str(), "hop" | "write" | "document") {
         anyhow::bail!("--without-tools is supported only by hop, write and document");
     }
+    if flags.intent.is_some() && !matches!(command.as_str(), "dump" | "hop") {
+        anyhow::bail!("--intent is supported only by dump and hop");
+    }
+    if flags.intent.is_some()
+        && flags
+            .compaction
+            .as_deref()
+            .is_some_and(|mode| mode != "summary")
+    {
+        anyhow::bail!(
+            "--intent goes with --compaction summary; it cannot be combined with another compaction"
+        );
+    }
+    // An intent is a summary prompt: naming one selects the summary transport by itself.
+    let summary = flags.compaction.as_deref() == Some("summary") || flags.intent.is_some();
     // Compaction is chosen on the source, before a document exists: `write` imports a document
     // `dump` already compacted, so a compaction flag there would be silently ignored.
     if (flags.compaction.is_some()
@@ -180,6 +207,15 @@ pub fn run(args: &[String]) -> Result<()> {
     {
         anyhow::bail!(
             "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop"
+        );
+    }
+    if !summary
+        && (flags.keep_turns.is_some()
+            || flags.summary_model.is_some()
+            || flags.summary_timeout.is_some())
+    {
+        anyhow::bail!(
+            "--keep-turns, --summary-model and --summary-timeout go with --compaction summary or --intent"
         );
     }
     if let Some(hash) = flags.expect_sha256.as_deref() {
@@ -221,6 +257,32 @@ pub fn run(args: &[String]) -> Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({"path": path, "candidates": candidates}))?
+        );
+        return Ok(());
+    }
+    if command == "intents" {
+        no_more(&positional, 0)?;
+        anyhow::ensure!(flags == Flags::default(), "intents takes no options");
+        let directory = crate::intent::prompt_dir().map_err(anyhow::Error::msg)?;
+        let prompts: Vec<serde_json::Value> = crate::intent::list()
+            .map_err(anyhow::Error::msg)?
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "name": entry.name,
+                    "path": entry.path.display().to_string(),
+                    "builtin": entry.builtin,
+                    "custom": entry.custom,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "directory": directory.display().to_string(),
+                "default": crate::intent::DEFAULT_INTENT,
+                "prompts": prompts,
+            }))?
         );
         return Ok(());
     }
@@ -789,6 +851,7 @@ struct Flags {
     reasoning: Option<String>,
     compaction: Option<String>,
     keep_turns: Option<String>,
+    intent: Option<String>,
     summary_model: Option<String>,
     summary_timeout: Option<String>,
     resume_prompt: Option<String>,
@@ -992,17 +1055,21 @@ impl Flags {
     /// work: a summary stands for the branch the source resumes, and a source outside its store can
     /// be summarized only by Pi, which forks a session from its file.
     fn compaction(&self, source: HarnessId) -> Result<Compaction> {
-        let summary = self.compaction.as_deref() == Some("summary");
+        let mode = self
+            .compaction
+            .as_deref()
+            .or(self.intent.as_ref().map(|_| "summary"));
+        let summary = mode == Some("summary");
         if !summary
             && (self.keep_turns.is_some()
                 || self.summary_model.is_some()
                 || self.summary_timeout.is_some())
         {
             anyhow::bail!(
-                "--keep-turns, --summary-model and --summary-timeout go with --compaction summary"
+                "--keep-turns, --summary-model and --summary-timeout go with --compaction summary or --intent"
             );
         }
-        match self.compaction.as_deref() {
+        match mode {
             None | Some("none") => Ok(Compaction::None),
             Some("portable") => Ok(Compaction::Portable {
                 summary: SummarySource::SourceRecord,
@@ -1038,11 +1105,16 @@ impl Flags {
                     ))
                     .into());
                 }
+                let prompt =
+                    crate::intent::resolve(self.intent.as_deref()).map_err(anyhow::Error::msg)?;
+                let intent = prompt.name.clone();
                 Ok(Compaction::Portable {
                     summary: SummarySource::SourceModel(SummarizeOpts {
                         model: self.summary_model.clone(),
                         timeout,
                         exe: self.exe_flag(source).map(str::to_owned),
+                        prompt: Some(prompt.text),
+                        intent: Some(intent),
                     }),
                     keep_from: KeepFrom::LastTurns(keep_turns),
                 })

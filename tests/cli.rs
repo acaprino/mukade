@@ -841,6 +841,106 @@ fn hop_with_a_model_summary_keeps_the_turns_asked_for() {
 }
 
 #[test]
+fn intents_lists_the_editable_prompt_folder_and_custom_files() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-intents");
+    let folder = scratch.join("custom-intents");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("security.md"), "Check every input boundary.").unwrap();
+    let (code, stdout, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &["intents"],
+        &[("MUKADE_INTENT_DIR", folder.to_str().unwrap())],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let printed: Value = serde_json::from_str(&stdout).expect("one JSON document");
+    assert_eq!(printed["default"], "generic");
+    assert_eq!(printed["directory"], folder.display().to_string());
+    let names: Vec<&str> = printed["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["name"].as_str())
+        .collect();
+    for expected in [
+        "generic",
+        "continue",
+        "execute",
+        "review",
+        "analyze",
+        "brainstorm",
+        "plan",
+        "security",
+    ] {
+        assert!(names.contains(&expected), "{names:?}");
+    }
+    let security = printed["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "security")
+        .unwrap();
+    assert_eq!(security["builtin"], false);
+    assert_eq!(security["custom"], true);
+
+    let (code, _, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &["intents"],
+        &[("MUKADE_INTENT_DIR", "relative-intents")],
+    );
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("MUKADE_INTENT_DIR must be an absolute folder"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_named_intent_prompt_reaches_the_source_model() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-intent-prompt");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    let intents = scratch.join("intent-prompts");
+    std::fs::create_dir_all(&intents).unwrap();
+    std::fs::write(intents.join("custom.md"), "CUSTOMINTENTMARKER").unwrap();
+    let observed = scratch.join("observed-args.txt");
+    let pi = support::launcher(
+        &scratch.join("bin"),
+        "pi",
+        &format!("echo %*>>\"{}\"\r\necho The summary.", observed.display()),
+        &format!(
+            "printf '%s\\n' \"$*\" >> '{}'\necho The summary.",
+            observed.display()
+        ),
+    );
+    let output = scratch.join("summary.json");
+    let (code, _, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &[
+            "dump",
+            "pi",
+            &id,
+            "--intent",
+            "custom",
+            "--pi-exe",
+            pi.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ],
+        &[("MUKADE_INTENT_DIR", intents.to_str().unwrap())],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let args = std::fs::read_to_string(&observed).expect("the fake pi records its arguments");
+    assert!(args.contains("CUSTOMINTENTMARKER"), "{args}");
+    let doc: Value =
+        serde_json::from_str(&std::fs::read_to_string(output).unwrap()).expect("a document");
+    let text = doc["messages"][0]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("The summary."), "{text}");
+    assert_eq!(doc["summary"]["summary"]["prompt"], "custom", "{doc}");
+}
+
+#[test]
 fn summary_flags_and_combinations_that_cannot_work_are_refused() {
     let scratch = support::scratch(HarnessId::Pi, "cli-summary-refused");
     let id = stage_fixture(HarnessId::Pi, &scratch);
@@ -884,6 +984,31 @@ fn summary_flags_and_combinations_that_cannot_work_are_refused() {
     );
     assert_eq!(code, Some(1), "{stderr}");
     assert!(stderr.contains("none, portable, summary"), "{stderr}");
+
+    // An intent is a summary prompt: it implies the summary transport, and cannot be combined
+    // with another one. An unknown intent is refused before the source is read.
+    for (extra, message) in [
+        (
+            vec!["--intent", "review", "--compaction", "none"],
+            "goes with --compaction summary",
+        ),
+        (
+            vec!["--intent", "no-such-intent"],
+            "unknown intent no-such-intent",
+        ),
+    ] {
+        let mut args = vec!["hop", "pi", "not-there", "claude_code"];
+        args.extend(extra);
+        let (code, _, stderr) = cli_code(&scratch, &args);
+        assert_eq!(code, Some(1), "{args:?}: {stderr}");
+        assert!(stderr.contains(message), "{args:?}: {stderr}");
+    }
+    let (code, _, stderr) = cli_code(&scratch, &["list", "pi", "--intent", "review"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("--intent is supported only by dump and hop"),
+        "{stderr}"
+    );
 
     let codex_id = stage_fixture(HarnessId::Codex, &scratch);
     let (code, _, stderr) = cli_code(

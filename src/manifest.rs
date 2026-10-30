@@ -121,7 +121,7 @@ impl Manifest {
                     "harness": facts.summary.harness.as_str(),
                     "version": facts.summary.harness_version,
                     "model": facts.summary.model,
-                    "prompt": crate::summary::SUMMARY_PROMPT_VERSION,
+                    "prompt": facts.summary.prompt.as_deref().unwrap_or(crate::summary::SUMMARY_PROMPT_VERSION),
                     "chars": facts.summary.text.chars().count(),
                     "usage": facts.summary.usage.as_deref().and_then(|usage| serde_json::from_str::<Value>(usage).ok()),
                     "left_out": facts.left_out,

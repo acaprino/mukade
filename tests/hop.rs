@@ -488,6 +488,7 @@ fn generated(harness: HarnessId, text: &str) -> SummarySource {
         model: Some("anthropic/claude-x".into()),
         usage: None,
         leftover: None,
+        prompt: None,
     })
 }
 

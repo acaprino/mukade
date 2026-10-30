@@ -102,6 +102,40 @@ fn the_prompt_is_one_line_a_cmd_launcher_can_take() {
     );
 }
 
+/// A prompt chosen by the caller replaces the generic one as the last argument to the harness.
+#[test]
+fn a_custom_prompt_reaches_the_source_harness() {
+    let dir = scratch("summary-custom-prompt");
+    let session = support::read_source(HarnessId::ClaudeCode);
+    let opts = SummarizeOpts {
+        prompt: Some("Review the changes and their tests.".into()),
+        ..SummarizeOpts::default()
+    };
+    let args = args_of(&session, &opts, &dir);
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some("Review the changes and their tests.")
+    );
+}
+
+/// A `.cmd` launcher cannot take an arbitrary argument: a multiline or unsafe prompt is refused
+/// before the launcher is spawned.
+#[cfg(windows)]
+#[test]
+fn a_batch_launcher_refuses_an_unsafe_prompt_before_spawning() {
+    let dir = scratch("summary-batch-prompt");
+    let launcher = support::launcher(&dir.join("bin"), "pi", "echo should not run", "echo no");
+    let session = support::read_source(HarnessId::Pi);
+    let opts = SummarizeOpts {
+        exe: Some(launcher.display().to_string()),
+        prompt: Some("line one\nline two".into()),
+        ..SummarizeOpts::default()
+    };
+    let error = summary::summary_command(&session, &opts, &dir).unwrap_err();
+    assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
+    assert!(error.to_string().contains("batch launcher"), "{error}");
+}
+
 /// The commands of the live record's "Final commands" table, the prompt last.
 #[test]
 fn each_harness_gets_its_non_saving_command() {
