@@ -69,12 +69,12 @@ impl Writer for Codex {
         Ok(Written {
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
-            resume: vec![
-                opts.exe.clone().unwrap_or_else(|| "codex".into()),
-                "exec".into(),
-                "resume".into(),
-                id,
-            ],
+            resume: crate::catalog::resume(
+                HarnessId::Codex,
+                opts.exe.as_deref().unwrap_or("codex"),
+                &id,
+                None,
+            ),
         })
     }
 }

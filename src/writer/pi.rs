@@ -61,12 +61,12 @@ impl Writer for Pi {
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
             // Pi searches the current project first, so the library passes the file path (§5).
-            resume: vec![
-                opts.exe.clone().unwrap_or_else(|| "pi".into()),
-                "-p".into(),
-                "--session".into(),
-                file.to_string_lossy().into_owned(),
-            ],
+            resume: crate::catalog::resume(
+                HarnessId::Pi,
+                opts.exe.as_deref().unwrap_or("pi"),
+                &id,
+                Some(&file),
+            ),
         })
     }
 }

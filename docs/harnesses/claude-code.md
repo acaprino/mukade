@@ -77,6 +77,26 @@ Requirements: macOS 13.0+, Windows 10 1809+ or Windows Server 2019+, Ubuntu 20.0
 
 - Update: native installs update themselves in the background; `claude update` (alias `claude upgrade`) forces a check; Homebrew, WinGet, apt, dnf and apk do not self-update (`brew upgrade claude-code`, `winget upgrade Anthropic.ClaudeCode`); npm: `npm install -g @anthropic-ai/claude-code@latest` [9][10]. `DISABLE_AUTOUPDATER=1` stops the background check [16].
 - Launcher location: native installs put it at `~/.local/bin/claude` (a symlink into `~/.local/share/claude/versions/` on macOS and Linux) [10]; on this machine `C:\Users\alfio\.local\bin\claude.exe` [1][6].
+
+### Canonical locations and finding an existing install
+
+| what | Windows | macOS / Linux |
+|---|---|---|
+| Native-install launcher | `%USERPROFILE%\.local\bin\claude.exe` | `~/.local/bin/claude` |
+| Native-install versions | `%USERPROFILE%\.local\share\claude\versions\` | `~/.local/share/claude/versions/` |
+| Default session/config store | `%USERPROFILE%\.claude` | `~/.claude` |
+
+The macOS/Linux launcher is a symlink into the versions directory; on Windows the same native layout
+is used under `%USERPROFILE%` [28]. The store is `~/.claude` on every OS unless `CLAUDE_CONFIG_DIR`
+moves it [16][18]. Homebrew, apt/dnf/apk, WinGet and npm installs are found through `PATH` and their
+package manager, not by assuming the native path: use `command -v claude` (macOS/Linux),
+`Get-Command claude -All` (PowerShell), `brew --prefix` or `npm prefix -g`, then `claude --version`.
+`claude doctor` also reports installation health without starting a session [28].
+
+`mukade harnesses` reports the one executable it resolves, not every copy on disk. See the
+[harness catalog](../reference/harness-catalog.md#finding-existing-installations) for the shared
+per-OS discovery procedure and for selecting a non-default installation in mukade.
+
 - Windows: Git for Windows is optional; with it the Bash tool uses Git Bash, without it Claude Code uses the PowerShell tool [10].
 - Alpine / musl: needs `bash`, `curl`, `libgcc`, `libstdc++`, `ripgrep` and `USE_BUILTIN_RIPGREP=0` [10].
 - Uninstall: see the setup page [10] (not reproduced here **[U]**).
@@ -202,7 +222,7 @@ Sources: `src/reader/claude_code.rs`, `src/writer/claude_code.rs`, `src/writer/p
 | CLI name | `claude_code` |
 | Store variable | `CLAUDE_CONFIG_DIR` (sessions under `projects/`); required explicitly for read and write, never defaulted [6][8] |
 | Executable flag / variable | `--claude-exe` / `MUKADE_CLAUDE_EXE` [6][8] |
-| Executable resolution | flag, then `MUKADE_CLAUDE_EXE`, then `PATH`, then `~/.local/bin/claude.exe` and `~/.local/bin/claude` (under `USERPROFILE` or `HOME`), then `claude` [6] |
+| Executable resolution | flag, then `MUKADE_CLAUDE_EXE`, then `PATH`, then the native launcher `~/.local/bin/claude[.exe]` from [`catalog/harnesses.json`](../../catalog/harnesses.json), then `claude` [6] |
 | Version stamp | `--dest-version`, else the first version printed by the resolved executable's `--version` [7] |
 | Detection | a directory with at least one `projects/<project>/*.jsonl` is Claude Code [7] |
 | Resume command written | `claude -p --resume <id>` (the resolved executable replaces `claude`) [5] |
@@ -250,7 +270,7 @@ still run [27]. The JSON's `total_cost_usd`, `usage` and `modelUsage` go to the 
 sessions, of some entrypoints, superseded ("continued in"), recorded under another directory with
 the same project slug, or made of bookkeeping rows only (no `"parentUuid":`).
 
-All accessed 2026-10-28.
+All accessed 2026-10-28 unless a source says otherwise.
 
 Local (this repository and this machine):
 
@@ -284,3 +304,4 @@ Web:
 25. License file, https://raw.githubusercontent.com/anthropics/claude-code/main/LICENSE.md
 26. npm registry, https://registry.npmjs.org/@anthropic-ai/claude-code/latest (`version` 2.1.312, `license` "SEE LICENSE IN README.md", `engines.node` ">=22.0.0", `bin.claude` "bin/claude.exe")
 27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+28. Advanced setup and the native installers, https://code.claude.com/docs/en/setup and https://claude.ai/install.sh, accessed 2026-10-30 (canonical launcher, versions directory, `claude doctor`).

@@ -688,6 +688,68 @@ fn pi_id(file: &Path) -> String {
         .unwrap_or_else(|| stem.to_string())
 }
 
+/// One read-only pass over Pi's store: how many session files it holds and how many of them are
+/// forks. Both numbers come from the same directory walk; only each file's first line is read.
+pub struct StoreSummary {
+    pub sessions: usize,
+    /// The fork count, or the first header that could not be read or understood. A bad header
+    /// never hides the sessions that were counted.
+    pub forks: Result<usize, anyhow::Error>,
+}
+
+/// Count sessions and forks in one traversal of `<agent-dir>/sessions`.
+pub fn store_summary(agent_dir: &Path) -> Result<StoreSummary> {
+    let mut sessions = 0;
+    let mut forks = 0;
+    let mut header_error = None;
+    for file in session_files(&agent_dir.join("sessions"))? {
+        sessions += 1;
+        if header_error.is_some() {
+            continue;
+        }
+        match names_a_parent(&file) {
+            Ok(true) => forks += 1,
+            Ok(false) => {}
+            Err(error) => header_error = Some(error),
+        }
+    }
+    Ok(StoreSummary {
+        sessions,
+        forks: match header_error {
+            Some(error) => Err(error),
+            None => Ok(forks),
+        },
+    })
+}
+
+/// How many of Pi's sessions are forks: a forked session's header names its `parentSession` (the
+/// fork commands, and mukade's own summary fork, both write it).
+pub fn forks_in(agent_dir: &Path) -> Result<usize> {
+    store_summary(agent_dir)?.forks
+}
+
+/// Read one session's first line and report whether it names a parent session.
+fn names_a_parent(file: &Path) -> Result<bool> {
+    use std::io::BufRead;
+    let handle = std::fs::File::open(file)
+        .with_context(|| format!("open Pi session header {}", file.display()))?;
+    let mut header = String::new();
+    std::io::BufReader::new(handle)
+        .read_line(&mut header)
+        .with_context(|| format!("read Pi session header {}", file.display()))?;
+    let row: Value = serde_json::from_str(header.trim())
+        .with_context(|| format!("parse Pi session header {}", file.display()))?;
+    anyhow::ensure!(
+        row.get("type").and_then(Value::as_str) == Some("session"),
+        "missing Pi session header in {}",
+        file.display()
+    );
+    Ok(row
+        .get("parentSession")
+        .and_then(Value::as_str)
+        .is_some_and(|parent| !parent.is_empty()))
+}
+
 /// Every session file under Pi's `sessions/` directory, whatever project folder it sits in.
 fn session_files(sessions: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();

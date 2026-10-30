@@ -193,13 +193,7 @@ impl Writer for Opencode {
                 Some(db) => db.to_string_lossy().into_owned(),
                 None => format!("opencode's configured store, session {imported}"),
             },
-            resume: vec![
-                exe,
-                "run".into(),
-                "--standalone".into(),
-                "--session".into(),
-                imported,
-            ],
+            resume: crate::catalog::resume(HarnessId::OpenCode, &exe, &imported, None),
         })
     }
 }

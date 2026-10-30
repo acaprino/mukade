@@ -11,6 +11,7 @@
 //! `fixtures/` carry.
 
 pub mod cache;
+pub mod catalog;
 pub mod cli;
 pub mod detect;
 pub mod exe;

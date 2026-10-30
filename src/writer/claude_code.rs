@@ -58,12 +58,12 @@ impl Writer for ClaudeCode {
         Ok(Written {
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
-            resume: vec![
-                opts.exe.clone().unwrap_or_else(|| "claude".into()),
-                "-p".into(),
-                "--resume".into(),
-                id,
-            ],
+            resume: crate::catalog::resume(
+                HarnessId::ClaudeCode,
+                opts.exe.as_deref().unwrap_or("claude"),
+                &id,
+                None,
+            ),
         })
     }
 }

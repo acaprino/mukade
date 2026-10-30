@@ -329,21 +329,21 @@ fn import_uses_the_reserved_session_id_and_provenance() {
         let ready = ready.clone();
         std::thread::spawn(move || {
             for _ in 0..500 {
-                if let Ok(bytes) = std::fs::read(&observed) {
-                    if let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        let db = rusqlite::Connection::open(&database).unwrap();
-                        db.execute_batch(
-                            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, metadata TEXT)",
-                        )
-                        .unwrap();
-                        db.execute(
-                            "INSERT INTO session_v2 VALUES (?, ?)",
-                            [reserved, &doc["info"]["metadata"].to_string()],
-                        )
-                        .unwrap();
-                        std::fs::write(&ready, "done").unwrap();
-                        return true;
-                    }
+                if let Ok(bytes) = std::fs::read(&observed)
+                    && let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&bytes)
+                {
+                    let db = rusqlite::Connection::open(&database).unwrap();
+                    db.execute_batch(
+                        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, metadata TEXT)",
+                    )
+                    .unwrap();
+                    db.execute(
+                        "INSERT INTO session_v2 VALUES (?, ?)",
+                        [reserved, &doc["info"]["metadata"].to_string()],
+                    )
+                    .unwrap();
+                    std::fs::write(&ready, "done").unwrap();
+                    return true;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }

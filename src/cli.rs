@@ -26,12 +26,17 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 pub const USAGE: &str = "\
+mukade harnesses
 mukade list  <harness> [options]
 mukade dump  <harness> <session-id> [options]
 mukade document opencode <src-harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
 mukade detect <dir>
+
+`harnesses` lists every supported harness with the executable and store mukade finds on this
+machine, its version, session/fork counts and lineage support. Store reads are read-only; discovered
+executables are asked for `--version`.
 
 harnesses: claude_code | codex | opencode | pi
 
@@ -187,6 +192,12 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     if let Some(agent) = flags.dest_agent.as_deref() {
         crate::writer::opencode::validate_agent(agent)?;
+    }
+    if command == "harnesses" {
+        no_more(&positional, 0)?;
+        anyhow::ensure!(flags == Flags::default(), "harnesses takes no options");
+        print_harnesses()?;
+        return Ok(());
     }
     if command == "detect" {
         let path = positional.first().context("detect needs a directory")?;
@@ -440,6 +451,237 @@ pub fn run(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+struct HarnessStoreInfo {
+    path: Option<std::path::PathBuf>,
+    origin: &'static str,
+    state: String,
+    sessions: String,
+    forks: String,
+}
+
+/// The stores the inventory looks at: the harness's own variable when this process sets a
+/// non-empty one, else the catalog's default location for this platform. Read-only: the library's
+/// explicit store contract is unchanged, and no other command reads these defaults.
+fn inventory_roots() -> StoreRoots {
+    use std::path::PathBuf;
+    let vars = crate::catalog::Vars::from_env();
+    let pick = |harness: HarnessId| {
+        std::env::var_os(crate::catalog::store_env(harness))
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| crate::catalog::store_default_with(harness, &vars))
+    };
+    let opencode_db = pick(HarnessId::OpenCode).map(|path| {
+        if path.is_absolute() || path.as_os_str() == ":memory:" {
+            return path;
+        }
+        // OpenCode resolves a relative OPENCODE_DB beneath its data directory, not mukade's cwd:
+        // `$XDG_DATA_HOME/opencode/custom.db` (or the same fallback the catalog uses).
+        crate::catalog::store_default_with(HarnessId::OpenCode, &vars)
+            .and_then(|default| default.parent().map(|dir| dir.join(&path)))
+            .unwrap_or(path)
+    });
+    StoreRoots {
+        claude_config_dir: pick(HarnessId::ClaudeCode),
+        codex_home: pick(HarnessId::Codex),
+        opencode_db,
+        pi_agent_dir: pick(HarnessId::Pi),
+    }
+}
+
+fn store_path(harness: HarnessId, roots: &StoreRoots) -> Option<&std::path::Path> {
+    match harness {
+        HarnessId::ClaudeCode => roots.claude_config_dir.as_deref(),
+        HarnessId::Codex => roots.codex_home.as_deref(),
+        HarnessId::OpenCode => roots.opencode_db.as_deref(),
+        HarnessId::Pi => roots.pi_agent_dir.as_deref(),
+    }
+}
+
+fn store_env_name(harness: HarnessId) -> &'static str {
+    crate::catalog::store_env(harness)
+}
+
+/// What the catalog says about lineage, in one line: the fields when the store records them, or
+/// that it does not and why.
+fn lineage_info(harness: HarnessId) -> String {
+    let lineage = &crate::catalog::entry(harness).lineage;
+    if lineage.recorded {
+        format!("recorded: {}", lineage.fields.join(", "))
+    } else {
+        format!("not recorded ({})", lineage.note)
+    }
+}
+
+fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
+    use std::path::Path;
+    let path = store_path(harness, roots).map(Path::to_path_buf);
+    let explicit = std::env::var_os(store_env_name(harness))
+        .is_some_and(|value| !value.is_empty());
+    let origin = if explicit { "environment" } else { "default" };
+    let missing = || HarnessStoreInfo {
+        path: path.clone(),
+        origin,
+        state: "not found".into(),
+        sessions: "unknown".into(),
+        forks: if matches!(harness, HarnessId::ClaudeCode | HarnessId::Codex) {
+            "unknown (not recorded)".into()
+        } else {
+            "unknown".into()
+        },
+    };
+    let Some(path) = path.clone() else {
+        return missing();
+    };
+    if harness == HarnessId::OpenCode && path.as_os_str() == ":memory:" {
+        return HarnessStoreInfo {
+            path: Some(path),
+            origin,
+            state: "non-persistent (:memory:)".into(),
+            sessions: "unknown".into(),
+            forks: "unknown".into(),
+        };
+    }
+    if !path.exists() {
+        return missing();
+    }
+    let detections = crate::detect::detect_store(&path);
+    let recognized = detections.iter().any(|detection| detection.harness == harness);
+    if !recognized && !explicit {
+        return HarnessStoreInfo {
+            path: Some(path),
+            origin,
+            state: "present, layout not recognized".into(),
+            sessions: "unknown".into(),
+            forks: if matches!(harness, HarnessId::ClaudeCode | HarnessId::Codex) {
+                "unknown (not recorded)".into()
+            } else {
+                "unknown".into()
+            },
+        };
+    }
+    let reader = match crate::reader::for_harness(harness) {
+        Ok(reader) => reader,
+        Err(error) => {
+            return HarnessStoreInfo {
+                path: Some(path),
+                origin,
+                state: format!("read error: {error}"),
+                sessions: "unknown".into(),
+                forks: "unknown".into(),
+            };
+        }
+    };
+    let (session_count, fork_count) = if harness == HarnessId::OpenCode {
+        match crate::reader::opencode::store_counts(&path) {
+            Ok(counts) => (Ok(counts.sessions), Some(Ok(counts.forks))),
+            Err(error) => {
+                let error = format!("{error:#}");
+                (
+                    Err(anyhow::anyhow!(error.clone())),
+                    Some(Err(anyhow::anyhow!(error))),
+                )
+            }
+        }
+    } else if harness == HarnessId::Pi {
+        match roots.pi_agent_dir.as_deref().map(crate::reader::pi::store_summary) {
+            Some(Ok(summary)) => (Ok(summary.sessions), Some(summary.forks)),
+            Some(Err(error)) => {
+                let error = format!("{error:#}");
+                (
+                    Err(anyhow::anyhow!(error.clone())),
+                    Some(Err(anyhow::anyhow!(error))),
+                )
+            }
+            None => {
+                let error = "PI_CODING_AGENT_DIR is not set: no Pi store to list".to_string();
+                (
+                    Err(anyhow::anyhow!(error.clone())),
+                    Some(Err(anyhow::anyhow!(error))),
+                )
+            }
+        }
+    } else {
+        (reader.list(roots).map(|sessions| sessions.len()), None)
+    };
+    let state = match &session_count {
+        Ok(_) => "recognized".to_string(),
+        Err(error) => format!(
+            "recognized, read error: {}",
+            error.to_string().replace(['\r', '\n'], " ")
+        ),
+    };
+    let sessions = session_count
+        .map(|count| count.to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    let forks = match fork_count {
+        Some(Ok(count)) => count.to_string(),
+        Some(Err(error)) => format!(
+            "unknown ({})",
+            error.to_string().replace(['\r', '\n'], " ")
+        ),
+        None => "unknown (not recorded)".into(),
+    };
+    HarnessStoreInfo {
+        path: Some(path),
+        origin,
+        state,
+        sessions,
+        forks,
+    }
+}
+
+fn print_harnesses() -> Result<()> {
+    use crate::exe::Source;
+    let roots = inventory_roots();
+    println!(
+        "mukade harnesses - local inventory; store reads are read-only (catalog {}, {} supported)",
+        crate::catalog::catalog().schema,
+        HarnessId::ALL.len()
+    );
+    for harness in HarnessId::ALL {
+        let entry = crate::catalog::entry(harness);
+        let (binary, source) = crate::exe::resolve_source(harness, None);
+        let status = match source {
+            Source::Override | Source::Env => "configured",
+            Source::Path | Source::WellKnown => "installed",
+            Source::Name => "not found",
+        };
+        let version = if source == Source::Name {
+            "unknown".to_string()
+        } else {
+            crate::exe::version_of_in(&binary, None).unwrap_or_else(|| "unknown".into())
+        };
+        let source = match source {
+            Source::Override => entry.binary.flag.as_str(),
+            Source::Env => entry.binary.env.as_str(),
+            Source::Path => "PATH",
+            Source::WellKnown => "catalog location",
+            Source::Name => "not on PATH, no catalog location",
+        };
+        let store = inspect_store(harness, &roots);
+        println!("\n{} ({}) - {}", harness.as_str(), entry.display, status);
+        println!("  binary:   {} [{}]", binary, source);
+        println!("  version:  {}", version);
+        println!(
+            "  store:    {} [{}; {}]",
+            store
+                .path
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unknown".into()),
+            store_env_name(harness),
+            store.origin
+        );
+        println!("  status:   {}", store.state);
+        println!("  sessions: {}", store.sessions);
+        println!("  forks:    {}", store.forks);
+        println!("  lineage:  {}", lineage_info(harness));
+        println!("  layout:   {}", crate::catalog::layout(harness).join(" | "));
+    }
+    Ok(())
+}
+
 /// Hand back a written session: its receipt on stdout first, so a caller always learns what was
 /// written, then the manifest file when one was asked for. A resume that failed after the write
 /// still has both (Â§5), and keeps its own exit code.
@@ -502,7 +744,7 @@ fn no_more(operands: &[&str], expected: usize) -> Result<()> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 struct Flags {
     cwd: Option<String>,
     dest_version: Option<String>,

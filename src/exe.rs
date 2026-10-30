@@ -12,14 +12,9 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The command name a default install puts on `PATH`.
+/// The command name a default install puts on `PATH`, from the harness catalog.
 pub fn binary_name(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "claude",
-        HarnessId::Codex => "codex",
-        HarnessId::OpenCode => "opencode",
-        HarnessId::Pi => "pi",
-    }
+    &crate::catalog::entry(harness).binary.name
 }
 
 /// The variable a caller uses to name a custom executable for this harness.
@@ -32,8 +27,29 @@ pub fn env_var_name(harness: HarnessId) -> &'static str {
     }
 }
 
+/// Where the binary [`resolve`] returned came from, in the order the resolution tries them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// The caller's `--<harness>-exe`.
+    Override,
+    /// The harness's own `MUKADE_*_EXE` variable.
+    Env,
+    /// The binary on `PATH`.
+    Path,
+    /// A well-known install location.
+    WellKnown,
+    /// Nothing was found: the plain command name is all there is.
+    Name,
+}
+
 /// The executable to spawn for `harness`. `explicit` wins over every other source.
 pub fn resolve(harness: HarnessId, explicit: Option<&str>) -> String {
+    resolve_source(harness, explicit).0
+}
+
+/// [`resolve`], keeping which source answered. `mukade harnesses` prints it, so a caller can tell
+/// a binary it named from one mukade found on its own.
+pub fn resolve_source(harness: HarnessId, explicit: Option<&str>) -> (String, Source) {
     let env = std::env::var(env_var_name(harness))
         .ok()
         .filter(|value| !value.is_empty());
@@ -41,7 +57,7 @@ pub fn resolve(harness: HarnessId, explicit: Option<&str>) -> String {
     let well_known = default_candidates(harness)
         .into_iter()
         .find(|path| path.is_file());
-    pick(explicit, env, on_path(name), well_known, name)
+    pick_source(explicit, env, on_path(name), well_known, name)
 }
 
 /// The version a harness binary reports, found as cheaply as it can be:
@@ -168,6 +184,7 @@ pub fn is_batch(program: &str) -> bool {
 
 /// The pure ordering of [`resolve`], kept separate so the precedence is testable without a
 /// process environment.
+#[cfg(test)]
 fn pick(
     explicit: Option<&str>,
     env: Option<String>,
@@ -175,19 +192,31 @@ fn pick(
     well_known: Option<PathBuf>,
     name: &str,
 ) -> String {
+    pick_source(explicit, env, on_path, well_known, name).0
+}
+
+/// [`pick`], keeping the source that answered: an explicit override, the harness's own variable,
+/// `PATH`, a well-known install location, then the bare command name.
+fn pick_source(
+    explicit: Option<&str>,
+    env: Option<String>,
+    on_path: Option<PathBuf>,
+    well_known: Option<PathBuf>,
+    name: &str,
+) -> (String, Source) {
     if let Some(path) = explicit.filter(|value| !value.is_empty()) {
-        return path.to_string();
+        return (path.to_string(), Source::Override);
     }
     if let Some(value) = env {
-        return value;
+        return (value, Source::Env);
     }
     if let Some(path) = on_path {
-        return path.to_string_lossy().into_owned();
+        return (path.to_string_lossy().into_owned(), Source::Path);
     }
     if let Some(path) = well_known {
-        return path.to_string_lossy().into_owned();
+        return (path.to_string_lossy().into_owned(), Source::WellKnown);
     }
-    name.to_string()
+    (name.to_string(), Source::Name)
 }
 
 /// The binary on `PATH`, as a full path. Windows tries the `PATHEXT` extensions, so a `pi.cmd`
@@ -223,65 +252,11 @@ fn on_path_in(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     None
 }
 
-/// Where a default install of this harness lives when it is not on `PATH`. Only locations the
-/// harness's own installers use are listed; a custom location is what the overrides are for.
+/// Where a default install of this harness lives when it is not on `PATH`. The locations are the
+/// catalog's (`catalog/harnesses.json`), per platform: only locations a harness's own installer
+/// uses are listed, and a custom location is what the overrides are for.
 fn default_candidates(harness: HarnessId) -> Vec<PathBuf> {
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from);
-    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-    let roaming = std::env::var_os("APPDATA").map(PathBuf::from);
-    let mut out = Vec::new();
-    match harness {
-        HarnessId::ClaudeCode => {
-            // The native installer: ~/.local/bin/claude (claude.exe on Windows).
-            if let Some(home) = home {
-                out.push(home.join(".local").join("bin").join("claude.exe"));
-                out.push(home.join(".local").join("bin").join("claude"));
-            }
-        }
-        HarnessId::Codex => {
-            // The Codex CLI installer: %LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe.
-            if let Some(local) = local {
-                out.push(
-                    local
-                        .join("Programs")
-                        .join("OpenAI")
-                        .join("Codex")
-                        .join("bin")
-                        .join("codex.exe"),
-                );
-            }
-        }
-        HarnessId::OpenCode => {
-            // The real binary of the npm package (the `opencode.cmd` launcher on `PATH` only
-            // forwards its arguments to it, so either works); the install script's
-            // ~/.opencode/bin on Unix.
-            if let Some(roaming) = roaming {
-                out.push(
-                    roaming
-                        .join("npm")
-                        .join("node_modules")
-                        .join("@opencode")
-                        .join("cli")
-                        .join("bin")
-                        .join("opencode.exe"),
-                );
-            }
-            if let Some(home) = home {
-                out.push(home.join(".opencode").join("bin").join("opencode"));
-            }
-        }
-        HarnessId::Pi => {
-            // The npm package `@earendil-works/pi-coding-agent` puts a `pi` launcher in the
-            // global npm bin directory.
-            if let Some(roaming) = roaming {
-                out.push(roaming.join("npm").join("pi.cmd"));
-                out.push(roaming.join("npm").join("pi"));
-            }
-        }
-    }
-    out
+    crate::catalog::binary_candidates(harness)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -418,6 +393,59 @@ mod tests {
         assert!(is_batch("run.BAT"));
         assert!(!is_batch("pi"));
         assert!(!is_batch(r"C:\bin\pi.exe"));
+    }
+
+    /// The order `resolve` tries is the order the source names: a caller's override first, then
+    /// the harness's variable, then `PATH`, then a well-known location, then the bare name.
+    #[test]
+    fn the_source_names_which_step_answered() {
+        let path = PathBuf::from("/on/path/pi");
+        let well_known = PathBuf::from("/well/known/pi");
+        let cases = [
+            (
+                pick_source(
+                    Some("/mine/pi"),
+                    Some("/env/pi".into()),
+                    Some(path.clone()),
+                    Some(well_known.clone()),
+                    "pi",
+                ),
+                ("/mine/pi", Source::Override),
+            ),
+            (
+                pick_source(
+                    Some(""),
+                    Some("/env/pi".into()),
+                    Some(path.clone()),
+                    Some(well_known.clone()),
+                    "pi",
+                ),
+                ("/env/pi", Source::Env),
+            ),
+            (
+                pick_source(
+                    None,
+                    None,
+                    Some(path.clone()),
+                    Some(well_known.clone()),
+                    "pi",
+                ),
+                ("/on/path/pi", Source::Path),
+            ),
+            (
+                pick_source(None, None, None, Some(well_known), "pi"),
+                ("/well/known/pi", Source::WellKnown),
+            ),
+            (
+                pick_source(None, None, None, None, "pi"),
+                ("pi", Source::Name),
+            ),
+        ];
+        for ((found, source), (path, expected)) in cases {
+            assert_eq!((found.as_str(), source), (path, expected));
+        }
+        // An empty override is not an override: it is the same as none at all.
+        assert_eq!(pick(Some(""), None, None, None, "pi"), "pi");
     }
 
     fn scratch(tag: &str) -> PathBuf {

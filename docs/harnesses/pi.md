@@ -85,6 +85,27 @@ version suffix (`…/pi-coding-agent@1.2.0`); check any install with `pi --versi
 Windows the `bash` tool needs a Bash: Pi tries `shellPath` in `settings.json`, then Git Bash under
 `Program Files`, then `bash.exe` on `PATH` [12].
 
+### Canonical locations and finding an existing install
+
+| what | Windows | macOS / Linux |
+|---|---|---|
+| Managed-install launcher | `%USERPROFILE%\.pi\agent\bin\pi.cmd` | `~/.pi/agent/bin/pi` |
+| Managed releases | `%USERPROFILE%\.pi\agent\install\releases\`, selected by `current-version` | `~/.pi/agent/install/releases/`, selected by `current-version` |
+| npm launcher | `%APPDATA%\npm\pi.cmd` | `$(npm prefix -g)/bin/pi` |
+| Default agent/session store | `%USERPROFILE%\.pi\agent` | `~/.pi/agent` |
+
+The current managed installer puts the launcher in `<PI_CODING_AGENT_DIR>/bin` (default
+`~/.pi/agent/bin`) and selects a release under `<PI_CODING_AGENT_DIR>/install/releases/`; the npm
+launcher remains a separate installation form [35]. `PI_CODING_AGENT_DIR` moves the store on every
+OS [6][7][16]. Find the selected binary with `command -v pi` (macOS/Linux) or
+`Get-Command pi -All` (PowerShell), the npm prefix with `npm prefix -g`, and the version with
+`pi --version`. For session storage moved separately with `--session-dir`,
+`PI_CODING_AGENT_SESSION_DIR` or `sessionDir`, see the limitation in §8: mukade does not follow it.
+
+`mukade harnesses` reports the one executable it resolves, not every copy on disk. See the
+[harness catalog](../reference/harness-catalog.md#finding-existing-installations) for the shared
+per-OS discovery procedure and for selecting a non-default installation in mukade.
+
 ### Licence
 
 MIT, in `package.json`, the README and the repository, a monorepo that also holds `pi-ai`,
@@ -239,7 +260,7 @@ replace a finished message; `turn_end` and `agent_before_settle` can append `cus
 |---|---|
 | CLI name | `pi` (`mukade list pi`, `mukade dump pi <id>`, `mukade hop <src> <id> pi …`; examples in [`../usage.md`](../usage.md)) [32] |
 | store root | `PI_CODING_AGENT_DIR`, required even for a standard install; sessions are read and written under `<PI_CODING_AGENT_DIR>/sessions` [31][32] |
-| executable | `--pi-exe` → `MUKADE_PI_EXE` → `pi` on `PATH` (with `PATHEXT`, so npm's `pi.cmd` is found) → `%APPDATA%\npm\pi.cmd`, `%APPDATA%\npm\pi` → bare `pi` [31] |
+| executable | `--pi-exe` → `MUKADE_PI_EXE` → `pi` on `PATH` (with `PATHEXT`) → the managed launcher `~/.pi/agent/bin/pi[.cmd]`, then npm's `%APPDATA%\npm\pi.cmd` or `pi` on Windows → bare `pi`; locations live in [`catalog/harnesses.json`](../../catalog/harnesses.json) [31] |
 | store detection | `sessions/--*--/*.jsonl` and Pi's `models.json` [32] |
 
 mukade ignores `PI_CODING_AGENT_SESSION_DIR`, the `sessionDir` setting and `--session-dir`:
@@ -308,7 +329,7 @@ stdout. The provider and the model id go apart, because a model id can hold a sl
 ## 9. Sources
 
 `<pkg>` = `C:\Users\alfio\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent` (1.2.0);
-repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28.
+repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28 unless a source says otherwise.
 
 1. Pi `package.json`, `<pkg>\package.json`.
 2. Pi README, `<pkg>\README.md`.
@@ -344,3 +365,4 @@ repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28.
 32. `README.md`, `docs/usage.md`.
 33. `src/model/tool.rs` (`CanonicalTool::from_pi`).
 34. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+35. Official managed installers, https://pi.dev/install.sh and https://pi.dev/install.ps1, accessed 2026-10-30 (`<PI_CODING_AGENT_DIR>/bin`, `<PI_CODING_AGENT_DIR>/install/releases/`, `current-version`).

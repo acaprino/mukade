@@ -414,6 +414,36 @@ impl Reader for Opencode {
     }
 }
 
+/// Session and fork counts read from OpenCode's own store. The database is opened read-only;
+/// `total_sessions` includes child sessions, unlike [`Reader::list`], which lists roots only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreCounts {
+    pub sessions: usize,
+    pub forks: usize,
+}
+
+pub fn store_counts(db: &Path) -> Result<StoreCounts> {
+    use rusqlite::{Connection, OpenFlags};
+    let connection = Connection::open_with_flags(
+        db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open {} read-only", db.display()))?;
+    connection.busy_timeout(std::time::Duration::from_secs(2))?;
+    let (sessions, forks): (i64, i64) = connection
+        .query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN parent_id IS NOT NULL OR fork_session_id IS NOT NULL THEN 1 ELSE 0 END) \
+             FROM session_v2",
+            [],
+            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )
+        .with_context(|| format!("count sessions in {}", db.display()))?;
+    Ok(StoreCounts {
+        sessions: usize::try_from(sessions).unwrap_or(0),
+        forks: usize::try_from(forks).unwrap_or(0),
+    })
+}
+
 /// Which `opencode` to spawn: the caller's override (`MUKADE_OPENCODE_EXE`), then the binary on
 /// `PATH`, then the well-known install locations.
 fn opencode_binary() -> String {

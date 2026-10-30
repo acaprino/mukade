@@ -75,12 +75,19 @@ For complete examples for each harness, including ones kept in a folder of their
 [command-line usage guide](docs/usage.md).
 
 ```text
+mukade harnesses                           # local inventory: installed harnesses, versions, stores and session/fork counts
 mukade list  <harness>
 mukade dump  <harness> <session-id>          # the interchange document on stdout, or --output <file>
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
 mukade hop   <src-harness> <session-id> <dst-harness> [options]   # --all-branches: a Codex thread whole
 mukade detect <dir>                          # which harness stores the directory holds
 ```
+
+The binaries' own install locations, the default store of each harness on Windows, macOS and Linux,
+their store layouts and the lineage each records are one data file,
+[`catalog/harnesses.json`](catalog/harnesses.json), documented in the
+[harness catalog](docs/reference/harness-catalog.md). It is embedded in the executable, and
+`mukade harnesses` reads it.
 
 A `hop` reads the source and writes the destination in one process, so set **both** harnesses' store
 variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`):

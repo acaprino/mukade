@@ -11,6 +11,7 @@
 - [Tool conversion tables](tool-conversion-tables.md): tool mappings between harnesses.
 - Harness guides: [Claude Code](harnesses/claude-code.md), [Codex](harnesses/codex.md), [OpenCode](harnesses/opencode.md) and [Pi](harnesses/pi.md).
 - [Harness session persistence reference](reference/harness-session-persistence-reference.md): secondary research with its original provenance and limitations.
+- [Harness catalog](reference/harness-catalog.md): the four harnesses, their own install and store locations on Windows, macOS and Linux, their store layouts and the lineage each records (`catalog/harnesses.json`).
 
 ## Verification records
 

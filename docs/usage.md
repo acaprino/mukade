@@ -40,6 +40,42 @@ not install harnesses or transfer their credentials.
 
 ## 2. Quick start
 
+### Find supported harnesses and existing installations
+
+List the supported harnesses found on this machine, with their binary, version, store, session
+counts and the lineage information each format records:
+
+```powershell
+mukade harnesses
+```
+
+This command checks the standard store locations and honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+`OPENCODE_DB`, `PI_CODING_AGENT_DIR` and `MUKADE_*_EXE`. It reads store files without modifying them
+and asks a discovered executable for its version; unknown counts and lineage are shown as unknown,
+not guessed. It reports **one resolved executable per harness**, not every copy on disk, and does
+not change the explicit-root behavior of `list`, `dump`, `write` or `hop`.
+
+The locations it consults, per harness and per platform, are the [harness catalog](reference/harness-catalog.md)
+(`catalog/harnesses.json`), which ships inside the executable. To enumerate `PATH` matches yourself:
+
+```powershell
+# Windows PowerShell
+Get-Command claude,codex,opencode,pi -All -ErrorAction SilentlyContinue |
+  Select-Object Name,Source
+```
+
+```bash
+# macOS / Linux
+for h in claude codex opencode pi; do command -v "$h" || true; done
+```
+
+Use `npm prefix -g`, `npm root -g` or `brew --prefix` for package-managed installs, then run each
+binary's `--version`. For custom executables and stores, the override order and `--root` are in
+[Stores and executables](#8-stores-and-executables); the full per-OS discovery procedure and the
+canonical native locations are in [Finding existing installations](reference/harness-catalog.md#finding-existing-installations).
+
+### Move your first session
+
 Continue a Claude Code session in Pi:
 
 ```powershell
@@ -457,10 +493,12 @@ environment explicitly when isolation matters.
 
 An executable override points to the **launcher or executable**, not its installation directory.
 The CLI resolves the destination executable using its flag, then its `MUKADE_*_EXE` variable,
-then `PATH` (`.cmd` launchers included), then known installation locations, and finally the bare
-command name. An explicitly configured executable is also put into the returned resume command.
-OpenCode is special: when it is the **source**, its export reader uses `MUKADE_OPENCODE_EXE` or
-default resolution, not the `--opencode-exe` flag. The flag applies to OpenCode as a destination.
+then `PATH` (`.cmd` launchers included), then the platform locations in
+[`catalog/harnesses.json`](../catalog/harnesses.json), and finally the bare command name. Run
+`mukade harnesses` to see which one it resolves. An explicitly configured executable is also put
+into the returned resume command. OpenCode is special: when it is the **source**, its export reader
+uses `MUKADE_OPENCODE_EXE` or default resolution, not the `--opencode-exe` flag. The flag applies to
+OpenCode as a destination.
 
 `--root` changes the selected harness's store for `list`, `dump` or `write`. For `hop`, it applies
 to the **source**, including when both ends use the same harness; set the destination variable in

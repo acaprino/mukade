@@ -72,7 +72,27 @@ Documentation: https://developers.openai.com/codex [2] (as of 2026-10-28 its pag
   Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false` (Windows:
   `$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex`) [1].
 - Windows install location: `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`. The binary used
-  for this page is there, and `src/exe.rs:149-160` records it as the installer's location [18][24].
+  for this page is there, and [`catalog/harnesses.json`](../../catalog/harnesses.json) records it as the installer's location [18][24].
+
+### Canonical locations and finding an existing install
+
+| what | Windows | macOS / Linux |
+|---|---|---|
+| Native-install launcher | `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` | `~/.local/bin/codex` |
+| Native-install releases | — | `$CODEX_HOME/packages/standalone/releases/`, selected through `current/` |
+| Default store | `%USERPROFILE%\.codex` | `~/.codex` |
+
+The Unix install script puts the launcher at `${CODEX_INSTALL_DIR:-$HOME/.local/bin}/codex`, linked to
+the selected standalone release; `CODEX_INSTALL_DIR` overrides that directory [28]. The store is
+`~/.codex` on every OS unless `CODEX_HOME` moves it [9][20]. Homebrew and npm installs are found via
+`PATH` and their manager: use `command -v codex` (macOS/Linux), `Get-Command codex -All` (PowerShell),
+`brew --prefix` or `npm prefix -g`, then `codex --version`. Multiple installs are possible; `PATH`
+order decides which one runs [28].
+
+`mukade harnesses` reports the one executable it resolves, not every copy on disk. See the
+[harness catalog](../reference/harness-catalog.md#finding-existing-installations) for the shared
+per-OS discovery procedure and for selecting a non-default installation in mukade.
+
 - To update, re-run the install script or use `codex update` [2][18].
 - To sign in, run `codex` and choose **Sign in with ChatGPT**. An API key also works:
   `codex login --with-api-key`, or `CODEX_API_KEY=<key>` for `codex exec`. `--device-auth` is also
@@ -256,7 +276,7 @@ deprecated alias [13].
 |---|---|
 | CLI name | `codex` |
 | store variable | `CODEX_HOME`, **required** (no implicit `~/.codex`). Errors: `CODEX_HOME is not set: no Codex store to list` / `…to read` / `nowhere to write the Codex rollout` (`src/reader/codex.rs:546-576`, `src/writer/codex.rs:34-38`) |
-| executable | `--codex-exe` → `MUKADE_CODEX_EXE` → `PATH` → `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` → `codex` (`src/exe.rs:26-50,149-160`) |
+| executable | `--codex-exe` → `MUKADE_CODEX_EXE` → `PATH` → the native launchers in [`catalog/harnesses.json`](../../catalog/harnesses.json) (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` on Windows, `~/.local/bin/codex` on macOS/Linux) → `codex` (`src/exe.rs`) |
 | destination options | `--dest-version`, `--model-provider`, `--model`, `--dest-shell bash\|sh\|zsh\|powershell\|pwsh` (`src/cli.rs:26-70`) |
 | resume command in receipt | `[<exe or "codex">, "exec", "resume", <new id>]` (`src/writer/codex.rs:64-73`) |
 | compaction (CLI) | `--compaction none` (default) or `portable`; `DestinationNative` is refused by the library (`src/hop.rs:353-358`) |
@@ -344,7 +364,7 @@ spawning thread's and whose `state_5.sqlite` row is keyed by their own `id`): th
 file plus one page, `history_base.end_ordinal_exclusive` 511 of 1064). Not in the repository: they
 are the user's own conversations.
 
-All accessed 2026-10-28.
+All accessed 2026-10-28 unless a source says otherwise.
 
 1. OpenAI, *openai/codex* README, https://github.com/openai/codex
 2. OpenAI, *Codex CLI*, https://learn.chatgpt.com/docs/codex/cli (redirect from https://developers.openai.com/codex/cli)
@@ -372,3 +392,4 @@ All accessed 2026-10-28.
 24. Repository: [`src/exe.rs`](../../src/exe.rs), [`src/cli.rs`](../../src/cli.rs) (`codex_config_provider`, `top_level_string`, `destination_version`), `src/detect.rs`
 25. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md) §2
 27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
+28. Official Unix install script, https://chatgpt.com/codex/install.sh, accessed 2026-10-30 (`CODEX_INSTALL_DIR` default `$HOME/.local/bin`, standalone release layout, existing-install discovery).
