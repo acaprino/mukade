@@ -2,6 +2,12 @@
 
 Status: design draft, awaiting approval. Date: 2026-10-30.
 
+Implementation note (2026-10-30): a native TUI now exists in
+[`mukade-tui/`](../../../mukade-tui/): harnesses, their sessions, transcript, interactive resume
+and a first hop dialog (destination, compaction, resume prompt). It shares this design's
+information model but not yet all of its manager actions or the library changes in §7. This
+document remains the target for the full GUI explorer/manager.
+
 Interaction reference: [`docs/mockups/tui.html`](../../mockups/tui.html). That mockup is a
 terminal-shaped HTML prototype, not an implementation choice; this design keeps its information
 model, screens and shortcuts in a native window.

@@ -28,6 +28,14 @@ embed-resource = "3"
 name = "mukade"
 path = "src/bin/mukade.rs"
 
+[workspace]
+members = ["mukade-tui"]
+default-members = ["."]
+resolver = "3"
+
+# The CLI stays the default build: `cargo build` and `cargo test` never pull the TUI's
+# dependencies. `cargo build -p mukade-tui` builds the terminal browser.
+
 # The binary is one file that is copied around: small and fast matter more than build time.
 [profile.release]
 opt-level = 3

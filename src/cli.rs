@@ -985,11 +985,7 @@ impl Flags {
         // What the *destination* is configured to use, when the caller did not state it. OpenCode's
         // interchange format refuses a model reference without a provider, and Codex stamps the
         // provider its own config names, so both are read from the destination's own files.
-        let configured = match harness {
-            HarnessId::OpenCode => opencode_config_model(),
-            HarnessId::Codex => codex_config_provider().map(|provider| (provider, None)),
-            _ => None,
-        };
+        let configured = crate::dest::configured_model(harness);
         let model_provider = self
             .model_provider
             .clone()
@@ -1160,177 +1156,21 @@ fn opencode_project_id(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<Strin
     opencode_project_id_in(exe, cwd, roots, crate::cache::dir().as_deref())
 }
 
-/// [`opencode_project_id`] with the cache folder stated. The answer is kept for this binary, this
-/// database and this directory: finding it takes a process start per session it has to look at.
+/// [`opencode_project_id`] with the cache folder stated. The probe lives in the OpenCode reader:
+/// it asks the harness's own store, and the TUI needs the same answer without a second copy.
 fn opencode_project_id_in(
     exe: &str,
     cwd: &str,
     roots: &StoreRoots,
     cache: Option<&std::path::Path>,
 ) -> Option<String> {
-    let program = std::path::PathBuf::from(crate::exe::spawnable(exe));
-    let key = crate::cache::identity(&program).map(|identity| {
-        let database = roots
-            .opencode_db
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        format!("project|{identity}|{database}|{}", normalise_directory(cwd))
-    });
-    if let (Some(dir), Some(key)) = (cache, &key)
-        && let Some(known) = crate::cache::get(dir, key)
-    {
-        return Some(known);
-    }
-    let found = ask_opencode_project(exe, cwd, roots)?;
-    if let (Some(dir), Some(key)) = (cache, &key) {
-        crate::cache::put(dir, key, &found);
-    }
-    Some(found)
-}
-
-fn ask_opencode_project(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
-    let directory = std::path::Path::new(cwd);
-    // Asked of the store the session will be written to, not the caller's own.
-    let store = Some((HarnessId::OpenCode, roots));
-    let list = run_probe(exe, &["session", "list", "--standalone"], directory, store)
-        .map(|out| String::from_utf8_lossy(&out).into_owned())?;
-    for id in list
-        .lines()
-        .filter_map(|line| line.split('\t').next())
-        .filter(|id| id.starts_with("ses_"))
-        .take(5)
-    {
-        let Some(doc) = run_json(
-            exe,
-            &["session", "export", id, "--standalone"],
-            directory,
-            store,
-        ) else {
-            continue;
-        };
-        let found = doc
-            .pointer("/info/location/directory")
-            .and_then(serde_json::Value::as_str);
-        if found.is_some_and(|found| same_directory(found, cwd)) {
-            return doc
-                .pointer("/info/projectID")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned);
-        }
-    }
-    None
-}
-
-fn normalise_directory(directory: &str) -> String {
-    directory
-        .replace('\\', "/")
-        .trim_end_matches('/')
-        .to_ascii_lowercase()
-}
-
-fn same_directory(a: &str, b: &str) -> bool {
-    normalise_directory(a) == normalise_directory(b)
-}
-
-/// How long a question to the destination's binary (its version, its sessions) may take; a probe
-/// that does not answer leaves the fact unknown instead of hanging the command.
-const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// The stdout of a probe that succeeded within [`PROBE_TIMEOUT`], run against `store` when given.
-fn run_probe(
-    exe: &str,
-    args: &[&str],
-    cwd: &std::path::Path,
-    store: Option<(HarnessId, &StoreRoots)>,
-) -> Option<Vec<u8>> {
-    let mut command = std::process::Command::new(crate::exe::spawnable(exe));
-    command.args(args).current_dir(cwd);
-    if let Some((harness, roots)) = store {
-        roots.apply_to(harness, &mut command);
-    }
-    let output = crate::exe::run_within(&mut command, PROBE_TIMEOUT).ok()?;
-    output
-        .status
-        .is_some_and(|status| status.success())
-        .then_some(output.stdout)
-}
-
-fn run_json(
-    exe: &str,
-    args: &[&str],
-    cwd: &std::path::Path,
-    store: Option<(HarnessId, &StoreRoots)>,
-) -> Option<serde_json::Value> {
-    serde_json::from_slice(&run_probe(exe, args, cwd, store)?).ok()
-}
-
-/// OpenCode's own config names its model as `<provider>/<model>`; that is where the destination's
-/// provider id comes from when the caller does not state one.
-fn opencode_config_model() -> Option<(String, Option<String>)> {
-    let path = std::env::var_os("OPENCODE_CONFIG")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("XDG_CONFIG_HOME").map(|d| {
-                std::path::PathBuf::from(d)
-                    .join("opencode")
-                    .join("opencode.json")
-            })
-        })?;
-    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    let (provider, model) = doc.get("model")?.as_str()?.split_once('/')?;
-    Some((provider.to_string(), Some(model.to_string())))
-}
-
-/// Codex's `config.toml` states `model_provider = "<id>"`.
-fn codex_config_provider() -> Option<String> {
-    let home = std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from)?;
-    let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
-    top_level_string(&text, "model_provider")
-}
-
-/// A top-level `key = "value"` of a TOML file: before any `[table]`, the key exactly (not
-/// `model_providers.x`), with a trailing `# comment` left out.
-fn top_level_string(text: &str, key: &str) -> Option<String> {
-    for line in text.lines().map(str::trim) {
-        if line.starts_with('[') {
-            return None;
-        }
-        let Some((name, value)) = line.split_once('=') else {
-            continue;
-        };
-        if name.trim() != key {
-            continue;
-        }
-        let value = value.trim();
-        let value = match value.strip_prefix('"') {
-            Some(quoted) => quoted.split('"').next().unwrap_or_default(),
-            None => value.split('#').next().unwrap_or_default().trim(),
-        };
-        return Some(value.to_string()).filter(|v| !v.is_empty());
-    }
-    None
+    crate::reader::opencode::project_id_for(exe, cwd, roots, cache)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{opencode_project_id_in, top_level_string};
+    use super::opencode_project_id_in;
     use crate::roots::StoreRoots;
-
-    /// Codex's own provider is the top-level key: not a provider table's field, not a profile's,
-    /// and not the comment after it.
-    #[test]
-    fn the_codex_provider_is_the_top_level_key_only() {
-        let config = "model = \"gpt\"\nmodel_provider = \"azure\" # the work account\n\n[model_providers.azure]\nname = \"Azure\"\n";
-        assert_eq!(
-            top_level_string(config, "model_provider").as_deref(),
-            Some("azure")
-        );
-        let nested = "[profiles.fast]\nmodel_provider = \"openai\"\n";
-        assert_eq!(top_level_string(nested, "model_provider"), None);
-        let dotted = "model_providers.azure.name = \"Azure\"\n";
-        assert_eq!(top_level_string(dotted, "model_provider"), None);
-    }
 
     /// The project id OpenCode files a directory under takes one process start per session it has
     /// to look at: it is asked once per binary, database and directory.

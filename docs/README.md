@@ -3,6 +3,7 @@
 ## Getting started
 
 - [Command-line usage](usage.md): setup, commands, compaction, summary intents, examples and troubleshooting.
+- [Sessions TUI](../mukade-tui/README.md): the native terminal explorer, its commands, keys, resume and hop examples.
 - [Open questions](../next.md): outstanding verification and known limitations.
 
 ## Technical reference

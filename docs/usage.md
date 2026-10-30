@@ -5,6 +5,9 @@ OpenCode, Pi — and the destination continues it **as one of its own sessions**
 command-line manual: how to get it, the use cases it is made for, how to read what it prints, and
 every harness's details.
 
+The native sessions explorer is a separate crate: [mukade-tui](../mukade-tui/README.md) documents
+its commands, keys, resume and hop examples.
+
 Paths, session IDs, project IDs, model names and provider names in the examples are
 **illustrative**: replace them with values from your installation. Commands are shown for Windows
 PowerShell; on macOS or Linux use the corresponding paths and `export NAME=value` instead of
@@ -812,7 +815,7 @@ the directory's own layout when exactly one harness is recognized. `write` alway
   source harness, a model it cannot reach (name another with `--summary-model`), a run longer than
   `--summary-timeout`, or a model that called a tool instead of summarizing. When OpenCode's fork
   could not be deleted, the message ends with the command that removes it.
-- **"the summary prompt cannot be passed through the batch launcher â€¦"** (exit 2): the selected
+- **"the summary prompt cannot be passed through the batch launcher …"** (exit 2): the selected
   `intent-prompts/<name>.md` contains a line break or a character an install's `.cmd` shim cannot
   carry. Name the harness's native executable, or keep the prompt to ASCII letters, digits, spaces
   and `.,;:()`.

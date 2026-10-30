@@ -36,6 +36,9 @@ pub struct Entry {
     /// The argv mukade returns as the native resume command. `{exe}`, `{id}` and `{file}` are
     /// filled in by [`resume`].
     pub resume: Vec<String>,
+    /// The argv that opens the session interactively in the harness's own TUI.
+    #[serde(default)]
+    pub interactive_resume: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,6 +181,26 @@ pub fn layout(harness: HarnessId) -> &'static [String] {
 pub fn resume(harness: HarnessId, exe: &str, id: &str, file: Option<&Path>) -> Vec<String> {
     entry(harness)
         .resume
+        .iter()
+        .map(|part| match part.as_str() {
+            "{exe}" => exe.to_string(),
+            "{id}" => id.to_string(),
+            "{file}" => file
+                .map(|file| file.display().to_string())
+                .unwrap_or_else(|| id.to_string()),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// The command that opens a session interactively in the harness's own terminal UI.
+pub fn interactive_resume(harness: HarnessId, exe: &str, id: &str, file: Option<&Path>) -> Vec<String> {
+    let template = if entry(harness).interactive_resume.is_empty() {
+        &entry(harness).resume
+    } else {
+        &entry(harness).interactive_resume
+    };
+    template
         .iter()
         .map(|part| match part.as_str() {
             "{exe}" => exe.to_string(),

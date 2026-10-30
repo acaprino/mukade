@@ -350,36 +350,11 @@ impl Reader for Opencode {
     }
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
-        use rusqlite::{Connection, OpenFlags};
-        let path = roots.opencode_db.as_ref().ok_or_else(|| {
-            super::Lookup::NoStore("OPENCODE_DB is not set: no OpenCode store to list".into())
-        })?;
-        let db = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .with_context(|| format!("open {} read-only", path.display()))?;
-        db.busy_timeout(std::time::Duration::from_secs(2))?;
-        let mut query = db
-            .prepare(
-                "SELECT id, title, directory, time_updated, time_archived FROM session_v2 \
-             WHERE parent_id IS NULL ORDER BY time_updated DESC, id ASC",
-            )
-            .with_context(|| format!("list sessions in {}", path.display()))?;
-        let rows = query.query_map([], |row| {
-            let updated: i64 = row.get(3)?;
-            Ok(SessionInfo {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                cwd: row.get(2)?,
-                updated: chrono::DateTime::from_timestamp_millis(updated)
-                    .map(|time| time.to_rfc3339()),
-                archived: row.get::<_, Option<i64>>(4)?.is_some(),
-                path: path.to_string_lossy().into_owned(),
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .context("read OpenCode session list")
+        list_in(roots, true)
+    }
+
+    fn list_all(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
+        list_in(roots, false)
     }
 
     /// OpenCode's own export path (OC2): `opencode session export <id> --standalone` prints the
@@ -412,6 +387,48 @@ impl Reader for Opencode {
         session.meta.source_sha256 = Some(crate::sha256::sha256_hex(text.as_bytes()));
         Ok(session)
     }
+}
+
+/// List OpenCode sessions. `roots_only` keeps the CLI's `list` contract (one row per root
+/// session); the explorer asks for every row, forks included.
+fn list_in(roots: &StoreRoots, roots_only: bool) -> Result<Vec<SessionInfo>> {
+    use rusqlite::{Connection, OpenFlags};
+    let path = roots.opencode_db.as_ref().ok_or_else(|| {
+        super::Lookup::NoStore("OPENCODE_DB is not set: no OpenCode store to list".into())
+    })?;
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("open {} read-only", path.display()))?;
+    db.busy_timeout(std::time::Duration::from_secs(2))?;
+    let filter = if roots_only {
+        "WHERE parent_id IS NULL "
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT id, title, directory, time_updated, time_archived, parent_id FROM session_v2 \
+         {filter}ORDER BY time_updated DESC, id ASC"
+    );
+    let mut query = db
+        .prepare(&sql)
+        .with_context(|| format!("list sessions in {}", path.display()))?;
+    let rows = query.query_map([], |row| {
+        let updated: i64 = row.get(3)?;
+        Ok(SessionInfo {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            cwd: row.get(2)?,
+            updated: chrono::DateTime::from_timestamp_millis(updated)
+                .map(|time| time.to_rfc3339()),
+            archived: row.get::<_, Option<i64>>(4)?.is_some(),
+            path: path.to_string_lossy().into_owned(),
+            parent: row.get(5)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("read OpenCode session list")
 }
 
 /// Session and fork counts read from OpenCode's own store. The database is opened read-only;
@@ -472,4 +489,112 @@ pub fn export_command(exe: &str, id: &str) -> Vec<String> {
         id.to_string(),
         "--standalone".into(),
     ]
+}
+
+/// The project the destination already files sessions of `directory` under. The destination is
+/// asked from **inside that directory**: its CLI scopes the session list to the project it is run
+/// in. The answer is cached for this binary, this database and this directory, because finding it
+/// costs a process start per session it has to look at.
+///
+/// This is the one destination probe the UI cannot reasonably reimplement: it belongs to the
+/// harness's own store, not to the TUI. `cache` is the caller's `mukade-data/cache` folder.
+pub fn project_id_for(
+    exe: &str,
+    cwd: &str,
+    roots: &StoreRoots,
+    cache: Option<&Path>,
+) -> Option<String> {
+    let program = std::path::PathBuf::from(crate::exe::spawnable(exe));
+    let key = crate::cache::identity(&program).map(|identity| {
+        let database = roots
+            .opencode_db
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        format!("project|{identity}|{database}|{}", normalise_directory(cwd))
+    });
+    if let (Some(dir), Some(key)) = (cache, &key)
+        && let Some(known) = crate::cache::get(dir, key)
+    {
+        return Some(known);
+    }
+    let found = ask_project(exe, cwd, roots)?;
+    if let (Some(dir), Some(key)) = (cache, &key) {
+        crate::cache::put(dir, key, &found);
+    }
+    Some(found)
+}
+
+fn ask_project(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
+    let directory = Path::new(cwd);
+    // Asked of the store the session will be written to, not the caller's own.
+    let store = Some((HarnessId::OpenCode, roots));
+    let list = run_probe(exe, &["session", "list", "--standalone"], directory, store)
+        .map(|out| String::from_utf8_lossy(&out).into_owned())?;
+    for id in list
+        .lines()
+        .filter_map(|line| line.split('\t').next())
+        .filter(|id| id.starts_with("ses_"))
+        .take(5)
+    {
+        let Some(doc) = run_json(
+            exe,
+            &["session", "export", id, "--standalone"],
+            directory,
+            store,
+        ) else {
+            continue;
+        };
+        let found = doc
+            .pointer("/info/location/directory")
+            .and_then(Value::as_str);
+        if found.is_some_and(|found| same_directory(found, cwd)) {
+            return doc
+                .pointer("/info/projectID")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+    }
+    None
+}
+
+fn normalise_directory(directory: &str) -> String {
+    directory
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn same_directory(a: &str, b: &str) -> bool {
+    normalise_directory(a) == normalise_directory(b)
+}
+
+/// How long a question to the destination's binary (its version, its sessions) may take.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn run_probe(
+    exe: &str,
+    args: &[&str],
+    cwd: &Path,
+    store: Option<(HarnessId, &StoreRoots)>,
+) -> Option<Vec<u8>> {
+    let mut command = std::process::Command::new(crate::exe::spawnable(exe));
+    command.args(args).current_dir(cwd);
+    if let Some((harness, roots)) = store {
+        roots.apply_to(harness, &mut command);
+    }
+    let output = crate::exe::run_within(&mut command, PROBE_TIMEOUT).ok()?;
+    output
+        .status
+        .is_some_and(|status| status.success())
+        .then_some(output.stdout)
+}
+
+fn run_json(
+    exe: &str,
+    args: &[&str],
+    cwd: &Path,
+    store: Option<(HarnessId, &StoreRoots)>,
+) -> Option<Value> {
+    serde_json::from_slice(&run_probe(exe, args, cwd, store)?).ok()
 }

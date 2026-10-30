@@ -32,7 +32,8 @@
         "fields": [],
         "note": "claude --fork-session writes no lineage field, so a fork is a session with no parent"
       },
-      "resume": ["{exe}", "-p", "--resume", "{id}"]
+      "resume": ["{exe}", "-p", "--resume", "{id}"],
+      "interactive_resume": ["{exe}", "--resume", "{id}"]
     },
     {
       "id": "codex",
@@ -58,7 +59,8 @@
         "fields": [],
         "note": "a thread keeps no cross-session parent; subagent threads are not linked"
       },
-      "resume": ["{exe}", "exec", "resume", "{id}"]
+      "resume": ["{exe}", "exec", "resume", "{id}"],
+      "interactive_resume": ["{exe}", "resume", "{id}"]
     },
     {
       "id": "opencode",
@@ -84,7 +86,8 @@
         "fields": ["parent_id", "fork_session_id", "fork_boundary"],
         "note": "a fork names its source session and the boundary it forked at"
       },
-      "resume": ["{exe}", "run", "--standalone", "--session", "{id}"]
+      "resume": ["{exe}", "run", "--standalone", "--session", "{id}"],
+      "interactive_resume": ["{exe}", "mini", "--standalone", "--session", "{id}"]
     },
     {
       "id": "pi",
@@ -110,7 +113,8 @@
         "fields": ["parentSession"],
         "note": "the fork's session header names the session it came from"
       },
-      "resume": ["{exe}", "-p", "--session", "{file}"]
+      "resume": ["{exe}", "-p", "--session", "{file}"],
+      "interactive_resume": ["{exe}", "--session", "{file}"]
     }
   ]
 }

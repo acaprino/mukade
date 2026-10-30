@@ -20,6 +20,9 @@ pub struct SessionInfo {
     pub archived: bool,
     /// The native file (or store record) the session lives in.
     pub path: String,
+    /// The native parent link, when the harness records one. `None` is "not recorded or no
+    /// parent", never a guess.
+    pub parent: Option<String>,
 }
 
 /// One reader per harness. It turns native records into [`Session`], keeping every source record
@@ -27,8 +30,14 @@ pub struct SessionInfo {
 pub trait Reader {
     fn harness(&self) -> HarnessId;
 
-    /// Every session in the store, in a stable order.
+    /// Every root session in the store, in a stable order.
     fn list(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>>;
+
+    /// Every session the store holds, forks included, in a stable order. A harness that has no
+    /// cross-session parent link returns the same list as [`Reader::list`].
+    fn list_all(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>> {
+        self.list(roots)
+    }
 
     /// Read one session by its native id (an unambiguous prefix is accepted where the store's file
     /// names allow it).

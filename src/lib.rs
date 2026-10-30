@@ -13,6 +13,7 @@
 pub mod cache;
 pub mod catalog;
 pub mod cli;
+pub mod dest;
 pub mod detect;
 pub mod exe;
 pub mod hop;

@@ -6,6 +6,8 @@
 mod support;
 
 use mukade::model::HarnessId;
+use mukade::reader::for_harness;
+use mukade::roots::StoreRoots;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1223,6 +1225,40 @@ fn harness_inventory_counts_all_opencode_sessions_and_linked_forks() {
     assert!(
         section.contains("layout:   opencode.db (SQLite; session_v2, session_message)"),
         "{section}"
+    );
+}
+
+#[test]
+fn reader_list_all_includes_opencode_forks_while_list_keeps_roots() {
+    let scratch = support::scratch(HarnessId::OpenCode, "reader-list-all");
+    let db_path = scratch.join("home/opencode.db");
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2 (
+             id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT
+         );
+         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL);
+         INSERT INTO session_v2 VALUES ('child-a', 'Fork A', 'D:/work', 2, NULL, 'root', NULL);
+         INSERT INTO session_v2 VALUES ('child-b', 'Fork B', 'D:/work', 3, NULL, NULL, 'root');",
+    )
+    .unwrap();
+    drop(db);
+
+    let roots = StoreRoots {
+        opencode_db: Some(db_path),
+        ..Default::default()
+    };
+    let reader = for_harness(HarnessId::OpenCode).unwrap();
+    let listed = reader.list(&roots).unwrap();
+    let all = reader.list_all(&roots).unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(all.len(), 3);
+    assert!(listed.iter().all(|info| info.parent.is_none()));
+    assert!(
+        all.iter()
+            .any(|info| info.parent.as_deref() == Some("root"))
     );
 }
 

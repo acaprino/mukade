@@ -264,7 +264,11 @@ pub fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>, std::time::SystemTime)> {
             if path.is_dir() {
                 stack.push(path);
             } else {
-                let modified = entry.metadata().expect("metadata").modified().expect("mtime");
+                let modified = entry
+                    .metadata()
+                    .expect("metadata")
+                    .modified()
+                    .expect("mtime");
                 out.push((path.clone(), std::fs::read(&path).expect("read"), modified));
             }
         }

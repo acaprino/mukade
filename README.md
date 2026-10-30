@@ -147,6 +147,21 @@ changed (for example the plan would be refused by a provider), 5 failed and reco
 (the source could not be read, an external import has an uncertain outcome, or the resume failed
 after the write).
 
+## Sessions TUI
+
+`mukade-tui` is a separate native terminal explorer and manager for the same stores: the four
+harnesses and their sessions in one window, a transcript, interactive resume and hop. It is built
+only on request, so the `mukade` CLI stays a single binary with its own dependency list.
+
+```text
+cargo run -p mukade-tui
+cargo run -p mukade-tui -- --turns 20
+cargo run -p mukade-tui -- --check
+```
+
+The full command list, keys, hop dialog and examples are in
+[mukade-tui/README.md](mukade-tui/README.md).
+
 ## One executable, nothing to install, and speed
 
 mukade is a single command-line executable: run `build.bat` on Windows or `sh build.sh` on Linux,
