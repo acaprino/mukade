@@ -277,7 +277,7 @@ deprecated alias [13].
 | CLI name | `codex` |
 | store variable | `CODEX_HOME`, **required** (no implicit `~/.codex`). Errors: `CODEX_HOME is not set: no Codex store to list` / `…to read` / `nowhere to write the Codex rollout` (`src/reader/codex.rs:546-576`, `src/writer/codex.rs:34-38`) |
 | executable | `--codex-exe` → `MUKADE_CODEX_EXE` → `PATH` → the native launchers in [`catalog/harnesses.json`](../../catalog/harnesses.json) (`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` on Windows, `~/.local/bin/codex` on macOS/Linux) → `codex` (`src/exe.rs`) |
-| destination options | `--dest-version`, `--model-provider`, `--model`, `--dest-shell bash\|sh\|zsh\|powershell\|pwsh` (`src/cli.rs:26-70`) |
+| destination options | `--dest-version`, `--model-provider`, `--model`, `--dest-shell bash\|sh\|zsh\|powershell\|pwsh`, `--dest-path <file>` (`src/cli.rs:26-70`) |
 | resume command in receipt | `[<exe or "codex">, "exec", "resume", <new id>]` (`src/writer/codex.rs:64-73`) |
 | compaction (CLI) | `--compaction none` (default) or `portable`; `DestinationNative` is refused by the library (`src/hop.rs:353-358`) |
 

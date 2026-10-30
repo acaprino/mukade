@@ -55,6 +55,26 @@ and asks a discovered executable for its version; unknown counts and lineage are
 not guessed. It reports **one resolved executable per harness**, not every copy on disk, and does
 not change the explicit-root behavior of `list`, `dump`, `write` or `hop`.
 
+The store line carries one of these states, so a store that is there but unreadable is never mistaken
+for an empty one:
+
+| state | meaning |
+| --- | --- |
+| `recognized` | the store holds files in that harness's own layout and mukade listed them |
+| `recognized, read error: <reason>` | the layout is right but counting failed; the reason follows |
+| `present, layout not recognized` | the path exists but no file matches that harness's layout. An explicit store variable skips this check and is read directly (failures then show as a read error) |
+| `read error: <reason>` | the harness reader could not be opened at all |
+| `not found` | no store at the default or the configured path |
+| `non-persistent (:memory:)` | OpenCode's `OPENCODE_DB` points at an in-memory database |
+
+The harness line reports the executable as `configured` (a `--<harness>-exe` flag or `MUKADE_*_EXE`),
+`installed` (`PATH` or the catalog location) or `not found`. When a store reads
+`present, layout not recognized`, `mukade detect <dir>` prints the evidence it looked for (see
+[Discover, export, import](#10-discover-export-import)).
+
+`harnesses` takes no options and prints text, not JSON: it is meant to be read by a person. A program
+that needs the same facts should use the library or `mukade list`, whose rows are JSON.
+
 The locations it consults, per harness and per platform, are the [harness catalog](reference/harness-catalog.md)
 (`catalog/harnesses.json`), which ships inside the executable. To enumerate `PATH` matches yourself:
 
@@ -249,6 +269,21 @@ ID or metadata is supplied, `OPENCODE_DB` must identify the destination explicit
 the resulting ID and metadata there after the native import. If the process fails or the check
 cannot confirm the write, exit 5 reports an uncertain result and its ID; inspect the destination
 before retrying. A metadata file may be at most 1 MiB and should be protected by the host.
+
+`--dest-path <path>` reserves the destination file itself, for the file-based destinations (Claude
+Code, Codex, Pi). It must be absolute, inside the destination root, and free of `..`; OpenCode refuses
+it (exit 2) because its native import allocates the file. A host that retries a hop states both
+`--dest-id`/`--dest-path` and `--expect-sha256`, so the second run lands on the same destination and
+only while the source is unchanged.
+
+`--tool-map <path>` states the source-to-destination tool bindings explicitly instead of the
+destination catalog's defaults. The file is a JSON array of `[source, destination, original, mapped]`
+tuples: the two names are tool names (up to 256 characters) and the two values are the JSON objects
+the conversation holds and the destination should receive. At most 4096 entries and 1 MiB; `hop`,
+`write` and `document` accept it, and a malformed map is refused before anything is written.
+
+`--dest-shell bash|sh|zsh|powershell|pwsh` states the shell the destination is configured to use; it
+matters only where the destination records one.
 
 ### Use it from a task runner or another program
 

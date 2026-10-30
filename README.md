@@ -75,7 +75,7 @@ For complete examples for each harness, including ones kept in a folder of their
 [command-line usage guide](docs/usage.md).
 
 ```text
-mukade harnesses                           # local inventory: installed harnesses, versions, stores and session/fork counts
+mukade harnesses                           # local inventory: installed harnesses, versions, stores and session/fork counts (text output, no options)
 mukade list  <harness>
 mukade dump  <harness> <session-id>          # the interchange document on stdout, or --output <file>
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
