@@ -94,6 +94,23 @@ Get-Command claude,codex,opencode,pi -All -ErrorAction SilentlyContinue |
 for h in claude codex opencode pi; do command -v "$h" || true; done
 ```
 
+To find **every** installation below a folder, portable and custom ones included, scan it:
+
+```powershell
+mukade scan D:\
+mukade scan D:\Apps --depth 4
+```
+
+`scan` prints JSON: one entry per installation, with the harness, its store as the harness's
+variable names it, the executable kept beside the store (`null` when there is none: the standard
+resolution then applies) and the evidence. A portable JanuraCode copy, for example, is an OpenCode
+installation whose store is `<app>\data\share\opencode\opencode.db` and whose executable is
+`<app>\resources\opencode-cli\opencode.exe`. The scan descends 8 folder levels by default, never
+follows links or junctions, skips `node_modules`, `.git` and `target`, does not enter a store's own
+session folders, and reads at most 100,000 folders; `"truncated": true` says the depth or that budget
+stopped it before the whole tree was read. An installation is recognized by its store: a copy that
+was never started has no sessions yet and is not reported.
+
 Use `npm prefix -g`, `npm root -g` or `brew --prefix` for package-managed installs, then run each
 binary's `--version`. For custom executables and stores, the override order and `--root` are in
 [Stores and executables](#8-stores-and-executables); the full per-OS discovery procedure and the
@@ -576,9 +593,26 @@ uses `MUKADE_OPENCODE_EXE` or default resolution, not the `--opencode-exe` flag.
 OpenCode as a destination.
 
 `--root` changes the selected harness's store for `list`, `dump` or `write`. For `hop`, it applies
-to the **source**, including when both ends use the same harness; set the destination variable in
-the environment. For OpenCode,
+to the **source**, including when both ends use the same harness; the destination is its
+environment variable, or `--dest-root`. For OpenCode,
 an existing directory passed as `--root` means its `opencode.db`; a file path is used as-is.
+
+`--root` and `--dest-root` take a store, or a folder that holds one installation: when the path is
+not a store itself, it is scanned as `mukade scan` would, and must hold exactly one installation (of
+the harness named, when one is). Several are refused with the list of their stores, so one of them
+can be passed instead. A path that holds nothing is still used as the store of a named harness: a
+destination store can legitimately be empty.
+
+`--dest-root` names a hop's destination installation. Its executable, the one `scan` reports beside
+the store, writes the session and appears in the resume command; an explicit `--<harness>-exe`
+still wins over it, and it wins over `MUKADE_*_EXE` and `PATH`. Into a portable JanuraCode:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
+```
+
+Only `OPENCODE_DB` is set for that import, as for any OpenCode destination: the JanuraCode engine
+still reads the `XDG_*` configuration of the shell that runs mukade.
 
 A `--resume-prompt` runs the destination with its store variable set to the root the session was
 written to, whether it came from the environment or from `--root`, and from the destination's
@@ -756,8 +790,10 @@ compaction, tools, plugins and hooks: [`docs/harnesses/`](harnesses/).
 
 ## 10. Discover, export, import
 
-`detect` inspects store evidence; it does **not** identify an installation directory or configure an
-executable. It can return zero or multiple candidates. An empty or ambiguous root cannot be inferred;
+`detect` inspects the evidence of one folder; `scan` walks a folder and reports every installation
+below it, with the executable kept beside each store (see
+[Find supported harnesses and existing installations](#find-supported-harnesses-and-existing-installations)).
+Both can return zero or multiple candidates. An empty or ambiguous root cannot be inferred;
 pass the harness explicitly when you know it. For a nonstandard OpenCode database filename, pass
 `opencode` and its file path explicitly rather than relying on detection.
 
@@ -794,7 +830,16 @@ mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --cla
 ```
 
 With `--root` the harness may be left out of `list`, `dump` and a hop's source: it is inferred from
-the directory's own layout when exactly one harness is recognized. `write` always needs it.
+the directory's own layout when exactly one harness is recognized, or from the only installation
+below it. `write` always needs it.
+
+A portable installation found by `scan` can be named by its folder instead of its store:
+
+```powershell
+mukade scan 'D:\Apps'
+mukade list --root 'D:\Apps\JanuraCode'
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
+```
 
 ## 11. Troubleshooting
 

@@ -81,6 +81,7 @@ mukade dump  <harness> <session-id>          # the interchange document on stdou
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
 mukade hop   <src-harness> <session-id> <dst-harness> [options]   # --all-branches: a Codex thread whole
 mukade detect <dir>                          # which harness stores the directory holds
+mukade scan  <dir> [--depth <n>]             # every installation below the directory, portable ones included
 ```
 
 The binaries' own install locations, the default store of each harness on Windows, macOS and Linux,
@@ -102,7 +103,9 @@ A store can also be named per command: `--root <dir>` (non-empty) points one har
 directory — for a hop, the source's; for OpenCode a directory means its `opencode.db`. For `list`,
 `dump` and a `hop` source the harness itself can be omitted: it is inferred from the directory's own
 layout when exactly one is recognized, and refused when none or several are. `mukade detect <dir>`
-prints the same answer with its evidence. Detection needs concrete files — session records
+prints the same answer with its evidence. `mukade scan <dir>` walks a whole folder and reports every
+installation below it, portable and custom ones included, with the executable kept beside each
+store; `--root` and a hop's `--dest-root` accept such a folder when it holds exactly one. Detection needs concrete files — session records
 (`projects/*/*.jsonl`, `sessions/**/rollout-*.jsonl`, `sessions/--*--/*.jsonl`), Codex's
 `session_index.jsonl`, Pi's `models.json`, OpenCode's `opencode.db`, whose file can also be passed
 directly; an empty directory tree infers nothing, and another harness's SQLite state (Codex's

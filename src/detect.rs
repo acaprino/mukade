@@ -9,7 +9,8 @@
 //! - [`detect_store`] answers for one folder (or OpenCode's database file);
 //! - [`scan_installations`] walks a tree and reports every installation in it, portable and
 //!   custom ones included, with the executable kept beside each store
-//!   ([`engine_beside_store`]).
+//!   ([`engine_beside_store`]);
+//! - [`locate_installation`] resolves a path a command was handed to one installation.
 //!
 //! Each harness's layout is an adapter (`claude_code`, `codex`, `opencode`, `pi`) behind one
 //! contract (`layout::StoreLayout`), so detection and the scan apply the same rules. The CLI and
@@ -20,11 +21,13 @@ mod codex;
 mod engine;
 mod folder;
 mod layout;
+mod locate;
 mod opencode;
 mod pi;
 mod scan;
 
 pub use engine::engine_beside_store;
+pub use locate::{Located, locate_installation};
 pub use scan::{DEFAULT_SCAN_DEPTH, Installation, Scan, scan_installations};
 
 use crate::model::HarnessId;
@@ -87,11 +90,22 @@ pub(crate) mod tests {
             &dir.join("sessions/--pi-project--/2026-10-27T16-00-39-689Z_id.jsonl"),
             b"{}\n",
         );
-        touch(&dir.join("models.json"), b"{}");
+        touch(&dir.join("models.json"), br#"{"providers":{}}"#);
         let found = detect_store(&dir);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].harness, HarnessId::Pi);
         assert_eq!(found[0].evidence.len(), 2, "{:?}", found[0].evidence);
+    }
+
+    #[test]
+    fn another_tools_models_json_is_not_pis() {
+        // OpenCode-style provider lists and other tools' files share the name: Pi's own file
+        // lists its `providers`.
+        let dir = scratch("not-pi");
+        touch(&dir.join("models.json"), br#"{"provider":{"gw":{}}}"#);
+        assert!(detect_store(&dir).is_empty());
+        touch(&dir.join("models.json"), b"not json");
+        assert!(detect_store(&dir).is_empty());
     }
 
     #[test]

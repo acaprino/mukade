@@ -21,7 +21,16 @@ pub fn engine_beside_store(harness: HarnessId, store: &Path) -> Option<PathBuf> 
     start.ancestors().take(SEARCH_LEVELS + 1).find_map(|dir| {
         candidates
             .iter()
-            .map(|relative| dir.join(relative))
+            .map(|relative| beneath(dir, relative))
             .find(|candidate| candidate.is_file())
     })
+}
+
+/// `dir` joined with a catalog path written with `/`, one component at a time, so the result uses
+/// the platform's own separator.
+fn beneath(dir: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(dir.to_path_buf(), |path, part| path.join(part))
 }

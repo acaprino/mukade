@@ -18,6 +18,7 @@ machine it runs on.
 | `binary.name` | the command looked up on `PATH` |
 | `binary.flag` / `binary.env` | `--<harness>-exe` and `MUKADE_*_EXE`, the two overrides |
 | `binary.locations` | the installers' own locations, per platform (a fallback after `PATH`) |
+| `binary.beside_store` | where a self-contained installation keeps its executable, relative to the store's folder or one of its three nearest ancestors, per platform; `mukade scan` and `--dest-root` read it (a portable JanuraCode: `resources/opencode-cli/opencode.exe`) |
 | `store.env` | the variable that points mukade at the store |
 | `store.default` | the harness's own default store, expanded per platform |
 | `store.root_is_a_file` | `true` for OpenCode: the store is the SQLite database itself |

@@ -212,6 +212,139 @@ fn an_empty_root_and_an_ambiguous_root_are_refused_for_inference() {
     assert!(stderr.contains("more than one"), "{stderr}");
 }
 
+/// A portable JanuraCode copy below `app`: OpenCode's database under the app's data folder and
+/// the engine in its Electron resources. Answers the database and the engine.
+fn portable_januracode(app: &Path) -> (PathBuf, PathBuf) {
+    let db = app.join("data/share/opencode/opencode.db");
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    std::fs::write(&db, b"SQLite format 3\0rest of the file").unwrap();
+    let engine = app.join(if cfg!(windows) {
+        "resources/opencode-cli/opencode.exe"
+    } else {
+        "resources/opencode-cli/opencode"
+    });
+    std::fs::create_dir_all(engine.parent().unwrap()).unwrap();
+    std::fs::write(&engine, b"engine").unwrap();
+    (db, engine)
+}
+
+#[test]
+fn scan_reports_every_installation_below_a_folder() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-scan");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let (db, engine) = portable_januracode(&scratch.join("apps/JanuraCode"));
+
+    let (ok, stdout, stderr) = cli(&scratch, &["scan", scratch.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).expect("scan prints one JSON document");
+    assert_eq!(doc["truncated"], false, "{doc}");
+    let found: Vec<(&str, PathBuf, Option<PathBuf>)> = doc["installations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|found| {
+            (
+                found["harness"].as_str().unwrap(),
+                PathBuf::from(found["store"].as_str().unwrap()),
+                found["exe"].as_str().map(PathBuf::from),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            ("opencode", db, Some(engine)),
+            ("claude_code", scratch.join("home"), None),
+        ],
+        "{doc}"
+    );
+}
+
+#[test]
+fn scan_honours_its_depth() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-scan-depth");
+    let _ = portable_januracode(&scratch.join("apps/JanuraCode"));
+    let (ok, stdout, stderr) = cli(&scratch, &["scan", scratch.to_str().unwrap(), "--depth", "2"]);
+    assert!(ok, "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(doc["installations"].as_array().unwrap().len(), 0, "{doc}");
+    assert_eq!(doc["truncated"], true, "{doc}");
+
+    let (ok, _, stderr) = cli(&scratch, &["scan", scratch.to_str().unwrap(), "--depth", "x"]);
+    assert!(!ok);
+    assert!(stderr.contains("--depth"), "{stderr}");
+}
+
+#[test]
+fn root_accepts_a_folder_that_holds_one_installation() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-root-parent");
+    let _ = stage_fixture(HarnessId::Pi, &scratch);
+    // The scratch folder is not a store: the Pi store is its `home` child.
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "--root", scratch.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    let line: Value = serde_json::from_str(stdout.lines().next().expect("one line")).unwrap();
+    assert_eq!(line["id"], "01a17e17-9f07-743d-8072-8b3b13d65ab5");
+}
+
+#[test]
+fn a_root_holding_several_installations_names_them() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-root-several");
+    let _ = portable_januracode(&scratch.join("apps/one"));
+    let _ = portable_januracode(&scratch.join("apps/two"));
+    let (ok, _, stderr) = cli(
+        &scratch,
+        &["list", "opencode", "--root", scratch.join("apps").to_str().unwrap()],
+    );
+    assert!(!ok);
+    assert!(stderr.contains("more than one"), "{stderr}");
+    // Both stores are named, so the caller can pass one of them.
+    assert_eq!(stderr.matches("opencode.db").count(), 2, "{stderr}");
+}
+
+#[test]
+fn hop_writes_into_the_installation_dest_root_names() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-dest-root");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    // A second Pi, kept in a folder of its own: recognized by its provider configuration.
+    let portable = scratch.join("portable");
+    let agent = portable.join("pi/agent");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::write(agent.join("models.json"), br#"{"providers":{}}"#).unwrap();
+    let (ok, stdout, stderr) = cli(
+        &scratch,
+        &[
+            "hop",
+            "claude_code",
+            "c45db7bc",
+            "pi",
+            "--dest-root",
+            portable.to_str().unwrap(),
+            "--dest-version",
+            "1.2.0",
+        ],
+    );
+    assert!(ok, "{stderr}");
+    let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    let location = PathBuf::from(printed["location"].as_str().unwrap());
+    assert!(
+        location.starts_with(&agent),
+        "{} is not in {}",
+        location.display(),
+        agent.display()
+    );
+}
+
+#[test]
+fn dest_root_is_refused_outside_hop() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-dest-root-list");
+    let (ok, _, stderr) = cli(
+        &scratch,
+        &["list", "pi", "--dest-root", scratch.to_str().unwrap()],
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--dest-root"), "{stderr}");
+}
+
 #[test]
 fn hop_infers_the_source_harness_from_root() {
     let scratch = support::scratch(HarnessId::Pi, "cli-hop-infer");

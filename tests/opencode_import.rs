@@ -84,6 +84,54 @@ fn hop_to_the_same_harness_writes_to_the_destination_store_not_the_source() {
 }
 
 #[test]
+fn dest_root_imports_with_the_engine_kept_beside_the_destination_store() {
+    let scratch = support::scratch(mukade::model::HarnessId::OpenCode, "import-dest-root");
+    // A self-contained OpenCode below a folder of its own: its database under the XDG data
+    // folder and its launcher at the top, where an npm-style install keeps it.
+    let install = scratch.join("portable/oc");
+    let database = install.join("share/opencode/opencode.db");
+    std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+    std::fs::write(&database, b"SQLite format 3\0rest of the file").unwrap();
+    let observed = scratch.join("observed.txt");
+    let engine = support::launcher(
+        &install,
+        "opencode",
+        &format!(
+            "echo %OPENCODE_DB%>\"{0}\"\r\necho Imported session: ses_test\r\n",
+            observed.display()
+        ),
+        &format!(
+            "printf '%s' \"$OPENCODE_DB\" > '{0}'\necho 'Imported session: ses_test'\n",
+            observed.display()
+        ),
+    );
+    let fixture = fixture();
+    let portable = scratch.join("portable");
+    let mut args = import_args(fixture.to_str().unwrap(), scratch.to_str().unwrap(), "unused");
+    // No --opencode-exe: the engine beside the installation is the one to use.
+    args.truncate(args.len() - 2);
+    args.extend(["--dest-root", portable.to_str().unwrap()]);
+    let (code, stdout, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &args,
+        &[("OPENCODE_DB", scratch.join("elsewhere.db").to_str().unwrap())],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(
+        PathBuf::from(std::fs::read_to_string(&observed).unwrap().trim()),
+        database,
+        "the installation's database was written, not OPENCODE_DB's"
+    );
+    let receipt: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(
+        PathBuf::from(receipt["resume"][0].as_str().unwrap()),
+        engine,
+        "the resume command names the installation's engine: {receipt}"
+    );
+}
+
+#[test]
 fn an_explicit_data_directory_holds_the_private_import_document() {
     let scratch = support::scratch(mukade::model::HarnessId::OpenCode, "import-data-dir");
     let data = scratch.join("private-data");

@@ -85,7 +85,7 @@
           "linux": ["{home}/.opencode/bin/opencode"]
         },
         "beside_store": {
-          "windows": ["opencode.exe", "bin/opencode.exe", "resources/opencode-cli/opencode.exe", ".opencode/bin/opencode.exe"],
+          "windows": ["opencode.exe", "bin/opencode.exe", "resources/opencode-cli/opencode.exe", ".opencode/bin/opencode.exe", "opencode.cmd", "bin/opencode.cmd"],
           "macos": ["opencode", "bin/opencode", "resources/opencode-cli/opencode", ".opencode/bin/opencode"],
           "linux": ["opencode", "bin/opencode", "resources/opencode-cli/opencode", ".opencode/bin/opencode"]
         }

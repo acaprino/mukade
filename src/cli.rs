@@ -34,6 +34,7 @@ mukade document opencode <src-harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
 mukade detect <dir>
+mukade scan  <dir> [--depth <n>]
 
 `harnesses` lists every supported harness with the executable and store mukade finds on this
 machine, its version, session/fork counts and lineage support. Store reads are read-only; discovered
@@ -54,6 +55,15 @@ Codex's state_*.sqlite, are not OpenCode). An empty directory tree infers nothin
 `--root <dir>` (non-empty) the harness may be omitted from `list`, `dump` and a `hop` source: it is
 inferred from the directory's own layout when exactly one harness is recognized. `--root` names the
 source store for a hop, the only store otherwise; for OpenCode a directory means its `opencode.db`.
+
+`scan` walks a directory (default 8 folder levels, `--depth <n>` to change it) and prints every
+harness installation below it as JSON, portable and custom ones included: the harness, the store as
+its variable names it, the executable kept beside the store (or null) and the evidence. It never
+follows links, skips node_modules, .git and target, and sets `truncated` when the depth or
+its folder budget stopped it. `--root` and `--dest-root` accept such a folder too: when the path is
+not a store itself, it must hold exactly one installation (of the harness named, when one is).
+`--dest-root` names a hop's destination installation; its executable writes the session unless
+--<harness>-exe names another.
 
 options:
   --cwd <dir>              the project the destination files the session under
@@ -87,6 +97,8 @@ options:
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
   --root <dir>             the store directory to use, and to infer the harness from
+  --dest-root <dir>        hop: the destination's store or installation folder
+  --depth <n>              scan: how many folder levels to descend (default 8)
   --claude-exe <path>      the claude binary to spawn
   --codex-exe <path>       the codex binary to spawn
   --opencode-exe <path>    the opencode binary to spawn
@@ -165,6 +177,8 @@ pub fn run(args: &[String]) -> Result<()> {
             "--timing" => crate::timing::enable(),
             "--reasoning" => flags.reasoning = Some(next(rest, &mut i)?),
             "--root" => flags.root = Some(next(rest, &mut i)?),
+            "--dest-root" => flags.dest_root = Some(next(rest, &mut i)?),
+            "--depth" => flags.depth = Some(next(rest, &mut i)?),
             "--claude-exe" => flags.claude_exe = Some(next(rest, &mut i)?),
             "--codex-exe" => flags.codex_exe = Some(next(rest, &mut i)?),
             "--opencode-exe" => flags.opencode_exe = Some(next(rest, &mut i)?),
@@ -247,6 +261,53 @@ pub fn run(args: &[String]) -> Result<()> {
         print_harnesses()?;
         return Ok(());
     }
+    if flags.depth.is_some() && command != "scan" {
+        anyhow::bail!("--depth is supported only by scan");
+    }
+    if command == "scan" {
+        let path = positional.first().context("scan needs a directory")?;
+        no_more(&positional, 1)?;
+        anyhow::ensure!(
+            flags
+                == Flags {
+                    depth: flags.depth.clone(),
+                    ..Flags::default()
+                },
+            "scan takes only --depth"
+        );
+        let depth = match flags.depth.as_deref() {
+            Some(depth) => depth
+                .parse::<usize>()
+                .with_context(|| format!("--depth {depth}: not a number of folder levels"))?,
+            None => crate::detect::DEFAULT_SCAN_DEPTH,
+        };
+        let scan = crate::detect::scan_installations(std::path::Path::new(path), depth);
+        let installations: Vec<serde_json::Value> =
+            scan.installations.iter().map(installation_json).collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "path": path,
+                "depth": depth,
+                "visited": scan.visited,
+                "truncated": scan.truncated,
+                "installations": installations,
+            }))?
+        );
+        return Ok(());
+    }
+    if flags.dest_root.is_some() && command != "hop" {
+        anyhow::bail!(
+            "--dest-root is supported only by hop: it names the destination's installation"
+        );
+    }
+    if flags
+        .dest_root
+        .as_deref()
+        .is_some_and(|root| root.trim().is_empty())
+    {
+        anyhow::bail!("--dest-root needs a non-empty directory");
+    }
     if command == "detect" {
         let path = positional.first().context("detect needs a directory")?;
         let found = crate::detect::detect_store(std::path::Path::new(path));
@@ -317,32 +378,28 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut roots = StoreRoots::from_env();
     // A hop's --root selects only the source, including when both ends use the same harness.
     let destination_roots = roots.clone();
-    let harness = match explicit {
-        Some(harness) => harness,
-        None => {
-            let root = flags.root.as_deref().expect("inference needs --root");
-            let found = crate::detect::detect_store(std::path::Path::new(root));
-            match found.len() {
-                0 => anyhow::bail!(
-                    "no harness store recognized in {root}: state the harness explicitly"
-                ),
-                1 => found[0].harness,
-                _ => anyhow::bail!(
-                    "{root} holds more than one harness's store ({}): state the harness explicitly",
-                    found
-                        .iter()
-                        .map(|d| d.harness.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            }
-        }
+    // --root names a store, or a folder that holds one installation; without a harness in the
+    // arguments, the installation's own layout says which harness it is.
+    let rooted = match flags.root.as_deref() {
+        Some(root) => locate_root(root, explicit, "--root")?,
+        None => None,
     };
+    let harness = explicit
+        .or(rooted.as_ref().map(|found| found.harness))
+        .context(USAGE)?;
     // The root override concerns the store the command reads; for a hop that is the source, and
     // the destination keeps its own environment.
     if let Some(root) = flags.root.as_deref() {
-        apply_root(&mut roots, harness, std::path::Path::new(root));
+        let store = rooted.as_ref().map_or_else(
+            || std::path::PathBuf::from(root),
+            |found| found.store.clone(),
+        );
+        apply_root(&mut roots, harness, &store);
     }
+    // `write`'s root is its destination: the engine kept beside that store imports into it.
+    let write_engine = rooted
+        .and_then(|found| found.exe)
+        .map(|exe| exe.to_string_lossy().into_owned());
     match command.as_str() {
         "list" => {
             no_more(operands, 0)?;
@@ -412,7 +469,13 @@ pub fn run(args: &[String]) -> Result<()> {
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
             let session = wire::from_document(&doc)?;
-            let mut opts = flags.import_opts(session.meta.harness, harness, &session, &roots)?;
+            let mut opts = flags.import_opts(
+                session.meta.harness,
+                harness,
+                &session,
+                &roots,
+                write_engine.as_deref(),
+            )?;
             // A document `dump --compaction summary` made says who wrote its summary.
             if let Some(facts) = doc
                 .get("summary")
@@ -451,7 +514,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 }
             }.map_err(anyhow::Error::new)?;
             anyhow::ensure!(source.conversation().any(|entry| matches!(entry.kind, crate::model::Kind::Step { .. })), "noCompleteTurn");
-            let mut opts = flags.write_opts(dest, &source, &destination_roots)?;
+            let mut opts = flags.write_opts(dest, &source, &destination_roots, None)?;
             if source_harness == HarnessId::OpenCode {
                 for entry in source.conversation() {
                     if let crate::model::Kind::Step { calls, .. } = &entry.kind {
@@ -526,8 +589,11 @@ pub fn run(args: &[String]) -> Result<()> {
                 }
             }
             // Compaction (including a source-model summary) uses the source store. The writer and
-            // optional resume use the destination's environment, never the source override.
-            let mut opts = flags.import_opts(harness, dest, &source, &destination_roots)?;
+            // optional resume use the destination's environment, or the installation --dest-root
+            // names, never the source override.
+            let (destination_roots, engine) = hop_destination(&flags, dest, destination_roots)?;
+            let mut opts =
+                flags.import_opts(harness, dest, &source, &destination_roots, engine.as_deref())?;
             let (selected, summary) =
                 crate::hop::compact(&source, &selection, &roots).map_err(anyhow::Error::new)?;
             opts.summary = summary;
@@ -860,6 +926,8 @@ struct Flags {
     manifest: Option<String>,
     output: Option<String>,
     root: Option<String>,
+    dest_root: Option<String>,
+    depth: Option<String>,
     claude_exe: Option<String>,
     codex_exe: Option<String>,
     opencode_exe: Option<String>,
@@ -874,8 +942,9 @@ impl Flags {
         dest: HarnessId,
         session: &crate::model::Session,
         roots: &StoreRoots,
+        engine: Option<&str>,
     ) -> Result<ImportOpts> {
-        let write = self.write_opts(dest, session, roots)?;
+        let write = self.write_opts(dest, session, roots, engine)?;
         Ok(ImportOpts {
             cwd: self.cwd.clone().or_else(|| session.meta.cwd.clone()),
             roots: roots.clone(),
@@ -910,11 +979,14 @@ impl Flags {
         })
     }
 
+    /// `engine` is the executable the destination installation keeps beside its store: an
+    /// explicit `--<harness>-exe` wins over it, and it wins over `MUKADE_*_EXE` and `PATH`.
     fn write_opts(
         &self,
         harness: HarnessId,
         session: &crate::model::Session,
         roots: &StoreRoots,
+        engine: Option<&str>,
     ) -> Result<WriteOpts> {
         if harness != HarnessId::OpenCode
             && (self.dest_agent.is_some() || self.metadata_file.is_some())
@@ -998,16 +1070,15 @@ impl Flags {
         // travels with the write so the resume command names it too; probes resolve the whole
         // chain â€” PATH, then the well-known install locations â€” so a default install is found
         // with no flag at all.
-        let exe_override = self
-            .exe_flag(harness)
-            .filter(|v| !v.is_empty())
+        let stated_exe = self.exe_flag(harness).filter(|v| !v.is_empty()).or(engine);
+        let exe_override = stated_exe
             .map(str::to_string)
             .or_else(|| {
                 std::env::var(crate::exe::env_var_name(harness))
                     .ok()
                     .filter(|v| !v.is_empty())
             });
-        let resolved_exe = crate::exe::resolve(harness, self.exe_flag(harness));
+        let resolved_exe = crate::exe::resolve(harness, stated_exe);
         // The destination's own version stamp, when the caller did not state it: L7 wants the
         // destination's `cli_version`, and Codex refuses a rollout without one.
         let dest_version = self.dest_version.clone().or_else(|| {
@@ -1146,6 +1217,66 @@ fn apply_root(roots: &mut StoreRoots, harness: HarnessId, root: &std::path::Path
         }
         HarnessId::Pi => roots.pi_agent_dir = Some(root),
     }
+}
+
+/// Resolve a `--root` or `--dest-root` to the installation it names. A path that names nothing is
+/// still a store when the harness is stated (a destination store can legitimately be empty);
+/// without a harness, nothing recognized is refused, and so is a choice between several.
+fn locate_root(
+    root: &str,
+    harness: Option<HarnessId>,
+    flag: &str,
+) -> Result<Option<crate::detect::Installation>> {
+    use crate::detect::Located;
+    match crate::detect::locate_installation(std::path::Path::new(root), harness) {
+        Located::One(found) => Ok(Some(found)),
+        Located::Nothing if harness.is_some() => Ok(None),
+        Located::Nothing => {
+            anyhow::bail!("no harness store recognized in {root}: state the harness explicitly")
+        }
+        Located::Several(found) => anyhow::bail!(
+            "{root} holds more than one harness installation: state the harness, or pass one of \
+             these stores as {flag}:\n{}",
+            found
+                .iter()
+                .map(|found| format!("  {} {}", found.harness.as_str(), found.store.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    }
+}
+
+/// Where a hop writes: the destination's environment, or the installation `--dest-root` names,
+/// with the engine kept beside its store.
+fn hop_destination(
+    flags: &Flags,
+    dest: HarnessId,
+    mut roots: StoreRoots,
+) -> Result<(StoreRoots, Option<String>)> {
+    let Some(dest_root) = flags.dest_root.as_deref() else {
+        return Ok((roots, None));
+    };
+    let found = locate_root(dest_root, Some(dest), "--dest-root")?;
+    let store = found.as_ref().map_or_else(
+        || std::path::PathBuf::from(dest_root),
+        |found| found.store.clone(),
+    );
+    apply_root(&mut roots, dest, &store);
+    let engine = found
+        .and_then(|found| found.exe)
+        .or_else(|| crate::detect::engine_beside_store(dest, &store))
+        .map(|exe| exe.to_string_lossy().into_owned());
+    Ok((roots, engine))
+}
+
+/// One installation as `scan` prints it.
+fn installation_json(found: &crate::detect::Installation) -> serde_json::Value {
+    json!({
+        "harness": found.harness.as_str(),
+        "store": found.store.display().to_string(),
+        "exe": found.exe.as_ref().map(|exe| exe.display().to_string()),
+        "evidence": found.evidence,
+    })
 }
 
 /// The project the destination already files sessions of this directory under. The destination is
