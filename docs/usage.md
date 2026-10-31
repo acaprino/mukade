@@ -611,8 +611,16 @@ still wins over it, and it wins over `MUKADE_*_EXE` and `PATH`. Into a portable 
 mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
 ```
 
-Only `OPENCODE_DB` is set for that import, as for any OpenCode destination: the JanuraCode engine
-still reads the `XDG_*` configuration of the shell that runs mukade.
+The destination's model and provider come from that installation's own configuration when it keeps
+one beside its store: an OpenCode database in an XDG data layout (`<root>\share\opencode\opencode.db`,
+as in a portable JanuraCode) is configured by `<root>\config\opencode\opencode.json`, a Codex home by
+its `config.toml`. When that file exists it alone answers; otherwise `OPENCODE_CONFIG` and
+`XDG_CONFIG_HOME` apply as before. `--model-provider` and `--model` still win over both. A
+destination whose database holds no session for the source's folder yet cannot name its project:
+pass `--project-id` for that first hop.
+
+Only `OPENCODE_DB` is set for the import itself, as for any OpenCode destination: the JanuraCode
+engine runs with the `XDG_*` configuration of the shell that runs mukade.
 
 A `--resume-prompt` runs the destination with its store variable set to the root the session was
 written to, whether it came from the environment or from `--root`, and from the destination's

@@ -132,6 +132,63 @@ fn dest_root_imports_with_the_engine_kept_beside_the_destination_store() {
 }
 
 #[test]
+fn dest_root_takes_the_model_the_installation_configures() {
+    let scratch = support::scratch(mukade::model::HarnessId::OpenCode, "import-dest-root-model");
+    // A portable app: its data in an XDG layout, its configuration beside that data.
+    let data = scratch.join("portable/app/data");
+    let database = data.join("share/opencode/opencode.db");
+    std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+    std::fs::write(&database, b"SQLite format 3\0rest of the file").unwrap();
+    std::fs::create_dir_all(data.join("config/opencode")).unwrap();
+    std::fs::write(
+        data.join("config/opencode/opencode.json"),
+        r#"{"model":"portable-gateway/portable-model"}"#,
+    )
+    .unwrap();
+    // The engine keeps a copy of the document it was asked to import.
+    let copy = scratch.join("imported.json");
+    support::launcher(
+        &scratch.join("portable/app/bin"),
+        "opencode",
+        &format!(
+            "copy /y %3 \"{0}\" >nul\r\necho Imported session: ses_test\r\n",
+            copy.display()
+        ),
+        &format!(
+            "cp \"$3\" '{0}'\necho 'Imported session: ses_test'\n",
+            copy.display()
+        ),
+    );
+    let fixture = fixture();
+    let portable = scratch.join("portable");
+    let args = vec![
+        "hop",
+        "opencode",
+        "fixture",
+        "opencode",
+        "--from-file",
+        fixture.to_str().unwrap(),
+        "--cwd",
+        scratch.to_str().unwrap(),
+        "--dest-version",
+        "2.1.4",
+        "--project-id",
+        "global",
+        "--dest-root",
+        portable.to_str().unwrap(),
+    ];
+    let (code, _, stderr) = support::cli_in(&scratch, &scratch, &args, &[]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&copy).unwrap()).unwrap();
+    let text = document.to_string();
+    assert!(
+        text.contains("portable-gateway") && text.contains("portable-model"),
+        "the installation's model was not used: {text}"
+    );
+}
+
+#[test]
 fn an_explicit_data_directory_holds_the_private_import_document() {
     let scratch = support::scratch(mukade::model::HarnessId::OpenCode, "import-data-dir");
     let data = scratch.join("private-data");

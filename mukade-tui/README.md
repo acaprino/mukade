@@ -139,12 +139,12 @@ prompt was given. The manifest is saved under `mukade-data/manifests/`.
 
 The source is read from its row's store and the destination written to its own
 (`mukade::hop_into`), with the destination installation's executable, which also appears in the
-resume commands. A destination's model and provider are read from the configuration of the shell
-that started the explorer (`OPENCODE_CONFIG` / `XDG_CONFIG_HOME` for OpenCode,
-`CODEX_HOME/config.toml` for Codex), not from a scanned installation's own; OpenCode refuses a hop
-without them, and without a project id, which a destination whose database has no session for the
-source's folder yet cannot supply: use the CLI's `--model-provider`, `--model` and `--project-id`
-for that first hop.
+resume commands. A destination's model and provider come from that installation's own
+configuration (`mukade::dest::configured_model_in`): a portable JanuraCode's
+`data\config\opencode\opencode.json` beside its `data\share\opencode\opencode.db`, a Codex home's
+`config.toml`; a standard OpenCode falls back to `OPENCODE_CONFIG` / `XDG_CONFIG_HOME`. OpenCode
+refuses a hop without them, and without a project id, which a destination whose database has no
+session for the source's folder yet cannot supply: use the CLI's `--project-id` for that first hop.
 
 ## Limits
 

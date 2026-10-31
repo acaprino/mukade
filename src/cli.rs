@@ -1057,7 +1057,7 @@ impl Flags {
         // What the *destination* is configured to use, when the caller did not state it. OpenCode's
         // interchange format refuses a model reference without a provider, and Codex stamps the
         // provider its own config names, so both are read from the destination's own files.
-        let configured = crate::dest::configured_model(harness);
+        let configured = crate::dest::configured_model_in(harness, roots);
         let model_provider = self
             .model_provider
             .clone()

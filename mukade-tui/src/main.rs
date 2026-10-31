@@ -789,7 +789,7 @@ fn execute_hop(hop: &HopState) -> Vec<String> {
         },
     };
     let exe = dest.engine();
-    let configured = dest::configured_model(dest.harness);
+    let configured = dest::configured_model_in(dest.harness, &dest.roots);
     let project_id = if dest.harness == HarnessId::OpenCode {
         cwd.as_deref().and_then(|cwd| {
             mukade::reader::opencode::project_id_for(
