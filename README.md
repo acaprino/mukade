@@ -167,7 +167,8 @@ The full command list, keys, hop dialog and examples are in
 
 ## One executable, nothing to install, and speed
 
-mukade is a single command-line executable: run `build.bat` on Windows or `sh build.sh` on Linux,
+mukade is a single command-line executable: run `build.bat` on Windows or `sh build.sh` on Linux
+(both also build the `mukade-tui` terminal browser beside it, `target/release/mukade-tui.exe`),
 then copy `target/release/mukade.exe` or `target/release/mukade` anywhere (a USB stick included)
 and run it. The Windows executable includes the Musashi icon and links the C runtime in, so it
 needs no redistributable. There is no installer, no configuration file and no mode to switch on.
