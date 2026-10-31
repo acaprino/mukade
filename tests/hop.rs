@@ -357,6 +357,23 @@ fn a_resume_returns_once_the_harness_exits_even_if_its_child_holds_the_output() 
     assert!(out.contains("answered"), "{out:?}");
 }
 
+/// A timeout the clock cannot reach sets no deadline: the resume waits for the harness to exit.
+#[test]
+fn a_resume_with_a_timeout_beyond_the_clock_waits_for_the_harness() {
+    let scratch = support::scratch(HarnessId::Pi, "resume-unbounded-timeout");
+    let harness = support::launcher(&scratch, "harness", "echo answered", "echo answered");
+
+    let out = hop::run_resume(
+        &[harness.to_string_lossy().into_owned()],
+        None,
+        "x",
+        std::time::Duration::MAX,
+    )
+    .expect("a timeout past the clock must not stop the resume");
+
+    assert!(out.contains("answered"), "{out:?}");
+}
+
 /// An npm launcher is `cmd.exe` waiting on the real harness: a timeout stops the harness too, not
 /// only the launcher, so nothing keeps writing to the session after the caller was told it failed.
 #[cfg(windows)]

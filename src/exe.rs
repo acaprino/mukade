@@ -279,7 +279,8 @@ pub struct Finished {
 /// command is stopped with everything it started: an npm install puts a `.cmd` launcher in front
 /// of the harness, so the child is `cmd.exe` and killing it alone would leave the harness running.
 /// Once the command has exited, a process it left behind holding the pipes open does not keep the
-/// caller waiting.
+/// caller waiting. A timeout beyond what the clock can represent sets no deadline: the caller
+/// waits for the command to exit.
 pub fn run_within(command: &mut Command, timeout: Duration) -> std::io::Result<Finished> {
     let mut child = command
         .stdin(Stdio::null())
@@ -288,12 +289,12 @@ pub fn run_within(command: &mut Command, timeout: Duration) -> std::io::Result<F
         .spawn()?;
     let stdout = child.stdout.take().map(drain);
     let stderr = child.stderr.take().map(drain);
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now().checked_add(timeout);
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break Some(status);
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             kill_tree(&mut child);
             let _ = child.wait();
             break None;
