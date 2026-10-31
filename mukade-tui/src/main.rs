@@ -113,12 +113,40 @@ struct App {
 }
 
 impl App {
-    fn selected_row(&self) -> &HarnessRow {
-        &self.rows[self.harness.min(self.rows.len().saturating_sub(1))]
+    fn new(rows: Vec<HarnessRow>, turn_limit: usize) -> Self {
+        Self {
+            rows,
+            harness: 0,
+            session: 0,
+            focus: Focus::Harnesses,
+            transcript: None,
+            scroll: 0,
+            status: "ready".to_string(),
+            mode: Mode::Normal,
+            job: None,
+            job_kind: JobKind::Scan,
+            busy: false,
+            viewport_width: 80,
+            viewport_height: 20,
+            turn_limit,
+            default_turns: turn_limit,
+        }
+    }
+
+    /// `None` until the first scan returns: the interactive explorer draws before it has rows.
+    fn selected_row(&self) -> Option<&HarnessRow> {
+        self.rows
+            .get(self.harness.min(self.rows.len().saturating_sub(1)))
     }
 
     fn selected_session(&self) -> Option<&SessionInfo> {
-        self.selected_row().sessions.get(self.session)
+        self.selected_row()?.sessions.get(self.session)
+    }
+
+    /// The selected session together with the harness that owns it.
+    fn selected_pair(&self) -> Option<(HarnessId, &SessionInfo)> {
+        let row = self.selected_row()?;
+        Some((row.harness, row.sessions.get(self.session)?))
     }
 
     fn move_down(&mut self) {
@@ -129,7 +157,7 @@ impl App {
                 self.transcript = None;
             }
             Focus::Sessions => {
-                let len = self.selected_row().sessions.len();
+                let len = self.selected_row().map_or(0, |row| row.sessions.len());
                 if len > 0 {
                     self.session = (self.session + 1).min(len - 1);
                 }
@@ -196,23 +224,7 @@ fn main() -> std::io::Result<()> {
         return Ok(());
     }
 
-    let mut app = App {
-        rows,
-        harness: 0,
-        session: 0,
-        focus: Focus::Harnesses,
-        transcript: None,
-        scroll: 0,
-        status: "ready".to_string(),
-        mode: Mode::Normal,
-        job: None,
-        job_kind: JobKind::Scan,
-        busy: false,
-        viewport_width: 80,
-        viewport_height: 20,
-        turn_limit,
-        default_turns: turn_limit,
-    };
+    let mut app = App::new(rows, turn_limit);
 
     if args.iter().any(|arg| arg == "--snapshot-hop") {
         open_hop(&mut app);
@@ -414,11 +426,10 @@ fn start_load(app: &mut App, roots: &StoreRoots) {
 }
 
 fn start_read(app: &mut App, roots: &StoreRoots) {
-    let Some(info) = app.selected_session() else {
+    let Some((harness, info)) = app.selected_pair() else {
         app.status = "no session selected".to_string();
         return;
     };
-    let harness = app.selected_row().harness;
     let info = info.clone();
     let fallback = session_label(&info);
     let id = info.id.clone();
@@ -568,8 +579,7 @@ fn other_harnesses(source: HarnessId) -> Vec<HarnessId> {
 }
 
 fn open_hop(app: &mut App) {
-    let harness = app.selected_row().harness;
-    let Some(info) = app.selected_session() else {
+    let Some((harness, info)) = app.selected_pair() else {
         app.status = "no session selected".to_string();
         return;
     };
@@ -779,8 +789,7 @@ fn resume_argv(harness: HarnessId, info: &SessionInfo) -> Vec<String> {
 
 fn resume_selected(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result<()> {
     let (harness, info) = {
-        let harness = app.selected_row().harness;
-        let Some(info) = app.selected_session() else {
+        let Some((harness, info)) = app.selected_pair() else {
             app.status = "no session selected".to_string();
             return Ok(());
         };
@@ -1023,7 +1032,11 @@ fn draw_harnesses(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
-    let row = app.selected_row();
+    let Some(row) = app.selected_row() else {
+        let block = Block::default().borders(Borders::ALL).title(" sessions ");
+        frame.render_widget(block, area);
+        return;
+    };
     let title = format!(" {} · {} ", row.label, row.sessions.len());
     let items: Vec<ListItem> = row
         .sessions
@@ -1077,8 +1090,18 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    let row = app.selected_row();
     let mut lines: Vec<Line> = Vec::new();
+    let Some(row) = app.selected_row() else {
+        lines.push(Line::from(Span::styled(
+            app.status.clone(),
+            Style::default().fg(Color::DarkGray),
+        )));
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title(" session "))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(paragraph, area);
+        return;
+    };
     if let Some(error) = &row.error {
         lines.push(Line::from(Span::styled(
             error.clone(),
@@ -1349,6 +1372,35 @@ mod tests {
                 .iter()
                 .any(|span| span.content.contains("USER") || span.content.contains("ASSISTANT"))
         }));
+    }
+
+    /// The interactive explorer draws its first frame before the background scan returns any
+    /// harness, so every pane must render, and every key must be handled, over empty rows.
+    #[test]
+    fn the_first_frame_renders_before_the_scan_returns() {
+        let mut app = App::new(Vec::new(), 50);
+        app.busy = true;
+        app.status = "scanning stores…".to_string();
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("scanning stores"));
+
+        app.busy = false;
+        for focus in [Focus::Harnesses, Focus::Sessions, Focus::Transcript] {
+            app.focus = focus;
+            app.move_down();
+            app.move_up();
+        }
+        assert!(app.selected_session().is_none());
+        open_hop(&mut app);
+        assert!(matches!(app.mode, Mode::Normal));
     }
 
     #[test]

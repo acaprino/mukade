@@ -789,6 +789,7 @@ name = "mukade-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "embed-resource",
  "mukade",
  "ratatui",
  "serde_json",
