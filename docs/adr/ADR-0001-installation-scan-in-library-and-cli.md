@@ -2,7 +2,7 @@
 adr_id: ADR-0001
 version: 1
 title: Installation scanning is a library capability the CLI exposes first
-status: Proposed
+status: Accepted
 author: Alfio Caprino
 scope:
   paths:
@@ -20,8 +20,8 @@ depends_on:
 created_from_task: brainstorm-installation-scan
 proposed_on: 2026-10-31
 proposed_at_sha: e1146a4dca385f7e6a9fe1c3f8eea348c47b91f7
-accepted_on: null
-accepted_at_sha: null
+accepted_on: 2026-10-31
+accepted_at_sha: 206932d8ac629f34b7c6e73822617d718903b23c
 last_verified_sha: null
 retired_on: null
 retired_reason: null
@@ -33,7 +33,7 @@ changes:
 # ADR-0001: Installation scanning is a library capability the CLI exposes first
 
 <!-- adr-header:start -->
-Version 1 · Proposed 2026-10-31 by Alfio Caprino
+Version 1 · Accepted 2026-10-31 at 206932d · proposed 2026-10-31 by Alfio Caprino
 <!-- adr-header:end -->
 
 ## Context and Problem Statement
