@@ -21,7 +21,7 @@ run `index`; do not edit this block by hand.
 
 | ADR | Title | Governs | From task |
 |---|---|---|---|
-| none | | | |
+| [ADR-0001](<ADR-0001-installation-scan-in-library-and-cli.md>) | Installation scanning is a library capability the CLI exposes first | `src/detect.rs`, `src/cli.rs`, `mukade-tui/src/**`, `mukade::detect`, `mukade::cli`, `mukade-tui`, `installation-discovery` | `brainstorm-installation-scan` |
 
 ## Superseded
 
