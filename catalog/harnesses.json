@@ -19,6 +19,11 @@
           "windows": ["{home}/.local/bin/claude.exe", "{home}/.local/bin/claude"],
           "macos": ["{home}/.local/bin/claude"],
           "linux": ["{home}/.local/bin/claude"]
+        },
+        "beside_store": {
+          "windows": ["claude.exe", "bin/claude.exe", ".local/bin/claude.exe"],
+          "macos": ["claude", "bin/claude", ".local/bin/claude"],
+          "linux": ["claude", "bin/claude", ".local/bin/claude"]
         }
       },
       "store": {
@@ -46,6 +51,11 @@
           "windows": ["{local_app_data}/Programs/OpenAI/Codex/bin/codex.exe"],
           "macos": ["{home}/.local/bin/codex"],
           "linux": ["{home}/.local/bin/codex"]
+        },
+        "beside_store": {
+          "windows": ["codex.exe", "bin/codex.exe"],
+          "macos": ["codex", "bin/codex"],
+          "linux": ["codex", "bin/codex"]
         }
       },
       "store": {
@@ -73,6 +83,11 @@
           "windows": ["{app_data}/npm/node_modules/@opencode/cli/bin/opencode.exe", "{app_data}/npm/opencode.cmd", "{home}/.opencode/bin/opencode.exe"],
           "macos": ["{home}/.opencode/bin/opencode"],
           "linux": ["{home}/.opencode/bin/opencode"]
+        },
+        "beside_store": {
+          "windows": ["opencode.exe", "bin/opencode.exe", "resources/opencode-cli/opencode.exe", ".opencode/bin/opencode.exe"],
+          "macos": ["opencode", "bin/opencode", "resources/opencode-cli/opencode", ".opencode/bin/opencode"],
+          "linux": ["opencode", "bin/opencode", "resources/opencode-cli/opencode", ".opencode/bin/opencode"]
         }
       },
       "store": {
@@ -100,6 +115,11 @@
           "windows": ["{home}/.pi/agent/bin/pi.cmd", "{app_data}/npm/pi.cmd", "{app_data}/npm/pi"],
           "macos": ["{home}/.pi/agent/bin/pi"],
           "linux": ["{home}/.pi/agent/bin/pi"]
+        },
+        "beside_store": {
+          "windows": ["bin/pi.cmd", "pi.cmd"],
+          "macos": ["bin/pi", "pi"],
+          "linux": ["bin/pi", "pi"]
         }
       },
       "store": {

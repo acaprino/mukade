@@ -47,9 +47,13 @@ pub struct Binary {
     pub flag: String,
     pub env: String,
     pub locations: Locations,
+    /// Where a self-contained (portable or custom) installation keeps its executable, relative to
+    /// the store's folder or one of its nearest ancestors. Read by [`crate::detect`].
+    #[serde(default)]
+    pub beside_store: Locations,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Locations {
     #[serde(default)]
     pub windows: Vec<String>,
@@ -145,6 +149,17 @@ pub fn binary_candidates_with(harness: HarnessId, platform: &str, vars: &Vars) -
     list.iter()
         .filter_map(|location| expand(location, vars))
         .collect()
+}
+
+/// The executable paths a self-contained installation may keep beside its store, relative to the
+/// store's folder or an ancestor of it, for a platform.
+pub fn engines_beside_store(harness: HarnessId, platform: &str) -> &'static [String] {
+    let entry = entry(harness);
+    match platform {
+        "windows" => &entry.binary.beside_store.windows,
+        "macos" => &entry.binary.beside_store.macos,
+        _ => &entry.binary.beside_store.linux,
+    }
 }
 
 /// [`binary_candidates_with`] for this machine's platform and variables.

@@ -1,12 +1,35 @@
-//! Recognize which harness a store directory belongs to, from the layout its own files make.
+//! Recognize harness stores and installations from the layouts their own files make.
 //!
 //! Detection is evidence, not a verdict: a directory can legitimately hold more than one
 //! harness's store (the test homes do), so the answer is every candidate with what was seen. An
 //! explicitly stated harness always wins over detection; inference is for a caller that has a
 //! directory and nothing else. A candidate needs concrete files — session records, Pi's
 //! `models.json`, OpenCode's `opencode.db`: an empty directory tree infers nothing.
+//!
+//! - [`detect_store`] answers for one folder (or OpenCode's database file);
+//! - [`scan_installations`] walks a tree and reports every installation in it, portable and
+//!   custom ones included, with the executable kept beside each store
+//!   ([`engine_beside_store`]).
+//!
+//! Each harness's layout is an adapter (`claude_code`, `codex`, `opencode`, `pi`) behind one
+//! contract (`layout::StoreLayout`), so detection and the scan apply the same rules. The CLI and
+//! the terminal browser use these functions and recognize nothing themselves (ADR-0001).
+
+mod claude_code;
+mod codex;
+mod engine;
+mod folder;
+mod layout;
+mod opencode;
+mod pi;
+mod scan;
+
+pub use engine::engine_beside_store;
+pub use scan::{DEFAULT_SCAN_DEPTH, Installation, Scan, scan_installations};
 
 use crate::model::HarnessId;
+use folder::Folder;
+use layout::layouts;
 use std::path::Path;
 
 /// One harness a directory may belong to, with what was seen.
@@ -19,166 +42,31 @@ pub struct Detection {
 /// Recognize the harness stores `path` holds. A file is accepted too: OpenCode's store is the
 /// SQLite database itself, not a directory. An empty answer means nothing was recognized.
 pub fn detect_store(path: &Path) -> Vec<Detection> {
+    let detection = |harness: HarnessId, evidence: Vec<String>| {
+        (!evidence.is_empty()).then_some(Detection { harness, evidence })
+    };
     if path.is_file() {
-        // Only the name OpenCode itself uses: other harnesses keep SQLite state too (Codex's
-        // `state_*.sqlite`), so the magic bytes alone must not decide.
-        let named_opencode = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("opencode.db"));
-        return if named_opencode && is_sqlite(path) {
-            vec![Detection {
-                harness: HarnessId::OpenCode,
-                evidence: vec![format!(
-                    "{} is a SQLite database (OpenCode's store)",
-                    path.display()
-                )],
-            }]
-        } else {
-            Vec::new()
-        };
+        return layouts()
+            .into_iter()
+            .filter_map(|layout| detection(layout.harness(), layout.file_evidence(path)))
+            .collect();
     }
     if !path.is_dir() {
         return Vec::new();
     }
-
-    let mut out = Vec::new();
-
-    // Claude Code: projects/<mangled cwd>/<uuid>.jsonl. The directory name alone is too common to
-    // be evidence: at least one session file must be there.
-    let mut claude = Vec::new();
-    let projects = path.join("projects");
-    if projects.is_dir() {
-        let sessions = count_files(&projects, 2, &|name| name.ends_with(".jsonl"));
-        if sessions > 0 {
-            claude.push(format!(
-                "projects/<project>/ holds {sessions} session .jsonl file(s)"
-            ));
-        }
-    }
-    if !claude.is_empty() {
-        out.push(Detection {
-            harness: HarnessId::ClaudeCode,
-            evidence: claude,
-        });
-    }
-
-    // Codex: sessions/YYYY/MM/DD/rollout-*.jsonl, plus the session catalog.
-    let mut codex = Vec::new();
-    let sessions = path.join("sessions");
-    let rollouts = count_files(&sessions, 4, &|name| {
-        name.starts_with("rollout-") && name.ends_with(".jsonl")
-    });
-    if rollouts > 0 {
-        codex.push(format!(
-            "sessions/ holds {rollouts} rollout-*.jsonl file(s)"
-        ));
-    }
-    if path.join("session_index.jsonl").is_file() {
-        codex.push("session_index.jsonl (Codex's session catalog)".into());
-    }
-    if !codex.is_empty() {
-        out.push(Detection {
-            harness: HarnessId::Codex,
-            evidence: codex,
-        });
-    }
-
-    // OpenCode: the SQLite database.
-    let mut opencode = Vec::new();
-    let db = path.join("opencode.db");
-    if db.is_file() && is_sqlite(&db) {
-        opencode.push("opencode.db is a SQLite database".into());
-    }
-    if !opencode.is_empty() {
-        out.push(Detection {
-            harness: HarnessId::OpenCode,
-            evidence: opencode,
-        });
-    }
-
-    // Pi: sessions/--<mangled cwd>--/<stamp>_<uuid>.jsonl, plus the provider configuration.
-    let mut pi = Vec::new();
-    let pi_sessions = count_pi_sessions(&sessions);
-    if pi_sessions > 0 {
-        pi.push(format!(
-            "sessions/--<project>--/ holds {pi_sessions} session .jsonl file(s)"
-        ));
-    }
-    if path.join("models.json").is_file() {
-        pi.push("models.json (Pi's provider configuration)".into());
-    }
-    if !pi.is_empty() {
-        out.push(Detection {
-            harness: HarnessId::Pi,
-            evidence: pi,
-        });
-    }
-
-    out
-}
-
-/// Files under `dir` whose name matches, walking at most `depth` levels and a bounded number of
-/// entries: detection must stay cheap even on a large store.
-fn count_files(dir: &Path, depth: usize, matches: &dyn Fn(&str) -> bool) -> usize {
-    fn walk(dir: &Path, depth: usize, matches: &dyn Fn(&str) -> bool, budget: &mut usize) -> usize {
-        if depth == 0 || *budget == 0 {
-            return 0;
-        }
-        let mut found = 0;
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                *budget = budget.saturating_sub(1);
-                if *budget == 0 {
-                    break;
-                }
-                let path = entry.path();
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if path.is_dir() {
-                    found += walk(&path, depth - 1, matches, budget);
-                } else if matches(&name) {
-                    found += 1;
-                }
-            }
-        }
-        found
-    }
-    walk(dir, depth, matches, &mut 10_000)
-}
-
-/// Pi's project folders are unmistakable: `--<working directory>--`, one `.jsonl` per session.
-fn count_pi_sessions(sessions: &Path) -> usize {
-    let mut found = 0;
-    if let Ok(entries) = std::fs::read_dir(sessions) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.path().is_dir()
-                && name.starts_with("--")
-                && name.ends_with("--")
-                && name.len() > 4
-            {
-                found += count_files(&entry.path(), 1, &|name| name.ends_with(".jsonl"));
-            }
-        }
-    }
-    found
-}
-
-/// The 16-byte header every SQLite database starts with.
-fn is_sqlite(path: &Path) -> bool {
-    use std::io::Read;
-    let mut header = [0u8; 16];
-    std::fs::File::open(path)
-        .and_then(|mut file| file.read_exact(&mut header))
-        .is_ok_and(|_| &header == b"SQLite format 3\0")
+    let folder = Folder::read(path);
+    layouts()
+        .into_iter()
+        .filter_map(|layout| detection(layout.harness(), layout.evidence(&folder)))
+        .collect()
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn scratch(tag: &str) -> PathBuf {
+    pub(crate) fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "mukade-detect-{tag}-{}",
             uuid::Uuid::new_v4().simple()
@@ -187,7 +75,7 @@ mod tests {
         dir
     }
 
-    fn touch(path: &Path, content: &[u8]) {
+    pub(crate) fn touch(path: &Path, content: &[u8]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
     }
@@ -257,6 +145,14 @@ mod tests {
         let dir = scratch("empty-projects");
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         assert!(detect_store(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_folder_named_projects_with_another_case_is_not_claude_code() {
+        // `D:\Projects\<repo>\notes.jsonl` is not Claude Code's lowercase `projects/` store.
+        let root = scratch("scan-case");
+        touch(&root.join("Projects/repo/notes.jsonl"), b"{}\n");
+        assert!(detect_store(&root).is_empty());
     }
 
     #[test]
