@@ -408,12 +408,19 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
 
 /// Read, plan, check, write: the whole pipeline of Â§1.
 pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
+    hop_into(req, &req.roots)
+}
+
+/// [`hop`] into stores of its own: the source is read and compacted with `req.roots`, the
+/// destination written with `destination`. Two installations of one harness (an OpenCode and a
+/// portable JanuraCode, say) cannot share one [`StoreRoots`].
+pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
     let source = export(&req.source, &req.roots)?;
     let facts = SourceFacts::of(&source);
     let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
     let opts = ImportOpts {
         cwd: req.cwd.clone(),
-        roots: req.roots.clone(),
+        roots: destination.clone(),
         reasoning: req.reasoning,
         write: req.write.clone(),
         resume: req.resume.clone(),

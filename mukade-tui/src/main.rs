@@ -1,14 +1,19 @@
 //! A deliberately small native terminal browser for Mukade sessions.
 //!
-//! Left: the four harnesses with their session counts. Middle: the sessions of the selected
-//! harness. Right: the selected session's metadata, or its transcript after `Enter`.
-//! `R` resumes in the session's own harness; `h` hops it to another and shows the manifest.
+//! Left: the four harnesses' standard stores, then every installation a scan found (portable and
+//! custom ones included), with their session counts. Middle: the sessions of the selected row.
+//! Right: the selected session's metadata, or its transcript after `Enter`.
+//! `R` resumes in the session's own installation; `h` hops it to another and shows the manifest;
+//! `o` scans a folder for more installations (`--scan <dir>` does it at start).
+
+mod location;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use location::Location;
 use mukade::catalog;
 use mukade::dest;
 use mukade::exe;
@@ -41,9 +46,9 @@ enum Focus {
     Transcript,
 }
 
+/// One location's sessions, as the left and middle columns show them.
 struct HarnessRow {
-    harness: HarnessId,
-    label: String,
+    location: Location,
     sessions: Vec<SessionInfo>,
     error: Option<String>,
 }
@@ -57,8 +62,10 @@ struct Transcript {
 
 enum Mode {
     Normal,
-    Hop(HopState),
+    Hop(Box<HopState>),
     Result(ResultView),
+    /// The folder to scan for installations, as typed so far.
+    Open(String),
 }
 
 struct ResultView {
@@ -67,11 +74,14 @@ struct ResultView {
 }
 
 struct HopState {
-    source_harness: HarnessId,
+    source: Location,
     source_id: String,
     source_title: String,
     source_cwd: Option<String>,
-    dest: HarnessId,
+    /// Every other location, the same harness elsewhere included.
+    destinations: Vec<Location>,
+    /// The chosen one, an index into `destinations`.
+    dest: usize,
     compaction: usize,
     prompt: String,
     field: usize,
@@ -85,7 +95,11 @@ enum JobKind {
 }
 
 enum JobResult {
-    Loaded(Vec<HarnessRow>),
+    Loaded {
+        locations: Vec<Location>,
+        rows: Vec<HarnessRow>,
+        status: String,
+    },
     Read {
         info: SessionInfo,
         fallback: String,
@@ -95,6 +109,10 @@ enum JobResult {
 }
 
 struct App {
+    /// Where sessions are listed from: the standard stores, then scanned installations.
+    locations: Vec<Location>,
+    /// The standard stores, which a scanned installation keeps for the other harnesses.
+    standard: StoreRoots,
     rows: Vec<HarnessRow>,
     harness: usize,
     session: usize,
@@ -113,8 +131,15 @@ struct App {
 }
 
 impl App {
-    fn new(rows: Vec<HarnessRow>, turn_limit: usize) -> Self {
+    fn new(
+        locations: Vec<Location>,
+        standard: StoreRoots,
+        rows: Vec<HarnessRow>,
+        turn_limit: usize,
+    ) -> Self {
         Self {
+            locations,
+            standard,
             rows,
             harness: 0,
             session: 0,
@@ -143,10 +168,10 @@ impl App {
         self.selected_row()?.sessions.get(self.session)
     }
 
-    /// The selected session together with the harness that owns it.
-    fn selected_pair(&self) -> Option<(HarnessId, &SessionInfo)> {
+    /// The selected session together with the location that holds it.
+    fn selected_pair(&self) -> Option<(&Location, &SessionInfo)> {
         let row = self.selected_row()?;
-        Some((row.harness, row.sessions.get(self.session)?))
+        Some((&row.location, row.sessions.get(self.session)?))
     }
 
     fn move_down(&mut self) {
@@ -202,29 +227,51 @@ impl App {
 }
 
 fn main() -> std::io::Result<()> {
-    let roots = resolve_roots();
+    let standard = resolve_roots();
+    let mut locations = location::standard_locations(&standard);
     let args: Vec<String> = std::env::args().collect();
     let turn_limit = parse_turns(&args);
+    let folders = parse_scan_folders(&args);
     let headless = args
         .iter()
         .any(|arg| matches!(arg.as_str(), "--check" | "--snapshot" | "--snapshot-hop"));
     let rows = if headless {
-        load_rows(&roots)
+        if !folders.is_empty() {
+            location::scan_folders(&mut locations, &folders, &standard);
+        }
+        load_rows(&locations)
     } else {
         Vec::new()
     };
 
     if args.iter().any(|arg| arg == "--check") {
+        let width = rows
+            .iter()
+            .map(|row| row.location.label.chars().count())
+            .max()
+            .unwrap_or(0);
         for row in &rows {
+            let label = &row.location.label;
             match &row.error {
-                Some(error) => println!("{:<12} error: {error}", row.label),
-                None => println!("{:<12} {} sessions", row.label, row.sessions.len()),
+                Some(error) => println!("{label:<width$}  error: {error}"),
+                None => println!("{label:<width$}  {} sessions", row.sessions.len()),
+            }
+            if let Some(store) = &row.location.store {
+                println!("{:<width$}  store  {}", "", store.display());
+                println!(
+                    "{:<width$}  engine {}",
+                    "",
+                    row.location
+                        .exe
+                        .as_deref()
+                        .unwrap_or("(standard resolution)")
+                );
             }
         }
         return Ok(());
     }
 
-    let mut app = App::new(rows, turn_limit);
+    let mut app = App::new(locations, standard, rows, turn_limit);
 
     if args.iter().any(|arg| arg == "--snapshot-hop") {
         open_hop(&mut app);
@@ -244,9 +291,29 @@ fn main() -> std::io::Result<()> {
     execute!(stdout, EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
-    let result = run(&mut terminal, &mut app, &roots);
+    let result = run(&mut terminal, &mut app, folders);
     restore_terminal(&mut terminal);
     result
+}
+
+/// `--scan <dir>` (or `--scan=<dir>`), any number of times: folders scanned for installations
+/// before the first listing.
+fn parse_scan_folders(args: &[String]) -> Vec<std::path::PathBuf> {
+    let mut folders = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--scan" {
+            if let Some(folder) = args.get(index + 1) {
+                folders.push(std::path::PathBuf::from(folder));
+                index += 1;
+            }
+        } else if let Some(folder) = arg.strip_prefix("--scan=") {
+            folders.push(std::path::PathBuf::from(folder));
+        }
+        index += 1;
+    }
+    folders
 }
 
 /// `--turns N` (or `--turns=N`): how many user turns the transcript opens with. `0` means all.
@@ -313,9 +380,9 @@ fn snapshot(app: &mut App) {
     }
 }
 
-fn run(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result<()> {
+fn run(terminal: &mut Tui, app: &mut App, folders: Vec<std::path::PathBuf>) -> std::io::Result<()> {
     if app.rows.is_empty() {
-        start_load(app, roots);
+        start_load(app, folders);
     }
     loop {
         poll_job(app);
@@ -337,7 +404,11 @@ fn run(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result
         }
         match &mut app.mode {
             Mode::Hop(_) => {
-                handle_hop_key(app, roots, key.code);
+                handle_hop_key(app, key.code);
+                continue;
+            }
+            Mode::Open(_) => {
+                handle_open_key(app, key.code);
                 continue;
             }
             Mode::Result(view) => {
@@ -361,7 +432,8 @@ fn run(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result
         match key.code {
             KeyCode::Char('q') => return Ok(()),
             KeyCode::Char('h') => open_hop(app),
-            KeyCode::Char('R') => resume_selected(terminal, app, roots)?,
+            KeyCode::Char('R') => resume_selected(terminal, app)?,
+            KeyCode::Char('o') => app.mode = Mode::Open(String::new()),
             KeyCode::Tab => {
                 app.focus = match app.focus {
                     Focus::Harnesses => Focus::Sessions,
@@ -380,7 +452,7 @@ fn run(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result
             }
             KeyCode::Enter => match app.focus {
                 Focus::Harnesses => app.focus = Focus::Sessions,
-                Focus::Sessions => start_read(app, roots),
+                Focus::Sessions => start_read(app),
                 Focus::Transcript => {}
             },
             KeyCode::Down | KeyCode::Char('j') => app.move_down(),
@@ -406,34 +478,52 @@ fn run(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result
             KeyCode::PageUp => {
                 app.scroll = app.scroll.saturating_sub(10);
             }
-            KeyCode::Char('r') => start_load(app, roots),
+            KeyCode::Char('r') => start_load(app, Vec::new()),
             KeyCode::Char('t') => toggle_turns(app),
             _ => {}
         }
     }
 }
 
-fn start_load(app: &mut App, roots: &StoreRoots) {
-    let roots = roots.clone();
+/// List every location's sessions again, after scanning `folders` for more installations.
+fn start_load(app: &mut App, folders: Vec<std::path::PathBuf>) {
+    let mut locations = app.locations.clone();
+    let standard = app.standard.clone();
+    let scanning = !folders.is_empty();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(JobResult::Loaded(load_rows(&roots)));
+        let status = if scanning {
+            location::scan_folders(&mut locations, &folders, &standard)
+        } else {
+            "ready".to_string()
+        };
+        let rows = load_rows(&locations);
+        let _ = sender.send(JobResult::Loaded {
+            locations,
+            rows,
+            status,
+        });
     });
     app.job = Some(receiver);
     app.job_kind = JobKind::Scan;
     app.busy = true;
-    app.status = "scanning stores…".to_string();
+    app.status = if scanning {
+        "scanning for installations…".to_string()
+    } else {
+        "scanning stores…".to_string()
+    };
 }
 
-fn start_read(app: &mut App, roots: &StoreRoots) {
-    let Some((harness, info)) = app.selected_pair() else {
+fn start_read(app: &mut App) {
+    let Some((location, info)) = app.selected_pair() else {
         app.status = "no session selected".to_string();
         return;
     };
+    let harness = location.harness;
+    let roots = location.roots.clone();
     let info = info.clone();
     let fallback = session_label(&info);
     let id = info.id.clone();
-    let roots = roots.clone();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let result = mukade::export(&SessionRef::id(harness, info.id.clone()), &roots)
@@ -450,15 +540,20 @@ fn start_read(app: &mut App, roots: &StoreRoots) {
     app.status = format!("reading {id}…");
 }
 
-fn start_hop(app: &mut App, roots: &StoreRoots) {
+fn start_hop(app: &mut App) {
     let Mode::Hop(hop) = std::mem::replace(&mut app.mode, Mode::Normal) else {
         return;
     };
-    let label = hop.dest.as_str();
-    let roots = roots.clone();
+    let Some(label) = hop
+        .destinations
+        .get(hop.dest)
+        .map(|dest| dest.label.clone())
+    else {
+        return;
+    };
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let lines = execute_hop(&hop, &roots);
+        let lines = execute_hop(&hop);
         let _ = sender.send(JobResult::Hopped(lines));
     });
     app.job = Some(receiver);
@@ -512,14 +607,19 @@ fn poll_job(app: &mut App) {
     app.job = None;
     app.busy = false;
     match result {
-        JobResult::Loaded(rows) => {
+        JobResult::Loaded {
+            locations,
+            rows,
+            status,
+        } => {
+            app.locations = locations;
             app.rows = rows;
             app.harness = app.harness.min(app.rows.len().saturating_sub(1));
             app.session = 0;
             app.transcript = None;
             app.scroll = 0;
             app.focus = Focus::Harnesses;
-            app.status = "ready".to_string();
+            app.status = status;
         }
         JobResult::Read {
             info,
@@ -571,56 +671,46 @@ fn poll_job(app: &mut App) {
     }
 }
 
-fn other_harnesses(source: HarnessId) -> Vec<HarnessId> {
-    HarnessId::ALL
-        .into_iter()
-        .filter(|harness| *harness != source)
-        .collect()
-}
-
 fn open_hop(app: &mut App) {
-    let Some((harness, info)) = app.selected_pair() else {
+    let Some((source, info)) = app.selected_pair() else {
         app.status = "no session selected".to_string();
         return;
     };
-    let destinations = other_harnesses(harness);
-    let Some(first) = destinations.first() else {
+    let rows: Vec<Location> = app.rows.iter().map(|row| row.location.clone()).collect();
+    let destinations = location::destinations(&rows, app.harness);
+    if destinations.is_empty() {
         return;
-    };
-    app.mode = Mode::Hop(HopState {
-        source_harness: harness,
+    }
+    app.mode = Mode::Hop(Box::new(HopState {
+        source: source.clone(),
         source_id: info.id.clone(),
         source_title: session_label(info),
         source_cwd: info.cwd.clone(),
-        dest: *first,
+        destinations,
+        dest: 0,
         compaction: 0,
         prompt: String::new(),
         field: 0,
-    });
+    }));
 }
 
-fn handle_hop_key(app: &mut App, roots: &StoreRoots, code: KeyCode) {
+fn handle_hop_key(app: &mut App, code: KeyCode) {
     let mut run = false;
     {
         let Mode::Hop(hop) = &mut app.mode else {
             return;
         };
-        let destinations = other_harnesses(hop.source_harness);
+        let count = hop.destinations.len().max(1);
         match code {
             KeyCode::Esc => app.mode = Mode::Normal,
             KeyCode::Tab => hop.field = (hop.field + 1) % 3,
             KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => match hop.field {
                 0 => {
-                    let at = destinations
-                        .iter()
-                        .position(|harness| *harness == hop.dest)
-                        .unwrap_or(0);
-                    let next = if matches!(code, KeyCode::Up | KeyCode::Left) {
-                        (at + destinations.len() - 1) % destinations.len()
+                    hop.dest = if matches!(code, KeyCode::Up | KeyCode::Left) {
+                        (hop.dest + count - 1) % count
                     } else {
-                        (at + 1) % destinations.len()
+                        (hop.dest + 1) % count
                     };
-                    hop.dest = destinations[next];
                 }
                 1 => {
                     hop.compaction = if matches!(code, KeyCode::Up | KeyCode::Left) {
@@ -641,7 +731,31 @@ fn handle_hop_key(app: &mut App, roots: &StoreRoots, code: KeyCode) {
         }
     }
     if run {
-        start_hop(app, roots);
+        start_hop(app);
+    }
+}
+
+/// The folder prompt `o` opens: Enter scans the folder for installations and lists them.
+fn handle_open_key(app: &mut App, code: KeyCode) {
+    let Mode::Open(path) = &mut app.mode else {
+        return;
+    };
+    match code {
+        KeyCode::Esc => app.mode = Mode::Normal,
+        KeyCode::Backspace => {
+            path.pop();
+        }
+        KeyCode::Char(character) => path.push(character),
+        KeyCode::Enter => {
+            let folder = path.trim().trim_matches('"').to_string();
+            app.mode = Mode::Normal;
+            if folder.is_empty() {
+                app.status = "no folder given".to_string();
+            } else {
+                start_load(app, vec![std::path::PathBuf::from(folder)]);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -659,24 +773,29 @@ fn compaction_for(index: usize) -> Compaction {
     }
 }
 
-fn execute_hop(hop: &HopState, roots: &StoreRoots) -> Vec<String> {
+/// Read the source from its location, write it into the destination's: two installations of one
+/// harness keep their stores apart (`mukade::hop_into`).
+fn execute_hop(hop: &HopState) -> Vec<String> {
+    let Some(dest) = hop.destinations.get(hop.dest) else {
+        return vec!["hop failed: no destination".to_string()];
+    };
     let compaction = compaction_for(hop.compaction);
-    let source = SessionRef::id(hop.source_harness, hop.source_id.clone());
+    let source = SessionRef::id(hop.source.harness, hop.source_id.clone());
     let cwd = match hop.source_cwd.clone() {
         Some(cwd) => Some(cwd),
-        None => match mukade::export(&source, roots) {
+        None => match mukade::export(&source, &hop.source.roots) {
             Ok(session) => session.meta.cwd,
             Err(error) => return vec![format!("hop failed: {error}")],
         },
     };
-    let exe = exe::resolve(hop.dest, None);
-    let configured = dest::configured_model(hop.dest);
-    let project_id = if hop.dest == HarnessId::OpenCode {
+    let exe = dest.engine();
+    let configured = dest::configured_model(dest.harness);
+    let project_id = if dest.harness == HarnessId::OpenCode {
         cwd.as_deref().and_then(|cwd| {
             mukade::reader::opencode::project_id_for(
                 &exe,
                 cwd,
-                roots,
+                &dest.roots,
                 mukade::cache::dir().as_deref(),
             )
         })
@@ -685,16 +804,16 @@ fn execute_hop(hop: &HopState, roots: &StoreRoots) -> Vec<String> {
     };
     let request = HopRequest {
         source,
-        dest: hop.dest,
+        dest: dest.harness,
         cwd,
         compaction,
         resume: (!hop.prompt.trim().is_empty())
             .then(|| ResumePrompt::new(hop.prompt.trim().to_string())),
         reasoning: ReasoningPolicy::default(),
-        roots: roots.clone(),
+        roots: hop.source.roots.clone(),
         write: WriteDetails {
             dest_version: exe::version_of(&exe),
-            dest_protocol: mukade::policy::destination_protocol(hop.dest),
+            dest_protocol: mukade::policy::destination_protocol(dest.harness),
             model_provider: configured.as_ref().map(|(provider, _)| provider.clone()),
             model: configured.and_then(|(_, model)| model),
             project_id,
@@ -702,25 +821,25 @@ fn execute_hop(hop: &HopState, roots: &StoreRoots) -> Vec<String> {
             ..Default::default()
         },
     };
-    match mukade::hop(&request) {
-        Ok(receipt) => receipt_lines(&receipt, hop.dest),
+    match mukade::hop_into(&request, &dest.roots) {
+        Ok(receipt) => receipt_lines(&receipt, dest),
         Err(HopError::ResumeFailed { reason, receipt }) => {
             let mut lines = vec![format!("resume failed: {reason}"), String::new()];
-            lines.extend(receipt_lines(&receipt, hop.dest));
+            lines.extend(receipt_lines(&receipt, dest));
             lines
         }
         Err(error) => vec![format!("hop failed: {error}")],
     }
 }
 
-fn receipt_lines(receipt: &mukade::Receipt, dest: HarnessId) -> Vec<String> {
-    let manifest = save_manifest(receipt, dest);
+fn receipt_lines(receipt: &mukade::Receipt, dest: &Location) -> Vec<String> {
+    let manifest = save_manifest(receipt, dest.harness);
     receipt_lines_with(receipt, dest, manifest)
 }
 
 fn receipt_lines_with(
     receipt: &mukade::Receipt,
-    dest: HarnessId,
+    dest: &Location,
     manifest: Option<String>,
 ) -> Vec<String> {
     let info = SessionInfo {
@@ -728,9 +847,9 @@ fn receipt_lines_with(
         path: receipt.location.clone(),
         ..Default::default()
     };
-    let interactive = resume_argv(dest, &info);
+    let interactive = resume_argv(dest.harness, &dest.engine(), &info);
     let mut lines = vec![
-        format!("destination  {} ({})", receipt.dest_id, dest.as_str()),
+        format!("destination  {} ({})", receipt.dest_id, dest.label),
         format!("location     {}", receipt.location),
         format!("headless     {}", receipt.resume_command.join(" ")),
         format!("interactive  {}", interactive.join(" ")),
@@ -777,27 +896,28 @@ fn save_manifest(receipt: &mukade::Receipt, dest: HarnessId) -> Option<String> {
     Some(path.display().to_string())
 }
 
-fn resume_argv(harness: HarnessId, info: &SessionInfo) -> Vec<String> {
-    let exe = exe::resolve(harness, None);
+/// The command that opens a session in its harness's own terminal UI, with `exe`.
+fn resume_argv(harness: HarnessId, exe: &str, info: &SessionInfo) -> Vec<String> {
     catalog::interactive_resume(
         harness,
-        &exe,
+        exe,
         &info.id,
         Some(std::path::Path::new(&info.path)),
     )
 }
 
-fn resume_selected(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std::io::Result<()> {
-    let (harness, info) = {
-        let Some((harness, info)) = app.selected_pair() else {
+fn resume_selected(terminal: &mut Tui, app: &mut App) -> std::io::Result<()> {
+    let (location, info) = {
+        let Some((location, info)) = app.selected_pair() else {
             app.status = "no session selected".to_string();
             return Ok(());
         };
-        (harness, info.clone())
+        (location.clone(), info.clone())
     };
-    let argv = resume_argv(harness, &info);
+    let harness = location.harness;
+    let argv = resume_argv(harness, &location.engine(), &info);
     let cwd = info.cwd.clone().or_else(|| {
-        mukade::export(&SessionRef::id(harness, info.id.clone()), roots)
+        mukade::export(&SessionRef::id(harness, info.id.clone()), &location.roots)
             .ok()
             .and_then(|session| session.meta.cwd)
     });
@@ -814,7 +934,7 @@ fn resume_selected(terminal: &mut Tui, app: &mut App, roots: &StoreRoots) -> std
     if let Some(cwd) = &cwd {
         command.current_dir(cwd);
     }
-    roots.apply_to(harness, &mut command);
+    location.roots.apply_to(harness, &mut command);
     let status = command.status();
 
     enable_raw_mode()?;
@@ -845,6 +965,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
     match &mut app.mode {
         Mode::Hop(hop) => draw_hop(frame, area, hop),
         Mode::Result(view) => draw_result(frame, area, view),
+        Mode::Open(path) => draw_open(frame, area, path),
         Mode::Normal => {}
     }
 }
@@ -863,7 +984,6 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
     let rect = centered(area, 78, 17);
     frame.render_widget(Clear, rect);
-    let destinations = other_harnesses(hop.source_harness);
     let mut lines = vec![
         Line::from(vec![
             Span::styled("source  ", Style::default().fg(Color::DarkGray)),
@@ -871,8 +991,8 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
         ]),
         Line::from(""),
     ];
-    for (index, harness) in destinations.iter().enumerate() {
-        let selected = *harness == hop.dest;
+    for (index, destination) in hop.destinations.iter().enumerate() {
+        let selected = index == hop.dest;
         let focus = hop.field == 0 && selected;
         lines.push(Line::from(vec![
             Span::styled(
@@ -880,7 +1000,7 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
                 Style::default().fg(Color::Green),
             ),
             Span::styled(
-                format!("{:<12}", harness.as_str()),
+                format!("{:<28}", destination.label),
                 if selected {
                     Style::default()
                         .fg(Color::Green)
@@ -936,6 +1056,37 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
         Style::default().fg(Color::DarkGray),
     )));
     let block = Block::default().borders(Borders::ALL).title(" hop ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
+}
+
+/// The folder prompt: a path, scanned for installations on Enter.
+fn draw_open(frame: &mut Frame, area: Rect, path: &str) {
+    let rect = centered(area, 78, 8);
+    frame.render_widget(Clear, rect);
+    let lines = vec![
+        Line::from(Span::styled(
+            "folder to scan for harness installations (portable ones included)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("▶ ", Style::default().fg(Color::Green)),
+            Span::raw(format!("{path}▌")),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "enter scan · esc cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" open folder ");
     frame.render_widget(
         Paragraph::new(lines)
             .block(block)
@@ -1013,7 +1164,10 @@ fn draw_harnesses(frame: &mut Frame, area: Rect, app: &App) {
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{mark} "), Style::default().fg(color)),
-                Span::styled(row.label.clone(), Style::default().fg(Color::White)),
+                Span::styled(
+                    row.location.label.clone(),
+                    Style::default().fg(Color::White),
+                ),
                 Span::raw(format!("  {}", row.sessions.len())),
             ]))
         })
@@ -1037,7 +1191,7 @@ fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(block, area);
         return;
     };
-    let title = format!(" {} · {} ", row.label, row.sessions.len());
+    let title = format!(" {} · {} ", row.location.label, row.sessions.len());
     let items: Vec<ListItem> = row
         .sessions
         .iter()
@@ -1115,7 +1269,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &mut App) {
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
-        field(&mut lines, "harness", row.harness.as_str());
+        field(&mut lines, "harness", row.location.harness.as_str());
         field(&mut lines, "id", &info.id);
         if let Some(parent) = &info.parent {
             field(&mut lines, "parent", parent);
@@ -1144,6 +1298,16 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &mut App) {
         )));
     }
 
+    if let Some(store) = &row.location.store {
+        lines.push(Line::from(""));
+        field(&mut lines, "store", &store.display().to_string());
+        field(
+            &mut lines,
+            "engine",
+            row.location.exe.as_deref().unwrap_or("standard resolution"),
+        );
+    }
+
     let paragraph = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(" session "))
         .wrap(Wrap { trim: true });
@@ -1162,7 +1326,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Black).bg(Color::Gray),
         ),
         Span::raw(
-            "  j/k move · enter open · t history · h hop · R resume · tab focus · esc back · r reload · q quit",
+            "  j/k move · enter open · t history · h hop · R resume · o open folder · tab focus · esc back · r reload · q quit",
         ),
     ]);
     frame.render_widget(Paragraph::new(line), area);
@@ -1211,29 +1375,21 @@ fn resolve_roots() -> StoreRoots {
     roots
 }
 
-fn load_rows(roots: &StoreRoots) -> Vec<HarnessRow> {
-    HarnessId::ALL
-        .into_iter()
-        .map(|harness| {
-            let label = catalog::entry(harness).display.clone();
-            match reader::for_harness(harness) {
-                Ok(reader) => match reader.list_all(roots) {
-                    Ok(sessions) => HarnessRow {
-                        harness,
-                        label,
-                        sessions,
-                        error: None,
-                    },
-                    Err(error) => HarnessRow {
-                        harness,
-                        label,
-                        sessions: Vec::new(),
-                        error: Some(error.to_string()),
-                    },
+/// Every location's sessions, through the harness's own reader.
+fn load_rows(locations: &[Location]) -> Vec<HarnessRow> {
+    locations
+        .iter()
+        .map(|location| {
+            let listed = reader::for_harness(location.harness)
+                .and_then(|reader| reader.list_all(&location.roots));
+            match listed {
+                Ok(sessions) => HarnessRow {
+                    location: location.clone(),
+                    sessions,
+                    error: None,
                 },
                 Err(error) => HarnessRow {
-                    harness,
-                    label,
+                    location: location.clone(),
                     sessions: Vec::new(),
                     error: Some(error.to_string()),
                 },
@@ -1378,7 +1534,7 @@ mod tests {
     /// harness, so every pane must render, and every key must be handled, over empty rows.
     #[test]
     fn the_first_frame_renders_before_the_scan_returns() {
-        let mut app = App::new(Vec::new(), 50);
+        let mut app = App::new(Vec::new(), StoreRoots::default(), Vec::new(), 50);
         app.busy = true;
         app.status = "scanning stores…".to_string();
         let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
@@ -1401,6 +1557,90 @@ mod tests {
         assert!(app.selected_session().is_none());
         open_hop(&mut app);
         assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn the_scan_flag_is_repeatable() {
+        let args: Vec<String> = [
+            "mukade-tui",
+            "--scan",
+            "D:\\Apps",
+            "--turns",
+            "5",
+            "--scan=E:\\",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        assert_eq!(
+            parse_scan_folders(&args),
+            vec![
+                std::path::PathBuf::from("D:\\Apps"),
+                std::path::PathBuf::from("E:\\")
+            ]
+        );
+        assert!(parse_scan_folders(&["mukade-tui".to_string(), "--scan".to_string()]).is_empty());
+    }
+
+    /// A Claude Code session can hop into a portable JanuraCode the scan found, and an OpenCode
+    /// session into it too: the hop offers every other location.
+    #[test]
+    fn a_hop_offers_the_installations_a_scan_found() {
+        let standard = StoreRoots::default();
+        let mut locations = location::standard_locations(&standard);
+        location::add_installations(
+            &mut locations,
+            &[mukade::detect::Installation {
+                harness: HarnessId::OpenCode,
+                store: std::path::PathBuf::from("apps/JanuraCode/data/share/opencode/opencode.db"),
+                exe: Some(std::path::PathBuf::from(
+                    "apps/JanuraCode/resources/opencode-cli/opencode.exe",
+                )),
+                evidence: Vec::new(),
+            }],
+            &standard,
+        );
+        let rows = locations
+            .iter()
+            .map(|location| HarnessRow {
+                location: location.clone(),
+                sessions: vec![SessionInfo {
+                    id: "abc".to_string(),
+                    path: "session.jsonl".to_string(),
+                    ..Default::default()
+                }],
+                error: None,
+            })
+            .collect();
+        let mut app = App::new(locations, standard, rows, 50);
+        open_hop(&mut app);
+        let Mode::Hop(hop) = &app.mode else {
+            panic!("the hop dialog opens");
+        };
+        assert_eq!(hop.source.harness, HarnessId::ClaudeCode);
+        assert_eq!(hop.destinations.len(), 4);
+        assert!(
+            hop.destinations
+                .iter()
+                .any(|l| l.label.contains("JanuraCode"))
+        );
+    }
+
+    #[test]
+    fn the_open_prompt_collects_a_folder_and_esc_cancels_it() {
+        let mut app = App::new(Vec::new(), StoreRoots::default(), Vec::new(), 50);
+        app.mode = Mode::Open(String::new());
+        for character in "D:\\Apps".chars() {
+            handle_open_key(&mut app, KeyCode::Char(character));
+        }
+        handle_open_key(&mut app, KeyCode::Backspace);
+        assert!(matches!(&app.mode, Mode::Open(path) if path == "D:\\App"));
+        handle_open_key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        // An empty folder starts nothing.
+        app.mode = Mode::Open(String::new());
+        handle_open_key(&mut app, KeyCode::Enter);
+        assert!(!app.busy);
     }
 
     #[test]
@@ -1433,7 +1673,7 @@ mod tests {
             path: "/tmp/session.jsonl".to_string(),
             ..Default::default()
         };
-        let tail = |harness| resume_argv(harness, &info)[1..].to_vec();
+        let tail = |harness| resume_argv(harness, "exe", &info)[1..].to_vec();
         assert_eq!(
             tail(HarnessId::ClaudeCode),
             vec!["--resume".to_string(), "abc".to_string()]
@@ -1455,8 +1695,6 @@ mod tests {
             tail(HarnessId::Pi),
             vec!["--session".to_string(), "/tmp/session.jsonl".to_string()]
         );
-        assert_eq!(other_harnesses(HarnessId::Codex).len(), 3);
-        assert!(!other_harnesses(HarnessId::Codex).contains(&HarnessId::Codex));
     }
 
     #[test]
@@ -1475,7 +1713,11 @@ mod tests {
             manifest: serde_json::json!({ "losses": ["one", "two"] }),
             resume_output: None,
         };
-        let lines = receipt_lines_with(&receipt, HarnessId::Codex, None);
+        let codex = location::standard_locations(&StoreRoots::default())
+            .into_iter()
+            .find(|location| location.harness == HarnessId::Codex)
+            .unwrap();
+        let lines = receipt_lines_with(&receipt, &codex, None);
         assert!(lines.iter().any(|line| line.contains("new-id")));
         assert!(lines.iter().any(|line| line.contains("headless")));
         assert!(lines.iter().any(|line| line.contains("interactive")));

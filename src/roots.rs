@@ -55,6 +55,34 @@ impl StoreRoots {
     pub fn pi_sessions(&self) -> Option<PathBuf> {
         self.pi_agent_dir.as_deref().map(|d| d.join("sessions"))
     }
+
+    /// One harness's store, as its variable names it.
+    pub fn root(&self, harness: HarnessId) -> Option<&Path> {
+        match harness {
+            HarnessId::ClaudeCode => self.claude_config_dir.as_deref(),
+            HarnessId::Codex => self.codex_home.as_deref(),
+            HarnessId::OpenCode => self.opencode_db.as_deref(),
+            HarnessId::Pi => self.pi_agent_dir.as_deref(),
+        }
+    }
+
+    /// Point one harness at an explicit store, e.g. a portable installation's own. OpenCode's
+    /// store is the database file: an existing folder means its `opencode.db`.
+    pub fn set_root(&mut self, harness: HarnessId, root: &Path) {
+        let root = root.to_path_buf();
+        match harness {
+            HarnessId::ClaudeCode => self.claude_config_dir = Some(root),
+            HarnessId::Codex => self.codex_home = Some(root),
+            HarnessId::OpenCode => {
+                self.opencode_db = Some(if root.is_dir() {
+                    root.join("opencode.db")
+                } else {
+                    root
+                })
+            }
+            HarnessId::Pi => self.pi_agent_dir = Some(root),
+        }
+    }
 }
 
 impl StoreRoots {
@@ -119,4 +147,28 @@ fn base36(mut n: u64) -> String {
     }
     out.reverse();
     String::from_utf8(out).expect("ASCII digits")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_harness_root_is_set_and_read_back() {
+        let mut roots = StoreRoots::default();
+        roots.set_root(HarnessId::Pi, Path::new("portable/pi/agent"));
+        assert_eq!(roots.root(HarnessId::Pi), Some(Path::new("portable/pi/agent")));
+        assert_eq!(roots.root(HarnessId::ClaudeCode), None);
+    }
+
+    #[test]
+    fn an_opencode_folder_means_its_database() {
+        let dir = std::env::temp_dir().join(format!("mukade-roots-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut roots = StoreRoots::default();
+        roots.set_root(HarnessId::OpenCode, &dir);
+        assert_eq!(roots.opencode_db, Some(dir.join("opencode.db")));
+        roots.set_root(HarnessId::OpenCode, &dir.join("other.db"));
+        assert_eq!(roots.opencode_db, Some(dir.join("other.db")));
+    }
 }

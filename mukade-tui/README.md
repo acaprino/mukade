@@ -29,6 +29,7 @@ store for that harness, read-only until an explicit resume or hop.
 | `cargo run -p mukade-tui -- --turns 20` | open transcripts on the last 20 user turns |
 | `cargo run -p mukade-tui -- --turns 0` | open transcripts on the full history |
 | `cargo run -p mukade-tui -- --check` | print harnesses and session counts, then exit |
+| `cargo run -p mukade-tui -- --scan D:\Apps` | also list every installation below a folder |
 | `cargo run -p mukade-tui -- --snapshot` | render one 120×40 frame on stdout |
 | `cargo run -p mukade-tui -- --snapshot-hop` | render the same frame with the hop dialog open |
 | `target\release\mukade-tui.exe` | the release binary on Windows |
@@ -58,10 +59,24 @@ $env:OPENCODE_DB = "$env:USERPROFILE\.local\share\opencode\opencode.db"
 .\target\release\mukade-tui.exe
 ```
 
+Add the installations below a folder (portable and custom ones, a JanuraCode copy, say), at start
+or from inside the explorer with `o`:
+
+```powershell
+.\target\release\mukade-tui.exe --scan D:\Apps
+.\target\release\mukade-tui.exe --scan D:\Apps --scan E:\
+```
+
+Each installation becomes one more row, `<harness> · <name>` (for example
+`OpenCode · JanuraCode`), with its own store and the executable kept beside it. The scan is the
+library's (`mukade::detect::scan_installations`, the same as `mukade scan`): the explorer recognizes
+nothing itself. A store already listed is not added twice.
+
 Headless checks (useful in a script or CI):
 
 ```powershell
 .\target\release\mukade-tui.exe --check
+.\target\release\mukade-tui.exe --check --scan D:\Apps
 .\target\release\mukade-tui.exe --snapshot
 .\target\release\mukade-tui.exe --snapshot-hop
 ```
@@ -92,8 +107,9 @@ session.
 | `tab` | switch focus between harnesses and sessions |
 | `enter` | open the selected session's transcript |
 | `t` | toggle last-50-turns / full history |
-| `h` | hop the selected session to another harness |
-| `R` | resume the selected session in its own harness |
+| `h` | hop the selected session to another harness or installation |
+| `R` | resume the selected session in its own installation |
+| `o` | scan a folder for more installations and add them as rows |
 | `g` / `G` | top / bottom of the transcript |
 | page up/down | scroll the transcript |
 | `esc` | close the transcript, then return to the harness list |
@@ -113,16 +129,22 @@ The commands come from `catalog/harnesses.json` (`interactive_resume`), not from
 
 ## Hop
 
-`h` opens a small dialog: destination harness, compaction (`none`, `portable`, `summary`) and an
+`h` opens a small dialog: destination (every other row: another harness, or another installation
+of the same harness, such as an OpenCode session into a portable JanuraCode), compaction (`none`, `portable`, `summary`) and an
 optional resume prompt. `portable` needs a source that compacted at least once; `summary` asks the
 source's own model and may take minutes. `enter` on the prompt runs the hop in the background.
 The result is scrollable (`j/k`, page keys) and shows the new id, its location, the headless and
 interactive resume commands, the manifest path, every loss, and the destination's reply when a
 prompt was given. The manifest is saved under `mukade-data/manifests/`.
 
-A destination's model and provider are read from its own configuration (`OPENCODE_CONFIG` /
-`XDG_CONFIG_HOME` for OpenCode, `CODEX_HOME/config.toml` for Codex); OpenCode refuses a hop
-without them.
+The source is read from its row's store and the destination written to its own
+(`mukade::hop_into`), with the destination installation's executable, which also appears in the
+resume commands. A destination's model and provider are read from the configuration of the shell
+that started the explorer (`OPENCODE_CONFIG` / `XDG_CONFIG_HOME` for OpenCode,
+`CODEX_HOME/config.toml` for Codex), not from a scanned installation's own; OpenCode refuses a hop
+without them, and without a project id, which a destination whose database has no session for the
+source's folder yet cannot supply: use the CLI's `--model-provider`, `--model` and `--project-id`
+for that first hop.
 
 ## Limits
 
@@ -135,3 +157,5 @@ without them.
 - The transcript shows user, assistant, reasoning, tool calls, full results and compactions in
   native order; `Meta` records are hidden.
 - Scans, session reads and hops run on worker threads; a hop cannot be cancelled once it starts.
+- A folder scan reads at most 8 levels and 100,000 folders; a whole user profile can take tens of
+  seconds and stop early, so scan the folder that holds the installations.

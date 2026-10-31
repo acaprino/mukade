@@ -394,7 +394,7 @@ pub fn run(args: &[String]) -> Result<()> {
             || std::path::PathBuf::from(root),
             |found| found.store.clone(),
         );
-        apply_root(&mut roots, harness, &store);
+        roots.set_root(harness, &store);
     }
     // `write`'s root is its destination: the engine kept beside that store imports into it.
     let write_engine = rooted
@@ -1201,24 +1201,6 @@ impl Flags {
     }
 }
 
-/// Point one harness's root at an explicit directory, e.g. a portable install's own home.
-/// OpenCode's root is the database file: a directory means its `opencode.db`.
-fn apply_root(roots: &mut StoreRoots, harness: HarnessId, root: &std::path::Path) {
-    let root = root.to_path_buf();
-    match harness {
-        HarnessId::ClaudeCode => roots.claude_config_dir = Some(root),
-        HarnessId::Codex => roots.codex_home = Some(root),
-        HarnessId::OpenCode => {
-            roots.opencode_db = Some(if root.is_dir() {
-                root.join("opencode.db")
-            } else {
-                root
-            })
-        }
-        HarnessId::Pi => roots.pi_agent_dir = Some(root),
-    }
-}
-
 /// Resolve a `--root` or `--dest-root` to the installation it names. A path that names nothing is
 /// still a store when the harness is stated (a destination store can legitimately be empty);
 /// without a harness, nothing recognized is refused, and so is a choice between several.
@@ -1261,7 +1243,7 @@ fn hop_destination(
         || std::path::PathBuf::from(dest_root),
         |found| found.store.clone(),
     );
-    apply_root(&mut roots, dest, &store);
+    roots.set_root(dest, &store);
     let engine = found
         .and_then(|found| found.exe)
         .or_else(|| crate::detect::engine_beside_store(dest, &store))

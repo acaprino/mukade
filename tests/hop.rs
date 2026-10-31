@@ -41,6 +41,29 @@ fn request(source: HarnessId, dest: HarnessId, tag: &str) -> (HopRequest, PathBu
 }
 
 #[test]
+fn a_hop_between_two_installations_of_one_harness_keeps_their_stores_apart() {
+    // The source is the scratch store; the destination another Pi installation of its own.
+    let (request, scratch) = request(HarnessId::Pi, HarnessId::Pi, "hop-pi-into-another-pi");
+    let elsewhere = scratch.join("portable/pi/agent");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let mut destination = request.roots.clone();
+    destination.set_root(HarnessId::Pi, &elsewhere);
+
+    let receipt = hop::hop_into(&request, &destination).expect("the hop must complete");
+    assert!(
+        std::path::Path::new(&receipt.location).starts_with(&elsewhere),
+        "{} is not in the destination installation",
+        receipt.location
+    );
+    let source_sessions = std::fs::read_dir(scratch.join("home/sessions"))
+        .unwrap()
+        .flatten()
+        .flat_map(|project| std::fs::read_dir(project.path()).unwrap().flatten())
+        .count();
+    assert_eq!(source_sessions, 1, "nothing was written into the source store");
+}
+
+#[test]
 fn a_hop_reads_the_source_writes_the_destination_and_reports_a_manifest() {
     let (request, _) = request(HarnessId::ClaudeCode, HarnessId::Pi, "hop-claude-to-pi");
     let receipt = hop::hop(&request).expect("the hop must complete");
