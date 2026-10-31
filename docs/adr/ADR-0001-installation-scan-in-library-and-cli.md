@@ -22,7 +22,7 @@ proposed_on: 2026-10-31
 proposed_at_sha: e1146a4dca385f7e6a9fe1c3f8eea348c47b91f7
 accepted_on: 2026-10-31
 accepted_at_sha: 206932d8ac629f34b7c6e73822617d718903b23c
-last_verified_sha: null
+last_verified_sha: fdf7038535174fd7d49b515c66e89c45cdc87bbb
 retired_on: null
 retired_reason: null
 supersedes:
