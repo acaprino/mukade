@@ -2,14 +2,14 @@
 
 | | |
 |---|---|
-| **Documentation updated** | 2026-10-28 |
+| **Documentation updated** | 2026-11-01 |
 | **Version described** | 2.1.311 (the version mukade's readers and writers were verified against) [1][24] |
 | **Vendor** | Anthropic PBC [25] |
 | **Website** | https://code.claude.com (documentation); https://github.com/anthropics/claude-code (releases, issues) [20][24] |
 | **License / source** | Proprietary: "© Anthropic PBC. All rights reserved. Use is subject to Anthropic's Commercial Terms of Service." [25] |
 | **mukade name** | `claude_code` |
 
-Version note: the binary installed on the verification machine now reports `2.1.312 (Claude Code)` and npm's `latest` is `2.1.312` [9][26]. On-disk facts and mukade behaviour below were verified on 2.1.311 [1]; the entry points were checked against the 2.1.312 `--help`; the web documentation describes the current release, so a feature it names may be newer than 2.1.311 **[U]** per feature.
+Version note: the binary installed on the verification machine now reports `2.1.316 (Claude Code)` and npm's `latest` is `2.1.316` [35][36]. On-disk facts and mukade behaviour below were verified on 2.1.311 [1]; the entry points were checked against the 2.1.312 `--help` [9], and only the tool and restriction flags added to section 3 were read from the 2.1.316 `--help` [35]. Also read on 2.1.316: text found in the installed binary about how `WebSearch` and `WebFetch` run, the shape of the search `results` object and some tool names [37]; it is internal code, not a documented contract. These are the only facts checked on 2.1.316, and none of them is mukade behaviour verified there. Every other fact added on 2026-11-01 comes from the web documentation, was not run, and is subject to the rule that follows: the web documentation describes the current release (the pages read name versions up to v2.1.310 [29]; which release they track is **[U]**), so a feature it names may be newer than 2.1.311 **[U]** per feature.
 
 ## 1. Introduction
 
@@ -37,6 +37,10 @@ Claude Code is Anthropic's agentic coding tool: it reads a codebase, edits files
 | Resume under a new id | add `--fork-session` to `--resume` or `--continue` [9] |
 | Fix the session id / name it | `--session-id <uuid>`, `-n, --name <name>` [9] |
 | No transcript written (print mode only) | `--no-session-persistence` [9] |
+| Choose the tools one run is offered | `--tools "<list>"` takes names from the built-in set (`--tools ""` offers none); `--allowedTools "<rules>"` allows the named tools or rules, `--disallowedTools "<rules>"` denies them (a bare tool name removes the tool from the model's context). `--tools` and `--allowedTools` take several values and swallow a prompt that follows them [35][31][32] |
+| Restrict one run | `--restricted` removes the code-running tools and `WebFetch` unless `--tools` names them, ignores the user, project and local settings files (`--settings` still applies), confines file tools to the working directories and refuses `bypassPermissions`; `--strict-mcp-config` with no `--mcp-config` loads no MCP server; `--safe-mode` disables every customization (section 6) [35][9]. claude.ai connectors and plugins are separate from `.mcp.json` servers [39]; that `--strict-mcp-config` or `--disable-slash-commands` excludes them is **[U]**, and empty `mcp_servers` and `plugins` in the `system/init` line of a run would settle it |
+| Permission prompts in print mode | `--permission-prompts host\|none`; `none` needs v2.1.259+ [31]. What `host` does was not read **[U]**; the `--help` text of the flag would settle it |
+| Hook events in the stream | `--include-hook-events` is listed by `--help` [35]; what it adds to the stream was not read **[U]**; a `-p --output-format stream-json` run with a `PreToolUse` hook would show it |
 | Resume a session linked to a pull request | `--from-pr [value]` [9] |
 | Background sessions | `claude --bg`, then `claude agents`, `claude attach <id\|name>`, `claude logs <id\|name>`, `claude stop <id>`, `claude rm <id>`, `claude respawn [id]` [9] |
 | Isolated git worktree | `claude -w [name]` / `--worktree [name]` [9] |
@@ -139,7 +143,7 @@ Proprietary; use is subject to Anthropic's Commercial Terms of Service [25]. The
   resumed id [27].
 - **Under a new id.** `--fork-session` with `--resume` or `--continue` writes the continuation to a
   new file and leaves the original as it was [9][19].
-- **No tools.** `--tools ""` offers none. The option takes several values, so it must come before
+- **No tools.** `--tools ""` offers none; `EndConversation` is the exception no `--tools` list removes, but `-p` runs do not offer it [29]. The option takes several values, so it must come before
   another option: after `--resume` it swallows the prompt and Claude Code answers `Error: No
   deferred tool marker found in the resumed session …` [27]. A history holding tool calls is
   accepted with no tools offered (first-party API, `claude-sonnet-5`) [27].
@@ -157,7 +161,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 |---|---|
 | Files | `Read`, `Write`, `Edit`, `NotebookEdit` (Jupyter cells) |
 | Shell | `Bash`; `PowerShell` (default on native Windows without Git Bash; opt-in elsewhere through `CLAUDE_CODE_USE_POWERSHELL_TOOL=1`); `Monitor` (background command streamed line by line) |
-| Search | `Glob`, `Grep` (default on Windows; on macOS, Linux and WSL the shell runs embedded `bfs` and `ugrep` instead), `LSP` (code intelligence through language servers), `ToolSearch` (loads deferred tools) |
+| Search | `Glob`, `Grep` (default on Windows; on macOS, Linux and WSL the shell runs embedded `bfs` and `ugrep` instead, and the two tools are absent unless `--tools` or `--allowedTools` names them (naming either in `--allowedTools` restores both; an allow rule in a settings file does not) or Bash is removed [29]), `LSP` (code intelligence through language servers), `ToolSearch` (loads deferred tools) |
 | Web | `WebFetch`, `WebSearch` |
 | Agents | `Agent` (subagent), `SendMessage`, `ListAgents`, `TaskStop`, `Workflow` (script that orchestrates subagents), `Skill` (runs a skill) |
 | Tasks and scheduling | `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate` (replace `TodoWrite`, which is off by default), `CronCreate`, `CronDelete`, `CronList`, `ScheduleWakeup`, `RemoteTrigger` |
@@ -165,7 +169,20 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 | MCP | `ListMcpResourcesTool`, `ReadMcpResourceTool`, `WaitForMcpServers`; tools of MCP servers are `mcp__<server>__<tool>` [3][12] |
 | Other | `Artifact`, `ReportFindings`, `PushNotification`, `SendFeedback`, `SendUserFile`, `ShareOnboardingGuide`, `SubagentHandback` (auto mode), `EndConversation` |
 
-`TaskOutput` was removed in v2.1.277 [12]. The set the model is offered depends on version, platform, model and settings. In the mukade bench (2.1.311, default settings, no plugins) 23 tools were offered: `Agent`, `Bash`, `CronCreate`, `CronDelete`, `CronList`, `Edit`, `EnterWorktree`, `ExitWorktree`, `Glob`, `Grep`, `ListAgents`, `Monitor`, `NotebookEdit`, `Read`, `ReportFindings`, `ScheduleWakeup`, `SendMessage`, `Skill`, `TaskStop`, `WebFetch`, `WebSearch`, `Workflow`, `Write` [3]. For how each call maps to Codex, OpenCode and Pi, see [../tool-conversion-tables.md](../tool-conversion-tables.md); the table is not repeated here.
+`TaskOutput` was removed in v2.1.277 [12]. The table omits tools that the SDK reference names: `ReadMcpResourceDir`, `Projects`, `RefreshMcpTools` (needs `CLAUDE_CODE_ENABLE_REFRESH_MCP_TOOLS=1`), `ShowOnboardingRolePicker` and `StructuredOutput`; the same page marks `REPL` as removed [32]. The 2.1.316 binary also holds the name strings `ArtifactComments`, `ArtifactData`, `ArtifactCheck`, `TeamCreate` and `TeamDelete`; a name found there does not show that the tool is offered, which the `tools` list of a `system/init` line would [37]. The set the model is offered depends on version, platform, model and settings. In the mukade bench (2.1.311, default settings, no plugins) 23 tools were offered: `Agent`, `Bash`, `CronCreate`, `CronDelete`, `CronList`, `Edit`, `EnterWorktree`, `ExitWorktree`, `Glob`, `Grep`, `ListAgents`, `Monitor`, `NotebookEdit`, `Read`, `ReportFindings`, `ScheduleWakeup`, `SendMessage`, `Skill`, `TaskStop`, `WebFetch`, `WebSearch`, `Workflow`, `Write` [3]. For how each call maps to Codex, OpenCode and Pi, see [../tool-conversion-tables.md](../tool-conversion-tables.md); the table is not repeated here.
+
+#### Web tools
+
+- **`WebSearch` runs at the provider.** Input `{query, allowed_domains?, blocked_domains?}`, the two lists not combinable in one call [29][32]. It "runs a query against Anthropic's web search backend and returns result titles and URLs" without fetching the pages, and is not exposed on Amazon Bedrock [29]. In the 2.1.316 binary a call makes a nested Messages request with the `web_search_20250305` server tool (`max_uses: 8`): a second model call, and up to eight backend searches per call [37]. Whether every login type (a subscription login) may run it is not stated **[U]**; a `-p` run on such a login would settle it, and the mukade bench (2.1.311) was offered the tool [3].
+- **`WebFetch` runs locally.** Input `{url, prompt, offset?}` [32]. It fetches the page, converts HTML to Markdown and "runs the prompt against the content in a separate model call"; the model receives that result, not the raw page [29]. The hostname goes to `api.anthropic.com` for a blocklist check first, which `skipWebFetchPreflight: true` skips [34]. It refuses `localhost` and hosts without a dot, and does not follow a redirect to another host: the result begins `REDIRECT DETECTED: The URL redirects to a location that was not fetched automatically` and the model must call again [29][37].
+- **Stream, search.** An `assistant` line holds a `tool_use` block `name:"WebSearch"` with `input.query`, `input.allowed_domains`, `input.blocked_domains` [32][33]. The answer is a `user` line with a `tool_result` block and a top-level `tool_use_result`: `query`; `results[]`, one `{tool_use_id, content:[{title, url}]}` per backend search or a plain string (the nested model's summary); `durationSeconds`; `searchCount`; an error is the string `Web search error: <error_code>` [32][37]. The refined queries are counted by `searchCount`, not listed, and the nested `server_tool_use` / `web_search_tool_result` blocks do not reach the outer stream [37]; `encrypted_content` and `page_age` of the API result are not in the output type [32]. Whether the binary's progress records (`query_update`, `search_results_received`) reach stream-json or a transcript is **[U]**; `grep -c query_update` on a saved run would settle it.
+- **Stream, fetch.** `tool_use` `name:"WebFetch"` with `input.url`, `input.prompt`, `input.offset?` [32][33]; the `tool_use_result` has `url`, `code`, `codeText`, `bytes`, `durationMs` and `result` (the extracted text); a background call returns `{detachedToolCall: true}` (v2.1.287+) [32]. In the binary `url` is assigned from the request variable, not from a redirect target; where that variable comes from was not traced **[U]** [37].
+- **What is established about these lines.** The field lists are the SDK's message types [32]; a refused call also arrives as a `system/permission_denied` line (`tool_name`, `tool_use_id`, `decision_reason`) and in the final `result`'s `permission_denials` [31][32]. That the CLI's stdout lines carry exactly these objects is consistent with the headless page but stated in no single sentence **[U]**, and so is whether `--verbose` is required with `--output-format stream-json` in `-p` (the page's example uses it) [31]. One such run with `WebSearch` allowed, with and without `--verbose`, would settle both.
+- **Allow or deny `WebSearch` for one run.** Allow: `--allowedTools "WebSearch"`; the rule has no specifier form [29][31]. Deny: `--disallowedTools "WebSearch"` removes it from the model's context [32], or leave it out of `--tools` [35]. In `-p` a call that needs approval and is not allowed is denied [31]. No environment variable that disables search was found **[U]** (`CLAUDE_CODE_DISABLE_WEB_FETCH=1` exists for `WebFetch`); a search of the installed binary's variable names would settle it. The per-turn limit resets on each `claude -p` run and is raised with `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION`; its `-p` default, and whether it can be lowered, are **[U]** [29].
+- **Allow or deny `WebFetch` for one run.** It asks in Manual mode except for built-in preapproved documentation domains [29]. Allow: `--allowedTools "WebFetch(domain:docs.example.com)"`. Deny: a bare `WebFetch` in `--disallowedTools` removes the tool, denying `WebFetch(domain:*)` keeps it and refuses every fetch, `CLAUDE_CODE_DISABLE_WEB_FETCH=1` (v2.1.285+) turns it off, and `--restricted` removes it unless `--tools` names it [29][30][35].
+- **`WebFetch` is restricted by host only.** `WebFetch(domain:example.com)` matches that host only, `WebFetch(domain:*.example.com)` its subdomains at any depth but not the apex, `WebFetch(domain:*)` every host; matching is case-insensitive, deny beats ask beats allow, an explicit rule beats the preapproved set, and elsewhere `*` matches one label [30][29]. A rule on the `url` field or on a path is not supported [30]; an exact-URL allowlist needs a `PreToolUse` hook (section 7).
+- **Read tools.** `Read`, `Glob` and `Grep` are read-only (a read of a network path asks first). Switch for one run: name them in `--tools`; `Read(<path>)` rules scope or deny paths for all three; `--disallowedTools "Read"` or `"Glob Grep"` removes them; the `Glob`/`Grep` platform rule is in the table above [29][30][32].
+- **No web sample in the repository.** The one Claude fixture that mentions `WebSearch` lists the tool among its tool schemas and holds no web `tool_use` or `tool_result` block; its `usage.server_tool_use` counters read `web_search_requests: 0` and `web_fetch_requests: 0` [38]. The field lists above therefore come from the SDK reference and the binary, not from a mukade fixture.
 
 ### Branches, rewind and subagents
 
@@ -211,6 +228,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 - **Input.** Command hooks get the event JSON on stdin, HTTP hooks as the POST body. Common fields: `session_id`, `prompt_id`, `transcript_path`, `cwd`, `scratchpad_dir`, `permission_mode`, `effort`, `hook_event_name`; tool events add `tool_name`, `tool_input`, `tool_use_id` [11]. Per-event fields beyond these were not read **[U]** (the page was fetched only in part).
 - **Exit codes.** `0` success (JSON on stdout is applied); `2` blocking error on events that can block, stderr is fed back (ignored on `PermissionRequest`); any other code is a non-blocking error; `onFailure: "block"` (v2.1.295+) makes a failure or timeout block [11].
 - **JSON output.** `continue: false` stops Claude; `decision: "block"` with `reason` on prompt, post-tool, `Stop`, `PreCompact` and similar events; `hookSpecificOutput` carries `permissionDecision` (`allow`, `deny`, `ask`, `defer`) for `PreToolUse`, `additionalContext`, `updatedInput` and others [11].
+- **Web tools in hooks.** A `PreToolUse` hook sees `tool_input.url` for `WebFetch` and can answer `permissionDecision: "deny"`; for `WebSearch` it sees `query`, `allowed_domains`, `blocked_domains` and an optional `mode` (`"standard"` or `"extended"`, v2.1.282+) [33]. Hooks run in `-p` runs [31]. Whether a hook runs under `--restricted` is **[U]** (a `-p --restricted` run with a hook that logs its stdin would settle it); the `PostToolUse` `tool_response` shape for `WebSearch` is **[U]** (the same logging hook on a search would show it).
 - `--bare` and `--safe-mode` skip hooks [9]. mukade neither reads nor writes hook configuration.
 
 ## 8. How mukade reads and writes it
@@ -305,3 +323,14 @@ Web:
 26. npm registry, https://registry.npmjs.org/@anthropic-ai/claude-code/latest (`version` 2.1.312, `license` "SEE LICENSE IN README.md", `engines.node` ">=22.0.0", `bin.claude` "bin/claude.exe")
 27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
 28. Advanced setup and the native installers, https://code.claude.com/docs/en/setup and https://claude.ai/install.sh, accessed 2026-10-30 (canonical launcher, versions directory, `claude doctor`).
+29. https://code.claude.com/docs/en/tools-reference, accessed 2026-11-01.
+30. https://code.claude.com/docs/en/permissions, accessed 2026-11-01.
+31. https://code.claude.com/docs/en/headless, accessed 2026-11-01.
+32. https://code.claude.com/docs/en/agent-sdk/typescript (characters 0 to 300000 of 329464), accessed 2026-11-01.
+33. https://code.claude.com/docs/en/hooks (characters 0 to 200000 of 284258), accessed 2026-11-01.
+34. https://code.claude.com/docs/en/data-usage ("WebFetch domain safety check"), accessed 2026-11-01.
+35. `claude --version` and `claude --help` of the installed CLI (2.1.316) on this machine, accessed 2026-11-01.
+36. https://registry.npmjs.org/@anthropic-ai/claude-code/latest (`version` 2.1.316), accessed 2026-11-01.
+37. `C:\Users\alfio\.local\share\claude\versions\2.1.316` (minified JS, read only; text found with `grep -a`: `web_search_20250305`, `Web search results for query`, `REDIRECT DETECTED`, tool names), accessed 2026-11-01.
+38. `fixtures/claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl` (searched for web tool blocks and `server_tool_use` counters), accessed 2026-11-01.
+39. https://code.claude.com/docs/en/security, accessed 2026-11-01.

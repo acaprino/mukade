@@ -70,6 +70,9 @@ for the process to exit.
 Each harness has its own page — what it is, how it is installed and launched, its store, compaction,
 tools, plugins and hooks, and how mukade reads and writes it: [Claude Code](docs/harnesses/claude-code.md),
 [Codex CLI](docs/harnesses/codex.md), [OpenCode](docs/harnesses/opencode.md), [Pi](docs/harnesses/pi.md).
+Two more harnesses have a page but no support yet: [Hermes Agent](docs/harnesses/hermes-agent.md) and
+[DeepSeek Harness](docs/harnesses/deepseek-harness.md) (mukade neither reads nor writes them; a
+read-first plan is proposed in [ADR-0002](docs/adr/ADR-0002-hermes-and-deepseek-harness-read-first.md)).
 The [tool conversion tables](docs/tool-conversion-tables.md) are the one place that says how a tool
 call of one harness becomes a call of another.
 

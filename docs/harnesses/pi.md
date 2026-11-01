@@ -2,12 +2,14 @@
 
 | | |
 |---|---|
-| **Documentation updated** | 2026-10-28 |
+| **Documentation updated** | 2026-11-01 |
 | **Version described** | 1.2.0 (the version mukade's readers and writers were built against); mukade-written sessions were also run live against 1.4.0, npm's `latest` on 2026-10-28 — see [`../verification/pi-session-and-reasoning-verification.md`](../verification/pi-session-and-reasoning-verification.md) |
 | **Vendor** | Earendil Inc. ("Earendil Inc. & Contributors") [24]; package author Mario Zechner [1] |
 | **Website** | <https://pi.dev>, documentation <https://pi.dev/docs/latest> [24] |
 | **License / source** | MIT; <https://github.com/earendil-works/pi>, package directory `packages/coding-agent` [1][21] |
 | **mukade name** | `pi` |
+
+Version note: the tool names, the default tool set and the tool flags listed below were re-checked on 2026-11-01 against `pi --help` of the installed 1.4.0, which is npm's `latest` [36][37]; the default set is `DEFAULT_TOOL_NAMES` in `dist\core\tools\index.js:35` [43]. No tool name changed. The parameter schemas in the table of "Built-in tools" are still those read in 1.2.0 (only `read`'s `path`, `offset` and `limit` were seen again at 1.4.0 [43]); whether the others differ is **[U]**, and reading `<pkg>\dist\core\tools\*.js` of 1.4.0 settles it.
 
 ## 1. Introduction
 
@@ -46,6 +48,7 @@ with the command `omp` and its state under `~/.omp` [25][27]. mukade does not re
 | continue | `pi --continue` (`-c`), `pi --resume` (`-r`) | the current project's most recent session, or a picker [4][7] |
 | a given session | `pi --session <path\|id>` | path, exact ID or partial ID; searches the current project first and offers to fork a match from another project [4] |
 | other session flags | `--session-id <id>`, `--fork <path\|id>`, `--session-dir <dir>`, `--no-session`, `--name <name>` | `--fork` cannot be combined with `--session`, `--continue`, `--resume` or `--no-session` [4] |
+| tool selection | `pi --tools read,grep,find,ls -p "<prompt>"`; also `--exclude-tools <names or * patterns>` (`-xt`), `--no-builtin-tools` (`-nbt`), `--no-tools` (`-nt`), `--no-mcp`, `--no-extensions` (`-ne`) | narrow the tools of one run; the rules for `--tools` and MCP tools are under "Built-in tools" [37][39] |
 | RPC | `pi --mode rpc --no-session`, `pi --mode rpc --session <id>` | JSONL commands on stdin, e.g. `{"id":"c1","type":"compact"}`, `{"type":"abort"}`; records split only on LF [17][26] |
 | SDK | `import { createAgentSession } from "@earendil-works/pi-coding-agent";` | `const { session } = await createAgentSession(); await session.prompt("…")` [18] |
 
@@ -165,6 +168,7 @@ prefix). The coding agent adds the roles `bashExecution`, `custom`, `branchSumma
 - **`--fork <path|id> --session-dir <dir>`** copies the session into a new file under `<dir>`; the
   source file and its folder stay byte-identical [34]. Delete `<dir>` afterwards and nothing is left.
 - **`--no-tools`** offers no tools; a history holding tool calls is accepted (`openrouter`) [34].
+- **`--exclude-tools` (`-xt`)** removes tools by name or `*` pattern, MCP tools included; **`--no-builtin-tools` (`-nbt`)** removes the built-in tools and keeps extension tools; `--no-tools` also has the short form `-nt`; with `--no-extensions` (`-ne`) an explicit `-e <path>` still loads [37][39].
 - **Output.** `-p` prints the final assistant text on stdout [4].
 
 ### Built-in tools
@@ -186,7 +190,35 @@ The default set is `DEFAULT_TOOL_NAMES = ["read", "bash", "edit", "write"]` [11]
 (e.g. `pi --tools read,grep,find,ls -p "…"`, or `+name`/`-name` entries) or `defaultTools` (e.g.
 `{"defaultTools": ["read", "powershell", "edit", "write"]}`) [4][12]. Outside the built-in set there are
 `codemode` (`--tools +codemode`), `tool_search`, MCP tools `mcp__<server>__<tool>` and extension tools
-[4][5]. How mukade translates them: [`../tool-conversion-tables.md`](../tool-conversion-tables.md).
+[4][5]. How mukade translates them: [`../tool-conversion-tables.md`](../tool-conversion-tables.md); its
+`WebFetch` and `WebSearch` rows map to Pi as text (**T**), which agrees with Pi having no web tool [28][44].
+
+Checked at 1.4.0 [39][40]: a list of plain names in `--tools` replaces the whole default selection,
+extension tools included, but does not remove MCP tools unless one entry starts with `mcp__`; with such
+an entry `--tools` filters MCP tools too, so `--tools read,grep,find,ls,'mcp__<server>__<tool>'` offers
+that one MCP tool, and an MCP tool no entry names is not declared directly (only `codemode` or
+`tool_search` could still reach it). Two flags complete the set [37][39]: `--exclude-tools` (`-xt`)
+removes tools by name or `*` pattern, MCP tools included, and `--no-builtin-tools` (`-nbt`) removes the
+built-in tools but keeps extension tools.
+
+When a connected MCP server offers resources, three more model-facing tools exist: `list_mcp_resources`,
+`list_mcp_resource_templates` and `read_mcp_resource` [40][45]. `codemode` and `tool_search` are two of the
+four built-in extensions in `dist\extensions` (`codemode`, `llama`, `mcp`, `tool-search`) and are registered
+inactive [43][44].
+
+Read-only tools: `read` (on by default), `grep`, `find`, `ls` (off by default) cannot write files, run commands or use the network; the switch for one run is `--tools read,grep,find,ls` [39][43].
+
+#### Web tools
+
+- Pi 1.4.0 has **no built-in web search or page-reading tool**: no web tool registration was found in the installed package, and `read` takes a file `path`, not a URL [43][44]. Web access comes only from an extension, a package, a skill or an MCP server, and none of the ones below is described as official in the vendor documentation or the pages read [46]-[49].
+- Extension `pi-web-access` runs in the Pi process: tools `web_search`, `fetch_content`, `get_search_content`, `source_check`; its default `provider: "auto"` needs no key (it goes through Exa MCP); `fetchContent.domainPolicy` takes `allow` and `deny` host lists, off by default [47].
+- Extension `pi-web-search` runs at the model provider's side (Gemini grounding, Responses or Messages API web search, DeepSeek and Ollama Cloud endpoints): tools `web_search`, `url_context` [48]. The gallery also lists `@onkernel/browser-loop`, whose tools were not read **[U]** [46].
+- Skill `brave-search` in `badlogic/pi-skills` runs through the `bash` tool; `badlogic` is one of Pi's npm maintainers [23], but the page does not call the skill official [49]. A web-search MCP server added with `pi mcp add <server> -- <cmd>` or `--url <url>` offers `mcp__<server>__<tool>`, the name being fixed by the server **[U]**; `pi mcp list --json` shows the tool names and their exposure without a model turn [37][40].
+- `pi --mode json "<prompt>"` writes a session header, then JSONL events, and exits [38]. A tool call is `tool_execution_start{toolCallId,toolName,args}`, optionally `tool_execution_update{toolCallId,toolName,args,partialResult}`, then `tool_execution_end{toolCallId,toolName,result:{content:[{type:"text",text}],details},isError,durationMs}`; the query is a field of `args` and result URLs are in `result.content[].text` [38]. The writer passes every session event except `message_update` through unchanged [42].
+- Through `codemode` the model's call is `codemode` with `args.code` as the script and only the script's output reaches it, while each nested tool call emits its own `tool_execution_*` events with a `parentToolCallId` [50][51][52]. That nothing hides or encrypts `args` or `result` is **[U]**: no statement was found either way in the docs read.
+- Not established **[U]**: the field names the two extensions use in these events, and whether provider-side search puts its query or result URLs in the output; one run settles it: `pi --no-session --mode json -ne -e <extension> --tools read,<tool> "<one search>"`, filtered to `tool_execution_*` events (it starts a model turn and was not run) [38][39][48].
+- The `pi-web-access` README was read only up to character 100,000 of 155,660, so any prompt-injection or "URLs seen in results" restriction in the rest is **[U]**; reading it from offset 100000 settles it [47].
+- Pi has no sandbox and no network switch: `--offline` only disables startup network activity (the model catalog refresh) [39]. The security page calls prompt injection from untrusted content and the lack of a built-in sandbox "generally outside the security boundary" of a vulnerability report, and advises restricting network access at the OS or container level [41].
 
 ### Tree, branches and forks
 
@@ -330,6 +362,7 @@ stdout. The provider and the model id go apart, because a model id can hold a sl
 
 `<pkg>` = `C:\Users\alfio\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent` (1.2.0);
 repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28 unless a source says otherwise.
+In sources 36 to 52, read on 2026-11-01, `<pkg>` is the same folder holding Pi 1.4.0.
 
 1. Pi `package.json`, `<pkg>\package.json`.
 2. Pi README, `<pkg>\README.md`.
@@ -366,3 +399,20 @@ repository paths are relative to `D:\Projects\mukade`. All accessed 2026-10-28 u
 33. `src/model/tool.rs` (`CanonicalTool::from_pi`).
 34. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
 35. Official managed installers, https://pi.dev/install.sh and https://pi.dev/install.ps1, accessed 2026-10-30 (`<PI_CODING_AGENT_DIR>/bin`, `<PI_CODING_AGENT_DIR>/install/releases/`, `current-version`).
+36. https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest (version 1.4.0, repository, author, licence, engines), accessed 2026-11-01.
+37. Output of `pi --version` (`1.4.0`), `pi --help` ("Built-in Tool Names", tool flags) and `pi mcp --help` (Pi 1.4.0, this machine), accessed 2026-11-01.
+38. "JSON event stream", `<pkg>\docs\json.md` lines 3-9, 101-115, 198-218, accessed 2026-11-01.
+39. "Command Line", `<pkg>\docs\cli.md` lines 25-48, 98-106, 111-199, 237-242 (modes, sessions, tools, extensions, offline), accessed 2026-11-01.
+40. "MCP", `<pkg>\docs\mcp.md` ("Control tool exposure", "Use resources", "Permissions"), accessed 2026-11-01.
+41. "Run Pi safely", `<pkg>\docs\security.md` (whole page), accessed 2026-11-01.
+42. `<pkg>\dist\modes\json-event.js:16-17` and `<pkg>\dist\modes\print-mode.js:84-86` (the JSON writer passes every session event except `message_update` through unchanged), accessed 2026-11-01.
+43. `<pkg>\dist\core\tools\index.js` (`allToolNames`, `DEFAULT_TOOL_NAMES` line 35) and `<pkg>\dist\core\tools\{read,bash,powershell,edit,write,grep,find,ls}.js`; `<pkg>\dist\extensions\{codemode,tool-search,mcp}`, accessed 2026-11-01.
+44. `<pkg>\README.md:19`; `<pkg>\package.json`; the listing of `<pkg>\dist\extensions` (`codemode`, `llama`, `mcp`, `tool-search`); a content search of `<pkg>` without `node_modules` for web search, fetch and browse terms and for the names Brave, Tavily, DuckDuckGo, Exa, Serper and SearXNG, accessed 2026-11-01.
+45. `<pkg>\dist\extensions\mcp\resources.js:2-3,28-40,194-226` (the resource tool definitions), accessed 2026-11-01.
+46. https://pi.dev/packages (package gallery, 5,372 packages; lists `pi-web-access`, `pi-web-search` and `@onkernel/browser-loop`, all third-party authors), accessed 2026-11-01.
+47. https://registry.npmjs.org/pi-web-access/latest and https://raw.githubusercontent.com/nicobailon/pi-web-access/main/README.md (first 100,000 of 155,660 characters read), accessed 2026-11-01.
+48. https://registry.npmjs.org/pi-web-search/latest and https://raw.githubusercontent.com/ttttmr/pi-web-search/main/README.md, accessed 2026-11-01.
+49. https://github.com/badlogic/pi-skills (skill list, including `brave-search`), accessed 2026-11-01.
+50. "Extensions", `<pkg>\docs\extensions.md` ("Tools", "Tool exposure", nested calls around line 261), accessed 2026-11-01.
+51. "Codemode", `<pkg>\docs\codemode.md` lines 3-7, 24-44, accessed 2026-11-01.
+52. `<pkg>\CHANGELOG.md:441` (nested tool calls emit events with `parentToolCallId`), accessed 2026-11-01.

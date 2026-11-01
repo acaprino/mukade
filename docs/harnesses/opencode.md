@@ -2,12 +2,14 @@
 
 | | |
 |---|---|
-| **Documentation updated** | 2026-10-28 |
+| **Documentation updated** | 2026-11-01 |
 | **Version described** | 2.1.4 (the version mukade's readers and writers were verified against) |
 | **Vendor** | Anomaly (GitHub organization `anomalyco`, <https://anoma.ly>) [3][4] |
 | **Website** | <https://opencode.ai>; V2 documentation at <https://opencode.ai/v2/docs/> [3][9] |
 | **License / source** | MIT; TypeScript source at <https://github.com/anomalyco/opencode> [1][3][4] |
 | **mukade name** | `opencode` |
+
+Version note: the binary installed on the verification machine now reports `opencode v2.2.5` [39], the newest release in GitHub's listing, published 2026-10-30 [47]. Everything else on this page (the reader, the writer, the probes and the on-disk facts) was verified on 2.1.4 [1] and has not been re-run on 2.2.5. The facts labelled *2.2.5* (the extra rows and notes under "Built-in tools", the "Web tools" subsection and the extra `--format json` event types) were read in the V2 documentation pages as served on 2026-11-01 [41][42][43][44][45][46], in the source at tag `v2.2.5` [48][49][50][51][52][53][54] and in the 2.2.5 `--help` [40]: they are not mukade behaviour verified there. The source files were read through a summarising fetch, so each is a model's extract, not the raw bytes. Whether a documented feature already exists in 2.1.4 is **[U]** per feature.
 
 ## 1. Introduction
 
@@ -184,7 +186,8 @@ MIT, declared in `@opencode/cli` 2.1.4's `package.json` and on the repository [1
   (merged with the user's own) denies every tool: asked to write a file, the model wrote none, and a
   fork of a session whose history holds a tool call was summarized normally [37].
 - **Output.** `--format json` prints one event per line (`step_start`, `tool_use`, `text`,
-  `step_finish`), each with the `sessionID` it belongs to: for a fork, the fork's id [37].
+  `step_finish`), each with the `sessionID` it belongs to: for a fork, the fork's id [37]. The 2.2.5
+  source also writes `reasoning` events (only with `--thinking`) and `error` events [52].
 
 ### Built-in tools
 
@@ -194,18 +197,46 @@ MIT, declared in `@opencode/cli` 2.1.4's `package.json` and on the repository [1
 | `glob` | paths matching a pattern |
 | `grep` | file contents search |
 | `edit` | exact replacement (`path`, `oldString`, `newString`, `replaceAll`) |
-| `write` | create or replace a file (`path`, `content`) |
-| `patch` | one multi-file patch; offered only for supported GPT models, which get it instead of `edit`/`write` |
+| `write` | create or replace a file (`path`, `content`). 2.2.5: its permission key is `edit` [42][54] |
+| `patch` | one multi-file patch. 2.2.5: offered when the model id contains `gpt-` and neither `oss` nor `gpt-4`, and `edit` and `write` are then removed; its permission key is `edit` [42][54] |
 | `shell` | command in the user's shell (`command`, `workdir`, `timeout`, `background`) |
-| `webfetch` | one URL as markdown, text or HTML |
-| `websearch` | search through the selected integration |
+| `webfetch` | one URL as markdown, text or HTML. 2.2.5: input `url`, `format` (default `markdown`) and `timeout` (seconds, at most 120, default 30); textual responses only [42][50] |
+| `websearch` | search through the selected integration. 2.2.5: the integration is one of five providers or the Console-hosted one, the input is `query`, and with none chosen the first call raises a consent form that a headless run cancels (see "Web tools") [41][45][49][51][52] |
 | `question` | asks the user, if the client supports it |
 | `skill` | loads one skill's instructions |
 | `subagent` | starts a child session with a subagent |
-| `execute` | Code Mode JavaScript that calls and combines tools; MCP tools and the `browser`/`opencode` namespaces are reached through it |
+| `execute` | Code Mode JavaScript that calls and combines tools; MCP tools and the `browser`/`opencode` namespaces are reached through it. 2.2.5: it has its own `fetch` global (see "Web tools") [53] |
+| `todowrite` | 2.2.5: registered only when config `experimental.todo` is true. Whether it is a direct tool or reached through `execute`: **[U]**; its `codemode` flag in `packages/core/src/tool/plugin/` at the tag settles it [54] |
+| `experimental_image_generate` | 2.2.5: offered only while a connected provider has an image model. Direct or through `execute`: **[U]**, settled the same way [54] |
+| `list_mcp_resources`, `read_mcp_resource` | 2.2.5: MCP resource tools, registered for Code Mode and reached through `execute`; the condition for registering them is not read **[U]**. Permission keys `opencode_list_mcp_resources` and `opencode_read_mcp_resource` [42][54] |
+| `artifact_*` | 2.2.5: gated by config `experimental.artifacts`; registered for Code Mode and reached through `execute` [54] |
+| `schedule_*` | 2.2.5: gated by config `experimental.schedules`; registered for Code Mode and reached through `execute` [54] |
+| `opencode` namespace | 2.2.5: `session_rename`, `session_move`, `worktree_create\|list\|remove` and `models`; registered for Code Mode and reached through `execute`; `worktree_remove` has the permission key `edit`; the condition for registering the namespace is not read **[U]** [42][54] |
 
 The 2.1.4 bench offered the model all of these except `patch` [30 §2]. How mukade maps them:
 [`../tool-conversion-tables.md`](../tool-conversion-tables.md).
+
+- **Registration (2.2.5).** `codemode` defaults to true; `read`, `glob`, `grep`, `shell`, `subagent`,
+  `skill`, `question`, `webfetch`, `websearch`, `edit`, `write` and `patch` register with
+  `codemode: false` [54]. No `lsp` tool is among the 19 files listed in `packages/core/src/tool/plugin` [54].
+- **Permission keys that differ from the tool name (2.2.5).** `write` and `patch` use `edit`;
+  `worktree_remove` uses `edit`; the MCP resource tools use `opencode_list_mcp_resources` and
+  `opencode_read_mcp_resource` [42][54].
+- **Read tools (2.2.5).** Read-only: `read` (files and directories; PNG, JPEG, GIF, WebP and PDF up to 20 MiB reach the model), `glob`, `grep`. Switch: permission key = the tool name, resource = the normalised path (`read`) or the pattern, not the path (`glob`, `grep`), effect `allow|ask|deny` [42][54].
+
+#### Web tools
+
+Read on 2.2.5 only (sources 40 to 54): not run through mukade and not checked on 2.1.4.
+
+- **Backend of `websearch`.** It runs locally inside OpenCode and calls a third-party search service over HTTP; nothing runs at the model provider [48][51]. Five providers are registered, in this order: `exa` (key `EXA_API_KEY` or a stored key), `firecrawl` (`FIRECRAWL_API_KEY`), `parallel` (`PARALLEL_API_KEY`), `tavily` (`TAVILY_API_KEY`) and `tinyfish` (`TINYFISH_API_KEY`, "optional" in the docs) [51][41]. Users connected to a Console workspace also get the hosted "OpenCode Web Search": no personal search key, USD 0.01 per successful search, up to eight results, "zero data retention" [45]. With no key set the code still sends the request (Tavily and TinyFish add a keyless-mode header) [51]; whether each server accepts a keyless call is not stated in the code or the docs **[U]**, and one throwaway `run` turn per provider with no key set (state `completed`, or the error `Web search authentication failed (HTTP 401)`) would settle it [49].
+- **Switch.** `websearch` is offered by default; permission action `websearch`, resource = the query text. Config `{"websearch": false}` "removes the web search tool from model requests", `{"websearch": {"provider": "tavily"}}` fixes a provider and skips the consent form, and `"random"` picks any available provider and retries another on HTTP 429 [41][43][48][49]. No environment variable enables or disables the tool [41]. `webfetch` is offered by default; permission action `webfetch`, resource = the requested URL; it has no enable flag and a `deny` rule disables it [43][50].
+- **Consent form.** With no stored choice the first search raises a form (title "Web Search", `kind: "websearch.provider"`: allow, choose another provider, disable); `allow` stores `"random"`, `disable` stores `false`, in the KV key `websearch:provider`, kept across sessions, and a 1-minute timeout cancels it [41][48][49]. A headless `run` cancels forms (this one, questions) and cancelling a form that is not a question sets exit code 1; without `--auto` a request that would ask is rejected and the model is told "This non-interactive run cannot ask the user for permission" (the run goes on), with `--auto` it is approved once [52]. A headless turn that should search therefore needs `websearch.provider` set, or `false` to remove the tool; how the key reaches a `run` is **[U]** (below).
+- **Events: search.** `run --format json` writes one object per line, `{"type","timestamp","sessionID",...}`, and none for permission requests, questions or forms [52]. A search is a `tool_use` with `part.tool` = `"websearch"` and `part.state.input` = `{"query": ...}`; also `part.state.status` (`completed` or `error`), `part.state.error` (error only: `Web search rate limited (HTTP 429)`, `Web search authentication failed (HTTP 401)` or `Web search request failed (HTTP <status>)`), `part.state.title`, `part.state.time`, `part.state.output` and `part.state.metadata` = `{metadata, content, providerCall, providerResult:{executed,state}, rawInput}`, where the tool's own `metadata` is `{provider: <id>}` [49][52]. The result URLs are in the tool's model-facing content as `[title](url)` links and as structured `results[].url` [49]; that they reach `part.state.output` or `part.state.metadata.content` is **[U]** (`toolOutputText` is not in the file read), and so is what `providerCall` and `providerResult` hold for a local tool. One throwaway `run --standalone --format json` search turn, checking whether either field contains `](http` and then `opencode session delete <id> --standalone`, would settle both [52].
+- **Events: fetch.** A fetch is a `tool_use` with `part.tool` = `"webfetch"`, `part.state.input` = `{url, format, timeout}` (the requested URL; the URL after a redirect is not reported), `part.state.output` = the converted page text, and tool metadata `{contentType}` only [50][52].
+- **Limiting a turn: rule shape.** Rules are `{"action","resource","effect"}` objects in a `permissions` array (V2; V1 spelled it `permission`); effects are `allow`, `ask` and `deny`, no match means `ask`, the last matching rule wins, a base rule `* * allow` comes first and agent rules are appended last [43]. Deny-all then allow is a documented pattern, and an agent can carry its own `permissions` [44]. Search only: `{"action":"*","resource":"*","effect":"deny"}` then `{"action":"websearch","resource":"*","effect":"allow"}`. Fetch limited by URL: `{"action":"webfetch","resource":"https://docs.example.com/*","effect":"allow"}`, where `*` matches any characters including `/`, `?` exactly one, and the pattern must match the whole URL [43]; the docs give no `webfetch` example, this one is built from the documented syntax.
+- **Limiting a turn: reach.** Deny-all removes `shell`, `edit` (also the key of `write` and `patch`), `subagent`, `skill`, `execute` (Code Mode, through which MCP tools and the `opencode` namespace are reached) and MCP tools (key `<server>_<tool>`) [42][43]; whether MCP servers are still started is **[U]** (a local MCP server that writes a marker file on start, under a deny-all `run --standalone` turn, would settle it). `webfetch` follows redirects by hand (at most 10) and checks each target with a deny-only check on action `webfetch`, with no approval prompt [50]. OpenCode documents no OS sandbox and no tool network allowlist, only `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` [46].
+- **`execute`'s own `fetch`.** The Code Mode tool `execute` has a `fetch` global that asserts `webfetch` on the original URL only, with no re-check after redirects, a 30 s limit, no size cap and any HTTP method, and it refuses `file:` URLs [53]. A turn whose web access is restricted must deny `execute` as well.
+- **Not established, and what would settle it.** **[U]** (1) That the `websearch` key reaches a `run` through `OPENCODE_CONFIG_CONTENT` with `--standalone` and beats the stored `websearch:provider` choice: the source reads the in-memory selection and falls back to the KV, and that the config key fills that selection is not read [48]; `OPENCODE_CONFIG_CONTENT='{"websearch":false}' opencode debug config` ("List configuration sources") and `opencode debug agents` ("List all agents") show the inline source and the agent's rules without a model turn, and one model turn shows whether the tool is absent [40]. **[U]** (2) That the V2 `permissions` array works through the same variable; mukade's V1 shape `{"permission":{"*":"deny"}}` was observed to deny every tool at 2.1.4 [37], and the same `debug` commands would show the V2 shape [40]. **[U]** (3) Which stream (stdout or stderr) carries the line `permission requested: <action> (<resources>); auto-rejecting` [52]; a `run` turn with the two streams captured apart settles it. **[U]** (4) Whether `webfetch` can be limited natively to the URLs found by this turn's search: patterns are static, so the workable design is a second turn whose config holds exact allow rules for those URLs, and a config that denies `*` and allows one URL redirecting to another host would show the redirect refused in `state.error` [43][50].
 
 ### Agents, subagents and sessions tree
 
@@ -400,3 +431,19 @@ All accessed 2026-10-28 unless a source says otherwise.
 36. Local npm launcher `C:\Users\alfio\AppData\Roaming\npm\opencode.cmd` (150 bytes, generated by npm for `@opencode/cli`).
 37. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
 38. Official install script, https://opencode.ai/v2/install, accessed 2026-10-30 (`INSTALL_DIR=$HOME/.opencode/bin`, Windows `.exe` handling); `opencode debug paths db` with `OPENCODE_DB=custom.db` and `:memory:` on this machine, 2026-10-30.
+39. `opencode --version` of the installed binary, printing `opencode v2.2.5`, accessed 2026-11-01.
+40. `opencode run --help` and `opencode debug --help` of the installed 2.2.5 binary, accessed 2026-11-01.
+41. OpenCode docs, Web search, <https://opencode.ai/v2/docs/websearch/>, accessed 2026-11-01.
+42. OpenCode docs, Tools, <https://opencode.ai/v2/docs/tools/>, accessed 2026-11-01.
+43. OpenCode docs, Permissions, <https://opencode.ai/v2/docs/permissions/>, accessed 2026-11-01.
+44. OpenCode docs, Agents, <https://opencode.ai/v2/docs/agents/>, accessed 2026-11-01.
+45. OpenCode docs, Console › Web search, <https://opencode.ai/v2/docs/console/websearch/>, accessed 2026-11-01.
+46. OpenCode docs, Network, <https://opencode.ai/v2/docs/network/>, accessed 2026-11-01.
+47. GitHub releases of anomalyco/opencode (v2.2.5, published 2026-10-30), <https://api.github.com/repos/anomalyco/opencode/releases?per_page=8>, accessed 2026-11-01.
+48. Source `packages/core/src/websearch.ts` at tag `v2.2.5` of <https://github.com/anomalyco/opencode>, accessed 2026-11-01 (summarising fetch).
+49. Source `packages/core/src/tool/plugin/websearch.ts` at tag `v2.2.5`, accessed 2026-11-01 (summarising fetch).
+50. Source `packages/core/src/tool/plugin/webfetch.ts` at tag `v2.2.5`, accessed 2026-11-01 (summarising fetch).
+51. Source `packages/core/src/plugin/websearch/{index,exa,firecrawl,parallel,tavily,tinyfish,mcp}.ts` at tag `v2.2.5`, accessed 2026-11-01 (summarising fetch).
+52. Source `packages/cli/src/run/noninteractive.ts` at tag `v2.2.5`, accessed 2026-11-01 (summarising fetch).
+53. Source `packages/core/src/codemode/{tool,fetch}.ts` at tag `v2.2.5`, accessed 2026-11-01 (summarising fetch).
+54. Source `packages/core/src/tool/plugin/*.ts` (file listing: read, glob, grep, edit, write, shell, subagent, skill, question, patch, todo, artifact, schedule, opencode, mcp-resource, image-generate) and `packages/core/src/tool/AGENTS.md` at tag `v2.2.5`, accessed 2026-11-01 (summarising fetch).

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Documentation updated** | 2026-10-28 |
+| **Documentation updated** | 2026-11-01 |
 | **Version described** | 0.164.0 (the version mukade's readers and writers were verified against) |
 | **Vendor** | OpenAI [1] |
 | **Website** | https://developers.openai.com/codex [2] |
@@ -20,7 +20,10 @@ app-server client [7], the Desktop app writes rollouts in the same format [21], 
 share `config.toml` [6][8].
 mukade was verified against CLI 0.164.0 and has also read Codex Desktop rollouts up to
 0.164.0-alpha.11.1 [21]. npm already lists 0.165.0 (published 2026-10-27), which mukade has not
-been verified against [17].
+been verified against [17]. The web-tool facts added on 2026-11-01 (§3 entry points, §5 Ephemeral
+runs and Built-in tools, Web tools) were checked against 0.164.0: the installed CLI [47] and the
+source at tag `rust-v0.164.0` [32]-[46]. They were read through summarising fetches, so their wording
+is as returned (§9).
 
 ## 2. Description
 
@@ -35,8 +38,8 @@ been verified against [17].
 
 | entry | command | notes |
 |---|---|---|
-| interactive TUI | `codex [PROMPT]` | `--search` enables the native `web_search` tool; `--no-alt-screen` runs inline [18] |
-| non-interactive | `codex exec "<prompt>"` (alias `codex e`) | `--json` prints JSONL events (`thread.started`, `turn.*`, `item.*`, `error`). `-` or piped stdin is accepted. `--ephemeral` writes no rollout [3][18] |
+| interactive TUI | `codex [PROMPT]` | `--search` selects the `live` mode of the native `web_search` tool, which is already on in `cached` mode without it [29][35][47]; `--no-alt-screen` runs inline [18] |
+| non-interactive | `codex exec "<prompt>"` (alias `codex e`) | `--json` prints JSONL events (`thread.started`, `turn.*`, `item.*`, `error`). `-` or piped stdin is accepted. `--ephemeral` writes no rollout [3][18]. `--search` is not an `exec` flag; per run, `-c web_search="live"` selects the mode [43][47] |
 | resume (TUI) | `codex resume [SESSION_ID] [PROMPT]` | picker by default; `--last`, `--all`, `--include-non-interactive` [18] |
 | resume (exec) | `codex exec resume <SESSION_ID> "<prompt>"` / `codex exec resume --last "<prompt>"` | id or thread name; appends to the same rollout [3][18][19] |
 | fork | `codex fork [SESSION_ID] [PROMPT]`, `codex exec fork <SESSION_ID> [PROMPT]` | new session from an old one [18] |
@@ -182,8 +185,13 @@ Record kinds in a rollout (`type`, then `payload.type`) [19][22]:
   carries the whole source conversation, an unanswered last user message included [27].
 - **Output.** `-o, --output-last-message <file>` writes the last agent message to a file; `--json`
   prints the events [18].
-- **No switch removes the tools** of `exec`; `-c sandbox_mode="read-only"` bounds what a call can
-  do [18][27]. `exec` reads stdin when it is left open (`Reading additional input from stdin...`) [27].
+- **Switches that remove tools of `exec`.** `--disable shell_tool` (the same as `-c features.shell_tool=false`)
+  removes `exec_command` and `write_stdin`: the source registers no shell tool when that feature is
+  off [38][47]. `--disable view_image` and `--disable multi_agent` close two more groups [38][47], and
+  `-c web_search="disabled"` removes the web tools (Built-in tools, Web tools). What a real run then
+  offers was not observed **[U]**; reading `tools` in the request body of `codex exec` against a local
+  mock Responses server would settle it. `-c sandbox_mode="read-only"` bounds what a call can do
+  [18][27]. `exec` reads stdin when it is left open (`Reading additional input from stdin...`) [27].
 - **Deleting a session without a terminal** needs `codex delete --force <id>`; without `--force` it
   answers `cannot confirm session deletion without an interactive terminal` [27].
 
@@ -195,11 +203,12 @@ Offered by 0.164.0 `exec` in the bench, with an unknown model and default settin
 - `write_stdin`: writes to a running `exec_command` session [21 §4.1].
 - `request_user_input`: asks the user a question (canonical `AskUserQuestion`) [21 §3].
 - `view_image`: image viewing; purpose taken from the name only **[U]**.
-- `multi_agent_v1` (namespace): subagent tools; real stores show `spawn_agent`, `send_message`, `wait_agent`.
+- `multi_agent_v1` (namespace): subagent tools; real stores show `spawn_agent`, `send_message`, `wait_agent`. The source at the tag puts `spawn_agent`, `send_input`, `resume_agent`, `wait_agent` and `close_agent` in `multi_agent_v1` [46], and `send_message`, `followup_task`, `interrupt_agent` and `list_agents` in `multi_agent_v2`, off by default [38]. Which of the two the stores' `send_message` calls come from is **[U]**; the namespace recorded on one of those calls would settle it.
 - `get_goal`, `create_goal`, `update_goal`: the thread's persistent goal (`/goal`) [15].
-- `web_search`: built-in, server-side Responses tool (`--search`) [18][21 §3].
-- `apply_patch`: patch-based file edits; **not offered** to the bench's unknown model, but used by Codex Desktop [21].
+- `web_search`: built-in, server-side Responses tool, on by default in `cached` mode; `--search` only selects `live` [18][21 §3][29][35]. A second, standalone web tool, `web.run`, exists beside it and is registered under conditions of its own (Web tools, below); the Desktop census holds 53 `web__run` calls [21 §2].
+- `apply_patch`: patch-based file edits; **not offered** to the bench's unknown model, but used by Codex Desktop [21]. The source registers it only when the model's catalog sets `apply_patch_tool_type`, and no feature switch removes it (`apply_patch_freeform` is `removed`) [38][47]; how far `-s read-only` bounds its writes is **[U]**, and one `codex exec -s read-only` run whose prompt asks for an edit would show it.
 - `local_shell_call`: an older record type, read by mukade from its `action` [22].
+- Gated in `core/src/tools/spec_plan.rs` and not among the nine offered above: `update_plan`, `list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`, `request_permissions`, `sleep`, `image_gen.imagegen`, `tool_search`, the plugin-install tools, the code-mode `exec` and `wait`, and the `multi_agent_v2` tools named above [38]. `apply_patch` is above; the tools of MCP servers are not listed here.
 
 **Codex Desktop "code mode".** Desktop rollouts (`originator: codex_work_desktop`) hold almost every
 call as **one custom tool `exec`**. Its input is a script such as
@@ -208,6 +217,16 @@ In the census, 4,844 of 4,908 Codex calls were of this form [21 §5]. The 0.164.
 has `--code-mode-host <URL>` [18].
 
 Conversion rules and argument tables: [`../tool-conversion-tables.md`](../tool-conversion-tables.md).
+
+#### Web tools
+
+- **Hosted `web_search`** (response item `web_search_call`) [33][39]. Config key `web_search` = `disabled`, `cached`, `indexed` or `live`; the default is `Cached`, and a full-access sandbox such as `--yolo` defaults to `live` [29][30][35]. `cached` is "an OpenAI-maintained index without external web access" (the query still goes to OpenAI), `live` "unrestricted live retrieval" [29]; the tool runs at the model provider's side, "separate from sandboxed local command networking" [30]. The docs read do not name the engine behind `live` **[U]**; a statement by the provider would settle it. Per run: `-c web_search="live"` [47]. `disabled` removes the tool [39], and it removes `web.run` too [38].
+- **`exec --json` item** `item.type` = `web_search` [32] ("web searches" is a named item type [31]): `query` (the query; for several queries the first plus ` ...`; the URL for `open_page`; `'pattern' in url` for `find_in_page`; empty for `other`) [37]; `action.type` = `search`, `open_page`, `find_in_page` or `other`, with `action.query` or `action.queries[]` (the full list), `action.url`, `action.pattern` [33]. Page reading is the same item; a switch that closes it while keeping search was not found **[U]**; the part of the configuration reference not read (100000 of 156888 characters) [29] could settle it. Which `id` the JSON carries is **[U]** (two flattened structs declare `id`) [32]; the `id` of one `item.completed` line would show it.
+- **Result URLs.** The hosted tool does not put them in the stream: `results` is `None` [36], `WebSearchAction` has no `sources` field [33], and the request `include` list does not ask for them [44]. `results` is optional opaque JSON, filled by the standalone tool [34][41]; whether it holds URLs is **[U]**, and `exec --json --ephemeral -s read-only --enable standalone_web_search -c web_search="live"` with a search prompt, an `item.completed` of type `web_search` with a non-empty `results`, would settle it.
+- **Standalone `web.run`** (namespace `web`, function `run`; commands `search_query`, `image_query`, `open`, `find`) [41]: Codex calls a remote search API with the provider's login, endpoint **[U]**; nothing runs locally [41]. Registered when the provider supports web search, the mode is not `disabled`, and the model uses `use_responses_lite` or feature `standalone_web_search` is on [38]; that feature is `under development`, default `false`, switched with `--enable standalone_web_search` [42][47]. Which models use `use_responses_lite` is **[U]**; a model's catalog entry would show it. `item.started` carries `query: ""` and `action: other`, the data arrives at `item.completed`, and an `open` by result reference (`turn0search0`) reports no URL [41]. That these items reach `exec` as `web_search` items is **[U]**: only the mapping `results: item.results` was read [34][40], and the probe above would show it.
+- **Domain allowlist:** `[tools.web_search] allowed_domains = ["example.com"]` (also `context_size`, `location`), separate from the sandbox network rules and not restricting connectors or MCP servers [29]; passed as `filters` into the hosted spec [39]. Whether it binds `open_page` and `open`, and whether opening is limited to URLs seen in the turn's results, are **[U]**; a standalone run with `-c tools.web_search.allowed_domains=["example.com"]` asked to open another host would settle it.
+- **No read tool.** `core/src/tools/handlers` at the tag has no `read_file`, `list_dir` or `grep_files` handler [45]; files are read through `exec_command`, images through `view_image` [21 §3].
+- Shell tool (`exec_command`, `write_stdin`): read-only? no (a shell); switch: bound with `-s read-only`, removed with `--disable shell_tool` [38][47].
 
 ### Branches, forks and subagents
 
@@ -393,3 +412,25 @@ All accessed 2026-10-28 unless a source says otherwise.
 25. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md) §2
 27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)
 28. Official Unix install script, https://chatgpt.com/codex/install.sh, accessed 2026-10-30 (`CODEX_INSTALL_DIR` default `$HOME/.local/bin`, standalone release layout, existing-install discovery).
+
+Sources [29]-[46] were read on 2026-11-01 through summarising fetches: a small model returns summaries and quotes, so the wording of the facts taken from them is as returned. [29]-[31] are pages already cited above, read again for their web-search content; [32]-[46] are files of the repository `openai/codex` at tag `rust-v0.164.0`, under `codex-rs/`, at `https://raw.githubusercontent.com/openai/codex/rust-v0.164.0/codex-rs/` unless a source gives a full URL.
+
+29. OpenAI, *Configuration reference*, https://learn.chatgpt.com/docs/config-file/config-reference (keys `web_search` and `tools.web_search`; first 100000 of 156888 characters read), accessed 2026-11-01.
+30. OpenAI, *Web search*, https://learn.chatgpt.com/docs/web-search, accessed 2026-11-01.
+31. OpenAI, *Non-interactive mode*, https://learn.chatgpt.com/docs/non-interactive-mode (`codex exec`, `--json` item types), accessed 2026-11-01.
+32. `exec/src/exec_events.rs` (`ThreadItemDetails`, the `web_search` item), accessed 2026-11-01.
+33. `protocol/src/models.rs` (`WebSearchAction`, `ResponseItem::WebSearchCall`; first 100000 of 167600 characters read), accessed 2026-11-01.
+34. `protocol/src/items.rs` (`WebSearchItem.results`), accessed 2026-11-01.
+35. `protocol/src/config_types.rs` (`WebSearchMode` default `Cached`, `WebSearchToolConfig`), accessed 2026-11-01.
+36. `core/src/event_mapping.rs` (`parse_turn_item`), accessed 2026-11-01.
+37. `core/src/web_search.rs` (`web_search_action_detail`), accessed 2026-11-01.
+38. `core/src/tools/spec_plan.rs` (which tools are registered, and under which feature or capability), accessed 2026-11-01.
+39. `core/src/tools/hosted_spec.rs` (`create_web_search_tool`), accessed 2026-11-01.
+40. `exec/src/event_processor_with_jsonl_output.rs` (`map_item_with_id`), accessed 2026-11-01.
+41. `ext/web-search/src/tool.rs` and `extension.rs` (the standalone `web.run` tool), accessed 2026-11-01.
+42. `features/src/lib.rs` (feature `standalone_web_search`), accessed 2026-11-01.
+43. `exec/src/cli.rs` (the `exec` flags), accessed 2026-11-01.
+44. `core/src/client.rs` (the request `include` list; first 100000 of 125901 characters read), accessed 2026-11-01.
+45. https://github.com/openai/codex/tree/rust-v0.164.0/codex-rs/core/src/tools/handlers (directory listing, which the page truncates behind "View all files"), accessed 2026-11-01.
+46. `core/src/tools/handlers/multi_agents_spec.rs` (the tools of `multi_agent_v1`), accessed 2026-11-01.
+47. Installed `codex` binary, accessed 2026-11-01: `codex --version` (`codex-cli 0.164.0`); `codex --help`; `codex exec --help`; `codex exec resume --help`; `codex features list`; `codex debug --help`; `codex sandbox --help`.

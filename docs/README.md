@@ -10,7 +10,7 @@
 
 - [Session interchange specification](session-interchange-spec.md): data model, conversion rules and contracts.
 - [Tool conversion tables](tool-conversion-tables.md): tool mappings between harnesses.
-- Harness guides: [Claude Code](harnesses/claude-code.md), [Codex](harnesses/codex.md), [OpenCode](harnesses/opencode.md) and [Pi](harnesses/pi.md).
+- Harness guides: [Claude Code](harnesses/claude-code.md), [Codex](harnesses/codex.md), [OpenCode](harnesses/opencode.md) and [Pi](harnesses/pi.md); and, with no mukade support yet, [Hermes Agent](harnesses/hermes-agent.md) and [DeepSeek Harness](harnesses/deepseek-harness.md) (read-first plan: [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md), Proposed).
 - [Harness session persistence reference](reference/harness-session-persistence-reference.md): secondary research with its original provenance and limitations.
 - [Harness catalog](reference/harness-catalog.md): the four harnesses, their own install and store locations on Windows, macOS and Linux, their store layouts and the lineage each records (`catalog/harnesses.json`).
 
