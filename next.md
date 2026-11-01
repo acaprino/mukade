@@ -63,8 +63,8 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
      half a summary.
    - *Smaller points from the review:* the manifest names the recorded model when OpenCode ran with
      its default; the summary is paid for before `--keep-turns` is checked against the source's
-     turns; `write` ignores the `--summary-*` flags without a word; `--summary-timeout` with an
-     enormous value panics; the source's own compaction lines are hidden when a kept tail holds it;
+     turns; `write` ignores the `--summary-*` flags without a word; the source's own
+     compaction lines are hidden when a kept tail holds it;
      a summary run's folder name is pid and time (two threads of one library caller could share it),
      and a run longer than an hour can have it swept by another mukade; the tests sharing
      `mukade-data/tmp` rely on `cargo test` running binaries one at a time (not nextest); no test

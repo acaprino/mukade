@@ -186,8 +186,8 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --co
 ```
 
 `--keep-turns 2` also keeps the last two user turns verbatim after it; `--summary-model` names a
-cheaper model; `--summary-timeout` (seconds, default 300) bounds the run. To export the summary and
-import it later, or elsewhere:
+cheaper model; `--summary-timeout` (seconds, default 300) bounds the run; a value too large for the
+clock sets no bound. To export the summary and import it later, or elsewhere:
 
 ```powershell
 mukade dump codex YOUR_CODEX_SESSION_ID --compaction summary --output 'C:\work\summary.json'
@@ -633,6 +633,7 @@ A resume prompt that starts with `-` is refused, because every harness CLI would
 option; so is one with line breaks when the destination's executable is a `.cmd` launcher, which
 cannot take them. Both are refused before anything is written. Every harness process mukade
 starts runs with a deadline; one that outlives it is stopped together with everything it started.
+A timeout too large for the clock sets no deadline: mukade waits for the process to exit.
 
 ## 9. Per-harness examples
 
