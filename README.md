@@ -60,9 +60,12 @@ with the summary the source's model wrote when one was asked for (`summary::summ
 Two helpers cover the harnesses themselves: `exe::resolve(harness, override)` finds the binary to
 spawn (explicit override → `MUKADE_*_EXE` → `PATH` → well-known install locations), and
 `detect::detect_store(dir)` reports which harness stores a directory holds, with the evidence. `WriteDetails::exe` carries a destination-side override, which
-the resume command also names. Every harness process mukade starts runs with a deadline, and a
-timeout stops it with everything it started (`exe::run_within`). A timeout too large for the clock
-sets no deadline: mukade waits for the process to exit.
+the resume command also names. Every harness process mukade starts, except the interactive resume
+of `mukade-tui`, runs with a deadline (`exe::run_within`). At the deadline mukade stops the process,
+on Windows with everything it started; elsewhere only the process itself, so a harness that started
+subprocesses of its own can leave them running (mukade stops waiting for their output pipes one
+second after the process exits). A timeout too large for the clock sets no deadline: mukade waits
+for the process to exit.
 
 Each harness has its own page — what it is, how it is installed and launched, its store, compaction,
 tools, plugins and hooks, and how mukade reads and writes it: [Claude Code](docs/harnesses/claude-code.md),

@@ -632,8 +632,10 @@ settings where needed; a database path alone is not a guarantee of complete isol
 A resume prompt that starts with `-` is refused, because every harness CLI would read it as an
 option; so is one with line breaks when the destination's executable is a `.cmd` launcher, which
 cannot take them. Both are refused before anything is written. Every harness process mukade
-starts runs with a deadline; one that outlives it is stopped together with everything it started.
-A timeout too large for the clock sets no deadline: mukade waits for the process to exit.
+starts, except the interactive resume of `mukade-tui`, runs with a deadline; one that outlives it is
+stopped, on Windows together with everything it started, elsewhere the process itself only, so
+subprocesses the harness started may keep running. A timeout too large for the clock sets no
+deadline: mukade waits for the process to exit.
 
 ## 9. Per-harness examples
 

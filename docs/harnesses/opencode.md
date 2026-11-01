@@ -333,7 +333,8 @@ answers `Bad Request` [32][27 §2.3].
   provider is required. **Version**: the first `x.y.z` of `<exe> --version`.
 
 **Deadlines**: export and import 120 s; `--version`, `session list` and project-id probes 30 s
-each (`PROBE_TIMEOUT`); resume prompt 300 s by default. Past one, the process tree is killed [33].
+each (`PROBE_TIMEOUT`); resume prompt 300 s by default. Past one, the process is killed (on Windows
+with its whole process tree) [33].
 
 **Known limits:**
 - No session listing and no direct SQLite read or write [31].
