@@ -76,3 +76,12 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
 5. **Review leftovers:** a test that the strict gate writes nothing on refusal needs a hook in the
    production code; the cases in `tests/regressions.rs` could move to the files of the parts they
    test.
+6. **A timeout stops only the process outside Windows [U].** `exe::run_within` ends the whole
+   process tree on Windows (`taskkill /T`); elsewhere `kill_tree` is a plain `child.kill()`
+   (`src/exe.rs`), so subprocesses a harness started can outlive a timeout. The docs and the
+   comment on `run_within` now say so; the behaviour is unchanged. A process group would fix it,
+   but a child in its own group no longer gets the terminal's Ctrl-C, so interrupting mukade
+   would leave the harness (and a paid model call) running, and catching the signal needs a new
+   dependency (or unsafe FFI) where the list in `Cargo.toml` is closed on purpose. Neither the
+   leak nor that side effect has been run: it needs a Unix host (WSL or CI), which the Windows
+   development host lacks.
