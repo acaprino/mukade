@@ -21,7 +21,7 @@ run `index`; do not edit this block by hand.
 
 | ADR | Title | Governs | From task |
 |---|---|---|---|
-| none | | | |
+| [ADR-0002](<ADR-0002-hermes-and-deepseek-harness-read-first.md>) | Hermes and DeepSeek Harness enter read-first; Hermes stays source-only | `src/model/harness.rs`, `catalog/harnesses.json`, `src/reader/**`, `src/writer/**`, `src/hop.rs`, `src/cli.rs`, `src/dest.rs`, `mukade::model`, `mukade::reader`, `mukade::writer`, `mukade::hop`, `harness-support` | `brainstorm-hermes-deepseek-harness` |
 
 ## Superseded
 
