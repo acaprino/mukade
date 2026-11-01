@@ -276,11 +276,12 @@ pub struct Finished {
 }
 
 /// Run a command with stdin closed, its output collected, and a deadline. Past the deadline the
-/// command is stopped with everything it started: an npm install puts a `.cmd` launcher in front
-/// of the harness, so the child is `cmd.exe` and killing it alone would leave the harness running.
-/// Once the command has exited, a process it left behind holding the pipes open does not keep the
-/// caller waiting. A timeout beyond what the clock can represent sets no deadline: the caller
-/// waits for the command to exit.
+/// command is stopped, on Windows with everything it started: an npm install puts a `.cmd` launcher
+/// in front of the harness, so the child is `cmd.exe` and killing it alone would leave the harness
+/// running. Elsewhere only the command itself is stopped (see `kill_tree`), so subprocesses it
+/// started can outlive it. Once the command has exited, a process it left behind holding the pipes
+/// open does not keep the caller waiting. A timeout beyond what the clock can represent sets no
+/// deadline: the caller waits for the command to exit.
 pub fn run_within(command: &mut Command, timeout: Duration) -> std::io::Result<Finished> {
     let mut child = command
         .stdin(Stdio::null())
@@ -358,7 +359,8 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-/// Elsewhere a launcher `exec`s the harness, so the child is the harness itself.
+/// Elsewhere a launcher `exec`s the harness, so the child is the harness itself. Only that
+/// process is stopped: nothing puts it in a process group, so what it started can outlive it.
 #[cfg(not(windows))]
 fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
