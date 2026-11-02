@@ -354,6 +354,7 @@ fn redacted_anthropic_reasoning_is_written_in_pis_redacted_shape() {
             reasoning: vec![mukade::model::Reasoning {
                 text: String::new(),
                 opaque: Some(mukade::model::Opaque {
+                    chat: None,
                     protocol: Protocol::AnthropicMessages,
                     model: Some("claude-haiku-5-5".into()),
                     signature: None,
@@ -439,10 +440,7 @@ fn a_reserved_destination_outside_the_root_is_refused() {
         let error = writer
             .write_planned(&source, &planned, &opts)
             .expect_err(what);
-        assert!(
-            error.to_string().contains("dest-path"),
-            "{what}: {error}"
-        );
+        assert!(error.to_string().contains("dest-path"), "{what}: {error}");
         assert!(!path.exists(), "{what}: nothing was written");
     }
 }

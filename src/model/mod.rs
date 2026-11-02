@@ -17,7 +17,7 @@ pub mod tool;
 
 pub use harness::{HarnessId, ModelRef, Protocol};
 pub use kind::{Kind, MetaKind, StepEnd, Trigger};
-pub use reasoning::{Opaque, Reasoning};
+pub use reasoning::{ChatReasoning, Opaque, Reasoning};
 pub use tool::{Attachment, CanonicalTool, ResultContent, ToolCall, ToolResult};
 
 use serde::{Deserialize, Serialize};

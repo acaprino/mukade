@@ -564,6 +564,7 @@ impl Builder {
                                 .unwrap_or_default()
                                 .to_string(),
                             opaque: Some(Opaque {
+                                chat: None,
                                 protocol: Protocol::AnthropicMessages,
                                 model: model_id.clone(),
                                 signature: b
@@ -576,6 +577,7 @@ impl Builder {
                         Some("redacted_thinking") => reasoning.push(Reasoning {
                             text: String::new(),
                             opaque: Some(Opaque {
+                                chat: None,
                                 protocol: Protocol::AnthropicMessages,
                                 model: model_id.clone(),
                                 signature: None,

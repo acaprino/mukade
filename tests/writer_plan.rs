@@ -310,6 +310,7 @@ fn reasoning_step(
             reasoning: vec![mukade::model::Reasoning {
                 text: String::new(),
                 opaque: Some(mukade::model::Opaque {
+                    chat: None,
                     protocol,
                     model: Some("m".into()),
                     signature: signature.map(str::to_owned),

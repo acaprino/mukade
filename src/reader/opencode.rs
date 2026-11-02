@@ -17,8 +17,8 @@
 use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+    CanonicalTool, ChatReasoning, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque,
+    Protocol, Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -206,28 +206,32 @@ impl Builder {
         {
             match block.get("type").and_then(Value::as_str).unwrap_or("") {
                 "reasoning" => {
-                    // Through OpenRouter the payload is in OpenRouter's own `reasoning_details`.
-                    let detail = block
+                    // Gateway and OpenRouter both use this array. A summary can precede the
+                    // encrypted entry, and one part can own several opaque entries.
+                    let details = block
                         .pointer("/native/reasoningDetails")
                         .and_then(Value::as_array)
-                        .and_then(|details| details.first());
-                    let protocol = detail
-                        .and_then(|d| d.get("format"))
-                        .and_then(Value::as_str)
-                        .and_then(|format| match format {
-                            "anthropic-claude-v1" => Some(Protocol::AnthropicMessages),
-                            "openai-responses-v1" => Some(Protocol::OpenaiResponses),
-                            _ => None,
-                        })
+                        .filter(|items| !items.is_empty());
+                    let protocol = details
+                        .and_then(|items| detail_protocol(items))
                         .or_else(|| self.protocol.clone())
                         .unwrap_or(Protocol::Other("unknown".into()));
-                    let (signature, encrypted) = match detail {
-                        Some(d) => (str_at(d, "/signature"), str_at(d, "/data")),
+                    let (signature, encrypted) = match details {
+                        Some(items) => (
+                            items.iter().find_map(|d| str_at(d, "/signature")),
+                            items.iter().find_map(|d| {
+                                str_at(d, "/data").or_else(|| str_at(d, "/encrypted"))
+                            }),
+                        ),
                         None => (
                             str_at(block, "/native/signature"),
                             str_at(block, "/native/encrypted"),
                         ),
                     };
+                    let chat = details.map(|items| ChatReasoning {
+                        provider: self.model.as_ref().and_then(|m| m.provider.clone()),
+                        details: items.clone(),
+                    });
                     reasoning.push(Reasoning {
                         text: str_at(block, "/text").unwrap_or_default(),
                         opaque: Some(Opaque {
@@ -235,6 +239,7 @@ impl Builder {
                             model: model_id.clone(),
                             signature,
                             encrypted,
+                            chat,
                         }),
                     })
                 }
@@ -420,8 +425,7 @@ fn list_in(roots: &StoreRoots, roots_only: bool) -> Result<Vec<SessionInfo>> {
             id: row.get(0)?,
             title: row.get(1)?,
             cwd: row.get(2)?,
-            updated: chrono::DateTime::from_timestamp_millis(updated)
-                .map(|time| time.to_rfc3339()),
+            updated: chrono::DateTime::from_timestamp_millis(updated).map(|time| time.to_rfc3339()),
             archived: row.get::<_, Option<i64>>(4)?.is_some(),
             path: path.to_string_lossy().into_owned(),
             parent: row.get(5)?,
@@ -597,4 +601,21 @@ fn run_json(
     store: Option<(HarnessId, &StoreRoots)>,
 ) -> Option<Value> {
     serde_json::from_slice(&run_probe(exe, args, cwd, store)?).ok()
+}
+
+/// A mixed or unknown format must not borrow the protocol of its first detail.
+fn detail_protocol(details: &[Value]) -> Option<Protocol> {
+    let mut formats = details
+        .iter()
+        .filter_map(|d| d.get("format").and_then(Value::as_str));
+    let format = formats.next()?;
+    // Native and reseller OpenAI proof share a family, not a replay namespace.
+    if formats.any(|next| next != format) {
+        return Some(Protocol::Other("mixed-reasoning-details".into()));
+    }
+    Some(match format {
+        "anthropic-claude-v1" => Protocol::AnthropicMessages,
+        "openai-responses-v1" | "openai-native-responses-v1" => Protocol::OpenaiResponses,
+        other => Protocol::Other(other.to_owned()),
+    })
 }

@@ -36,6 +36,11 @@ pub fn destination_protocol(harness: HarnessId) -> Option<Protocol> {
 /// `thinkingSignature`, and an Anthropic encrypted payload as its own `redacted: true` block;
 /// Codex only `encrypted_content`; OpenCode keeps both.
 pub fn payload_fits(opaque: &Opaque, dest: HarnessId) -> bool {
+    // Other stores cannot retain a Chat envelope. A single ordinary Anthropic detail
+    // has an existing exact scalar conversion; multi-item/OpenAI envelopes do not.
+    if opaque.chat.is_some() && dest != HarnessId::OpenCode && !scalar_chat_payload(opaque) {
+        return false;
+    }
     match dest {
         HarnessId::ClaudeCode | HarnessId::OpenCode => {
             opaque.signature.is_some() || opaque.encrypted.is_some()
@@ -46,6 +51,46 @@ pub fn payload_fits(opaque: &Opaque, dest: HarnessId) -> bool {
         }
         HarnessId::Codex => opaque.encrypted.is_some(),
     }
+}
+
+/// The receiving OpenCode provider must understand the retained envelope. Never relabel
+/// native OpenAI ciphertext as OpenRouter ciphertext merely because both speak Responses.
+pub fn chat_destination_fits(opaque: &Opaque, dest: HarnessId, provider: Option<&str>) -> bool {
+    if dest != HarnessId::OpenCode {
+        return true;
+    }
+    let Some(chat) = &opaque.chat else {
+        return true;
+    };
+    if provider == Some("openrouter")
+        && chat.details.iter().any(|d| {
+            d.get("format").and_then(serde_json::Value::as_str)
+                == Some("openai-native-responses-v1")
+        })
+    {
+        return false;
+    }
+    provider.is_some() && provider == chat.provider.as_deref()
+        || scalar_chat_payload(opaque) && matches!(provider, Some("anthropic" | "openrouter"))
+}
+
+fn scalar_chat_payload(opaque: &Opaque) -> bool {
+    let Some(chat) = &opaque.chat else {
+        return true;
+    };
+    opaque.protocol == Protocol::AnthropicMessages
+        && chat.details.len() == 1
+        && chat.details[0].as_object().is_some_and(|detail| {
+            matches!(
+                detail.get("type").and_then(serde_json::Value::as_str),
+                Some("reasoning.text" | "reasoning.encrypted")
+            ) && detail.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "type" | "text" | "signature" | "data" | "format" | "index" | "id"
+                )
+            })
+        })
 }
 
 /// What becomes of one reasoning block.
@@ -174,6 +219,7 @@ mod tests {
         Reasoning {
             text: "why".into(),
             opaque: Some(Opaque {
+                chat: None,
                 protocol,
                 model: Some("m".into()),
                 signature: signature.map(str::to_owned),

@@ -7,7 +7,9 @@
 use crate::model::{
     Attachment, HarnessId, Kind, MetaKind, ModelRef, Protocol, ResultContent, Session, StepEnd,
 };
-use crate::policy::{ReasoningDrop, ReasoningPlan, payload_fits, plan_reasoning};
+use crate::policy::{
+    ReasoningDrop, ReasoningPlan, chat_destination_fits, payload_fits, plan_reasoning,
+};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::{WriteOpts, media};
 use serde_json::Value;
@@ -345,10 +347,20 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         // A4: the payload must have a place in the destination's own format, or
                         // the block would be written without it and refused.
                         ReasoningPlan::Native(native)
-                            if native
-                                .opaque
-                                .as_ref()
-                                .is_some_and(|opaque| payload_fits(opaque, dest)) =>
+                            if native.opaque.as_ref().is_some_and(|opaque| {
+                                payload_fits(opaque, dest)
+                                    && chat_destination_fits(
+                                        opaque,
+                                        dest,
+                                        opts.model_provider.as_deref().or_else(|| {
+                                            session
+                                                .meta
+                                                .models
+                                                .first()
+                                                .and_then(|m| m.provider.as_deref())
+                                        }),
+                                    )
+                            }) =>
                         {
                             planned.reasoning.push(ReasoningPlan::Native(native))
                         }
@@ -380,7 +392,13 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     if let Some((name, input)) = tools::translate_with_map(call, &opts.tool_map) {
                         counts.tools_translated += 1;
                         last_step_native.push(call.id.clone());
-                        planned.calls.push(PlannedCall { id: ids.of(&call.id, &mut counts), name, source_name: call.source_name.clone(), input, source_input: call.input.clone() });
+                        planned.calls.push(PlannedCall {
+                            id: ids.of(&call.id, &mut counts),
+                            name,
+                            source_name: call.source_name.clone(),
+                            input,
+                            source_input: call.input.clone(),
+                        });
                         continue;
                     }
                     match tools::translate_with(call, dest, opts.dest_shell, offered) {

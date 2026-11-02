@@ -612,6 +612,7 @@ impl Builder {
                     .map(|s| blocks_text(s))
                     .unwrap_or_default(),
                 opaque: Some(Opaque {
+                    chat: None,
                     protocol: Protocol::OpenaiResponses,
                     model: model_id,
                     signature: None,

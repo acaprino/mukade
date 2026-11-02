@@ -94,7 +94,10 @@ impl Writer for Opencode {
             ".json",
             crate::portable::STALE_AFTER,
         );
-        let file = temp.join(format!("mukade-import-{id}-{}.json", uuid::Uuid::new_v4().simple()));
+        let file = temp.join(format!(
+            "mukade-import-{id}-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
         // The guard exists before the file does: a write that fails half-way leaves nothing behind.
         let temporary = ImportDocument(file.clone());
         write_private(
@@ -465,6 +468,20 @@ fn assistant_message(
             block.insert("type".into(), Value::String("reasoning".into()));
             block.insert("text".into(), Value::String(text.clone()));
             let native = match opaque {
+                Some(opaque)
+                    if opaque.chat.as_ref().is_some_and(|chat| {
+                        through_openrouter
+                            || chat.provider.as_deref()
+                                == model.get("providerID").and_then(Value::as_str)
+                    }) =>
+                {
+                    let mut native = Map::new();
+                    native.insert(
+                        "reasoningDetails".into(),
+                        Value::Array(opaque.chat.as_ref().unwrap().details.clone()),
+                    );
+                    native
+                }
                 Some(opaque) if through_openrouter => openrouter_native(text, opaque, index),
                 Some(opaque) => opencode_native(opaque),
                 None => Map::new(),

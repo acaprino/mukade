@@ -249,6 +249,7 @@ mod tests {
         s.reasoning.push(ReasoningPlan::Native(Reasoning {
             text: "hmm".into(),
             opaque: Some(crate::model::Opaque {
+                chat: None,
                 protocol: Protocol::AnthropicMessages,
                 model: Some("m".into()),
                 signature: Some("sig".into()),

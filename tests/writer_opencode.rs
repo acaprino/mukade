@@ -43,12 +43,7 @@ fn the_import_command_always_carries_standalone() {
 
 /// A launcher standing in for `opencode session import`: it records the store and the document it
 /// was given, then runs `windows`/`unix` (a failure or a successful import answer).
-fn mock_opencode(
-    dir: &Path,
-    capture: &Path,
-    windows: &str,
-    unix: &str,
-) -> String {
+fn mock_opencode(dir: &Path, capture: &Path, windows: &str, unix: &str) -> String {
     support::launcher(
         dir,
         "mock-opencode",
@@ -85,12 +80,7 @@ fn opencode_import_cleans_its_document_and_uses_the_requested_root() {
         let mut opts = support::opts(HarnessId::OpenCode, &scratch);
         opts.project_id = Some("project-under-test".into());
         opts.roots.opencode_db = Some(root.join("custom.db"));
-        opts.exe = Some(mock_opencode(
-            &scratch.join("bin"),
-            &capture,
-            windows,
-            unix,
-        ));
+        opts.exe = Some(mock_opencode(&scratch.join("bin"), &capture, windows, unix));
         let result = mukade::writer::for_harness(HarnessId::OpenCode).write(&source, &opts);
         match (&result, succeeds) {
             (Ok(written), true) => {
@@ -466,6 +456,7 @@ fn reasoning_toward_openrouter_is_written_as_its_reasoning_details() {
     let reasoning = |text: &str, signature: Option<&str>, encrypted: Option<&str>| Reasoning {
         text: text.into(),
         opaque: Some(Opaque {
+            chat: None,
             protocol: Protocol::AnthropicMessages,
             model: Some("anthropic/claude-haiku-5.5".into()),
             signature: signature.map(str::to_owned),

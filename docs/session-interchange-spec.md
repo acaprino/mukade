@@ -429,7 +429,9 @@ pub struct ToolResult { pub call_id: String, pub content: ResultContent, pub is_
                         pub truncated_by_source: bool }
 pub struct Reasoning  { pub text: String, pub opaque: Option<Opaque> }
 pub struct Opaque     { pub protocol: Protocol,              // anthropic-messages | openai-responses | …
-                        pub model: Option<String>, pub signature: Option<String>, pub encrypted: Option<String> }
+                        pub model: Option<String>, pub signature: Option<String>, pub encrypted: Option<String>,
+                        pub chat: Option<ChatReasoning> }
+pub struct ChatReasoning { pub provider: Option<String>, pub details: Vec<serde_json::Value> }
 ```
 
 ### 3.2 Why each part is there (evidence)
@@ -449,17 +451,62 @@ Tool calls follow [`tool-conversion-tables.md`](tool-conversion-tables.md) (last
 
 ### 3.3 Reasoning
 
-[V] Every native store keeps the opaque part: Claude `signature`, Codex `encrypted_content`,
-OpenCode `native.signature` (through OpenRouter `native.reasoningDetails`), Pi `thinkingSignature`; and every harness sends it back on its own
-resume (all four `capture-gen.jsonl`).
+Provider proof is conversation state. HTTP 200, a correct short answer or a high
+prompt-cache hit rate does not establish its preservation. A visible summary is
+not the signed/encrypted state it describes. Native store support is version- and
+provider-specific: Claude `signature`, Codex `encrypted_content`, OpenCode
+`native.signature` / `native.encrypted` / `native.reasoningDetails`, and Pi
+`thinkingSignature` are distinct contracts, not interchangeable spellings.
 
-Policy (default `DropForeign`): carry a reasoning block only when the destination speaks the
-same provider protocol as the block's provenance **and** the opaque payload is present
-unmodified; otherwise drop it and record `reasoning_dropped: n` in the manifest, with a loss
-line per reason (no payload, the destination's protocol not known, another protocol, no place for
-the payload in the destination's format, dropped on request). `AsText` keeps it as a labelled text
-block (`[earlier reasoning, not replayable]`) and counts it in `reasoning_as_text`. Never
-synthesize, edit or concatenate a signed or encrypted payload.
+Policy (default `DropForeign`): carry reasoning only with a known compatible
+destination protocol, a present payload and a representable destination envelope.
+Otherwise record `reasoning_dropped` and its exact reason in the manifest.
+`AsText` writes only the available visible text, labelled
+`[earlier reasoning, not replayable]`, and increments `reasoning_as_text`; an
+encrypted-only block has no readable text and is counted as lost. `Drop` is an
+explicit omission. Neither policy may be reported as native proof replay.
+
+For OpenCode's Chat-compatible providers, the additional `Opaque.chat` stores
+the source provider ID and **the complete `reasoningDetails` array**, through
+both `Session` and the public document. The scalar `signature` / `encrypted`
+fields are compatibility projections, not a substitute for the envelope:
+
+1. Keep every detail and its order, original assistant/tool owner, `type`,
+   `format`, `id`, `index`, opaque payload and extension fields. Summaries may
+   precede several encrypted details. Never take only the first detail,
+   concatenate opaque entries, invent an ID or regenerate a stored envelope.
+2. `openai-native-responses-v1` identifies the native OpenAI route;
+   `openai-responses-v1` identifies the aggregator route. Both use the OpenAI
+   Responses family, but their envelopes must not be renamed or mixed.
+   Mixed/unknown declared formats do not inherit the first detail's protocol.
+3. Same-provider OpenCode conversion retains the original array verbatim.
+   Missing/different custom provider identity does not prove that an envelope
+   is replayable. A known single ordinary Anthropic detail retains its existing
+   scalar conversion; a multi-item or OpenAI Chat envelope is not silently
+   reduced to one Codex/Claude/Pi payload. An unrepresentable conversion is
+   counted as a loss, not written in an unsupported native field.
+4. OpenCode/Pi default to an unknown destination protocol unless the caller
+   states it. `--dest-protocol openai-responses` names the reasoning protocol,
+   even when the Gateway-facing HTTP envelope is Chat Completions. This flag
+   does not override incompatible provider formats. The JanuraCode Session
+   Bridge deliberately requests `as_text` on import and `drop` on Codex
+   export; those are separate handoff policies, not ordinary tool-loop replay.
+5. The permanent regression is `tests/reasoning_replay.rs`: complete arrays,
+   encrypted-only payload ownership after summaries, repeated public-document
+   round trips, extension fields, provider mismatch, mixed formats and explicit
+   loss policy. A native integration check must also pass converted sessions
+   through the real destination importer and inspect persisted proof at the
+   same owner. For a claim of model continuation, observe at least two
+   sequential tool steps (three model requests) and the outgoing proof:
+   import success alone does not establish provider replay or acceptance.
+
+These requirements apply to reader, model, document, planning, writer, persistence
+and resume changes. Retain a failing-before/passing-after regression when fixing
+a loss; compare IDs, formats and payload lengths/hashes without persisting raw
+production conversations or encrypted payloads merely for diagnostics. The
+verification record must separate source fixtures, native import/storage,
+outgoing client requests, and paid provider acceptance. Long-loop answer quality
+and cost are not inferred from a short successful transfer.
 
 ## 4. Compaction between hops (optional)
 

@@ -21,6 +21,18 @@ pub struct Opaque {
     /// `redacted_thinking`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encrypted: Option<String>,
+    /// The complete Chat reasoning envelope, including IDs, formats and extension fields.
+    /// Scalar fields above are compatibility projections, never a replacement for these bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatReasoning>,
+}
+
+/// Provider-owned Chat details must retain their order and opaque fields through document I/O.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatReasoning {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    pub details: Vec<serde_json::Value>,
 }
 
 /// One reasoning block of a model response.

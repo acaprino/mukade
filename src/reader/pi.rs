@@ -501,6 +501,7 @@ impl Builder {
                             str_at(block, "/thinking").unwrap_or_default()
                         },
                         opaque: Some(Opaque {
+                            chat: None,
                             protocol: self
                                 .protocol
                                 .clone()
