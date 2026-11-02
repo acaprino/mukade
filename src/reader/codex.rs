@@ -826,6 +826,7 @@ impl Reader for Codex {
             .into_iter()
             .map(|(id, file)| SessionInfo {
                 id,
+                cwd: peek_cwd(&file),
                 path: file.to_string_lossy().into_owned(),
                 ..Default::default()
             })
@@ -837,6 +838,28 @@ impl Reader for Codex {
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         read_with(id, roots, Branches::Active)
     }
+}
+
+/// Read only the native header; missing or damaged metadata does not hide the rollout.
+fn peek_cwd(file: &Path) -> Option<String> {
+    use std::io::{BufRead, Read};
+
+    const MAX_HEADER_BYTES: usize = 1024 * 1024;
+
+    let handle = std::fs::File::open(file).ok()?;
+    let mut header = String::new();
+    // The extra byte distinguishes an oversized line from a complete header at the limit.
+    std::io::BufReader::new(handle.take((MAX_HEADER_BYTES + 1) as u64))
+        .read_line(&mut header)
+        .ok()?;
+    if header.len() > MAX_HEADER_BYTES {
+        return None;
+    }
+    let row: Value = serde_json::from_str(header.trim_start_matches('\u{feff}').trim()).ok()?;
+    if row.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    str_at(&row, "/payload/cwd")
 }
 
 /// Read the thread `id` (an unambiguous prefix is enough) from the store, choosing which branches

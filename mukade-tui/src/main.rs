@@ -1,11 +1,12 @@
 //! A deliberately small native terminal browser for Mukade sessions.
 //!
 //! Left: the four harnesses' standard stores, then every installation a scan found (portable and
-//! custom ones included), with their session counts. Middle: the sessions of the selected row.
+//! custom ones included), with their session counts. Directory filters precede the session list.
 //! Right: the selected session's metadata, or its transcript after `Enter`.
 //! `R` resumes in the session's own installation; `h` hops it to another and shows the manifest;
 //! `o` scans a folder for more installations (`--scan <dir>` does it at start).
 
+mod directory;
 mod location;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -42,6 +43,7 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
     Harnesses,
+    Directories,
     Sessions,
     Transcript,
 }
@@ -50,7 +52,20 @@ enum Focus {
 struct HarnessRow {
     location: Location,
     sessions: Vec<SessionInfo>,
+    directories: directory::Directories,
     error: Option<String>,
+}
+
+impl HarnessRow {
+    fn new(location: Location, sessions: Vec<SessionInfo>, error: Option<String>) -> Self {
+        let directories = directory::Directories::new(&sessions);
+        Self {
+            location,
+            sessions,
+            directories,
+            error,
+        }
+    }
 }
 
 struct Transcript {
@@ -115,6 +130,7 @@ struct App {
     standard: StoreRoots,
     rows: Vec<HarnessRow>,
     harness: usize,
+    directory: usize,
     session: usize,
     focus: Focus,
     transcript: Option<Transcript>,
@@ -142,6 +158,7 @@ impl App {
             standard,
             rows,
             harness: 0,
+            directory: 0,
             session: 0,
             focus: Focus::Harnesses,
             transcript: None,
@@ -165,24 +182,72 @@ impl App {
     }
 
     fn selected_session(&self) -> Option<&SessionInfo> {
-        self.selected_row()?.sessions.get(self.session)
+        let row = self.selected_row()?;
+        let index = *row.directories.sessions(self.directory).get(self.session)?;
+        row.sessions.get(index)
+    }
+
+    fn visible_sessions(&self) -> &[usize] {
+        self.selected_row()
+            .map_or(&[], |row| row.directories.sessions(self.directory))
     }
 
     /// The selected session together with the location that holds it.
     fn selected_pair(&self) -> Option<(&Location, &SessionInfo)> {
         let row = self.selected_row()?;
-        Some((&row.location, row.sessions.get(self.session)?))
+        Some((&row.location, self.selected_session()?))
+    }
+
+    fn clear_session(&mut self) {
+        self.session = 0;
+        self.transcript = None;
+        self.scroll = 0;
+    }
+
+    fn next_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Harnesses => Focus::Directories,
+            Focus::Directories => Focus::Sessions,
+            Focus::Sessions => Focus::Harnesses,
+            Focus::Transcript => Focus::Transcript,
+        };
+    }
+
+    fn previous_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Harnesses => Focus::Sessions,
+            Focus::Directories => Focus::Harnesses,
+            Focus::Sessions => Focus::Directories,
+            Focus::Transcript => Focus::Transcript,
+        };
+    }
+
+    fn back(&mut self) {
+        if self.transcript.take().is_some() {
+            self.scroll = 0;
+            self.focus = Focus::Sessions;
+        } else {
+            self.focus = match self.focus {
+                Focus::Sessions | Focus::Transcript => Focus::Directories,
+                Focus::Directories | Focus::Harnesses => Focus::Harnesses,
+            };
+        }
     }
 
     fn move_down(&mut self) {
         match self.focus {
             Focus::Harnesses => {
                 self.harness = (self.harness + 1).min(self.rows.len().saturating_sub(1));
-                self.session = 0;
-                self.transcript = None;
+                self.directory = 0;
+                self.clear_session();
+            }
+            Focus::Directories => {
+                let len = self.selected_row().map_or(1, |row| row.directories.len());
+                self.directory = (self.directory + 1).min(len - 1);
+                self.clear_session();
             }
             Focus::Sessions => {
-                let len = self.selected_row().map_or(0, |row| row.sessions.len());
+                let len = self.visible_sessions().len();
                 if len > 0 {
                     self.session = (self.session + 1).min(len - 1);
                 }
@@ -199,8 +264,12 @@ impl App {
         match self.focus {
             Focus::Harnesses => {
                 self.harness = self.harness.saturating_sub(1);
-                self.session = 0;
-                self.transcript = None;
+                self.directory = 0;
+                self.clear_session();
+            }
+            Focus::Directories => {
+                self.directory = self.directory.saturating_sub(1);
+                self.clear_session();
             }
             Focus::Sessions => {
                 self.session = self.session.saturating_sub(1);
@@ -434,24 +503,12 @@ fn run(terminal: &mut Tui, app: &mut App, folders: Vec<std::path::PathBuf>) -> s
             KeyCode::Char('h') => open_hop(app),
             KeyCode::Char('R') => resume_selected(terminal, app)?,
             KeyCode::Char('o') => app.mode = Mode::Open(String::new()),
-            KeyCode::Tab => {
-                app.focus = match app.focus {
-                    Focus::Harnesses => Focus::Sessions,
-                    Focus::Sessions => Focus::Harnesses,
-                    Focus::Transcript => Focus::Transcript,
-                };
-            }
-            KeyCode::Esc => {
-                if app.transcript.is_some() {
-                    app.transcript = None;
-                    app.scroll = 0;
-                    app.focus = Focus::Sessions;
-                } else {
-                    app.focus = Focus::Harnesses;
-                }
-            }
+            KeyCode::Tab | KeyCode::Right => app.next_focus(),
+            KeyCode::BackTab | KeyCode::Left => app.previous_focus(),
+            KeyCode::Esc => app.back(),
             KeyCode::Enter => match app.focus {
-                Focus::Harnesses => app.focus = Focus::Sessions,
+                Focus::Harnesses => app.focus = Focus::Directories,
+                Focus::Directories => app.focus = Focus::Sessions,
                 Focus::Sessions => start_read(app),
                 Focus::Transcript => {}
             },
@@ -615,9 +672,8 @@ fn poll_job(app: &mut App) {
             app.locations = locations;
             app.rows = rows;
             app.harness = app.harness.min(app.rows.len().saturating_sub(1));
-            app.session = 0;
-            app.transcript = None;
-            app.scroll = 0;
+            app.directory = 0;
+            app.clear_session();
             app.focus = Focus::Harnesses;
             app.status = status;
         }
@@ -1138,18 +1194,116 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, app: &mut App) {
+    if area.width < 120 && app.transcript.is_some() {
+        draw_detail(frame, area, app);
+        return;
+    }
+    if area.width < 70 {
+        match app.focus {
+            Focus::Harnesses => draw_harnesses(frame, area, app),
+            Focus::Directories => draw_directories(frame, area, app),
+            Focus::Sessions => draw_sessions(frame, area, app),
+            Focus::Transcript => draw_detail(frame, area, app),
+        }
+        return;
+    }
+    let wide = area.width >= 120;
+    let constraints = if wide {
+        vec![
+            Constraint::Length(22),
+            Constraint::Length(28),
+            Constraint::Length(34),
+            Constraint::Min(30),
+        ]
+    } else {
+        vec![
+            Constraint::Length(18),
+            Constraint::Length(28),
+            Constraint::Min(24),
+        ]
+    };
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(26),
-            Constraint::Length(40),
-            Constraint::Min(30),
-        ])
+        .constraints(constraints)
         .split(area);
 
     draw_harnesses(frame, chunks[0], app);
-    draw_sessions(frame, chunks[1], app);
-    draw_detail(frame, chunks[2], app);
+    draw_directories(frame, chunks[1], app);
+    draw_sessions(frame, chunks[2], app);
+    if wide {
+        draw_detail(frame, chunks[3], app);
+    }
+}
+
+fn draw_directories(frame: &mut Frame, area: Rect, app: &App) {
+    let mut items = Vec::new();
+    if let Some(row) = app.selected_row() {
+        items.push(ListItem::new(format!(
+            "All directories  {}",
+            row.sessions.len()
+        )));
+        for (index, group) in row.directories.groups().iter().enumerate() {
+            let count = row.directories.sessions(index + 1).len();
+            let label = group
+                .cwd
+                .as_deref()
+                .map_or("Unknown directory", directory::name);
+            let count_text = format!("  {count}");
+            let label_width = usize::from(area.width.saturating_sub(2))
+                .saturating_sub(Span::raw(&count_text).width());
+            let mut lines = vec![Line::from(vec![
+                Span::raw(truncate_cells(label, label_width)),
+                Span::styled(count_text, Style::default().fg(Color::DarkGray)),
+            ])];
+            if let Some(cwd) = &group.cwd {
+                let width = usize::from(area.width.saturating_sub(2)).max(1);
+                let mut path_lines = if app.directory == index + 1 {
+                    wrap_cells(cwd, width)
+                } else {
+                    vec![truncate_cells(&group.display_path, width)]
+                };
+                // Ratatui hides an entire list item if it is taller than the viewport.
+                let max_lines = usize::from(area.height.saturating_sub(3));
+                if path_lines.len() > max_lines {
+                    path_lines.truncate(max_lines);
+                    if let Some(last) = path_lines.last_mut() {
+                        let mut start = cwd.len();
+                        let mut used = 1;
+                        for (index, ch) in cwd.char_indices().rev() {
+                            let cells = Span::raw(ch.to_string()).width();
+                            if used + cells > width {
+                                break;
+                            }
+                            used += cells;
+                            start = index;
+                        }
+                        *last = format!("…{}", &cwd[start..]);
+                    }
+                }
+                lines.extend(path_lines.into_iter().map(|line| {
+                    Line::from(Span::styled(line, Style::default().fg(Color::DarkGray)))
+                }));
+            }
+            items.push(ListItem::new(lines));
+        }
+    }
+    let mut state = ListState::default();
+    if !items.is_empty() {
+        state.select(Some(app.directory));
+    }
+    let highlight = if app.focus == Focus::Directories {
+        Style::default().bg(Color::DarkGray).fg(Color::White)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" directories "),
+        )
+        .highlight_style(highlight);
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn draw_harnesses(frame: &mut Frame, area: Rect, app: &App) {
@@ -1191,10 +1345,11 @@ fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(block, area);
         return;
     };
-    let title = format!(" {} · {} ", row.location.label, row.sessions.len());
-    let items: Vec<ListItem> = row
-        .sessions
+    let visible = app.visible_sessions();
+    let title = format!(" sessions · {} ", visible.len());
+    let items: Vec<ListItem> = visible
         .iter()
+        .map(|&index| &row.sessions[index])
         .map(|info| {
             let title = session_label(info);
             let when = info.updated.as_deref().unwrap_or("—");
@@ -1210,7 +1365,7 @@ fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
     let mut state = ListState::default();
-    if !row.sessions.is_empty() {
+    if !visible.is_empty() {
         state.select(Some(app.session));
     }
     let highlight = if app.focus == Focus::Sessions {
@@ -1317,19 +1472,19 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &mut App) {
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let focus = match app.focus {
         Focus::Harnesses => "harnesses",
+        Focus::Directories => "directories",
         Focus::Sessions => "sessions",
         Focus::Transcript => "transcript",
     };
-    let line = Line::from(vec![
+    let navigation = Line::from(vec![
         Span::styled(
             format!(" {focus} "),
             Style::default().fg(Color::Black).bg(Color::Gray),
         ),
-        Span::raw(
-            "  j/k move · enter open · t history · h hop · R resume · o open folder · tab focus · esc back · r reload · q quit",
-        ),
+        Span::raw("  j/k move · tab/←/→ column · enter open · esc back · r reload · q quit"),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
+    let actions = Line::from(" t history · h hop · R resume · o scan folder");
+    frame.render_widget(Paragraph::new(vec![navigation, actions]), area);
 }
 
 fn field(lines: &mut Vec<Line>, label: &str, value: &str) {
@@ -1358,6 +1513,49 @@ fn truncate(text: &str, max: usize) -> String {
     }
 }
 
+fn truncate_cells(text: &str, max: usize) -> String {
+    let text = text.split('\n').next().unwrap_or("");
+    if Span::raw(text).width() <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in text.chars() {
+        let ch_width = Span::raw(ch.to_string()).width();
+        if width + ch_width >= max {
+            break;
+        }
+        width += ch_width;
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
+
+fn wrap_cells(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let cells = Span::raw(ch.to_string()).width();
+        if ch == '\n' || (used + cells > width && !line.is_empty()) {
+            lines.push(std::mem::take(&mut line));
+            used = 0;
+        }
+        if ch != '\n' {
+            line.push(ch);
+            used += cells;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 fn resolve_roots() -> StoreRoots {
     let mut roots = StoreRoots::from_env();
     if roots.claude_config_dir.is_none() {
@@ -1383,16 +1581,10 @@ fn load_rows(locations: &[Location]) -> Vec<HarnessRow> {
             let listed = reader::for_harness(location.harness)
                 .and_then(|reader| reader.list_all(&location.roots));
             match listed {
-                Ok(sessions) => HarnessRow {
-                    location: location.clone(),
-                    sessions,
-                    error: None,
-                },
-                Err(error) => HarnessRow {
-                    location: location.clone(),
-                    sessions: Vec::new(),
-                    error: Some(error.to_string()),
-                },
+                Ok(sessions) => HarnessRow::new(location.clone(), sessions, None),
+                Err(error) => {
+                    HarnessRow::new(location.clone(), Vec::new(), Some(error.to_string()))
+                }
             }
         })
         .collect()
@@ -1514,6 +1706,260 @@ fn push_text(out: &mut Vec<Line<'static>>, label: &str, color: Color, text: &str
 mod tests {
     use super::*;
 
+    fn app_with_directories() -> App {
+        let roots = StoreRoots::default();
+        let locations = location::standard_locations(&roots);
+        let sessions = [
+            ("beta-first", Some("/projects/beta")),
+            ("alpha-first", Some("/projects/alpha")),
+            ("unknown", None),
+            ("alpha-second", Some("/projects/alpha")),
+            ("beta-second", Some("/projects/beta")),
+        ]
+        .into_iter()
+        .map(|(id, cwd)| SessionInfo {
+            id: id.to_string(),
+            cwd: cwd.map(String::from),
+            path: format!("{id}.jsonl"),
+            ..Default::default()
+        })
+        .collect();
+        let rows = vec![
+            HarnessRow::new(locations[0].clone(), sessions, None),
+            HarnessRow::new(locations[1].clone(), Vec::new(), None),
+        ];
+        App::new(locations, roots, rows, 50)
+    }
+
+    fn screen(app: &mut App, width: u16, height: u16) -> String {
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn a_directory_filter_keeps_the_original_session_as_the_hop_and_resume_target() {
+        let mut app = app_with_directories();
+        app.focus = Focus::Directories;
+        app.move_down(); // /projects/alpha, whose sessions are interleaved in the store.
+        app.next_focus();
+        app.move_down();
+        assert_eq!(app.selected_session().unwrap().id, "alpha-second");
+        let (location, info) = app.selected_pair().unwrap();
+        assert_eq!(location.harness, HarnessId::ClaudeCode);
+        assert_eq!(
+            resume_argv(location.harness, "claude", info),
+            ["claude", "--resume", "alpha-second"]
+        );
+        let rendered = screen(&mut app, 120, 24);
+        assert!(rendered.contains("alpha-first"));
+        assert!(rendered.contains("alpha-second"));
+        assert!(!rendered.contains("beta-first"));
+        open_hop(&mut app);
+        let Mode::Hop(hop) = &app.mode else {
+            panic!("hop opens")
+        };
+        assert_eq!(hop.source_id, "alpha-second");
+        assert_eq!(hop.source_cwd.as_deref(), Some("/projects/alpha"));
+    }
+
+    #[test]
+    fn all_directories_and_unknown_directory_keep_every_session_reachable() {
+        let mut app = app_with_directories();
+        assert_eq!(app.visible_sessions().len(), 5);
+        app.focus = Focus::Directories;
+        for _ in 0..10 {
+            app.move_down();
+        }
+        assert_eq!(app.visible_sessions().len(), 1);
+        assert_eq!(app.selected_session().unwrap().id, "unknown");
+        app.focus = Focus::Sessions;
+        app.move_down();
+        assert_eq!(app.selected_session().unwrap().id, "unknown");
+        app.focus = Focus::Directories;
+        for _ in 0..10 {
+            app.move_up();
+        }
+        assert_eq!(app.visible_sessions().len(), 5);
+    }
+
+    #[test]
+    fn changing_a_directory_or_harness_clears_the_previous_transcript() {
+        let mut app = app_with_directories();
+        let fixture = std::path::Path::new(
+            "../fixtures/claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl",
+        );
+        app.transcript = Some(Transcript {
+            title: "previous".into(),
+            session: mukade::reader::claude_code::read_file(fixture).unwrap(),
+            lines: Vec::new(),
+            hidden_turns: 0,
+        });
+        app.session = 3;
+        app.scroll = 10;
+        app.focus = Focus::Directories;
+        app.move_down();
+        assert!(app.transcript.is_none());
+        assert_eq!(app.scroll, 0);
+        assert_eq!(app.selected_session().unwrap().id, "alpha-first");
+        app.focus = Focus::Harnesses;
+        app.move_down();
+        assert_eq!(app.directory, 0);
+        assert!(app.selected_session().is_none());
+        app.move_up();
+        assert_eq!(app.visible_sessions().len(), 5);
+    }
+
+    #[test]
+    fn reloading_after_the_filtered_directory_disappears_resets_the_filter() {
+        let mut app = app_with_directories();
+        app.focus = Focus::Directories;
+        app.move_down();
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(JobResult::Loaded {
+                locations: app.locations.clone(),
+                rows: vec![HarnessRow::new(
+                    app.locations[0].clone(),
+                    vec![SessionInfo {
+                        id: "remaining".into(),
+                        cwd: Some("/projects/beta".into()),
+                        ..Default::default()
+                    }],
+                    None,
+                )],
+                status: "ready".into(),
+            })
+            .unwrap();
+        app.job = Some(receiver);
+        poll_job(&mut app);
+        assert_eq!(app.directory, 0);
+        assert_eq!(app.selected_session().unwrap().id, "remaining");
+        assert!(matches!(app.focus, Focus::Harnesses));
+    }
+
+    #[test]
+    fn keyboard_focus_visits_directories_in_both_directions() {
+        let mut app = app_with_directories();
+        app.next_focus();
+        assert!(matches!(app.focus, Focus::Directories));
+        app.next_focus();
+        assert!(matches!(app.focus, Focus::Sessions));
+        app.previous_focus();
+        assert!(matches!(app.focus, Focus::Directories));
+        app.back();
+        assert!(matches!(app.focus, Focus::Harnesses));
+    }
+
+    #[test]
+    fn directory_filters_render_in_wide_narrow_and_single_panel_terminals() {
+        let mut app = app_with_directories();
+        for (width, height) in [(120, 40), (80, 24), (40, 12)] {
+            app.focus = Focus::Directories;
+            let rendered = screen(&mut app, width, height);
+            assert!(rendered.contains("directories"));
+            assert!(rendered.contains("alpha"));
+            if width >= 70 {
+                assert!(rendered.contains("sessions"));
+            }
+        }
+    }
+
+    #[test]
+    fn same_named_projects_remain_distinguishable_without_the_metadata_panel() {
+        let mut app = app_with_directories();
+        let sessions = [
+            "/projects/long-shared-parent/one/app",
+            "/projects/long-shared-parent/two/app",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, cwd)| SessionInfo {
+            id: index.to_string(),
+            cwd: Some(cwd.into()),
+            ..Default::default()
+        })
+        .collect();
+        app.rows[0] = HarnessRow::new(app.locations[0].clone(), sessions, None);
+        app.focus = Focus::Directories;
+        let rendered = screen(&mut app, 80, 24);
+        assert!(rendered.contains("one/app"));
+        assert!(rendered.contains("two/app"));
+    }
+
+    #[test]
+    fn a_selected_directory_shows_the_complete_path_even_with_long_identical_prefixes() {
+        let mut app = app_with_directories();
+        let cwd = "/projects/long-shared-parent/frontend-experiment-branch-one/app";
+        let sessions = [
+            cwd,
+            "/projects/long-shared-parent/frontend-experiment-branch-two/app",
+        ]
+        .into_iter()
+        .map(|cwd| SessionInfo {
+            cwd: Some(cwd.into()),
+            ..Default::default()
+        })
+        .collect();
+        app.rows[0] = HarnessRow::new(app.locations[0].clone(), sessions, None);
+        app.directory = 1;
+        app.focus = Focus::Directories;
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(28, 24)).unwrap();
+        terminal
+            .draw(|frame| draw_directories(frame, frame.area(), &app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut content = String::new();
+        for y in 1..23 {
+            let line: String = (1..27)
+                .map(|x| buffer.cell((x, y)).unwrap().symbol())
+                .collect();
+            content.push_str(line.trim_end());
+        }
+        assert!(
+            content.contains(cwd),
+            "selected path was clipped: {content}"
+        );
+    }
+
+    #[test]
+    fn a_selected_directory_stays_visible_when_its_path_exceeds_the_panel_height() {
+        let mut app = app_with_directories();
+        app.rows[0] = HarnessRow::new(app.locations[0].clone(), vec![SessionInfo {
+            id: "long-path".into(),
+            cwd: Some(r"C:\Users\alfio\Documents\GitHub\company-frontend-platform\frontend-experiment-branch-one\apps\example-app".into()),
+            ..Default::default()
+        }], None);
+        app.directory = 1;
+        app.focus = Focus::Directories;
+        assert!(screen(&mut app, 80, 10).contains("example-app"));
+    }
+
+    #[test]
+    fn the_explorer_has_a_directory_filter_column() {
+        let mut app = App::new(Vec::new(), StoreRoots::default(), Vec::new(), 50);
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            screen.contains("directories"),
+            "directory filter is missing"
+        );
+    }
+
     #[test]
     fn a_fixture_becomes_readable_lines() {
         let path = std::path::Path::new(
@@ -1549,7 +1995,12 @@ mod tests {
         assert!(screen.contains("scanning stores"));
 
         app.busy = false;
-        for focus in [Focus::Harnesses, Focus::Sessions, Focus::Transcript] {
+        for focus in [
+            Focus::Harnesses,
+            Focus::Directories,
+            Focus::Sessions,
+            Focus::Transcript,
+        ] {
             app.focus = focus;
             app.move_down();
             app.move_up();
@@ -1602,14 +2053,16 @@ mod tests {
         );
         let rows = locations
             .iter()
-            .map(|location| HarnessRow {
-                location: location.clone(),
-                sessions: vec![SessionInfo {
-                    id: "abc".to_string(),
-                    path: "session.jsonl".to_string(),
-                    ..Default::default()
-                }],
-                error: None,
+            .map(|location| {
+                HarnessRow::new(
+                    location.clone(),
+                    vec![SessionInfo {
+                        id: "abc".to_string(),
+                        path: "session.jsonl".to_string(),
+                        ..Default::default()
+                    }],
+                    None,
+                )
             })
             .collect();
         let mut app = App::new(locations, standard, rows, 50);

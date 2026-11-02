@@ -1,7 +1,7 @@
 # mukade-tui
 
-A small native terminal browser for Mukade sessions: the four harnesses on the left, their
-sessions in the middle, the selected session's transcript on the right. It can also resume a
+A small native terminal browser for Mukade sessions: harnesses on the left, a directory filter,
+the matching sessions, and the selected session's transcript on the right. It can also resume a
 session in its own harness and hop it to another harness.
 
 It is a separate crate: the `mukade` CLI and its dependency list do not change. The TUI reads and
@@ -99,21 +99,43 @@ Hop the selected session:
 `t` switches between the configured history limit and the full history without re-reading the
 session.
 
+## Filter by directory
+
+The columns follow **harness/installation → directory → sessions → details**.
+Directories use each session's recorded working directory and show their session
+counts. Select **All directories** for the complete list, or **Unknown directory**
+for sessions without a recorded cwd. Filtering never depends on the directory
+still existing on disk. The selected directory expands its path over wrapped
+lines; a short viewport preserves the path tail. Identically named projects also
+show a distinguishing parent path.
+
+1. Select a harness with `↑`/`↓`.
+2. Press `tab` or `→` to reach directories; select the project directory.
+3. Press `tab` or `→` again to select a session; `enter` opens its transcript.
+
+`shift+tab` or `←` moves to the previous column. `esc` closes a transcript or
+moves back one selection column. Reloading with `r` resets the filter to
+**All directories**. Resume and hop use the selected filtered session.
+
+At 120 columns or wider, all four panels are visible. Narrower terminals show
+the three selection columns and open transcripts over the full body. Below 70
+columns, only the focused panel is shown.
+
 ## Keys
 
 | key | action |
 |---|---|
-| `j` / `k`, arrows | move in the focused list |
-| `tab` | switch focus between harnesses and sessions |
-| `enter` | open the selected session's transcript |
+| `j` / `k`, `↑` / `↓` | move in the focused list |
+| `tab` / `→`, `shift+tab` / `←` | move between harnesses, directories and sessions |
+| `enter` | advance to the next column, or open the selected session's transcript |
 | `t` | toggle last-50-turns / full history |
 | `h` | hop the selected session to another harness or installation |
 | `R` | resume the selected session in its own installation |
 | `o` | scan a folder for more installations and add them as rows |
 | `g` / `G` | top / bottom of the transcript |
 | page up/down | scroll the transcript |
-| `esc` | close the transcript, then return to the harness list |
-| `r` | rescan every store |
+| `esc` | close the transcript or move back one column |
+| `r` | rescan every store and reset the directory filter |
 | `q` | quit |
 
 ## Resume

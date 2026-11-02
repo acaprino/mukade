@@ -42,6 +42,83 @@ fn meta_comes_from_the_session_header() {
 }
 
 #[test]
+fn listing_exposes_the_fixture_working_directory() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Pi, "list-cwd");
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let listed = pi::Pi.list(&support::roots(&scratch)).unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, support::source_id(HarnessId::Pi));
+    assert_eq!(
+        listed[0].cwd.as_deref(),
+        Some(r"C:\Users\alfio\AppData\Local\shinatama-verify\H27\pi\work")
+    );
+}
+
+#[test]
+fn listing_keeps_sessions_with_missing_or_damaged_headers() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Pi, "list-bad-header");
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let roots = support::roots(&scratch);
+    let file = pi::Pi.list(&roots).unwrap().remove(0).path;
+    let headers: &[&[u8]] = &[
+        b"",
+        b"{unfinished\n",
+        b"\xff\n",
+        b"{\"type\":\"session\"}\n",
+        b"{\"type\":\"session\",\"cwd\":42}\n",
+        b"{\"type\":\"message\",\"cwd\":\"wrong\"}\n",
+    ];
+    for header in headers {
+        std::fs::write(&file, header).unwrap();
+        let listed = pi::Pi.list(&roots).unwrap();
+        assert_eq!(listed.len(), 1, "header: {header:?}");
+        assert_eq!(listed[0].id, support::source_id(HarnessId::Pi));
+        assert_eq!(listed[0].cwd, None, "header: {header:?}");
+    }
+}
+
+#[test]
+fn listing_reads_a_bom_header_without_decoding_the_transcript() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Pi, "list-header-only");
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let roots = support::roots(&scratch);
+    let file = pi::Pi.list(&roots).unwrap().remove(0).path;
+    std::fs::write(
+        &file,
+        b"\xef\xbb\xbf{\"type\":\"session\",\"cwd\":\"C:\\\\work\"}\n\xff\n",
+    )
+    .unwrap();
+
+    let listed = pi::Pi.list(&roots).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].cwd.as_deref(), Some(r"C:\work"));
+}
+
+#[test]
+fn listing_ignores_headers_over_one_mebibyte() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Pi, "list-large-header");
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let roots = support::roots(&scratch);
+    let file = pi::Pi.list(&roots).unwrap().remove(0).path;
+    let header = serde_json::json!({"type": "session", "cwd": "large"});
+    std::fs::write(&file, format!("{header}{}\n", " ".repeat(1024 * 1024))).unwrap();
+
+    let listed = pi::Pi.list(&roots).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, support::source_id(HarnessId::Pi));
+    assert_eq!(listed[0].cwd, None);
+}
+
+#[test]
 fn every_source_record_is_kept_exactly_once_in_native_order() {
     use serde_json::Value;
     let text = std::fs::read_to_string(fixture()).unwrap();

@@ -43,6 +43,83 @@ fn meta_comes_from_the_session_header() {
     assert_eq!(s.meta.updated.as_deref(), Some("2026-10-27T15:43:27.631Z"));
 }
 
+#[test]
+fn listing_exposes_the_fixture_working_directory() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Codex, "list-cwd");
+    support::stage_fixture(HarnessId::Codex, &scratch);
+    let listed = codex::Codex.list(&support::roots(&scratch)).unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, support::source_id(HarnessId::Codex));
+    assert_eq!(
+        listed[0].cwd.as_deref(),
+        Some(r"C:\Users\alfio\AppData\Local\shinatama-verify\H27\codex\work")
+    );
+}
+
+#[test]
+fn listing_keeps_sessions_with_missing_or_damaged_headers() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Codex, "list-bad-header");
+    support::stage_fixture(HarnessId::Codex, &scratch);
+    let roots = support::roots(&scratch);
+    let file = codex::Codex.list(&roots).unwrap().remove(0).path;
+    let headers: &[&[u8]] = &[
+        b"",
+        b"{unfinished\n",
+        b"\xff\n",
+        b"{\"type\":\"session_meta\",\"payload\":{}}\n",
+        b"{\"type\":\"session_meta\",\"payload\":{\"cwd\":42}}\n",
+        b"{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"wrong\"}}\n",
+    ];
+    for header in headers {
+        std::fs::write(&file, header).unwrap();
+        let listed = codex::Codex.list(&roots).unwrap();
+        assert_eq!(listed.len(), 1, "header: {header:?}");
+        assert_eq!(listed[0].id, support::source_id(HarnessId::Codex));
+        assert_eq!(listed[0].cwd, None, "header: {header:?}");
+    }
+}
+
+#[test]
+fn listing_reads_a_bom_header_without_decoding_the_transcript() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Codex, "list-header-only");
+    support::stage_fixture(HarnessId::Codex, &scratch);
+    let roots = support::roots(&scratch);
+    let file = codex::Codex.list(&roots).unwrap().remove(0).path;
+    std::fs::write(
+        &file,
+        b"\xef\xbb\xbf{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"C:\\\\work\"}}\n\xff\n",
+    )
+    .unwrap();
+
+    let listed = codex::Codex.list(&roots).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].cwd.as_deref(), Some(r"C:\work"));
+}
+
+#[test]
+fn listing_ignores_headers_over_one_mebibyte() {
+    use mukade::reader::Reader;
+
+    let scratch = support::scratch(HarnessId::Codex, "list-large-header");
+    support::stage_fixture(HarnessId::Codex, &scratch);
+    let roots = support::roots(&scratch);
+    let file = codex::Codex.list(&roots).unwrap().remove(0).path;
+    let header = serde_json::json!({"type": "session_meta", "payload": {"cwd": "large"}});
+    std::fs::write(&file, format!("{header}{}\n", " ".repeat(1024 * 1024))).unwrap();
+
+    let listed = codex::Codex.list(&roots).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, support::source_id(HarnessId::Codex));
+    assert_eq!(listed[0].cwd, None);
+}
+
 /// Every source record is kept verbatim, exactly once. Codex interleaves events with the model's
 /// records, so a step's rows are not adjacent in the file: the order checked is that of each
 /// entry's *first* row, and the multiset of rows is compared whole.
