@@ -282,7 +282,7 @@ struct OpenStep {
 struct MetaBuilder {
     id: Option<String>,
     cwd: Option<String>,
-    title: Option<String>,
+    title: TitleBuilder,
     git_branch: Option<String>,
     version: Option<String>,
     created: Option<String>,
@@ -290,9 +290,74 @@ struct MetaBuilder {
     models: Vec<ModelRef>,
 }
 
+/// The rows that name a session, in the order Claude Code's own picker takes them: its custom
+/// title (`/rename`), else the `lastPrompt` of its last `last-prompt` row, else its first user
+/// prompt (docs/harnesses/claude-code.md §8, source [9]). A `slug` is Claude's anonymous internal
+/// name on a compact_boundary row: the last resort, and still a name where a bare uuid is not.
+#[derive(Default)]
+struct TitleBuilder {
+    custom: Option<String>,
+    last_prompt: Option<String>,
+    first_prompt: Option<String>,
+    slug: Option<String>,
+}
+
+impl TitleBuilder {
+    /// What one row says about the session's name. A later row supersedes an earlier one, as both
+    /// are appended: a rename replaces the name before it, and a turn's prompt the one before it.
+    fn observe(&mut self, row: &Value) {
+        let at = |p: &str| row.pointer(p).and_then(Value::as_str);
+        match row.get("type").and_then(Value::as_str).unwrap_or("") {
+            "custom-title" => set_line(&mut self.custom, at("/customTitle")),
+            "last-prompt" => set_line(&mut self.last_prompt, at("/lastPrompt")),
+            _ => {}
+        }
+        if self.slug.is_none() {
+            set_line(&mut self.slug, at("/slug"));
+        }
+        // The user's own first prompt: not a subagent's, not a command or summary row.
+        if self.first_prompt.is_none()
+            && !truthy(row.get("isSidechain"))
+            && matches!(class_of(row), Class::User)
+        {
+            set_line(&mut self.first_prompt, content_text(row).as_deref());
+        }
+    }
+
+    /// The name the picker shows.
+    fn pick(self) -> Option<String> {
+        let Self {
+            custom,
+            last_prompt,
+            first_prompt,
+            slug,
+        } = self;
+        custom.or(last_prompt).or(first_prompt).or(slug)
+    }
+}
+
+/// Keep `text` as a title, unless it says nothing.
+fn set_line(slot: &mut Option<String>, text: Option<&str>) {
+    if let Some(line) = text.map(picker_line).filter(|line| !line.is_empty()) {
+        *slot = Some(line);
+    }
+}
+
+/// One line of at most 200 characters, as Claude Code's picker shows a prompt and as
+/// `writer::claude_code::last_prompt` writes one: whitespace folded to single spaces, the rest cut
+/// with an ellipsis.
+fn picker_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= 200 {
+        return line;
+    }
+    format!("{}…", line.chars().take(200).collect::<String>().trim_end())
+}
+
 impl MetaBuilder {
     fn observe(&mut self, row: &Value) {
         let str_at = |p: &str| row.pointer(p).and_then(Value::as_str).map(str::to_owned);
+        self.title.observe(row);
         if self.id.is_none() {
             self.id = str_at("/sessionId");
         }
@@ -304,9 +369,6 @@ impl MetaBuilder {
         }
         if self.version.is_none() {
             self.version = str_at("/version");
-        }
-        if self.title.is_none() {
-            self.title = str_at("/slug");
         }
         if let Some(ts) = str_at("/timestamp") {
             if self.created.as_deref().is_none_or(|c| ts.as_str() < c) {
@@ -724,7 +786,7 @@ impl Builder {
                 harness_version: m.version.unwrap_or_else(|| "unknown".into()),
                 id: m.id.unwrap_or_else(|| "unknown".into()),
                 cwd: m.cwd,
-                title: m.title,
+                title: m.title.pick(),
                 created: m.created,
                 updated: m.updated,
                 models: m.models,
@@ -800,39 +862,80 @@ impl Reader for ClaudeCode {
     }
 }
 
-/// What a session file's first records say about it, without reading the whole file.
+/// How much of a session file [`peek`] reads: its head, then its tail. Claude Code's own picker
+/// reads the two ends of each file, and a store holds single sessions over 100 MB, so a list must
+/// not read every byte of every one. A file no bigger than the two windows together is read whole;
+/// in a bigger one a `custom-title` written between them is missed, and the name falls back to the
+/// last prompt or the first one.
+const PEEK_HEAD_BYTES: u64 = 128 * 1024;
+const PEEK_TAIL_BYTES: u64 = 384 * 1024;
+
+/// What a session file's two ends say about it, without reading the whole file: the head for the
+/// id, the directory and the first prompt, the tail for the rows Claude Code appends as the
+/// conversation goes on (`custom-title`, `last-prompt`).
 fn peek(file: &Path) -> SessionInfo {
-    use std::io::BufRead;
+    use std::io::{BufReader, Seek, SeekFrom};
     let mut info = SessionInfo::default();
-    let Ok(f) = std::fs::File::open(file) else {
+    let mut titles = TitleBuilder::default();
+    let Ok(mut handle) = std::fs::File::open(file) else {
         return info;
     };
-    for line in std::io::BufReader::new(f)
-        .lines()
-        .take(20)
-        .map_while(Result::ok)
+    let size = handle.metadata().map(|m| m.len()).unwrap_or(0);
     {
-        let Ok(row) = serde_json::from_str::<Value>(&line) else {
-            continue;
+        let mut into = |row: Value| {
+            let str_at = |p: &str| row.pointer(p).and_then(Value::as_str).map(str::to_owned);
+            if info.id.is_empty() {
+                info.id = str_at("/sessionId").unwrap_or_default();
+            }
+            if info.cwd.is_none() {
+                info.cwd = str_at("/cwd");
+            }
+            if info.updated.is_none() {
+                info.updated = str_at("/timestamp");
+            }
+            titles.observe(&row);
         };
-        let str_at = |p: &str| row.pointer(p).and_then(Value::as_str).map(str::to_owned);
-        if info.id.is_empty() {
-            info.id = str_at("/sessionId").unwrap_or_default();
+        // One reader for the head and, when the file fits the two windows, the rest of it: a second
+        // reader would start where the first one's buffer ended, losing the rows in between.
+        let mut reader = BufReader::new(&mut handle);
+        peek_lines(&mut reader, PEEK_HEAD_BYTES, &mut into);
+        let whole = size <= PEEK_HEAD_BYTES + PEEK_TAIL_BYTES;
+        if whole {
+            peek_lines(&mut reader, u64::MAX, &mut into);
         }
-        if info.cwd.is_none() {
-            info.cwd = str_at("/cwd");
-        }
-        if info.title.is_none() {
-            info.title = str_at("/slug");
-        }
-        if info.updated.is_none() {
-            info.updated = str_at("/timestamp");
-        }
-        if !info.id.is_empty() && info.cwd.is_some() {
-            break;
+        drop(reader);
+        if !whole
+            && handle
+                .seek(SeekFrom::End(-(PEEK_TAIL_BYTES as i64)))
+                .is_ok()
+        {
+            // The tail is its own window: its first, partial line is no record and is skipped.
+            let mut tail = BufReader::new(&mut handle);
+            peek_lines(&mut tail, PEEK_TAIL_BYTES, &mut into);
         }
     }
+    info.title = titles.pick();
     info
+}
+
+/// Feed every record of at most `budget` bytes of `reader` to `into`. A line that is not a whole
+/// record is skipped; a line that is not UTF-8 ends the read.
+fn peek_lines<R: std::io::BufRead>(reader: &mut R, budget: u64, into: &mut dyn FnMut(Value)) {
+    let mut read = 0u64;
+    let mut line = String::new();
+    while read < budget {
+        line.clear();
+        let Ok(bytes) = reader.read_line(&mut line) else {
+            return;
+        };
+        if bytes == 0 {
+            return;
+        }
+        read += bytes as u64;
+        if let Ok(row) = serde_json::from_str::<Value>(line.trim()) {
+            into(row);
+        }
+    }
 }
 
 /// Every session file under a Claude Code `projects/` directory.

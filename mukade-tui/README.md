@@ -173,9 +173,10 @@ session for the source's folder yet cannot supply: use the CLI's `--project-id` 
 - No export/import dialog yet.
 - Hop options are limited to destination, compaction and resume prompt; reasoning policy,
   historical tools, cwd override, `all-branches` and advanced destination ids stay in the CLI.
-- Codex and Pi list only ids and paths from the current `Reader::list_all`; titles and lineage
-  need the library changes described in
-  `../docs/superpowers/specs/2026-10-30-mukade-ui-design.md`.
+- A Pi row is listed under its id: a Pi session records no display name, so there is no title to
+  show, in the list or over its transcript. Pi's `parentSession` and timestamp, and Codex's
+  `updated`, are still not read at list time (the remaining fields of
+  `../docs/superpowers/specs/2026-10-30-mukade-ui-design.md` §7.1).
 - The transcript shows user, assistant, reasoning, tool calls, full results and compactions in
   native order; `Meta` records are hidden.
 - Scans, session reads and hops run on worker threads; a hop cannot be cancelled once it starts.

@@ -918,3 +918,28 @@ fn the_thread_name_comes_from_the_session_index() {
         None
     );
 }
+
+/// The list carries the same name, read from the catalogue once per `list` and never from the
+/// rollouts (docs/superpowers/specs/2026-10-30-mukade-ui-design.md §7.1): the explorer shows the
+/// thread's name instead of its uuid.
+#[test]
+fn listing_shows_the_thread_name_from_the_session_index() {
+    use mukade::reader::Reader;
+    let (home, _, _) = paginated_home("list-name", 0);
+    let index = [
+        serde_json::json!({"id": THREAD, "thread_name": "First name", "updated_at": "2026-10-28T09:38:20Z"}),
+        serde_json::json!({"id": "someone-else", "thread_name": "Other", "updated_at": "2026-10-28T11:00:00Z"}),
+        serde_json::json!({"id": THREAD, "thread_name": "Renamed", "updated_at": "2026-10-28T10:00:00Z"}),
+    ]
+    .iter()
+    .map(|v| v.to_string() + "\n")
+    .collect::<String>()
+        + "not json\n";
+    std::fs::write(home.join("session_index.jsonl"), index).unwrap();
+    let listed = codex::Codex.list(&roots(&home)).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].id, THREAD);
+    assert_eq!(listed[0].title.as_deref(), Some("Renamed"));
+    std::fs::remove_file(home.join("session_index.jsonl")).unwrap();
+    assert_eq!(codex::Codex.list(&roots(&home)).unwrap()[0].title, None);
+}

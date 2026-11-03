@@ -696,6 +696,174 @@ fn a_dangling_or_cyclic_claude_chain_is_refused() {
     assert!(error.to_string().contains("cycle"), "{error}");
 }
 
+// ---------------------------------------------------------------------------------------------
+// The name a session is listed under.
+//
+// Claude Code's own /resume picker titles a session by its `custom-title` row (/rename), else by
+// the `lastPrompt` of its last `last-prompt` row, else by its first user prompt
+// (docs/harnesses/claude-code.md, source [9]: the picker reads each file's head and tail, not the
+// whole file). A `slug` is Claude's anonymous internal name on a compact_boundary row, so it is
+// the last resort; a session with a prompt is never listed under its bare uuid.
+
+/// A scratch store holding one session file of these rows, as `list` finds it.
+fn store_of(
+    tag: &str,
+    id: &str,
+    rows: &[serde_json::Value],
+) -> (mukade::roots::StoreRoots, PathBuf) {
+    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
+    let file = scratch
+        .join("home")
+        .join("projects")
+        .join("p")
+        .join(format!("{id}.jsonl"));
+    std::fs::create_dir_all(file.parent().expect("a project folder")).unwrap();
+    std::fs::write(
+        &file,
+        rows.iter()
+            .map(|row| row.to_string() + "\n")
+            .collect::<String>(),
+    )
+    .unwrap();
+    (support::roots(&scratch), file)
+}
+
+/// The recorded session staged in a scratch store, as `list` and `read` find it.
+fn staged_fixture(tag: &str) -> (mukade::roots::StoreRoots, PathBuf) {
+    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let file = scratch
+        .join("home")
+        .join("projects")
+        .join("claude-project")
+        .join(format!("{SESSION_ID}.jsonl"));
+    (support::roots(&scratch), file)
+}
+
+/// Append one record to a staged session file.
+fn append_row(file: &PathBuf, row: serde_json::Value) {
+    let mut text = std::fs::read_to_string(file).unwrap();
+    text.push_str(&row.to_string());
+    text.push('\n');
+    std::fs::write(file, text).unwrap();
+}
+
+/// The title the one session of this store is listed under.
+fn listed_title(roots: &mukade::roots::StoreRoots) -> Option<String> {
+    use mukade::reader::Reader;
+    let listed = claude_code::ClaudeCode.list(roots).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    listed.into_iter().next().unwrap().title
+}
+
+/// A prompt row of a session mukade has never seen: what the picker falls back to.
+fn prompt_row(id: &str, uuid: &str, text: &str, sidechain: bool) -> serde_json::Value {
+    serde_json::json!({
+        "type": "user", "uuid": uuid, "parentUuid": null, "isSidechain": sidechain,
+        "sessionId": id, "cwd": r"C:\work", "timestamp": "2026-11-03T10:00:00.000Z",
+        "message": {"role": "user", "content": text},
+    })
+}
+
+#[test]
+fn a_session_is_listed_under_the_last_prompt_its_picker_shows() {
+    let (roots, _file) = staged_fixture("title-last-prompt");
+    assert_eq!(
+        listed_title(&roots).as_deref(),
+        Some("H27-T3 after compaction")
+    );
+}
+
+#[test]
+fn a_custom_title_row_outnames_the_last_prompt() {
+    let (roots, file) = staged_fixture("title-custom");
+    append_row(
+        &file,
+        serde_json::json!({"type": "custom-title", "customTitle": "Stampe Gmail anonime", "sessionId": SESSION_ID}),
+    );
+    assert_eq!(
+        listed_title(&roots).as_deref(),
+        Some("Stampe Gmail anonime")
+    );
+}
+
+#[test]
+fn a_session_with_no_picker_row_is_listed_by_its_first_prompt_on_one_line() {
+    let id = "11111111-1111-4111-8111-111111111111";
+    let rows = vec![
+        serde_json::json!({"type": "mode", "mode": "normal", "sessionId": id}),
+        prompt_row(id, "u1", "Perché   vedo uuid\ninvece dei titoli?", false),
+        serde_json::json!({
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1", "isSidechain": false,
+            "sessionId": id, "timestamp": "2026-11-03T10:00:01.000Z",
+            "message": {"id": "m1", "role": "assistant", "model": "claude-opus-5-5",
+                        "content": [{"type": "text", "text": "Perché il reader non lo legge."}],
+                        "stop_reason": "end_turn"},
+        }),
+    ];
+    let (roots, _file) = store_of("title-first-prompt", id, &rows);
+    assert_eq!(
+        listed_title(&roots).as_deref(),
+        Some("Perché vedo uuid invece dei titoli?")
+    );
+}
+
+#[test]
+fn a_sidechain_prompt_never_titles_the_session() {
+    let id = "33333333-3333-4333-8333-333333333333";
+    let rows = vec![
+        prompt_row(
+            id,
+            "s1",
+            "[SYSTEM NOTIFICATION - NOT USER INPUT] background task finished",
+            true,
+        ),
+        prompt_row(id, "u1", "La domanda vera", false),
+    ];
+    let (roots, _file) = store_of("title-sidechain", id, &rows);
+    assert_eq!(listed_title(&roots).as_deref(), Some("La domanda vera"));
+}
+
+/// A session file can be over 100 MB, and a list must not read every byte of every one: the picker
+/// rows are looked for in the head and in the tail. The tail still has to be read.
+#[test]
+fn the_tail_of_a_session_bigger_than_the_peek_window_is_read() {
+    let id = "22222222-2222-4222-8222-222222222222";
+    let mut rows = vec![prompt_row(id, "u1", "Inizio della sessione", false)];
+    for index in 0..20_000 {
+        rows.push(serde_json::json!({
+            "type": "atis-latch", "index": index, "filler": "x".repeat(80), "sessionId": id,
+        }));
+    }
+    rows.push(
+        serde_json::json!({"type": "custom-title", "customTitle": "In coda", "sessionId": id}),
+    );
+    let (roots, file) = store_of("title-tail", id, &rows);
+    let size = std::fs::metadata(&file).unwrap().len();
+    assert!(
+        size > 1024 * 1024,
+        "the file must exceed the peek window: {size}"
+    );
+    assert_eq!(listed_title(&roots).as_deref(), Some("In coda"));
+}
+
+#[test]
+fn the_read_session_carries_the_same_title_as_the_list() {
+    let (_roots, file) = staged_fixture("title-read");
+    assert_eq!(
+        claude_code::read_file(&file).unwrap().meta.title.as_deref(),
+        Some("H27-T3 after compaction")
+    );
+    append_row(
+        &file,
+        serde_json::json!({"type": "custom-title", "customTitle": "Nome letto", "sessionId": SESSION_ID}),
+    );
+    assert_eq!(
+        claude_code::read_file(&file).unwrap().meta.title.as_deref(),
+        Some("Nome letto")
+    );
+}
+
 /// A malformed tool call in an out-of-order chain is an error, never silently accepted.
 #[test]
 fn an_out_of_order_chain_with_a_malformed_tool_is_not_silently_accepted() {

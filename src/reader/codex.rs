@@ -71,25 +71,65 @@ pub fn read_file_with(path: &Path, branches: Branches) -> Result<Session> {
 /// (by `updated_at`, then by place in the file). None when the rollout is not under a
 /// `sessions/` folder, the catalogue is missing, or it does not name the thread.
 fn indexed_name(rollout: &Path, id: &str) -> Option<String> {
-    let sessions = rollout
+    index_names(index_home(rollout)?).get(id).cloned()
+}
+
+/// The folder a rollout's catalogue lives in: the parent of the `sessions/` folder the rollout is
+/// under. None when it is not under one.
+fn index_home(rollout: &Path) -> Option<&Path> {
+    rollout
         .ancestors()
-        .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))?;
-    let text = std::fs::read_to_string(sessions.parent()?.join("session_index.jsonl")).ok()?;
-    text.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|entry| entry.get("id").and_then(Value::as_str) == Some(id))
-        .filter_map(|entry| {
-            let name = entry.get("thread_name")?.as_str()?.trim().to_string();
-            let updated = entry
+        .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))?
+        .parent()
+}
+
+/// Every thread name in `<home>/session_index.jsonl`, the newest entry per id winning (by
+/// `updated_at`, then by place in the file). Empty when the catalogue is missing; a line that is
+/// not JSON, names no thread or carries no name is skipped.
+fn index_names(home: &Path) -> HashMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(home.join("session_index.jsonl")) else {
+        return HashMap::new();
+    };
+    // id → (updated_at, place in the file, name).
+    let mut newest: HashMap<String, (String, usize, String)> = HashMap::new();
+    for (place, line) in text.lines().enumerate() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = entry
+            .get("thread_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let candidate = (
+            entry
                 .get("updated_at")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string();
-            (!name.is_empty()).then_some((updated, name))
-        })
-        .enumerate()
-        .max_by(|(i, (a, _)), (j, (b, _))| a.cmp(b).then(i.cmp(j)))
-        .map(|(_, (_, name))| name)
+                .to_string(),
+            place,
+            name.to_string(),
+        );
+        let supersedes = match newest.get(id) {
+            Some((updated, known_place, _)) => {
+                (updated.as_str(), *known_place) < (candidate.0.as_str(), candidate.1)
+            }
+            None => true,
+        };
+        if supersedes {
+            newest.insert(id.to_string(), candidate);
+        }
+    }
+    newest
+        .into_iter()
+        .map(|(id, (_, _, name))| (id, name))
+        .collect()
 }
 
 fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
@@ -823,13 +863,19 @@ impl Reader for Codex {
                 }
             }
         }
+        // The catalogue is read once for the whole list: a rollout never carries its thread's name.
+        let names = sessions.parent().map(index_names).unwrap_or_default();
         let mut out: Vec<SessionInfo> = latest
             .into_iter()
-            .map(|(id, file)| SessionInfo {
-                id,
-                cwd: peek_cwd(&file),
-                path: file.to_string_lossy().into_owned(),
-                ..Default::default()
+            .map(|(id, file)| {
+                let title = names.get(&id).cloned();
+                SessionInfo {
+                    id,
+                    title,
+                    cwd: peek_cwd(&file),
+                    path: file.to_string_lossy().into_owned(),
+                    ..Default::default()
+                }
             })
             .collect();
         out.sort_by(|a, b| a.path.cmp(&b.path));
