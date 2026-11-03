@@ -83,7 +83,7 @@ fn listing_keeps_sessions_with_missing_or_damaged_headers() {
 }
 
 #[test]
-fn listing_reads_a_bom_header_without_decoding_the_transcript() {
+fn listing_reads_a_bom_header_and_survives_a_damaged_transcript() {
     use mukade::reader::Reader;
 
     let scratch = support::scratch(HarnessId::Pi, "list-header-only");
@@ -623,4 +623,153 @@ fn a_redacted_thinking_block_is_an_encrypted_payload_without_text() {
     let signed = reasoning[1].opaque.as_ref().unwrap();
     assert_eq!(signed.signature.as_deref(), Some("SIG"));
     assert_eq!(signed.encrypted, None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The name a session is listed under.
+//
+// Pi records a display name in a `session_info` row (docs/harnesses/pi.md: "the display name"),
+// which `--name` and a rename write; a session without one is listed under its first prompt, one
+// line of at most 200 characters. The header's `parentSession` is read at the same time, so a fork
+// is marked without reading the session.
+
+/// The recorded session staged in a scratch store, as `list` and `read` find it.
+fn staged_fixture(tag: &str) -> (mukade::roots::StoreRoots, PathBuf) {
+    let scratch = support::scratch(HarnessId::Pi, tag);
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let file = scratch
+        .join("home")
+        .join("sessions")
+        .join("--pi-project--")
+        .join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl");
+    (support::roots(&scratch), file)
+}
+
+/// A scratch store holding one session file of these rows, as `list` finds it.
+fn store_of(
+    tag: &str,
+    file_name: &str,
+    rows: &[serde_json::Value],
+) -> (mukade::roots::StoreRoots, PathBuf) {
+    let scratch = support::scratch(HarnessId::Pi, tag);
+    let file = scratch
+        .join("home")
+        .join("sessions")
+        .join("--p--")
+        .join(file_name);
+    std::fs::create_dir_all(file.parent().expect("a project folder")).unwrap();
+    std::fs::write(
+        &file,
+        rows.iter()
+            .map(|row| row.to_string() + "\n")
+            .collect::<String>(),
+    )
+    .unwrap();
+    (support::roots(&scratch), file)
+}
+
+/// Append one record to a staged session file.
+fn append_row(file: &PathBuf, row: serde_json::Value) {
+    let mut text = std::fs::read_to_string(file).unwrap();
+    text.push_str(&row.to_string());
+    text.push('\n');
+    std::fs::write(file, text).unwrap();
+}
+
+/// The title and the parent the one session of this store is listed with.
+fn listed(roots: &mukade::roots::StoreRoots) -> mukade::reader::SessionInfo {
+    use mukade::reader::Reader;
+    let mut listed = pi::Pi.list(roots).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    listed.remove(0)
+}
+
+#[test]
+fn a_session_with_no_display_name_is_listed_under_its_first_prompt() {
+    let (roots, _file) = staged_fixture("title-first-prompt");
+    let title = listed(&roots).title.expect("a title");
+    assert!(title.starts_with("H27-TOOLS read "), "{title}");
+    assert!(!title.contains('\n'), "one line: {title:?}");
+}
+
+#[test]
+fn the_display_name_of_the_last_session_info_row_titles_the_session() {
+    let (roots, file) = staged_fixture("title-display-name");
+    append_row(
+        &file,
+        serde_json::json!({"type": "session_info", "id": "n1", "name": "Primo nome"}),
+    );
+    append_row(
+        &file,
+        serde_json::json!({"type": "session_info", "id": "n2", "name": "Secondo nome"}),
+    );
+    assert_eq!(listed(&roots).title.as_deref(), Some("Secondo nome"));
+}
+
+#[test]
+fn a_display_name_beyond_the_head_window_is_read_from_the_tail() {
+    use serde_json::json;
+    let id = "01a08a8b-10e3-715e-b03e-6cc54f4ab678";
+    let mut rows = vec![
+        json!({"type": "session", "version": 3, "id": id, "timestamp": "2026-09-10T08:59:24.772Z", "cwd": "C:\\work"}),
+        json!({"type": "message", "id": "u1", "parentId": null, "timestamp": "2026-09-10T08:59:30.000Z",
+               "message": {"role": "user", "content": [{"type": "text", "text": "Inizio della sessione"}]}}),
+    ];
+    for index in 0..20_000 {
+        rows.push(json!({"type": "usage", "index": index, "filler": "x".repeat(80)}));
+    }
+    rows.push(json!({"type": "session_info", "id": "n1", "name": "Next"}));
+    let (roots, file) = store_of(
+        "title-tail",
+        &format!("2026-09-10T08-59-24-772Z_{id}.jsonl"),
+        &rows,
+    );
+    let size = std::fs::metadata(&file).unwrap().len();
+    assert!(
+        size > 1024 * 1024,
+        "the file must exceed the peek window: {size}"
+    );
+    assert_eq!(listed(&roots).title.as_deref(), Some("Next"));
+}
+
+#[test]
+fn listing_exposes_the_parent_session_without_reading_the_transcript() {
+    use serde_json::json;
+    let id = "01a08085-89fc-736f-8aed-bf199658a6a4";
+    let rows = vec![
+        json!({"type": "session", "version": 3, "id": id, "parentSession": "01a07fff-0000-7000-8000-000000000001",
+               "timestamp": "2026-09-01T10:00:00.000Z", "cwd": "C:\\work"}),
+        json!({"type": "message", "id": "u1", "parentId": null, "timestamp": "2026-09-01T10:00:01.000Z",
+               "message": {"role": "user", "content": [{"type": "text", "text": "Una domanda"}]}}),
+    ];
+    let (roots, _file) = store_of(
+        "title-parent",
+        &format!("2026-09-01T10-00-00-000Z_{id}.jsonl"),
+        &rows,
+    );
+    let info = listed(&roots);
+    assert_eq!(
+        info.parent.as_deref(),
+        Some("01a07fff-0000-7000-8000-000000000001")
+    );
+    assert_eq!(info.title.as_deref(), Some("Una domanda"));
+    assert_eq!(
+        info.updated, None,
+        "the header's stamp is the creation, not an update"
+    );
+}
+
+#[test]
+fn the_read_session_carries_the_same_title_as_the_list() {
+    let (roots, file) = staged_fixture("title-read");
+    let from_list = listed(&roots).title;
+    assert_eq!(pi::read_file(&file).unwrap().meta.title, from_list);
+    append_row(
+        &file,
+        serde_json::json!({"type": "session_info", "id": "n1", "name": "Nome letto"}),
+    );
+    assert_eq!(
+        pi::read_file(&file).unwrap().meta.title.as_deref(),
+        Some("Nome letto")
+    );
 }

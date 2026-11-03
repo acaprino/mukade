@@ -173,9 +173,13 @@ session for the source's folder yet cannot supply: use the CLI's `--project-id` 
 - No export/import dialog yet.
 - Hop options are limited to destination, compaction and resume prompt; reasoning policy,
   historical tools, cwd override, `all-branches` and advanced destination ids stay in the CLI.
-- A Pi row is listed under its id: a Pi session records no display name, so there is no title to
-  show, in the list or over its transcript. Pi's `parentSession` and timestamp, and Codex's
-  `updated`, are still not read at list time (the remaining fields of
+- Every row is named by its own store: OpenCode and a portable JanuraCode from `session_v2.title`,
+  Claude Code from the rows its `/resume` picker reads, Codex from `session_index.jsonl`, Pi from its
+  `session_info` display name or its first prompt. A session its store does not name — a Claude Code
+  file of bookkeeping rows only, a Codex thread the catalogue has no entry for — is listed under its
+  id.
+- The `updated` column stays empty for Codex and Pi: their lists read a catalogue and a header, not
+  the transcript, and the only stamp there is the creation (the remaining fields of
   `../docs/superpowers/specs/2026-10-30-mukade-ui-design.md` §7.1).
 - The transcript shows user, assistant, reasoning, tool calls, full results and compactions in
   native order; `Meta` records are hidden.

@@ -155,6 +155,90 @@ pub fn str_at(value: &Value, pointer: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// How much of a session file [`peek_ends`] reads at each end. Claude Code's own picker reads the
+/// two ends of a session file, Pi writes the display name a rename gave it near the end, and a
+/// store holds single sessions over 100 MB: a list must not read every byte of every one. A file no
+/// bigger than the two windows together is read whole; in a bigger one a record written between
+/// them is missed, and the caller's own fallback decides what the session is called.
+pub const PEEK_HEAD_BYTES: u64 = 128 * 1024;
+pub const PEEK_TAIL_BYTES: u64 = 384 * 1024;
+
+/// The longest record [`peek_ends`] decodes. A session record can hold a pasted image, and a list
+/// builds no JSON it does not need: Pi's header, which is all a listing ever reads of it, is a few
+/// hundred bytes.
+const MAX_RECORD_BYTES: usize = 1024 * 1024;
+
+/// Read a session file's two ends, feeding every record to `into`: the first [`PEEK_HEAD_BYTES`],
+/// then the last [`PEEK_TAIL_BYTES`] — or the whole file when it fits the two. A file that cannot
+/// be opened yields nothing. A line that is not a whole record (the tail window's first one), is
+/// longer than [`MAX_RECORD_BYTES`] or is not JSON is skipped; a line that is not UTF-8 ends that
+/// window, so a damaged transcript never hides the session.
+pub fn peek_ends(path: &std::path::Path, into: &mut dyn FnMut(Value)) {
+    use std::io::{BufReader, Seek, SeekFrom};
+    let Ok(mut handle) = std::fs::File::open(path) else {
+        return;
+    };
+    let size = handle.metadata().map(|m| m.len()).unwrap_or(0);
+    // One reader for the head and, when the file fits the two windows, the rest of it: a second
+    // reader would start where the first one's buffer ended, losing the rows in between.
+    let mut reader = BufReader::new(&mut handle);
+    window(&mut reader, PEEK_HEAD_BYTES, into);
+    if size <= PEEK_HEAD_BYTES + PEEK_TAIL_BYTES {
+        window(&mut reader, u64::MAX, into);
+        return;
+    }
+    drop(reader);
+    if handle
+        .seek(SeekFrom::End(-(PEEK_TAIL_BYTES as i64)))
+        .is_ok()
+    {
+        let mut tail = BufReader::new(&mut handle);
+        window(&mut tail, PEEK_TAIL_BYTES, into);
+    }
+}
+
+/// Feed every record of at most `budget` bytes of `reader` to `into`.
+fn window<R: std::io::BufRead>(reader: &mut R, budget: u64, into: &mut dyn FnMut(Value)) {
+    let mut read = 0u64;
+    let mut line = String::new();
+    while read < budget {
+        line.clear();
+        let Ok(bytes) = reader.read_line(&mut line) else {
+            return;
+        };
+        if bytes == 0 {
+            return;
+        }
+        read += bytes as u64;
+        if line.len() > MAX_RECORD_BYTES {
+            continue;
+        }
+        // Pi writes a BOM on Windows; the tail window's first line is a record's second half.
+        if let Ok(row) = serde_json::from_str::<Value>(line.trim_start_matches('\u{feff}').trim()) {
+            into(row);
+        }
+    }
+}
+
+/// A title from a store's own text: one line of at most 200 characters, whitespace folded to single
+/// spaces and the rest cut with an ellipsis — how Claude Code's picker shows a prompt, and how
+/// `writer::claude_code::last_prompt` writes one. `None` when the text says nothing.
+pub fn title_line(text: Option<&str>) -> Option<String> {
+    const MAX_CHARS: usize = 200;
+    let line = text?.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() {
+        return None;
+    }
+    Some(if line.chars().count() <= MAX_CHARS {
+        line
+    } else {
+        format!(
+            "{}…",
+            line.chars().take(MAX_CHARS).collect::<String>().trim_end()
+        )
+    })
+}
+
 /// The text of a `content` value that is either a string or an array of `{type:"text",text}`.
 pub fn text_of_content(value: &Value) -> Option<String> {
     match value {

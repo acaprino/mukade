@@ -138,7 +138,7 @@ MIT, in `package.json`, the README and the repository, a monorepo that also hold
 | `custom_message` | `customType`, `content`, `display`, `details?` | yes, as a user message |
 | `context_edit` | `targetId`, `replacement` (`null` drops the target) | changes what the target contributes |
 | `model_change`, `thinking_level_change` | `provider`/`modelId`, `thinkingLevel` | settings only |
-| `custom`, `label`, `session_info`, `usage` | extension state, bookmarks, the display name, usage not tied to a message | no |
+| `custom`, `label`, `session_info`, `usage` | extension state, bookmarks, the display name (the last `session_info.name` is what mukade titles the session by, in a list and in `meta.title`), usage not tied to a message | no |
 
 Sources for the table: [6][9]. A `bashExecution` message records a `!cmd` the user typed; Pi gives it
 to the model as user text starting ``Ran `<command>` ``, unless `excludeFromContext` is set (the `!!`
@@ -303,6 +303,12 @@ elsewhere are not found [31].
 - **Listing.** `list` returns every `*.jsonl` under `sessions/`, in any project folder; the id is the
   part of the file name after the last `_`. `read <id>` accepts the file stem, a stem ending in `_<id>`,
   or a UUID prefix; several matches are refused as ambiguous.
+- **What a row is named.** Each file is read at its two ends only (128 KB then 384 KB, a smaller file
+  whole): the header gives `cwd` and `parentSession`, and the title is the display name of the last
+  `session_info` row — what `--name` and a rename write — else the first `user` message, folded to one
+  line of at most 200 characters. A session with neither stays untitled and is listed under its id.
+  `updated` stays empty: the header's stamp is the creation, and only a read finds the last one. A
+  missing, damaged or oversized record never hides a session.
 - **Active branch.** The reader follows `parentId` from the last record that has an `id` and is not the
   header, as Pi does [10]. Records off that path are kept verbatim as `Meta(OffBranch)`, not resumed.
 
