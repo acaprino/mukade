@@ -554,8 +554,10 @@ history and appends the destination's own record after it:
   `keepID` points backwards to the first generated message of the retained tail.
 - **Pi:** one `compaction` entry with `summary`, `firstKeptEntryId`, and `tokensBefore`, chained after
   the retained rows.
-- **Codex:** one `compacted` record with `message` and `replacement_history`, the latter holding the
-  retained response items.
+- **Codex:** one `compacted` record with `message` and `replacement_history`. The replacement history
+  carries the summary as its first user input item, then the retained response items with their
+  Mukade-generated top-level `id` fields removed; live Codex 0.166.0 refused such IDs and did not
+  replay the record's `message` as context.
 - **Claude Code:** the native pair `system/compact_boundary` + a user row with
   `isCompactSummary:true,isVisibleInTranscriptOnly:true`, inserted before the picker rows. The
   boundary's `preservedSegment` and `preservedMessages` name the retained UUIDs and the summary row.
@@ -572,9 +574,11 @@ No model or destination process is called to make the boundary. `document` repor
 `native_compaction`; `hop` records `options.compaction = "native"`.
 
 This mode is accepted by `document` and `hop`. `dump` refuses it because its interchange document is
-harness-neutral, and `write` does not reapply a boundary to a document that already exists. Hand-written
-acceptance by the real Claude Code, Codex and Pi binaries remains **[U]**; the records are proven by
-Mukade's readers and writer tests, not yet by a live resume in each destination.
+harness-neutral, and `write` does not reapply a boundary to a document that already exists. Live
+acceptance was verified on 2026-11-04 with an oversized synthetic session (~7.5 MB source, far above
+every model window): Claude Code 2.1.318, Codex 0.166.0, OpenCode 2.2.5 and Pi 1.4.0 each resumed the
+written session, answered from the deterministic summary, and added no second native compaction
+(`docs/verification/native-compaction-live.md`).
 
 ### 4.5 `Portable` with a summary from the source's model
 
@@ -709,8 +713,9 @@ describe additional harness runs, their environments and their coverage limitati
 
 ## 10. Open
 
-- [U] Live acceptance of the hand-written native compaction records by Claude Code, Codex, OpenCode and
-  Pi (§4.4), and destination-specific budget thresholds other than OpenCode's verified ceiling.
+- [U] Destination-specific native-compaction budget thresholds other than OpenCode's verified ceiling.
+  The live acceptance of the hand-written records themselves is [V] for Claude Code 2.1.318, Codex
+  0.166.0, OpenCode 2.2.5 and Pi 1.4.0 (2026-11-04).
 - [U] §4.5 against Codex's real model (the run was made against a mock), and a session larger than
   the source model's context window.
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).

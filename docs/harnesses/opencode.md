@@ -352,7 +352,7 @@ answers `Bad Request` [32][27 §2.3].
 | user image | `Prompt.FileAttachment` `{data, mime, source:{type:"inline"}}` in `files` [32 `media.rs`][2] |
 | tool-result image | `Tool.FileContent` `{type:"file", uri:"data:<mime>;base64,<data>", mime}` [32 `media.rs`][2] |
 | call without an OpenCode equivalent | the call goes into the assistant text, and its result follows as a user message, as described in [`../tool-conversion-tables.md`](../tool-conversion-tables.md) §1 |
-| source compaction | one user message carrying the summary. With `--compaction native`, mukade also appends its own OpenCode `compaction` record after the whole history [27 §4.4] |
+| source compaction | one user message carrying the summary. With `--compaction native`, mukade also appends its own OpenCode `compaction` record after the whole history; live OpenCode 2.2.5 resumed such a session and answered from the summary (2026-11-04) [27 §4.4] |
 
 **Lookups** [34 `cli.rs`]:
 - **Project id**: `--project-id`, else `session list --standalone` run inside `--cwd` against the

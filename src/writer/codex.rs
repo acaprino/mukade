@@ -304,15 +304,33 @@ fn rows(
             })
             .collect();
         let report = plan_native_items(&items, budget)?;
+        // Codex replays `replacement_history`, not the record's `message`; the summary therefore
+        // travels as its own user input item, as in Codex's own compacted records.
+        let mut replacement_history = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": report.summary}],
+        })];
+        replacement_history.extend(response_items[report.start..].iter().map(|item| without_input_id(item)));
         Some(json!({
             "message": report.summary,
-            "replacement_history": response_items[report.start..],
+            "replacement_history": replacement_history,
         }))
     });
     if let Some(payload) = boundary {
         push(&mut out, &mut ordinal, "compacted", payload, clock);
     }
     out
+}
+
+/// Codex's Responses API refuses user-supplied input item IDs in a compacted replacement history.
+/// The rollout rows keep their own ids; only what the boundary replays is stripped.
+fn without_input_id(payload: &Value) -> Value {
+    let mut payload = payload.clone();
+    if let Some(map) = payload.as_object_mut() {
+        map.remove("id");
+    }
+    payload
 }
 
 /// The text of a Codex user response item, without the writer's own environment-context message.

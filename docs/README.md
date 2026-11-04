@@ -19,10 +19,11 @@
 These are records of particular runs, not guarantees for later harness versions. Dates, environments and limitations remain in each record.
 
 - [Live hops and provider reasoning](verification/live-hops-and-provider-reasoning.md): Claude Code, Codex and OpenCode.
+- [Native compaction records](verification/native-compaction-live.md): live acceptance of §4.4's hand-written records by Claude Code, Codex, OpenCode and Pi.
 - [Pi session and reasoning verification](verification/pi-session-and-reasoning-verification.md): mock-provider import and real-provider signed reasoning, with separate results and limitations.
 - [Source-model summary](verification/source-model-summary-live.md): summary runs and their isolation.
 
-Supporting scripts are kept next to these records in `verification/live-hops/`, `verification/pi-live/` and `verification/pi-reasoning-live/`.
+Supporting scripts are kept next to these records in `verification/live-hops/`, `verification/native-compaction-live/`, `verification/pi-live/` and `verification/pi-reasoning-live/`.
 
 ## Archive
 

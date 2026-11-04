@@ -346,9 +346,11 @@ deprecated alias [13].
 - **Codex `apply_patch` calls** read as canonical `Edit`, but their patch input has no path or
   `old_string`, so they become text form everywhere (`src/tools.rs:595-619`).
 - **Native compaction.** A `portable` hop still writes the summary as a user message.
-  `--compaction native` keeps the whole rollout and appends a `compacted` record whose
-  `replacement_history` holds the retained response items; Codex accepts a minimal
-  `compacted{message}` line (P6), but live acceptance of Mukade's appended record remains **[U]**
+  `--compaction native` keeps the whole rollout and appends a `compacted` record. Its
+  `replacement_history` carries the deterministic summary as the first user input item, then the
+  retained response items with their Mukade-generated top-level `id` fields removed: live Codex
+  0.166.0 refused user-supplied input item IDs and ignored the record's `message` when replaying
+  context. Verified live 2026-11-04 by resuming an oversized session and answering from the summary
   [19 §4.4].
 - **Not converted:** subagent threads, forks, and
   compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].

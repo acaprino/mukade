@@ -203,8 +203,20 @@ fn a_native_budget_appends_a_codex_compacted_record_without_dropping_history() {
 
     let replacement = boundary["payload"]["replacement_history"].as_array().expect("the retained tail");
     let response_items: Vec<&Value> = rows[..rows.len() - 1].iter().filter(|row| row["type"] == "response_item").map(|row| &row["payload"]).collect();
-    assert_eq!(replacement.len(), 1, "the zero budget keeps only the newest response item");
-    assert_eq!(replacement[0], **response_items.last().unwrap());
+    assert_eq!(replacement.len(), 2, "the summary travels in replacement_history, then the retained item");
+    let summary_item = &replacement[0];
+    assert_eq!(summary_item["type"], "message");
+    assert_eq!(summary_item["role"], "user");
+    let summary_text = summary_item["content"][0]["text"].as_str().unwrap();
+    assert!(summary_text.contains("mukade native compaction"));
+    assert!(summary_text.contains(&first_user.chars().take(40).collect::<String>()));
+    let mut expected = (*response_items.last().unwrap()).clone();
+    expected.as_object_mut().unwrap().remove("id");
+    assert_eq!(replacement[1], expected);
+    assert!(
+        replacement.iter().all(|item| item.get("id").is_none()),
+        "Codex's Responses API refuses user-supplied input item IDs in replacement_history"
+    );
 
     assert_eq!(rows.len(), baseline.len() + 1, "only the boundary is added");
     assert_eq!(

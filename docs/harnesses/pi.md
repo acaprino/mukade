@@ -346,8 +346,9 @@ elsewhere are not found [31].
 - **Results.** One `toolResult` per result, in call order, with the call's `toolName`; a call carried as
   text is answered by a `user` text message in the same place; `bash` timeouts go back to seconds (L12) [28].
 - **Compaction.** `Portable` writes the summary as a user message. `--compaction native` keeps every
-  generated entry and appends Pi's own `compaction` entry with `firstKeptEntryId`; live acceptance by a
-  real Pi binary remains **[U]**. `Compaction::DestinationNative` is still refused with `Unsupported`
+  generated entry and appends Pi's own `compaction` entry with `firstKeptEntryId`; live Pi 1.4.0
+  resumed such a session and answered from the summary (2026-11-04). `Compaction::DestinationNative`
+  is still refused with `Unsupported`
   (`src/hop.rs`): Pi's own compaction is the caller's to run, as `pi --mode rpc --session <id>` with
   stdin `{"id":"c1","type":"compact"}` [26].
 - **Resume.** The receipt's command is `[<--pi-exe or "pi">, "-p", "--session", "<file path>"]`: the file

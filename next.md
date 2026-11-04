@@ -50,15 +50,14 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
 
 ## Across harnesses
 
-1. **Native compaction records: built for all four destinations.** `--compaction native` keeps the whole
-   generated history and appends the destination's own deterministic record: OpenCode `compaction`
-   (`metadata.keepID`), Pi `compaction` (`firstKeptEntryId`), Codex `compacted`
-   (`replacement_history`), and Claude Code `compact_boundary` + `isCompactSummary`
-   (`preservedSegment`/`preservedMessages`). Covered by unit, writer, reader, hop, CLI and
-   mocked-import tests. Still open:
-   - *Live destination confirmation [U].* For each harness, write a large session with the boundary and
-     resume it once: assert the destination lists/reads the session, projects summary + tail, does not
-     start a paid automatic compaction, and leaves the full history readable.
+1. **Native compaction records: built and live-verified for all four destinations.**
+   `--compaction native` keeps the whole generated history and appends the destination's own
+   deterministic record: OpenCode `compaction` (`metadata.keepID`), Pi `compaction`
+   (`firstKeptEntryId`), Codex `compacted` (`replacement_history`), and Claude Code
+   `compact_boundary` + `isCompactSummary` (`preservedSegment`/`preservedMessages`). On 2026-11-04 an
+   oversized synthetic session was written and resumed once by each real binary: Claude Code 2.1.318,
+   Codex 0.166.0, OpenCode 2.2.5 and Pi 1.4.0 all answered from the summary and added no second native
+   compaction (`docs/verification/native-compaction-live.md`). Still open:
    - *Destination-specific budget thresholds [U].* The common budget is conservative and uses the
      verified OpenCode ceiling; Claude Code, Codex and Pi's own trigger values are not all verified.
 2. **Summary written by the source's model: built** (`--compaction summary`, spec §4.5, live
