@@ -153,6 +153,40 @@ fn the_conversation_is_response_items_with_a_turn_context_per_step() {
 }
 
 #[test]
+fn message_ids_are_in_codex_own_local_shape() {
+    // Codex 0.166 forwards a rollout id it does not recognise to the Responses API, which refuses
+    // it: `This request does not support user-supplied input item IDs.` (live, 2026-11-04). Its own
+    // local items carry `msg_<uuid v7, dashed>`; a written rollout must use the same shape or the
+    // thread cannot be resumed.
+    let (_, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-items");
+    let messages = payloads(&rows, "message");
+    let ids: Vec<&str> = messages
+        .iter()
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert!(!ids.is_empty(), "the fixture writes message ids");
+    for id in ids {
+        let Some(rest) = id.strip_prefix("msg_") else {
+            panic!("{id}: not a message id");
+        };
+        let bytes: Vec<char> = rest.chars().collect();
+        assert_eq!(bytes.len(), 36, "{id}: not a dashed uuid");
+        for (i, c) in bytes.iter().enumerate() {
+            let dash = i == 8 || i == 13 || i == 18 || i == 23;
+            assert_eq!(
+                *c == '-',
+                dash,
+                "{id}: position {i} is a dash only in the uuid shape"
+            );
+            if !dash {
+                assert!(c.is_ascii_hexdigit(), "{id}: {c} is not hexadecimal");
+            }
+        }
+        assert_eq!(bytes[14], '7', "{id}: not a version 7 uuid");
+    }
+}
+
+#[test]
 fn calls_and_results_are_paired_by_call_id() {
     let (_, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-tools");
     let calls = payloads(&rows, "function_call");

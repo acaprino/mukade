@@ -703,8 +703,11 @@ for evidence about individual behaviors.
 | L14 | subagent, skill, question, MCP and harness-internal tools → text form in every direction | conversion tables §3 | no such call is translated |
 
 Writers also apply `ReasoningPolicy` (§3.3) and the compaction mode (§4); the native compaction
-record forms of §4.4 are built for all four destinations and read back by Mukade, while live
-acceptance by each real binary remains open.
+record forms of §4.4 are built for all four destinations and read back by Mukade, and each real
+binary live-accepted its record on 2026-11-04
+(`docs/verification/native-compaction-live.md`). Codex 0.166.0 also resumed a written copy with
+real encrypted reasoning byte-identical and refused a one-character tamper of it
+(`docs/verification/codex-encrypted-reasoning-live.md`).
 
 ## 9. Verification
 

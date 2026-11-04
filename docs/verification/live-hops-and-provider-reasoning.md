@@ -77,14 +77,15 @@ that its reasoning is.
 
 - Claude Code: the sessions of this run, all under the project folder of the scratch `work`
   directory (`…-scratchpad-live-claude-work`), none in the user's projects.
-- Codex: two threads made by the failed source calls (`01a18404-…`, `01a18407-…`), each holding
-  only the question, with the scratch `work` directory as their working directory. Not removed:
-  Codex's own `state_5.sqlite` indexes them, and a rollout removed under it breaks the thread.
+- Codex: the two threads made by the failed source calls (`01a18404-…`, `01a18407-…`) were removed
+  on 2026-11-04 with `codex delete --force`, leaving no rollout file and no index entry.
 
 ## Not covered
 
 - Codex → Codex and OpenAI encrypted reasoning: blocked by the plan's usage limit; rerun
-  `live_codex.py` after 2026-11-04.
+  `live_codex.py` after 2026-11-04. **Done 2026-11-04**: the hop is verified and the tampered
+  copy is refused — see [codex-encrypted-reasoning-live.md](codex-encrypted-reasoning-live.md),
+  which also records a writer fix (rollout message ids in Codex's own shape) the run uncovered.
 - A discriminating check of Anthropic payloads through Claude Code: it needs a resume whose last
   assistant turn is a tool call with thinking, which the provider does validate.
 - OpenCode with its own Anthropic provider (needs an Anthropic API key).

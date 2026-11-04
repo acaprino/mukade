@@ -10,6 +10,12 @@ and `--ignore-user-config` off so the login is read:
 - 1 makes the source (a question the model reasons about: an encrypted reasoning item), made once;
 - Codex -> Codex: 1 resume of mukade's copy, 1 of the copy with one character of the encrypted
   payload changed (a negative control).
+
+The source model must actually emit encrypted reasoning: `MUKADE_CODEX_MODEL` overrides the
+configured model and `MUKADE_CODEX_EFFORT` its reasoning effort (default `low`). On a ChatGPT
+account in 2026-11: the default `gpt-6-astra` emits none at any effort, `gpt-6.1-sol` needs an
+effort above `low`; the run of 2026-11-04 used `gpt-6.1-sol` at `xhigh`. The script refuses a
+source thread without an encrypted reasoning item.
 """
 
 import json
@@ -26,7 +32,14 @@ WORK.mkdir(parents=True, exist_ok=True)
 HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 CODEX = os.environ.get("MUKADE_CODEX_EXE") or str(
     Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/OpenAI/Codex/bin/codex.exe")
-LOW = ["-c", 'model_reasoning_effort="low"', "--skip-git-repo-check", "--json"]
+# The default model must emit encrypted reasoning for this test to mean anything; on a ChatGPT
+# account gpt-6-astra does not (effort none, zero reasoning items) while gpt-6.1-sol does.
+MODEL = os.environ.get("MUKADE_CODEX_MODEL")
+# gpt-6.1-sol at effort low emitted zero reasoning tokens; the effort must be high enough that
+# the source thread actually carries an encrypted reasoning item.
+EFFORT = os.environ.get("MUKADE_CODEX_EFFORT", "low")
+LOW = (["-c", f'model="{MODEL}"'] if MODEL else []) + [
+    "-c", f'model_reasoning_effort="{EFFORT}"', "--skip-git-repo-check", "--json"]
 QUESTION = "What was your answer before? Reply with only the number."
 
 
@@ -83,6 +96,9 @@ report["source_call"] = made
 assert made["exit"] == 0 and made["answer"], f"the source call failed: {made}"
 source = rollout(made["thread"])
 report["source_reasoning"] = [len(x or "") for x in reasoning(source)]
+assert any(report["source_reasoning"]), (
+    f"the source thread has no encrypted reasoning (model {MODEL or 'default'}); "
+    "set MUKADE_CODEX_MODEL to a reasoning model")
 
 
 def write(tag, edit=None):

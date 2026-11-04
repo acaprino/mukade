@@ -12,20 +12,18 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
    *To settle:* in the Codex app, open a test chat, send two messages, edit the second, then edit
    it again. Read the rollout files (read only) and compare with what the app shows; then
    `mukade dump codex <thread id>` must give the same turns.
-2. **Live Codex → Codex, OpenAI encrypted reasoning.** Blocked on 2026-10-28 by the ChatGPT plan's
-   usage limit (until 2026-11-04).
-   *To settle:* `python -I docs/verification/live-hops/live_codex.py <empty folder>` after the
-   limit resets; the tampered copy must be refused.
-3. **Code mode (L10).** Codex Desktop wraps almost every call in one `exec` script
+2. **Code mode (L10).** Codex Desktop wraps almost every call in one `exec` script
    (`tools.exec_command`, `tools.apply_patch`); mukade carries it as text, not as the call it
    wraps.
    *To settle:* parse the one-call `exec` script into its call (spec §8.1, tables §5).
-4. **Subagent threads and forks are not linked.** A subagent's rollout reads as its own session
+3. **Subagent threads and forks are not linked.** A subagent's rollout reads as its own session
    (fixed id), but its parent thread is not recorded (`meta.parent` empty), and subagent threads
    are not carried with their root thread.
-5. **Leftovers in the Codex store.** Two empty threads from the failed live calls:
-   `01a18404-20d1-7891-acb4-4361bf8e2e5c`, `01a18407-acd4-73e1-8cf3-0a325a158a4f` (working directory
-   in the scratchpad). Archive them in the app; removing the files alone breaks Codex's index.
+
+Settled 2026-11-04: the live Codex → Codex hop with real encrypted reasoning passed, including the
+tampered-copy refusal, and uncovered (and fixed) the message-id shape that made written threads
+unresumable (`docs/verification/codex-encrypted-reasoning-live.md`); the two leftover threads of
+2026-10-28 were removed with `codex delete --force`, no index residue.
 
 ## Claude Code
 

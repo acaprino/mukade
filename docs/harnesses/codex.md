@@ -332,7 +332,7 @@ deprecated alias [13].
 | not written | `event_msg` records, a `session_index.jsonl` line; **`state_5.sqlite` is never opened**, so no stale `threads` row (L7) | `:10-13` |
 | `cli_version` (**required**) | Codex refuses a rollout whose `session_meta` has no `cli_version`, so the write fails without one: ``Codex needs the destination's cli_version (`--dest-version`): it refuses a rollout whose session_meta has none``. The CLI takes `--dest-version`, else the first `x.y.z` token of `<exe> --version` (`codex-cli 0.164.0` → `0.164.0`); pass `--dest-version` when that probe fails [25] | `:48-54`; `src/cli.rs:462-468,528-546` |
 | `model_provider` | `--model-provider`, else the top-level `model_provider = "…"` of `$CODEX_HOME/config.toml`: `codex_config_provider`/`top_level_string` read only keys before the first `[table]`, match the key exactly and drop a trailing `# comment`; `[profiles.x]` and dotted `model_providers.x.*` are ignored | `src/cli.rs:646-693` |
-| reasoning | default `drop_foreign`: only `openai-responses` blocks that still carry `encrypted_content` are written natively; others are dropped and counted (or kept as text with `as_text`). Reasoning without `encrypted_content` against the real API is open (R3) **[U]** [19 §10] | `src/policy.rs:24-46` |
+| reasoning | default `drop_foreign`: only `openai-responses` blocks that still carry `encrypted_content` are written natively; others are dropped and counted (or kept as text with `as_text`). The native path is live-verified: Codex 0.166.0 resumed a written copy and the provider refused a one-character tamper of the payload [48]. Reasoning without `encrypted_content` against the real API is open (R3) **[U]** [19 §10] | `src/policy.rs:24-46` |
 | results | structured blocks are flattened to their text; non-text blocks are dropped and counted in `dropped_result_blocks` | `src/writer/plan.rs:209-221,377-388` |
 | tools | offered set `exec_command`, `write_stdin`, `request_user_input`, `view_image`, `get_goal`, `create_goal`, `update_goal`, `web_search`. Only shell calls translate, as `exec_command {cmd, workdir, justification}` (`timeout` dropped; background → text form; dialect must match `--dest-shell`). **Codex has no read or edit tool in the pinned bench**, so `Read`, `Write`, `Edit`, `Grep`, `Glob` travel as text [21 §3] | `src/tools.rs:71-81,150-165,368-450,659-665,813-835` |
 
@@ -367,6 +367,12 @@ deprecated alias [13].
   on 2026-10-28, one was a page, and its base was a plain file [26] **[U]**.
 - **Resume:** keep `CODEX_HOME` set for the resume process and run it from the session's cwd
   [19 §5][25].
+- **Local message ids must keep Codex's own shape.** A written rollout carries
+  `msg_<uuid v7, dashed>` ids on its `message` items, the shape Codex generates for its local
+  items: Codex 0.166.0 strips ids it recognises before replaying a resumed thread, but forwards
+  foreign shapes to the Responses API, which refuses them (`This request does not support
+  user-supplied input item IDs.`) — an earlier `msg_<uuid v4 simple>` shape made every written
+  thread unresumable. Live-verified 2026-11-04 [48].
 
 ### How mukade summarizes it
 
@@ -438,3 +444,4 @@ Sources [29]-[46] were read on 2026-11-01 through summarising fetches: a small m
 45. https://github.com/openai/codex/tree/rust-v0.164.0/codex-rs/core/src/tools/handlers (directory listing, which the page truncates behind "View all files"), accessed 2026-11-01.
 46. `core/src/tools/handlers/multi_agents_spec.rs` (the tools of `multi_agent_v1`), accessed 2026-11-01.
 47. Installed `codex` binary, accessed 2026-11-01: `codex --version` (`codex-cli 0.164.0`); `codex --help`; `codex exec --help`; `codex exec resume --help`; `codex features list`; `codex debug --help`; `codex sandbox --help`.
+48. `docs/verification/codex-encrypted-reasoning-live.md`: the live Codex → Codex hop of 2026-11-04 (`codex-cli 0.166.0`, real ChatGPT login, `gpt-6.1-sol` at `xhigh`): encrypted reasoning carried byte-identical, resume answered, tampered payload refused (`400 invalid_encrypted_content`), and the message-id findings.

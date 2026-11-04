@@ -159,7 +159,7 @@ fn rows(
         "response_item",
         json!({
             "type": "message",
-            "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+            "id": local_message_id(),
             "role": "user",
             "content": [{"type": "input_text", "text": environment}],
         }),
@@ -181,7 +181,7 @@ fn rows(
                     &mut out,
                     &mut ordinal,
                     "response_item",
-                    json!({"type": "message", "id": format!("msg_{}", uuid::Uuid::new_v4().simple()), "role": "user", "content": content}),
+                    json!({"type": "message", "id": local_message_id(), "role": "user", "content": content}),
                     clock,
                 );
             }
@@ -360,5 +360,14 @@ fn user_message(text: &str) -> Value {
 }
 
 fn assistant_message_id() -> String {
-    format!("msg_{}", uuid::Uuid::new_v4().simple())
+    local_message_id()
+}
+
+/// A rollout row id in the shape Codex generates for its own local items (`msg_<uuid v7>`).
+/// Codex 0.166 strips ids it recognises as its own before replaying a resumed thread to the
+/// Responses API, but forwards anything else: an id in a foreign shape makes the resume fail
+/// with `This request does not support user-supplied input item IDs.` (live-verified 2026-11-04;
+/// both this shape and no id at all resume, `msg_<uuid v4 simple>` does not).
+fn local_message_id() -> String {
+    format!("msg_{}", uuid::Uuid::now_v7())
 }

@@ -19,6 +19,7 @@
 These are records of particular runs, not guarantees for later harness versions. Dates, environments and limitations remain in each record.
 
 - [Live hops and provider reasoning](verification/live-hops-and-provider-reasoning.md): Claude Code, Codex and OpenCode.
+- [Codex encrypted reasoning live](verification/codex-encrypted-reasoning-live.md): the Codex → Codex hop of 2026-11-04, with the discriminating negative control.
 - [Native compaction records](verification/native-compaction-live.md): live acceptance of §4.4's hand-written records by Claude Code, Codex, OpenCode and Pi.
 - [Pi session and reasoning verification](verification/pi-session-and-reasoning-verification.md): mock-provider import and real-provider signed reasoning, with separate results and limitations.
 - [Source-model summary](verification/source-model-summary-live.md): summary runs and their isolation.
