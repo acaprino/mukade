@@ -32,6 +32,11 @@ Harnesses and versions described:
 | OpenCode | 2.1.4 | `%APPDATA%\npm\node_modules\@opencode\cli\bin\opencode.exe` |
 | Pi | 1.2.0 (`@earendil-works/pi-coding-agent`) | `node …\pi-coding-agent\dist\bundle\cli.js` |
 
+These are the versions the formats were described against. The installed binaries have since moved
+on, and the live acceptances of 2026-11-04 ran against Claude Code 2.1.318, Codex CLI 0.166.0,
+OpenCode 2.2.5 and Pi 1.4.0 (`docs/verification/native-compaction-live.md`,
+`docs/verification/codex-encrypted-reasoning-live.md`).
+
 **The library is Shinatama's own**: it reads and writes the four native formats itself, with one
 reader and one writer per harness.
 

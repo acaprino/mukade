@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Documentation updated** | 2026-11-01 |
-| **Version described** | 0.164.0 (the version mukade's readers and writers were verified against) |
+| **Documentation updated** | 2026-11-04 |
+| **Version described** | 0.164.0 (the version this documentation was researched against and mukade's readers were verified against); the writers' live acceptance ran against the installed 0.166.0 [48][49] |
 | **Vendor** | OpenAI [1] |
 | **Website** | https://developers.openai.com/codex [2] |
 | **License / source** | Apache-2.0, https://github.com/openai/codex [1][17]; Codex Desktop app licence **[U]** |
@@ -19,8 +19,12 @@ or an editor, or who automate repeatable work (`codex exec`) [2][3]. The IDE ext
 app-server client [7], the Desktop app writes rollouts in the same format [21], and all three
 share `config.toml` [6][8].
 mukade was verified against CLI 0.164.0 and has also read Codex Desktop rollouts up to
-0.164.0-alpha.11.1 [21]. npm already lists 0.165.0 (published 2026-10-27), which mukade has not
-been verified against [17]. The web-tool facts added on 2026-11-01 (§3 entry points, §5 Ephemeral
+0.164.0-alpha.11.1 [21]. The installed CLI is now 0.166.0 [49]: the live acceptance of mukade's
+Codex writer ran against it — the native `compacted` record
+(`docs/verification/native-compaction-live.md`) and the Codex → Codex hop with real encrypted
+reasoning, including the provider's refusal of a tampered payload and the message-id shape a
+written rollout must keep [48]. 0.165.0 (published 2026-10-27) was never itself exercised [17].
+The web-tool facts added on 2026-11-01 (§3 entry points, §5 Ephemeral
 runs and Built-in tools, Web tools) were checked against 0.164.0: the installed CLI [47] and the
 source at tag `rust-v0.164.0` [32]-[46]. They were read through summarising fetches, so their wording
 is as returned (§9).
@@ -445,3 +449,4 @@ Sources [29]-[46] were read on 2026-11-01 through summarising fetches: a small m
 46. `core/src/tools/handlers/multi_agents_spec.rs` (the tools of `multi_agent_v1`), accessed 2026-11-01.
 47. Installed `codex` binary, accessed 2026-11-01: `codex --version` (`codex-cli 0.164.0`); `codex --help`; `codex exec --help`; `codex exec resume --help`; `codex features list`; `codex debug --help`; `codex sandbox --help`.
 48. `docs/verification/codex-encrypted-reasoning-live.md`: the live Codex → Codex hop of 2026-11-04 (`codex-cli 0.166.0`, real ChatGPT login, `gpt-6.1-sol` at `xhigh`): encrypted reasoning carried byte-identical, resume answered, tampered payload refused (`400 invalid_encrypted_content`), and the message-id findings.
+49. Installed `codex` binary, accessed 2026-11-04: `codex --version` (`codex-cli 0.166.0`); `codex delete --help` (permanent deletion by id or name; used for the test threads of [48] with `--force`, no rollout or index residue). Live refusals seen the same day: `The 'gpt-5.1' model is not supported when using Codex with a ChatGPT account.` (same for `gpt-5.1-codex`, `gpt-5.1-codex-max`), and `This request does not support user-supplied input item IDs.` for a resumed rollout whose message ids were not in Codex's own shape.
