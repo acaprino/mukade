@@ -175,6 +175,28 @@ The source must have compacted at least once (a Claude `/compact`, a Pi compacti
 the hop is refused with a reason and nothing is written. The manifest keeps the lines
 `the source's compaction summary travels as one user message` and how many entries were kept.
 
+### Keep the whole session and add a native boundary
+
+*The imported history is larger than the destination model's useful budget, but nothing should be
+removed from the session.* `--compaction native` keeps the whole generated session and appends the
+destination's own compaction record with a deterministic, free summary of the earlier user requests.
+The destination then sends that summary plus the recent tail, while the older rows stay in the session
+and remain readable:
+
+```powershell
+mukade document opencode codex YOUR_CODEX_THREAD_ID --from-file 'C:\path\rollout.jsonl' --cwd 'C:\work\my-project' --project-id YOUR_PROJECT --model-provider YOUR_PROVIDER --model YOUR_MODEL --compaction native --context-window 1000000 --max-output-tokens 64000 --text-token-factor 1.3333
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --compaction native --context-window 200000
+```
+
+The record is the destination's own: OpenCode `compaction` with `metadata.keepID`, Pi `compaction` with
+`firstKeptEntryId`, Codex `compacted` with `replacement_history`, and Claude Code `compact_boundary`
+followed by an `isCompactSummary` row. `--context-window` is required; `--max-output-tokens` defaults
+to 16000 and `--text-token-factor` is optional. The common conservative budget is the smaller of half
+the window and OpenCode's verified automatic-compaction ceiling minus room for the next turn.
+`document` reports the boundary under `native_compaction`; `hop` puts `"compaction": "native"` in the
+manifest. No source or destination model is called. `dump` refuses this mode because its interchange
+document is harness-neutral.
+
 ### Move only a summary, written by the source's own model
 
 *The session is long, it never compacted, or its summary is encrypted (Codex).* `--compaction summary`

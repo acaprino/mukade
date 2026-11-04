@@ -10,6 +10,7 @@ use mukade::hop::{
     SummarySource,
 };
 use mukade::model::{HarnessId, Kind, Session};
+use mukade::native_compaction::NativeBudget;
 use mukade::roots::StoreRoots;
 use mukade::summary;
 use serde_json::Value;
@@ -863,4 +864,55 @@ fn a_changed_source_is_refused_before_the_destination_is_written() {
     assert_eq!(code, Some(0), "{stderr}");
     assert!(scratch.join("sessions").exists());
     assert_eq!(std::fs::read(&fixture).unwrap(), original);
+}
+
+#[test]
+fn native_compaction_and_its_budget_must_be_supplied_together() {
+    let scratch = support::scratch(HarnessId::Pi, "hop-native-mismatch");
+    let source = support::read_source(HarnessId::Pi);
+    let write_opts = support::opts(HarnessId::Pi, &scratch);
+    let budget = NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None };
+
+    let mut budget_without_mode = support::import_opts(&write_opts, &source, None);
+    budget_without_mode.native_budget = Some(budget.clone());
+    let error = hop::import(HarnessId::Pi, &source, &budget_without_mode).expect_err("the manifest would say none");
+    assert!(matches!(&error, HopError::Unsupported(reason) if reason.contains("compaction native")), "{error}");
+
+    let mut mode_without_budget = support::import_opts(&write_opts, &source, None);
+    mode_without_budget.compaction = "native".into();
+    let error = hop::import(HarnessId::Pi, &source, &mode_without_budget).expect_err("native needs the destination window");
+    assert!(matches!(&error, HopError::Unsupported(reason) if reason.contains("--context-window")), "{error}");
+}
+
+#[test]
+fn hop_to_claude_with_native_compaction_keeps_the_history_and_appends_the_native_pair() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "hop-native-claude");
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let write_opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let mut opts = support::import_opts(&write_opts, &source, None);
+    opts.compaction = "native".into();
+    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    let receipt = hop::import(HarnessId::ClaudeCode, &source, &opts).expect("Claude Code accepts its native record");
+    assert_eq!(receipt.manifest["options"]["compaction"], "native");
+    let written = mukade::reader::claude_code::read_file(std::path::Path::new(&receipt.location)).expect("Claude reads the written session");
+    assert!(written.entries.iter().any(|entry| matches!(&entry.kind, Kind::Compaction { summary, kept_from: Some(_), .. } if summary.contains("mukade native compaction"))));
+}
+
+#[test]
+fn hop_to_pi_with_native_compaction_keeps_the_history_and_appends_pi_entry() {
+    let scratch = support::scratch(HarnessId::Pi, "hop-native-pi");
+    let source = support::read_source(HarnessId::Pi);
+    let write_opts = support::opts(HarnessId::Pi, &scratch);
+    let mut opts = support::import_opts(&write_opts, &source, None);
+    opts.compaction = "native".into();
+    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    let receipt = hop::import(HarnessId::Pi, &source, &opts).expect("Pi accepts its native record");
+    assert_eq!(receipt.manifest["options"]["compaction"], "native");
+    let written = mukade::reader::pi::read_file(std::path::Path::new(&receipt.location)).expect("Pi reads the written session");
+    let compaction = written.entries.iter().rev().find_map(|entry| match &entry.kind {
+        Kind::Compaction { summary, kept_from, .. } => Some((summary.clone(), kept_from.clone())),
+        _ => None,
+    }).expect("the appended entry is a Pi compaction");
+    assert!(compaction.0.contains("mukade native compaction"));
+    assert!(compaction.1.is_some(), "Pi's native record names the retained tail");
 }

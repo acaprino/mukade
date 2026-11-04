@@ -1093,6 +1093,7 @@ fn reconstructed_history_hops_to_pi_without_losing_pairs_or_source_fingerprint()
         source_facts: SourceFacts::of(&source),
         compaction: "none".into(),
         summary: None,
+        native_budget: None,
     };
     let receipt = hop::hop_session(HarnessId::Pi, &source, &Compaction::None, &opts).unwrap();
     let written = pi::read_file(std::path::Path::new(&receipt.location)).unwrap();

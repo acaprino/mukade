@@ -12,6 +12,7 @@
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written, write_jsonl};
 use crate::model::{HarnessId, Reasoning, Session};
+use crate::native_compaction::{NativeItem, plan_native_items};
 use crate::policy::{Clock, ReasoningPlan};
 use crate::roots::claude_project_dir_name;
 use anyhow::{Context, Result};
@@ -234,6 +235,72 @@ fn rows(
             }
         }
     }
+
+    // §4.4: every generated conversation row stays. Claude's native pair is appended before the
+    // picker rows: a compact_boundary whose preserved segment names the retained tail, then the
+    // summary row that hangs under it.
+    if let Some(budget) = &opts.native_budget {
+        let conversation: Vec<&Value> = w
+            .out
+            .iter()
+            .filter(|row| row.get("uuid").is_some() && matches!(row["type"].as_str(), Some("user" | "assistant")))
+            .collect();
+        let user_texts: Vec<Option<String>> = conversation.iter().map(|row| user_text(row)).collect();
+        let items: Vec<NativeItem> = conversation
+            .iter()
+            .zip(&user_texts)
+            .map(|(row, text)| NativeItem {
+                id: row["uuid"].as_str(),
+                json: *row,
+                user_text: text.as_deref(),
+            })
+            .collect();
+        if let Some(report) = plan_native_items(&items, budget) {
+            let retained: Vec<String> = conversation[report.start..]
+                .iter()
+                .filter_map(|row| row["uuid"].as_str().map(str::to_string))
+                .collect();
+            if let (Some(head), Some(tail)) = (retained.first(), retained.last()) {
+                let old_leaf = w.parent.clone();
+                let boundary_uuid = new_uuid();
+                let summary_uuid = new_uuid();
+                let boundary = json!({
+                    "parentUuid": Value::Null,
+                    "logicalParentUuid": old_leaf,
+                    "isSidechain": false,
+                    "type": "system",
+                    "subtype": "compact_boundary",
+                    "content": "Conversation compacted",
+                    "isMeta": false,
+                    "timestamp": w.clock.next_iso(),
+                    "uuid": boundary_uuid,
+                    "level": "info",
+                    "compactMetadata": {
+                        "trigger": "manual",
+                        "preTokens": report.estimated_tokens,
+                        "durationMs": 0,
+                        "preservedSegment": {"headUuid": head, "anchorUuid": summary_uuid, "tailUuid": tail},
+                        "preservedMessages": {"anchorUuid": summary_uuid, "uuids": retained, "allUuids": retained},
+                        "postTokens": report.projected_tokens,
+                        "cumulativeDroppedTokens": 0,
+                    },
+                    "userType": "external",
+                    "sessionId": w.session_id,
+                    "cwd": w.cwd,
+                });
+                w.push(with_version(boundary, opts));
+                let mut summary = w.user_row(Value::String(report.summary.clone()));
+                if let Some(map) = summary.as_object_mut() {
+                    map.insert("uuid".into(), Value::String(summary_uuid));
+                    map.insert("parentUuid".into(), Value::String(boundary_uuid));
+                    map.insert("isCompactSummary".into(), Value::Bool(true));
+                    map.insert("isVisibleInTranscriptOnly".into(), Value::Bool(true));
+                }
+                w.push(with_version(summary, opts));
+            }
+        }
+    }
+
     // The session's name, as Claude Code's own /rename writes it: /resume lists it under this.
     if let Some(title) = opts
         .title
@@ -329,6 +396,29 @@ fn step_blocks(step: &PlannedStep) -> Vec<Value> {
         );
     }
     blocks
+}
+
+/// The text of a generated Claude user row. A tool_result row is an answer, not a user request.
+fn user_text(row: &Value) -> Option<String> {
+    if row["type"] != "user" {
+        return None;
+    }
+    match &row["message"]["content"] {
+        Value::String(text) => (!text.trim().is_empty()).then(|| text.clone()),
+        Value::Array(blocks) => {
+            if blocks.iter().any(|block| block["type"] == "tool_result") {
+                return None;
+            }
+            let text = blocks
+                .iter()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.trim().is_empty()).then_some(text)
+        }
+        _ => None,
+    }
 }
 
 fn new_uuid() -> String {

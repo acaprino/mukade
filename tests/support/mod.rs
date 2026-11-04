@@ -190,6 +190,7 @@ pub fn import_opts(
         source_facts: SourceFacts::of(source),
         compaction: "none".into(),
         summary: None,
+        native_budget: None,
     }
 }
 
@@ -413,6 +414,7 @@ pub fn opts(harness: HarnessId, scratch: &Path) -> WriteOpts {
         title: Some("interchange test".to_string()),
         now: Some(NOW.to_string()),
         exe: Some(mukade::exe::binary_name(harness).to_string()),
+        native_budget: None,
     }
 }
 

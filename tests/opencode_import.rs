@@ -189,6 +189,49 @@ fn dest_root_takes_the_model_the_installation_configures() {
 }
 
 #[test]
+fn hop_with_native_compaction_keeps_the_whole_history_and_appends_the_boundary() {
+    fn copied_engine(dir: &Path, copy: &Path) -> PathBuf {
+        support::launcher(
+            dir,
+            "engine",
+            &format!("copy /y %3 \"{0}\" >nul\r\necho Imported session: ses_test\r\n", copy.display()),
+            &format!("cp \"$3\" '{0}'\necho 'Imported session: ses_test'\n", copy.display()),
+        )
+    }
+    let fixture = fixture();
+    let run = |tag: &str, native: bool| -> (serde_json::Value, serde_json::Value) {
+        let scratch = support::scratch(mukade::model::HarnessId::OpenCode, tag);
+        let copy = scratch.join("imported.json");
+        let engine = copied_engine(&scratch.join("bin"), &copy);
+        let mut args = import_args(fixture.to_str().unwrap(), scratch.to_str().unwrap(), engine.to_str().unwrap());
+        let native_args = ["--compaction", "native", "--context-window", "40000", "--max-output-tokens", "32000"];
+        if native {
+            args.extend(native_args);
+        }
+        let (code, stdout, stderr) = support::cli_in(&scratch, &scratch, &args, &[]);
+        assert_eq!(code, Some(0), "{stderr}");
+        let document = serde_json::from_str(&std::fs::read_to_string(&copy).unwrap()).unwrap();
+        let receipt = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+        (document, receipt)
+    };
+
+    let (baseline, _) = run("import-native-baseline", false);
+    let (document, receipt) = run("import-native-boundary", true);
+    let baseline = baseline["messages"].as_array().unwrap();
+    let messages = document["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), baseline.len() + 1, "the boundary is appended, nothing is dropped");
+    assert_eq!(
+        messages[..baseline.len()].iter().map(|message| message["type"].as_str()).collect::<Vec<_>>(),
+        baseline.iter().map(|message| message["type"].as_str()).collect::<Vec<_>>()
+    );
+    let boundary = messages.last().unwrap();
+    assert_eq!(boundary["type"], "compaction");
+    assert_eq!(boundary["status"], "completed");
+    assert_eq!(boundary["metadata"]["keepID"], messages[messages.len() - 2]["id"]);
+    assert_eq!(receipt["manifest"]["options"]["compaction"], "native");
+}
+
+#[test]
 fn an_explicit_data_directory_holds_the_private_import_document() {
     let scratch = support::scratch(mukade::model::HarnessId::OpenCode, "import-data-dir");
     let data = scratch.join("private-data");

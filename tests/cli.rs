@@ -1118,7 +1118,7 @@ fn summary_flags_and_combinations_that_cannot_work_are_refused() {
         &["hop", "pi", &id, "claude_code", "--compaction", "bogus"],
     );
     assert_eq!(code, Some(1), "{stderr}");
-    assert!(stderr.contains("none, portable, summary"), "{stderr}");
+    assert!(stderr.contains("none, portable, summary, native"), "{stderr}");
 
     // An intent is a summary prompt: it implies the summary transport, and cannot be combined
     // with another one. An unknown intent is refused before the source is read.
@@ -1843,4 +1843,44 @@ fn list_opencode_sees_uncheckpointed_wal_without_modifying_the_store() {
     assert_eq!(std::fs::read(&database).unwrap(), before_db);
     assert_eq!(std::fs::read(&wal).unwrap(), before_wal);
     drop(db);
+}
+
+#[test]
+fn native_compaction_flags_are_refused_where_they_cannot_work() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-native-compaction-flags");
+    let fixture = support::source_path(HarnessId::OpenCode);
+    let cwd = scratch.to_str().unwrap();
+    let absent = scratch.join("absent.json");
+    let document = || {
+        vec![
+            "document".to_string(), "opencode".into(), "opencode".into(), "fixture".into(),
+            "--from-file".into(), fixture.to_str().unwrap().into(),
+            "--cwd".into(), cwd.into(),
+            "--dest-id".into(), "ses_preview".into(),
+            "--project-id".into(), "global".into(),
+            "--model-provider".into(), "h27".into(),
+            "--model".into(), "m1".into(),
+        ]
+    };
+    let run = |args: Vec<String>, expected: &str| {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (code, _, stderr) = support::cli(&scratch, &refs);
+        assert!(!code, "{refs:?} should fail");
+        assert!(stderr.contains(expected), "{refs:?}: {stderr}");
+    };
+
+    run([document(), vec!["--compaction".into(), "native".into()]].concat(), "--context-window is required with --compaction native");
+    run([document(), vec!["--compaction".into(), "native".into(), "--context-window".into(), "40000".into(), "--keep-turns".into(), "2".into()]].concat(), "--keep-turns, --summary-model and --summary-timeout go with --compaction summary or --intent");
+    run([document(), vec!["--context-window".into(), "40000".into()]].concat(), "--context-window, --max-output-tokens and --text-token-factor go with --compaction native");
+    run(vec![
+        "dump".into(), "opencode".into(), "fixture".into(),
+        "--from-file".into(), fixture.to_str().unwrap().into(),
+        "--compaction".into(), "native".into(),
+        "--context-window".into(), "40000".into(),
+    ], "--compaction native needs a destination writer: use document or hop");
+    run(vec![
+        "write".into(), "pi".into(), absent.to_str().unwrap().into(),
+        "--compaction".into(), "native".into(),
+        "--context-window".into(), "40000".into(),
+    ], "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop");
 }

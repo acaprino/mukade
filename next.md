@@ -50,9 +50,17 @@ What is still open after 2026-10-28, with how each one gets settled. Unverified 
 
 ## Across harnesses
 
-1. **Native compaction records [U].** A portable hop writes the summary as a user message, never
-   the destination's own record (Claude `compact_boundary`, Codex `compacted`, Pi `compaction`;
-   spec §4.4).
+1. **Native compaction records: built for all four destinations.** `--compaction native` keeps the whole
+   generated history and appends the destination's own deterministic record: OpenCode `compaction`
+   (`metadata.keepID`), Pi `compaction` (`firstKeptEntryId`), Codex `compacted`
+   (`replacement_history`), and Claude Code `compact_boundary` + `isCompactSummary`
+   (`preservedSegment`/`preservedMessages`). Covered by unit, writer, reader, hop, CLI and
+   mocked-import tests. Still open:
+   - *Live destination confirmation [U].* For each harness, write a large session with the boundary and
+     resume it once: assert the destination lists/reads the session, projects summary + tail, does not
+     start a paid automatic compaction, and leaves the full history readable.
+   - *Destination-specific budget thresholds [U].* The common budget is conservative and uses the
+     verified OpenCode ceiling; Claude Code, Codex and Pi's own trigger values are not all verified.
 2. **Summary written by the source's model: built** (`--compaction summary`, spec §4.5, live
    record `docs/verification/source-model-summary-live.md`). Still open:
    - *Codex's real model [U].* Checked against a mock only (quota). *To settle:* after the reset,

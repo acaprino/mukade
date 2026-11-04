@@ -2,7 +2,8 @@
 
 mod support;
 
-use mukade::model::HarnessId;
+use mukade::model::{HarnessId, Kind};
+use mukade::native_compaction::NativeBudget;
 use mukade::writer::for_harness;
 use serde_json::Value;
 use std::path::Path;
@@ -178,4 +179,39 @@ fn calls_and_results_are_paired_by_call_id() {
     for call in &calls {
         assert!(outputs.contains(&call["call_id"].as_str().unwrap().to_string()));
     }
+}
+
+/// §4.4 for Codex: the rollout keeps every generated row, and one `compacted` record is appended.
+/// Its `replacement_history` is the retained tail Codex will send after the summary.
+#[test]
+fn a_native_budget_appends_a_codex_compacted_record_without_dropping_history() {
+    let source = support::read_source(HarnessId::Codex);
+    let first_user = support::user_texts(&source).into_iter().next().expect("a user turn");
+    let (_, baseline) = support::write_fixture(HarnessId::Codex, "writer-codex-native-baseline");
+
+    let scratch = support::scratch(HarnessId::Codex, "writer-codex-native-boundary");
+    let mut opts = support::opts(HarnessId::Codex, &scratch);
+    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    let written = for_harness(HarnessId::Codex).write(&source, &opts).expect("write");
+    let rows = support::read_jsonl(Path::new(&written.location));
+
+    let boundary = rows.last().expect("a compacted record");
+    assert_eq!(boundary["type"], "compacted");
+    let message = boundary["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("mukade native compaction"));
+    assert!(message.contains(&first_user.chars().take(40).collect::<String>()));
+
+    let replacement = boundary["payload"]["replacement_history"].as_array().expect("the retained tail");
+    let response_items: Vec<&Value> = rows[..rows.len() - 1].iter().filter(|row| row["type"] == "response_item").map(|row| &row["payload"]).collect();
+    assert_eq!(replacement.len(), 1, "the zero budget keeps only the newest response item");
+    assert_eq!(replacement[0], **response_items.last().unwrap());
+
+    assert_eq!(rows.len(), baseline.len() + 1, "only the boundary is added");
+    assert_eq!(
+        rows[..baseline.len()].iter().map(|row| row["type"].as_str()).collect::<Vec<_>>(),
+        baseline.iter().map(|row| row["type"].as_str()).collect::<Vec<_>>()
+    );
+
+    let read_back = mukade::reader::codex::read_file(Path::new(&written.location)).expect("Codex reads its own compacted record");
+    assert!(read_back.entries.iter().any(|entry| matches!(&entry.kind, Kind::Compaction { summary, .. } if summary.contains("mukade native compaction"))));
 }

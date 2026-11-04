@@ -345,10 +345,11 @@ elsewhere are not found [31].
   counters: Pi refuses a session without it (`Cannot read properties of undefined (reading 'totalTokens')`).
 - **Results.** One `toolResult` per result, in call order, with the call's `toolName`; a call carried as
   text is answered by a `user` text message in the same place; `bash` timeouts go back to seconds (L12) [28].
-- **Compaction.** `Portable` writes the summary as a user message, not a native `compaction` entry;
-  whether Pi accepts a hand-written `compaction` entry is **[U]**. `Compaction::DestinationNative` is
-  refused with `Unsupported` (`src/hop.rs:353`): Pi's own compaction is the caller's to run, as
-  `pi --mode rpc --session <id>` with stdin `{"id":"c1","type":"compact"}` [26].
+- **Compaction.** `Portable` writes the summary as a user message. `--compaction native` keeps every
+  generated entry and appends Pi's own `compaction` entry with `firstKeptEntryId`; live acceptance by a
+  real Pi binary remains **[U]**. `Compaction::DestinationNative` is still refused with `Unsupported`
+  (`src/hop.rs`): Pi's own compaction is the caller's to run, as `pi --mode rpc --session <id>` with
+  stdin `{"id":"c1","type":"compact"}` [26].
 - **Resume.** The receipt's command is `[<--pi-exe or "pi">, "-p", "--session", "<file path>"]`: the file
   path, because `--session <id>` searches the current project first. Run it from the session's working
   directory with `PI_CODING_AGENT_DIR` set [26][30][32].

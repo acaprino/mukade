@@ -17,6 +17,7 @@ use crate::hop::{
     WriteDetails,
 };
 use crate::model::{HarnessId, Protocol};
+use crate::native_compaction::NativeBudget;
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
 use crate::summary::SummarizeOpts;
@@ -82,8 +83,13 @@ options:
   --expect-sha256 <hash>   refuse a hop when the captured source fingerprint changed
   --reasoning <mode>       drop_foreign (default) | as_text | drop
   --compaction <mode>      none (default) | portable (the source's own summary, then its tail) |
-                           summary (the source's model writes one now; dump and hop)
+                           summary (the source's model writes one now; dump and hop) |
+                           native (whole history plus the destination's own deterministic
+                           compaction record; document and hop)
   --keep-turns <n>         summary: also keep the last n user turns verbatim (default 0)
+  --context-window <n>     native: the destination model's context window, in tokens
+  --max-output-tokens <n>  native: the destination model's output limit (default 16000)
+  --text-token-factor <f>  native: the Gateway's text-token multiplier (default: chars/3)
   --intent <name>          summary: the prompt in intent-prompts/<name>.md (default: generic);
                            it implies --compaction summary
   --summary-model <id>     summary: the model to ask (default: the session's own)
@@ -166,6 +172,9 @@ pub fn run(args: &[String]) -> Result<()> {
             "--expect-sha256" => flags.expect_sha256 = Some(next(rest, &mut i)?),
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
             "--keep-turns" => flags.keep_turns = Some(next(rest, &mut i)?),
+            "--context-window" => flags.context_window = Some(next(rest, &mut i)?),
+            "--max-output-tokens" => flags.max_output_tokens = Some(next(rest, &mut i)?),
+            "--text-token-factor" => flags.text_token_factor = Some(next(rest, &mut i)?),
             "--intent" => flags.intent = Some(next(rest, &mut i)?),
             "--summary-model" => flags.summary_model = Some(next(rest, &mut i)?),
             "--summary-timeout" => flags.summary_timeout = Some(next(rest, &mut i)?),
@@ -212,15 +221,36 @@ pub fn run(args: &[String]) -> Result<()> {
     // An intent is a summary prompt: naming one selects the summary transport by itself.
     let summary = flags.compaction.as_deref() == Some("summary") || flags.intent.is_some();
     // Compaction is chosen on the source, before a document exists: `write` imports a document
-    // `dump` already compacted, so a compaction flag there would be silently ignored.
+    // `dump` already compacted, so a compaction flag there would be silently ignored. `document`
+    // may ask Mukade for the OpenCode-native boundary it will write itself.
+    let native_document = command == "document" && flags.compaction.as_deref() == Some("native");
     if (flags.compaction.is_some()
         || flags.keep_turns.is_some()
         || flags.summary_model.is_some()
         || flags.summary_timeout.is_some())
         && !matches!(command.as_str(), "dump" | "hop")
+        && !native_document
     {
         anyhow::bail!(
             "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop"
+        );
+    }
+    if flags.compaction.as_deref() == Some("native") && command == "dump" {
+        anyhow::bail!(
+            "--compaction native needs a destination writer: use document or hop"
+        );
+    }
+    let native_budget_flags = flags.context_window.is_some()
+        || flags.max_output_tokens.is_some()
+        || flags.text_token_factor.is_some();
+    if native_budget_flags && !matches!(command.as_str(), "document" | "hop") {
+        anyhow::bail!(
+            "--context-window, --max-output-tokens and --text-token-factor are supported only by document and hop"
+        );
+    }
+    if native_budget_flags && flags.compaction.as_deref() != Some("native") {
+        anyhow::bail!(
+            "--context-window, --max-output-tokens and --text-token-factor go with --compaction native"
         );
     }
     if !summary
@@ -532,9 +562,20 @@ pub fn run(args: &[String]) -> Result<()> {
             let plan = crate::writer::plan::plan(&source, dest, &opts);
             let violations = crate::strict::check_plan(&plan, opts.dest_protocol.as_ref());
             anyhow::ensure!(violations.is_empty(), "the document would violate the provider contract: {}", violations.join("; "));
-            let document = crate::writer::opencode::document_from_plan(&source, &plan, id, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
+            let (document, native_compaction) = crate::writer::opencode::document_from_plan_report(&source, &plan, id, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
             println!("{}", json!({
                 "document": document,
+                "native_compaction": native_compaction.map(|boundary| json!({
+                    "keep_id": boundary.keep_id,
+                    "summary_chars": boundary.summary.chars().count(),
+                    "estimated_tokens": boundary.estimated_tokens,
+                    "projected_tokens": boundary.projected_tokens,
+                    "summarized_messages": boundary.summarized_messages,
+                    "summarized_user_messages": boundary.summarized_user_messages,
+                    "budget": boundary.budget,
+                    "context_window": opts.native_budget.as_ref().map(|budget| budget.context),
+                    "fits": boundary.fits,
+                })),
                 "turns": source.conversation().filter(|entry| matches!(entry.kind, crate::model::Kind::User { .. })).count(),
                 "interrupted_last_turn": source.interrupted_last_turn(),
                 "counts": {
@@ -917,6 +958,9 @@ struct Flags {
     reasoning: Option<String>,
     compaction: Option<String>,
     keep_turns: Option<String>,
+    context_window: Option<String>,
+    max_output_tokens: Option<String>,
+    text_token_factor: Option<String>,
     intent: Option<String>,
     summary_model: Option<String>,
     summary_timeout: Option<String>,
@@ -976,6 +1020,10 @@ impl Flags {
                 .map(crate::hop::ResumePrompt::new),
             compaction: self.compaction.clone().unwrap_or_else(|| "none".into()),
             summary: None,
+            native_budget: match self.compaction.as_deref() {
+                Some("native") => Some(self.native_budget()?),
+                _ => None,
+            },
         })
     }
 
@@ -1115,6 +1163,10 @@ impl Flags {
             title: session.meta.title.clone(),
             now: None,
             exe: exe_override,
+            native_budget: match self.compaction.as_deref() {
+                Some("native") => Some(self.native_budget()?),
+                _ => None,
+            },
         })
     }
 
@@ -1142,6 +1194,7 @@ impl Flags {
                 summary: SummarySource::SourceRecord,
                 keep_from: KeepFrom::SourceBoundary,
             }),
+            Some("native") => self.native_budget().map(Compaction::Native),
             Some("summary") => {
                 let keep_turns = match self.keep_turns.as_deref() {
                     Some(n) => n
@@ -1186,8 +1239,38 @@ impl Flags {
                     keep_from: KeepFrom::LastTurns(keep_turns),
                 })
             }
-            Some(other) => anyhow::bail!("unknown --compaction {other} (none, portable, summary)"),
+            Some(other) => anyhow::bail!("unknown --compaction {other} (none, portable, summary, native)"),
         }
+    }
+
+    /// The destination-model facts an OpenCode-native boundary needs. The caller supplies them;
+    /// Mukade never reads another product's catalog and never guesses a window.
+    fn native_budget(&self) -> Result<NativeBudget> {
+        let context = match self.context_window.as_deref() {
+            Some(value) => value
+                .parse::<u64>()
+                .with_context(|| format!("--context-window {value}: not a number of tokens"))?,
+            None => anyhow::bail!("--context-window is required with --compaction native"),
+        };
+        anyhow::ensure!(context > 0, "--context-window must be greater than zero");
+        let max_output_tokens = match self.max_output_tokens.as_deref() {
+            Some(value) => Some(
+                value
+                    .parse::<u64>()
+                    .with_context(|| format!("--max-output-tokens {value}: not a number of tokens"))?,
+            ),
+            None => None,
+        };
+        let text_token_factor = match self.text_token_factor.as_deref() {
+            Some(value) => {
+                let factor = value
+                    .parse::<f64>()
+                    .with_context(|| format!("--text-token-factor {value}: not a number"))?;
+                Some(crate::native_compaction::TokenFactor::new(factor).map_err(anyhow::Error::msg)?)
+            }
+            None => None,
+        };
+        Ok(NativeBudget { context, max_output_tokens, text_token_factor })
     }
 
     /// The executable override stated for one harness, if any.

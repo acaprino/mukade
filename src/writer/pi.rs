@@ -14,6 +14,7 @@
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written, write_jsonl};
 use crate::model::{HarnessId, Reasoning, Session, StepEnd, ToolResult};
+use crate::native_compaction::{NativeItem, plan_native_items};
 use crate::policy::{Clock, ReasoningPlan};
 use crate::tools::content_blocks;
 use anyhow::{Context, Result};
@@ -216,6 +217,39 @@ fn rows(
         }
         i += 1;
     }
+
+    // §4.4: every generated entry stays in the file; Pi's own compaction entry is appended and points
+    // back at the first retained entry.
+    if let Some(budget) = &opts.native_budget {
+        let message_rows: Vec<&Value> = out
+            .iter()
+            .skip(1)
+            .filter(|row| row["type"] == "message")
+            .collect();
+        let user_texts: Vec<Option<String>> = message_rows.iter().map(|row| user_text(row)).collect();
+        let items: Vec<NativeItem> = message_rows
+            .iter()
+            .zip(&user_texts)
+            .map(|(row, text)| NativeItem {
+                id: row["id"].as_str(),
+                json: *row,
+                user_text: text.as_deref(),
+            })
+            .collect();
+        if let Some(report) = plan_native_items(&items, budget) {
+            if let Some(first_kept) = report.keep_id {
+                out.push(json!({
+                    "type": "compaction",
+                    "id": short_id(),
+                    "parentId": parent,
+                    "timestamp": clock.next_iso(),
+                    "summary": report.summary,
+                    "firstKeptEntryId": first_kept,
+                    "tokensBefore": report.estimated_tokens,
+                }));
+            }
+        }
+    }
     out
 }
 
@@ -327,6 +361,26 @@ fn message_row(id: &str, parent_id: Option<&str>, timestamp: &str, message: Valu
     row.insert("timestamp".into(), Value::String(timestamp.to_string()));
     row.insert("message".into(), message);
     Value::Object(row)
+}
+
+/// The text of a Pi user message, whether the writer stored it as a string or as text blocks.
+fn user_text(row: &Value) -> Option<String> {
+    if row["message"]["role"] != "user" {
+        return None;
+    }
+    match &row["message"]["content"] {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(text)
+        }
+        _ => None,
+    }
 }
 
 /// Pi stamps every record with a short hex id of its own.

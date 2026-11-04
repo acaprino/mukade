@@ -9,6 +9,7 @@ pub mod pi;
 pub mod plan;
 
 use crate::model::{HarnessId, Protocol, Session};
+use crate::native_compaction::NativeBudget;
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
 use crate::tools::{Shell, ToolSet, offered};
@@ -65,6 +66,9 @@ pub struct WriteOpts {
     /// harness's own resolution: `MUKADE_*_EXE`, `PATH`, then the well-known install locations
     /// (`crate::exe`).
     pub exe: Option<String>,
+    /// §4.4: destination-model facts for a deterministic native compaction boundary. The writer keeps
+    /// the whole generated session and appends the destination's own record when needed.
+    pub native_budget: Option<NativeBudget>,
 }
 
 /// A session that was written.
@@ -111,6 +115,7 @@ pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<(
     if harness != HarnessId::OpenCode && (opts.dest_agent.is_some() || opts.metadata.is_some()) {
         anyhow::bail!("a destination agent and metadata are currently supported only for OpenCode");
     }
+
     if harness == HarnessId::OpenCode && opts.dest_path.is_some() {
         anyhow::bail!("--dest-path is supported only for file-based destinations");
     }

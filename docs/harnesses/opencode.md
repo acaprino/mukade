@@ -352,7 +352,7 @@ answers `Bad Request` [32][27 §2.3].
 | user image | `Prompt.FileAttachment` `{data, mime, source:{type:"inline"}}` in `files` [32 `media.rs`][2] |
 | tool-result image | `Tool.FileContent` `{type:"file", uri:"data:<mime>;base64,<data>", mime}` [32 `media.rs`][2] |
 | call without an OpenCode equivalent | the call goes into the assistant text, and its result follows as a user message, as described in [`../tool-conversion-tables.md`](../tool-conversion-tables.md) §1 |
-| source compaction | one user message carrying the summary. No native `compaction` record is written yet [27 §4.4] |
+| source compaction | one user message carrying the summary. With `--compaction native`, mukade also appends its own OpenCode `compaction` record after the whole history [27 §4.4] |
 
 **Lookups** [34 `cli.rs`]:
 - **Project id**: `--project-id`, else `session list --standalone` run inside `--cwd` against the
@@ -369,8 +369,9 @@ with its whole process tree) [33].
 
 **Known limits:**
 - No session listing and no direct SQLite read or write [31].
-- `--compaction` is `none` or `portable`; the library's `DestinationNative` returns `Unsupported`,
-  so the caller runs OpenCode's HTTP compaction itself [34 `hop.rs`][27 §4.3].
+- `--compaction` is `none`, `portable`, or `native` for an OpenCode destination; the library's
+  `DestinationNative` still returns `Unsupported`, so the caller runs OpenCode's HTTP compaction
+  itself [34 `hop.rs`][27 §4.3].
 - `opencode run --session <unknown id>` silently creates a new session [27 §5][1].
 - Reasoning from another provider would reach OpenCode's model as visible text; the default
   `drop_foreign` drops it [27 §3.3].

@@ -3,6 +3,7 @@
 mod support;
 
 use mukade::model::HarnessId;
+use mukade::native_compaction::NativeBudget;
 use mukade::policy::Clock;
 use mukade::writer::opencode::{document_for, import_command};
 use serde_json::Value;
@@ -193,6 +194,71 @@ fn document_opencode_returns_a_native_import_document_without_starting_a_write()
     assert_eq!(result["document"]["info"]["agent"], "analyst");
     assert!(result["counts"]["tools_omitted"].as_u64().unwrap() > 0);
     assert!(!scratch.join("home/opencode.db").exists());
+}
+
+/// §4.4: an oversized OpenCode import keeps the whole document and appends one native compaction.
+/// `metadata.keepID` names the last message before the boundary, so the engine projects summary + tail
+/// while every superseded message remains readable in the imported session.
+#[test]
+fn a_native_budget_appends_an_opencode_compaction_record_without_dropping_history() {
+    let (baseline, _, _) = document("writer-opencode-native-baseline");
+    let scratch = support::scratch(HarnessId::OpenCode, "writer-opencode-native-compaction");
+    let session = support::read_source(HarnessId::OpenCode);
+    let mut opts = support::opts(HarnessId::OpenCode, &scratch);
+    opts.project_id = Some("project-under-test".into());
+    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    let mut clock = Clock::new(opts.now.as_deref());
+    let document = document_for(&session, "ses_test", &support::cwd_for(HarnessId::OpenCode), &opts, &mut clock).expect("document");
+
+    let compacted = messages(&document);
+    let boundary = compacted.last().expect("a native compaction boundary");
+    assert_eq!(boundary["type"], "compaction");
+    assert_eq!(boundary["status"], "completed");
+    assert_eq!(boundary["reason"], "manual");
+    assert!(boundary["native"].is_null(), "the deterministic summary is textual, never provider state");
+    assert_eq!(boundary["metadata"]["keepID"], compacted[compacted.len() - 2]["id"]);
+    assert!(boundary["summary"].as_str().unwrap().contains("mukade native compaction"));
+
+    let before = &compacted[..compacted.len() - 1];
+    assert_eq!(before.len(), messages(&baseline).len(), "nothing before the boundary is dropped");
+    assert_eq!(
+        before.iter().map(|message| message["type"].as_str()).collect::<Vec<_>>(),
+        messages(&baseline).iter().map(|message| message["type"].as_str()).collect::<Vec<_>>()
+    );
+}
+
+/// The CLI is the caller's contract: JanuraCode passes the destination window and receives a native
+/// OpenCode document with the boundary and its report, without post-processing the result.
+#[test]
+fn document_opencode_reports_the_native_compaction_it_appended() {
+    let scratch = support::scratch(HarnessId::OpenCode, "opencode-document-native-compaction");
+    let fixture = support::source_path(HarnessId::OpenCode);
+    let (code, stdout, stderr) = support::cli(
+        &scratch,
+        &[
+            "document", "opencode", "opencode", "fixture",
+            "--from-file", fixture.to_str().unwrap(),
+            "--cwd", scratch.to_str().unwrap(),
+            "--dest-id", "ses_preview",
+            "--project-id", "global",
+            "--model-provider", "h27",
+            "--model", "m1",
+            "--compaction", "native",
+            "--context-window", "40000",
+            "--max-output-tokens", "32000",
+        ],
+    );
+    assert!(code, "{stderr}");
+    let result: Value = serde_json::from_str(&stdout).unwrap();
+    let messages = result["document"]["messages"].as_array().expect("messages");
+    let boundary = messages.last().expect("a boundary");
+    let report = &result["native_compaction"];
+    assert_eq!(boundary["type"], "compaction");
+    assert_eq!(boundary["status"], "completed");
+    assert_eq!(report["keep_id"], boundary["metadata"]["keepID"]);
+    assert!(report["summarized_user_messages"].as_u64().unwrap() > 0);
+    assert!(report["estimated_tokens"].as_u64().unwrap() > report["projected_tokens"].as_u64().unwrap());
+    assert_eq!(report["fits"], false);
 }
 
 /// L8: one assistant message per step, holding reasoning, text and **both** tool parts, with each

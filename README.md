@@ -55,7 +55,9 @@ session (`export_path` reads one from a file), `import(dest, &session, &ImportOp
 already hold, and `Receipt` carries the destination id, its location, the native resume command, the
 manifest and — when a resume prompt was given — the destination's reply. `compact(&session,
 &Compaction, &roots)` is the step between them: the session a compaction policy hands to the writer,
-with the summary the source's model wrote when one was asked for (`summary::summarize` runs it).
+with the summary the source's model wrote when one is asked for (`summary::summarize` runs it).
+`Compaction::Native(budget)` keeps the whole history and has the writer append the destination's own
+deterministic compaction record (spec §4.4); no model is called.
 
 Two helpers cover the harnesses themselves: `exe::resolve(harness, override)` finds the binary to
 spawn (explicit override → `MUKADE_*_EXE` → `PATH` → well-known install locations), and

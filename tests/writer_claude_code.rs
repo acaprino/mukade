@@ -2,7 +2,8 @@
 
 mod support;
 
-use mukade::model::HarnessId;
+use mukade::model::{HarnessId, Kind};
+use mukade::native_compaction::NativeBudget;
 use mukade::writer::for_harness;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -248,4 +249,66 @@ fn a_named_session_carries_its_name_as_a_custom_title() {
     session.meta.title = None;
     let (_, rows) = write(&session, &opts);
     assert!(titles_of(&rows).is_empty(), "no name, no title row");
+}
+
+fn conversation_rows(rows: &[Value]) -> Vec<&Value> {
+    rows.iter()
+        .filter(|row| row.get("uuid").is_some() && matches!(row["type"].as_str(), Some("user" | "assistant")))
+        .collect()
+}
+
+/// §4.4 for Claude Code: every generated conversation row stays, then the native
+/// `system/compact_boundary` + `isCompactSummary` pair points back at the retained tail.
+#[test]
+fn a_native_budget_appends_claude_compact_boundary_and_summary_without_dropping_history() {
+    let source = support::read_source(HarnessId::ClaudeCode);
+    let first_user = support::user_texts(&source).into_iter().next().expect("a user turn");
+    let (_, baseline) = support::write_fixture(HarnessId::ClaudeCode, "writer-claude-native-baseline");
+
+    let scratch = support::scratch(HarnessId::ClaudeCode, "writer-claude-native-boundary");
+    let mut opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    let written = for_harness(HarnessId::ClaudeCode).write(&source, &opts).expect("write");
+    let rows = support::read_jsonl(Path::new(&written.location));
+
+    let boundary_at = rows.iter().position(|row| row["type"] == "system" && row["subtype"] == "compact_boundary").expect("a native boundary");
+    let boundary = &rows[boundary_at];
+    let summary = &rows[boundary_at + 1];
+    assert_eq!(summary["type"], "user");
+    assert_eq!(summary["isCompactSummary"], true);
+    assert_eq!(summary["isVisibleInTranscriptOnly"], true);
+    assert_eq!(summary["parentUuid"], boundary["uuid"]);
+    assert_eq!(boundary["parentUuid"], Value::Null);
+    assert_eq!(boundary["logicalParentUuid"], conversation_rows(&rows[..boundary_at]).last().unwrap()["uuid"]);
+
+    let retained_rows = conversation_rows(&rows[..boundary_at]);
+    let retained = retained_rows.last().expect("the retained tail");
+    let preserved = &boundary["compactMetadata"];
+    assert_eq!(preserved["trigger"], "manual");
+    assert!(preserved["preTokens"].as_u64().unwrap() > 0);
+    assert_eq!(preserved["preservedSegment"]["headUuid"], retained["uuid"]);
+    assert_eq!(preserved["preservedSegment"]["anchorUuid"], summary["uuid"]);
+    assert_eq!(preserved["preservedMessages"]["anchorUuid"], summary["uuid"]);
+    assert_eq!(preserved["preservedMessages"]["uuids"].as_array().unwrap().len(), 1);
+    assert_eq!(preserved["preservedMessages"]["uuids"][0], retained["uuid"]);
+
+    let summary_text = summary["message"]["content"].as_str().unwrap();
+    assert!(summary_text.contains("mukade native compaction"));
+    assert!(summary_text.contains(&first_user.chars().take(40).collect::<String>()));
+
+    let baseline_conversation = conversation_rows(&baseline);
+    let before = conversation_rows(&rows[..boundary_at]);
+    assert_eq!(before.len(), baseline_conversation.len(), "nothing before the boundary is dropped");
+    assert_eq!(
+        before.iter().map(|row| row["type"].as_str()).collect::<Vec<_>>(),
+        baseline_conversation.iter().map(|row| row["type"].as_str()).collect::<Vec<_>>()
+    );
+
+    let read_back = mukade::reader::claude_code::read_file(Path::new(&written.location)).expect("Claude reads its own native boundary");
+    let compaction = read_back.entries.iter().rev().find_map(|entry| match &entry.kind {
+        Kind::Compaction { summary, kept_from, .. } => Some((summary.clone(), kept_from.clone())),
+        _ => None,
+    }).expect("the appended pair is one compaction entry");
+    assert!(compaction.0.contains("mukade native compaction"));
+    assert!(compaction.1.is_some(), "the retained tail is named");
 }

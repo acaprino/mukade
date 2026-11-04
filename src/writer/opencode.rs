@@ -303,6 +303,18 @@ pub fn document_from_plan(
     opts: &WriteOpts,
     clock: &mut Clock,
 ) -> Result<Value> {
+    document_from_plan_report(session, plan, id, cwd, opts, clock).map(|(document, _)| document)
+}
+
+/// [`document_from_plan`], plus the native compaction boundary it appended, if any.
+pub fn document_from_plan_report(
+    session: &Session,
+    plan: &plan::Plan,
+    id: &str,
+    cwd: &str,
+    opts: &WriteOpts,
+    clock: &mut Clock,
+) -> Result<(Value, Option<crate::native_compaction::NativeCompaction>)> {
     let model = model_of(session, opts)?;
     let project_id = opts
         .project_id
@@ -367,6 +379,23 @@ pub fn document_from_plan(
         i += 1;
     }
 
+    // §4.4: the whole history stays; one completed native boundary is appended so the engine projects
+    // its deterministic summary and the retained tail, while the old messages remain readable.
+    let native_compaction = opts.native_budget.as_ref().and_then(|budget| {
+        let boundary = crate::native_compaction::plan_native_compaction(&messages, budget)?;
+        let keep_id = boundary.keep_id.clone()?;
+        messages.push(json!({
+            "id": message_id(),
+            "type": "compaction",
+            "status": "completed",
+            "reason": "manual",
+            "summary": boundary.summary.clone(),
+            "metadata": {"keepID": keep_id},
+            "time": {"created": clock.next_millis()},
+        }));
+        Some(boundary)
+    });
+
     let mut info = Map::new();
     info.insert("id".into(), Value::String(id.to_string()));
     info.insert("projectID".into(), Value::String(project_id));
@@ -395,7 +424,7 @@ pub fn document_from_plan(
         validate_agent(agent)?;
         info.insert("agent".into(), Value::String(agent.clone()));
     }
-    Ok(json!({"info": Value::Object(info), "messages": messages}))
+    Ok((json!({"info": Value::Object(info), "messages": messages}), native_compaction))
 }
 
 /// OpenCode's interchange format **requires** a complete model reference — `{id, providerID}` — on

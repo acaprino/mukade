@@ -72,6 +72,9 @@ pub enum Compaction {
         summary: SummarySource,
         keep_from: KeepFrom,
     },
+    /// The whole history, then the destination's own deterministic compaction record (Â§4.4).
+    /// No source or destination model is called.
+    Native(crate::native_compaction::NativeBudget),
     /// The whole history, then the destination's own compaction (Â§4.3). The compaction itself is
     /// run by the caller, as the bench does: it needs the destination's environment.
     DestinationNative,
@@ -86,6 +89,7 @@ impl Compaction {
                 ..
             } => "summary",
             Compaction::Portable { .. } => "portable",
+            Compaction::Native(_) => "native",
             Compaction::DestinationNative => "destination_native",
         }
     }
@@ -185,10 +189,12 @@ pub struct ImportOpts {
     pub resume: Option<ResumePrompt>,
     /// What the manifest states about the source.
     pub source_facts: SourceFacts,
-    /// `none` | `portable` | `summary` | `destination_native`, as requested.
+    /// `none` | `portable` | `summary` | `native` | `destination_native`, as requested.
     pub compaction: String,
     /// The summary the source's model wrote, when the history travels as one.
     pub summary: Option<SummaryFacts>,
+    /// §4.4: destination-model facts for a native boundary. The whole history is written.
+    pub native_budget: Option<crate::native_compaction::NativeBudget>,
 }
 
 /// What a hop produced (Â§1.2).
@@ -308,6 +314,17 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
                 .into(),
         ));
     }
+    if opts.compaction == "native" && opts.native_budget.is_none() {
+        return Err(HopError::Unsupported(
+            "compaction native needs --context-window and its optional budget flags".into(),
+        ));
+    }
+    if opts.compaction != "native" && opts.native_budget.is_some() {
+        return Err(HopError::Unsupported(
+            "a native budget goes with compaction native".into(),
+        ));
+    }
+
     let write_opts = WriteOpts {
         roots: opts.roots.clone(),
         cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
@@ -328,6 +345,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         title: session.meta.title.clone(),
         now: opts.write.now.clone(),
         exe: opts.write.exe.clone(),
+        native_budget: opts.native_budget.clone(),
     };
 
     if let Some(prompt) = opts.resume.as_ref() {
@@ -427,6 +445,10 @@ pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, H
         source_facts: facts,
         compaction: req.compaction.name().to_string(),
         summary,
+        native_budget: match &req.compaction {
+            Compaction::Native(budget) => Some(budget.clone()),
+            _ => None,
+        },
     };
     import(req.dest, &selection, &opts)
 }
@@ -439,16 +461,23 @@ pub fn hop_session(
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
     let (selection, summary) = compact(source, compaction, &opts.roots)?;
+    let opts = ImportOpts {
+        native_budget: match compaction {
+            Compaction::Native(budget) => Some(budget.clone()),
+            _ => opts.native_budget.clone(),
+        },
+        ..opts.clone()
+    };
     match summary {
         Some(summary) => import(
             dest,
             &selection,
             &ImportOpts {
                 summary: Some(summary),
-                ..opts.clone()
+                ..opts
             },
         ),
-        None => import(dest, &selection, opts),
+        None => import(dest, &selection, &opts),
     }
 }
 
@@ -496,7 +525,7 @@ fn select<'a>(
 ) -> Result<std::borrow::Cow<'a, Session>, HopError> {
     let _span = crate::timing::span("select");
     match compaction {
-        Compaction::None => Ok(std::borrow::Cow::Borrowed(source)),
+        Compaction::None | Compaction::Native(_) => Ok(std::borrow::Cow::Borrowed(source)),
         Compaction::DestinationNative => Err(HopError::Unsupported(
             "Compaction::DestinationNative: the destination's own compaction has to be triggered by the \
              caller, inside the destination's own environment (a resume command, an HTTP endpoint or an \

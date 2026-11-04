@@ -15,6 +15,7 @@
 use super::plan::{self, PlannedBlock, PlannedResult};
 use super::{WriteOpts, Writer, Written, write_jsonl};
 use crate::model::{HarnessId, Reasoning, Session};
+use crate::native_compaction::{NativeItem, plan_native_items};
 use crate::policy::{Clock, ReasoningPlan};
 use anyhow::{Context, Result};
 use chrono::DateTime;
@@ -283,7 +284,53 @@ fn rows(
             }
         }
     }
+
+    // §4.4: the rollout keeps every generated row; Codex's own `compacted` record is appended with
+    // the retained response items as its replacement history.
+    let boundary = opts.native_budget.as_ref().and_then(|budget| {
+        let response_items: Vec<&Value> = out
+            .iter()
+            .filter(|row| row["type"] == "response_item")
+            .map(|row| &row["payload"])
+            .collect();
+        let user_texts: Vec<Option<String>> = response_items.iter().map(|payload| user_text(payload)).collect();
+        let items: Vec<NativeItem> = response_items
+            .iter()
+            .zip(&user_texts)
+            .map(|(payload, text)| NativeItem {
+                id: payload["id"].as_str(),
+                json: *payload,
+                user_text: text.as_deref(),
+            })
+            .collect();
+        let report = plan_native_items(&items, budget)?;
+        Some(json!({
+            "message": report.summary,
+            "replacement_history": response_items[report.start..],
+        }))
+    });
+    if let Some(payload) = boundary {
+        push(&mut out, &mut ordinal, "compacted", payload, clock);
+    }
     out
+}
+
+/// The text of a Codex user response item, without the writer's own environment-context message.
+fn user_text(payload: &Value) -> Option<String> {
+    if payload["type"] != "message" || payload["role"] != "user" {
+        return None;
+    }
+    let text = payload["content"]
+        .as_array()?
+        .iter()
+        .filter(|block| matches!(block["type"].as_str(), Some("input_text" | "text")))
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() || text.starts_with("<environment_context>") {
+        return None;
+    }
+    Some(text)
 }
 
 fn user_message(text: &str) -> Value {

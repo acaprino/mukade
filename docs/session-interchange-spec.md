@@ -86,6 +86,7 @@ pub struct HopRequest {
 pub enum Compaction {
     None,                                // whole selected history
     Portable { summary: SummarySource, keep_from: KeepFrom },  // written by us as one user message + tail
+    Native(NativeBudget),                // whole selected history + the destination's own deterministic record (§4.4)
     DestinationNative,                   // refused: the destination's own compaction is the caller's to run
 }
 pub enum SummarySource { SourceRecord, Supplied(String),        // SourceRecord: the source's native compaction record (L4)
@@ -537,14 +538,43 @@ compaction (its summary is free and already written) or when the full history do
 destination's window; prefer `DestinationNative` when the summary should be written by the
 destination's model in the destination's own format.
 
-### 4.4 Writing a native compaction record (next step, not yet built)
+### 4.4 Writing a native compaction record
 
 The best form of `Portable` is a **native** compaction record in the destination, so that the
 destination treats the boundary as its own. Feasibility per destination: Codex accepts a
 minimal `compacted{message}` line (P6 [V]); OpenCode's import round-trips a `compaction` message
 losslessly (OC2 [V]); Claude Code (`compact_boundary` + `isCompactSummary` row) and Pi (`compaction`
-entry with `firstKeptEntryId`) are **[U]** for hand-written records. Until a fixture proves one,
-`Portable` writes the user-message form of 4.2.
+entry with `firstKeptEntryId`) are **[U]** for hand-written records.
+
+**Built for all four destinations.** `Compaction::Native(NativeBudget)` keeps the whole generated
+history and appends the destination's own record after it:
+
+- **OpenCode:** one completed `compaction` message,
+  `{"type":"compaction","status":"completed","reason":"manual","summary":"…","metadata":{"keepID":"…"},"time":{"created":…}}`.
+  `keepID` points backwards to the first generated message of the retained tail.
+- **Pi:** one `compaction` entry with `summary`, `firstKeptEntryId`, and `tokensBefore`, chained after
+  the retained rows.
+- **Codex:** one `compacted` record with `message` and `replacement_history`, the latter holding the
+  retained response items.
+- **Claude Code:** the native pair `system/compact_boundary` + a user row with
+  `isCompactSummary:true,isVisibleInTranscriptOnly:true`, inserted before the picker rows. The
+  boundary's `preservedSegment` and `preservedMessages` name the retained UUIDs and the summary row.
+
+The summary is deterministic and free: the user requests in the superseded prefix, in order, each
+truncated to 1,000 characters, with a 24,000-character body cap and an explicit mukade header. Every
+older row remains in the written session and readable there, while the destination projects summary +
+tail to the model. The caller supplies the destination facts (`--context-window`, optional
+`--max-output-tokens`, optional `--text-token-factor`); Mukade estimates text as chars/3, multiplied by
+a valid Gateway factor when supplied, and uses one conservative budget:
+`min(window/2, openCodeCeiling(window) - roomForNextTurn)`. OpenCode's trigger is verified; the other
+harnesses' thresholds are not all verified, so the common half-window bound is deliberately lower.
+No model or destination process is called to make the boundary. `document` reports it in
+`native_compaction`; `hop` records `options.compaction = "native"`.
+
+This mode is accepted by `document` and `hop`. `dump` refuses it because its interchange document is
+harness-neutral, and `write` does not reapply a boundary to a document that already exists. Hand-written
+acceptance by the real Claude Code, Codex and Pi binaries remains **[U]**; the records are proven by
+Mukade's readers and writer tests, not yet by a live resume in each destination.
 
 ### 4.5 `Portable` with a summary from the source's model
 
@@ -669,7 +699,8 @@ for evidence about individual behaviors.
 | L14 | subagent, skill, question, MCP and harness-internal tools → text form in every direction | conversion tables §3 | no such call is translated |
 
 Writers also apply `ReasoningPolicy` (§3.3) and the compaction mode (§4); the native compaction
-record forms of §4.4 are written only after a fixture proves the destination accepts them.
+record forms of §4.4 are built for all four destinations and read back by Mukade, while live
+acceptance by each real binary remains open.
 
 ## 9. Verification
 
@@ -678,7 +709,8 @@ describe additional harness runs, their environments and their coverage limitati
 
 ## 10. Open
 
-- [U] Hand-written native compaction records for Claude Code and Pi (§4.4).
+- [U] Live acceptance of the hand-written native compaction records by Claude Code, Codex, OpenCode and
+  Pi (§4.4), and destination-specific budget thresholds other than OpenCode's verified ceiling.
 - [U] §4.5 against Codex's real model (the run was made against a mock), and a session larger than
   the source model's context window.
 - [U] Codex reasoning without `encrypted_content` against the real Responses API (R3).

@@ -345,9 +345,11 @@ deprecated alias [13].
   as text.
 - **Codex `apply_patch` calls** read as canonical `Edit`, but their patch input has no path or
   `old_string`, so they become text form everywhere (`src/tools.rs:595-619`).
-- **No native compaction record.** A `portable` hop writes the summary as a user message, not a
-  `compacted` record, even though Codex accepts `compacted{message}` (P6). That form waits for a
-  fixture [19 §4.4].
+- **Native compaction.** A `portable` hop still writes the summary as a user message.
+  `--compaction native` keeps the whole rollout and appends a `compacted` record whose
+  `replacement_history` holds the retained response items; Codex accepts a minimal
+  `compacted{message}` line (P6), but live acceptance of Mukade's appended record remains **[U]**
+  [19 §4.4].
 - **Not converted:** subagent threads, forks, and
   compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].
 - **Subagent messages are excluded, by decision.** An `agent_message` record (a subagent writing

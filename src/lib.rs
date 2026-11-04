@@ -20,6 +20,7 @@ pub mod hop;
 pub mod intent;
 pub mod manifest;
 pub mod model;
+pub mod native_compaction;
 pub mod policy;
 pub mod portable;
 pub mod reader;
