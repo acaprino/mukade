@@ -1,10 +1,10 @@
-# Mukade
+# Mukade — harness sessions manager
 
 <p align="center">
   <img src="docs/assets/branding/mukade-logo-oni.png" alt="Mukade from Oni beside the Mukade wordmark" width="800">
 </p>
 
-Mukade moves a coding-agent session from one harness to another, and the destination continues it
+Mukade is a harness sessions manager for coding agents. It moves a session from one harness to another, and the destination continues it
 **as one of its own sessions**: no proxy in the middle, no re-prompting the history, no third-party
 converter. Claude Code, Codex CLI, OpenCode and Pi are the four harnesses it reads and writes.
 

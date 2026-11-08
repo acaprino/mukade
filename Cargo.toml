@@ -1,12 +1,12 @@
 [package]
 name = "mukade"
-description = "Move a coding-agent session between Claude Code, Codex CLI, OpenCode and Pi, as one of the destination's own."
+description = "Harness sessions manager for coding agents: move a session between Claude Code, Codex CLI, OpenCode and Pi, as one of the destination's own."
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/acaprino/mukade"
 readme = "README.md"
-keywords = ["session", "claude-code", "codex", "opencode", "interchange"]
+keywords = ["session", "claude-code", "codex", "opencode", "harness"]
 categories = ["development-tools"]
 build = "build.rs"
 

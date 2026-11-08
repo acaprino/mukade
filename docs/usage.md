@@ -1,4 +1,4 @@
-# Using Mukade
+# Using Mukade — harness sessions manager
 
 Mukade moves a coding-agent session from one harness to another — Claude Code, Codex CLI,
 OpenCode, Pi — and the destination continues it **as one of its own sessions**. This guide is the

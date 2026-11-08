@@ -1,4 +1,4 @@
-# mukade-tui
+# mukade-tui — harness sessions manager (terminal UI)
 
 A small native terminal browser for Mukade sessions: harnesses on the left, a directory filter,
 the matching sessions, and the selected session's transcript on the right. It can also resume a

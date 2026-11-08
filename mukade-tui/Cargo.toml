@@ -2,7 +2,7 @@
 name = "mukade-tui"
 version = "0.1.0"
 edition = "2024"
-description = "A small native terminal browser for Mukade sessions"
+description = "Terminal harness sessions manager: browse, resume and hop Mukade sessions"
 license = "MIT"
 build = "build.rs"
 
