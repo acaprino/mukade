@@ -538,6 +538,7 @@ redirected. The data folder is made the first time something is written to it (n
 |---|---|
 | `intent-prompts/*.md` | the editable summary prompts: `generic.md` is the default, every other file stem is an `--intent` name; copied on first start and never overwritten |
 | `mukade-data/cache/probes.json` | the versions and OpenCode project ids learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not start the harness to ask again |
+| `mukade-data/cache/claude-list-<hash>.json` | what `list claude_code` read from each session file (id, title, cwd, time), keyed by the file's path, size and modification time, so only the files that changed are read next time; one file per Claude Code `projects/` folder, rewritten whole, and a file modified in the last 2 seconds is never kept in it |
 | `mukade-data/tmp/mukade-import-*.json` | the document `opencode session import` needs as a file; private, and removed when the import ends, even when it fails |
 | `mukade-data/tmp/summary-*/` | one folder per `--compaction summary` run: the file Codex writes its summary to, the session Pi forks; removed when the run ends, even when it fails |
 | `.mukade-*.tmp` | beside the session being written, in the destination's store: the session as it is written, renamed into place when complete |
@@ -873,6 +874,44 @@ mukade scan 'D:\Apps'
 mukade list --root 'D:\Apps\JanuraCode'
 mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
 ```
+
+### The list output
+
+`mukade list <harness>` prints one JSON object per line, one per session:
+
+```json
+{"id":"01a1a817-…","title":"Alpha work","cwd":"D:\\work\\alpha","timestamp":"2026-11-08T14:03:20.000+00:00","location":"C:\\Users\\you\\.codex\\sessions\\2026\\11\\08\\rollout-….jsonl","archived":false,"unreadable":null,"live":null}
+```
+
+| key | meaning |
+|---|---|
+| `id`, `title`, `cwd`, `timestamp` | what the store records; any may be `null` |
+| `location` | the file (or database) the session is recorded in |
+| `archived` | the harness marked it archived |
+| `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
+| `live` | `true` when a process of the harness runs the session now; `false` when the store records running sessions and none runs it; `null` when the store does not say |
+
+A harness forgets transcripts long before it forgets sessions, so `list` reports both, and the
+`unreadable` rows are how a caller sees every project:
+
+| harness | an `unreadable` row is |
+|---|---|
+| Codex | a thread with a row in the home's newest `state_<n>.sqlite` whose rollout file is gone. `location` is the path the row records. Subagent and guardian threads are not listed |
+| Claude Code | a session `history.jsonl` still has prompts for, whose session file is gone (`location` is `history.jsonl`; `title` is its first prompt); or a running session that has not written its transcript yet |
+| OpenCode | a session in another `opencode*.db` beside the selected one (read it by selecting that file), or one only in the legacy `session` table, which OpenCode cannot export |
+
+A project is the distinct `cwd` of the rows. To count only what can be hopped, drop the rows with an
+`unreadable` reason; to count every project a harness remembers, keep them all:
+
+```powershell
+mukade list codex | ConvertFrom-Json | Where-Object { -not $_.unreadable } | Select-Object -ExpandProperty cwd -Unique
+mukade list claude_code | ConvertFrom-Json | Where-Object { $_.live } | Select-Object id, cwd
+```
+
+`live` is Claude Code's: it keeps `sessions/<pid>.json` while a process runs a session. The check
+looks at the process (on Windows also its start time, so a reused process id is not the session).
+Codex, OpenCode and Pi keep no such record, so their `live` is `null`: **a cleaner must read `null` as
+"not known", not as "not running".**
 
 ## 11. Troubleshooting
 

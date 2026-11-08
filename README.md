@@ -85,7 +85,7 @@ For complete examples for each harness, including ones kept in a folder of their
 
 ```text
 mukade harnesses                           # local inventory: installed harnesses, versions, stores and session/fork counts (text output, no options)
-mukade list  <harness>
+mukade list  <harness>                       # one JSON line per session; `unreadable` and `live` say what `dump` can read and what runs now
 mukade dump  <harness> <session-id>          # the interchange document on stdout, or --output <file>
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
 mukade hop   <src-harness> <session-id> <dst-harness> [options]   # --all-branches: a Codex thread whole
@@ -98,6 +98,13 @@ their store layouts and the lineage each records are one data file,
 [`catalog/harnesses.json`](catalog/harnesses.json), documented in the
 [harness catalog](docs/reference/harness-catalog.md). It is embedded in the executable, and
 `mukade harnesses` reads it.
+
+`list` also reports the sessions a harness still names after it lost their transcripts, so every
+project is seen: Codex threads that only remain as rows in `state_<n>.sqlite`, Claude Code sessions
+that only remain as prompts in `history.jsonl`, and OpenCode sessions in the other `opencode*.db`
+files beside the selected one. Those rows carry an `unreadable` reason and `dump`/`hop` refuse them
+(exit 2). `live` is `true` for a Claude Code session whose process is running. See
+[the list output](docs/usage.md#the-list-output).
 
 A `hop` reads the source and writes the destination in one process, so set **both** harnesses' store
 variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`):

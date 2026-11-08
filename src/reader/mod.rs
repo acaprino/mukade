@@ -1,6 +1,8 @@
 //! Readers: native session store → [`Session`] (docs/session-interchange-spec.md §8.1).
 
 pub mod claude_code;
+mod claude_history;
+mod claude_live;
 pub mod codex;
 mod codex_state;
 pub mod json;

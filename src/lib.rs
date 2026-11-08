@@ -23,6 +23,7 @@ pub mod model;
 pub mod native_compaction;
 pub mod policy;
 pub mod portable;
+pub mod process;
 pub mod reader;
 pub mod roots;
 pub mod sha256;

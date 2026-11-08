@@ -318,7 +318,25 @@ before it writes anything [34 `check_resume_prompt`][33 `is_batch`]; and on a ti
 (stdin closed, 120 s `EXPORT_TIMEOUT`; stderr with `not found` → not-found error) and parses
 `{info, messages}`; `--from-file` also takes a `{session_v2, session_message}` row dump or a bare
 message array. `list` opens the explicitly selected `OPENCODE_DB` read-only, returning root
-sessions including archived ones, without starting an OpenCode process. Mapping:
+sessions including archived ones, without starting an OpenCode process. Mapping, after the listing
+rules:
+
+- **Other database files.** When the selected file is named like OpenCode's own (`opencode.db`,
+  `opencode-<channel>.db`), the other such files in its folder are listed too: a channel build
+  starts a file of its own and leaves the old one with its sessions (on the machine of 2026-11-08,
+  `opencode-.db`: 62 sessions in 2 folders that `opencode.db` does not have). A file named otherwise
+  (`--root sessions.db`, a test store) stands alone. A sibling that cannot be read is skipped.
+- **Legacy rows.** A session only the pre-2.0 `session` table has (not yet moved to `session_v2`) is
+  listed too. OpenCode 2.2.5 did not export the newest of them (`Session not found`), and
+  opening that database with it (on a copy) created `session_v2` and moved 37 of the 62 rows: it
+  migrates what it opens, so these rows are marked.
+- **`unreadable` and the reason.** A session in another file, or only in the legacy table, is listed
+  with `unreadable` set and `location` = its file. `read` refuses it (exit 2, naming the file and
+  `--root`) **without starting OpenCode**: OpenCode migrates whatever database it opens, and a stale
+  channel file is not for mukade to change. Select that file (`--root`, or `OPENCODE_DB`) to read
+  it.
+
+Mapping:
 
 | OpenCode record | mukade entry |
 |---|---|
@@ -368,7 +386,9 @@ each (`PROBE_TIMEOUT`); resume prompt 300 s by default. Past one, the process is
 with its whole process tree) [33].
 
 **Known limits:**
-- No session listing and no direct SQLite read or write [31].
+- No direct SQLite write, and no SQLite read of a transcript: `list` reads the session table of the
+  selected database and its siblings read-only; `read` goes through `opencode session export` [31].
+- A session in a legacy-schema table or another database file is listed but not read (above).
 - `--compaction` is `none`, `portable`, or `native` for an OpenCode destination; the library's
   `DestinationNative` still returns `Unsupported`, so the caller runs OpenCode's HTTP compaction
   itself [34 `hop.rs`][27 §4.3].

@@ -121,7 +121,7 @@ unless cited otherwise [19 §2.2].
 |---|---|
 | `sessions/YYYY/MM/DD/rollout-<local ts>-<uuid>.jsonl` | one thread; JSONL lines `{timestamp, ordinal, type, payload[, metadata]}`. A rollout alone resumes by id, even from the wrong date folder |
 | `sessions/YYYY/MM/DD/rollout-<local ts>-<uuid>_<page uuid>.jsonl` | a later **page** of a paginated thread (0.165, below) |
-| `state_5.sqlite` | thread index. **`threads.rollout_path` wins over the file on disk**; a row pointing at a missing file fails with `no rollout found for thread id … (code -32600)` |
+| `state_5.sqlite` | thread index. **`threads.rollout_path` wins over the file on disk**; a row pointing at a missing file fails with `no rollout found for thread id … (code -32600)`. The row outlives the rollout: on the machine of 2026-11-08 all 8598 rows pointed at deleted files. mukade's `list` reads it read-only (below) |
 | `thread_history_1.sqlite` | exists, but the model context comes from the rollout, not from here |
 | `session_index.jsonl` | append-only name catalogue `{id, thread_name, updated_at}`; the newest name wins [20]. It was not written in the bench's scratch home [19] |
 | `history.jsonl` | transcript history, controlled by `history.persistence = "save-all" \| "none"` and `history.max_bytes` [4] |
@@ -323,6 +323,24 @@ deprecated alias [13].
 | `event_msg`, `turn_context`, `world_state`, `token_usage_record` | `Meta`, kept raw; models from `event_msg/thread_settings_applied` | `:69-80,195-207` |
 | `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title** from `<CODEX_HOME>/session_index.jsonl`, the newest `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent always empty** (forks and subagent spawns not linked) | `:149-181,455-470` |
 
+**Listing** (`src/reader/codex.rs`, `src/reader/codex_state.rs`). A thread is seen when it has a
+rollout under `sessions/`, **or** a row in Codex's state database, the newest `state_<n>.sqlite` of
+the home (opened read-only; a database that is missing, locked, damaged or laid out otherwise is an
+empty catalogue, and the rollouts are listed as before):
+
+- a rollout on disk stays the transcript; its row fills what it lacks (the update time, `archived`,
+  the parent, a title when `session_index.jsonl` has none);
+- a row whose `rollout_path` exists elsewhere (Codex moves archived threads out of `sessions/`) is
+  listed at that file and `dump`/`hop` read it there;
+- a row whose rollout is gone is listed with `unreadable` set and `location` = the path the row
+  records; `dump`/`hop` refuse it (exit 2) saying so. On the machine of 2026-11-08 this took
+  `mukade list codex` from 0 sessions to 1105, in 61 working directories, in 0.3 s;
+- `list` leaves out the threads Codex ran for another thread (`source` containing `subagent`,
+  `thread_source` `guardian_review` or `subagent`, or a child in `thread_spawn_edges`): 7493 of the
+  8598 rows. `list_all` (the TUI) keeps them, with `parent` from `thread_spawn_edges`;
+- the title is the thread's `name`, else its `title`, else the start of its `preview`; the time is
+  `updated_at_ms`, else `updated_at` (seconds). Columns a Codex version lacks read as absent.
+
 **Writer** (`src/writer/codex.rs`) [23]:
 
 | writes | detail | lines |
@@ -333,7 +351,7 @@ deprecated alias [13].
 | each step | `turn_context {turn_id:"turn-N", model, cwd}`, native `reasoning`, assistant `message` (`output_text`), `function_call {name, arguments (JSON string), call_id}` | `:189-251` |
 | each result | `function_call_output {call_id, output}` as text; a text-form call's result is a user message in the same place | `:252-273` |
 | `portable` summary | one user message | `:180-188` |
-| not written | `event_msg` records, a `session_index.jsonl` line; **`state_5.sqlite` is never opened**, so no stale `threads` row (L7) | `:10-13` |
+| not written | `event_msg` records, a `session_index.jsonl` line; **the writer never opens `state_5.sqlite`**, so no stale `threads` row (L7). The reader's `list` does open it, read-only | `:10-13` |
 | `cli_version` (**required**) | Codex refuses a rollout whose `session_meta` has no `cli_version`, so the write fails without one: ``Codex needs the destination's cli_version (`--dest-version`): it refuses a rollout whose session_meta has none``. The CLI takes `--dest-version`, else the first `x.y.z` token of `<exe> --version` (`codex-cli 0.164.0` → `0.164.0`); pass `--dest-version` when that probe fails [25] | `:48-54`; `src/cli.rs:462-468,528-546` |
 | `model_provider` | `--model-provider`, else the top-level `model_provider = "…"` of `$CODEX_HOME/config.toml`: `codex_config_provider`/`top_level_string` read only keys before the first `[table]`, match the key exactly and drop a trailing `# comment`; `[profiles.x]` and dotted `model_providers.x.*` are ignored | `src/cli.rs:646-693` |
 | reasoning | default `drop_foreign`: only `openai-responses` blocks that still carry `encrypted_content` are written natively; others are dropped and counted (or kept as text with `as_text`). The native path is live-verified: Codex 0.166.0 resumed a written copy and the provider refused a one-character tamper of the payload [48]. Reasoning without `encrypted_content` against the real API is open (R3) **[U]** [19 §10] | `src/policy.rs:24-46` |

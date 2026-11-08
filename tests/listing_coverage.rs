@@ -565,3 +565,484 @@ fn reading_a_session_that_lives_in_another_database_is_refused_with_its_file() {
     assert!(stdout.is_empty());
     assert!(stderr.contains("opencode-.db"), "{stderr}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Claude Code: `history.jsonl` outlives the transcripts, `sessions/` says what is running.
+
+const LOST: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+const FRESH: &str = "bbbbbbbb-0000-4000-8000-000000000002";
+const STALE: &str = "cccccccc-0000-4000-8000-000000000003";
+
+/// A line of Claude Code's `history.jsonl`: one prompt the user typed.
+fn prompt(session: &str, project: &str, timestamp: i64, display: &str) -> String {
+    serde_json::json!({
+        "display": display,
+        "pastedContents": {},
+        "timestamp": timestamp,
+        "project": project,
+        "sessionId": session,
+    })
+    .to_string()
+}
+
+/// A process id nothing runs under: that of a child that has already exited.
+fn dead_pid() -> u32 {
+    let mut child = std::process::Command::new(support::BIN)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the binary must run");
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+/// `<home>/sessions/<pid>.json`, the registration Claude Code keeps while a process runs a session.
+fn registration(home: &Path, pid: u32, session: &str, cwd: &str, extra: Value) {
+    let dir = home.join("sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = serde_json::json!({
+        "pid": pid,
+        "sessionId": session,
+        "cwd": cwd,
+        "startedAt": 1_794_143_992_646_i64,
+        "kind": "interactive",
+        "name": "a name",
+        "status": "idle",
+        "updatedAt": 1_794_149_286_106_i64,
+    });
+    if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            body.insert(key.clone(), value.clone());
+        }
+    }
+    std::fs::write(dir.join(format!("{pid}.json")), body.to_string()).unwrap();
+}
+
+#[test]
+fn claude_sessions_known_only_from_history_are_listed_as_unreadable() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-history");
+    let home = scratch.join("home");
+    let kept = support::source_id(HarnessId::ClaudeCode);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let history = [
+        prompt(LOST, "D:\\work\\lost", 1_794_100_000_000, "/clear"),
+        prompt(
+            LOST,
+            "D:\\work\\lost",
+            1_794_100_100_000,
+            "first real\nprompt  of the lost session",
+        ),
+        prompt(LOST, "D:\\work\\lost", 1_794_100_500_000, "a later one"),
+        prompt(
+            kept,
+            "D:\\work\\kept",
+            1_794_100_200_000,
+            "this one has its transcript",
+        ),
+        "{not json at all".to_string(),
+        // An older Claude Code wrote no session id: the prompt names a project, not a session.
+        r#"{"display":"old","project":"D:\\work\\nosession","timestamp":1}"#.to_string(),
+        String::new(),
+    ]
+    .join("\n");
+    std::fs::write(home.join("history.jsonl"), history).unwrap();
+
+    let rows = list(HarnessId::ClaudeCode, &scratch);
+
+    assert_eq!(
+        rows.len(),
+        2,
+        "the kept session once, the lost one once: {rows:?}"
+    );
+    assert!(row(&rows, kept)["unreadable"].is_null());
+    let lost = row(&rows, LOST);
+    assert_eq!(lost["cwd"], "D:\\work\\lost");
+    assert_eq!(
+        lost["title"], "first real prompt of the lost session",
+        "the first prompt that is not a slash command, on one line"
+    );
+    assert!(
+        lost["timestamp"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("2026-")),
+        "the last prompt's time: {lost}"
+    );
+    assert!(
+        lost["location"]
+            .as_str()
+            .unwrap()
+            .ends_with("history.jsonl"),
+        "{lost}"
+    );
+    assert!(
+        lost["unreadable"]
+            .as_str()
+            .is_some_and(|why| why.contains("history.jsonl")),
+        "{lost}"
+    );
+}
+
+#[test]
+fn dumping_a_claude_session_known_only_from_history_is_refused_with_the_reason() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-history-dump");
+    let home = scratch.join("home");
+    std::fs::write(
+        home.join("history.jsonl"),
+        prompt(LOST, "D:\\work\\lost", 1_794_100_000_000, "hello"),
+    )
+    .unwrap();
+
+    let (code, stdout, stderr) = support::cli_code(&scratch, &["dump", "claude_code", LOST]);
+
+    assert_eq!(code, Some(2), "a refusal: {stderr}");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("history.jsonl") && stderr.contains("transcript"),
+        "the refusal says the transcript is gone and where the session is still seen: {stderr}"
+    );
+}
+
+#[test]
+fn a_session_a_running_process_registered_is_live() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-live");
+    let home = scratch.join("home");
+    let kept = support::source_id(HarnessId::ClaudeCode);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    // The test process stands in for a running Claude Code; a child that has exited is a process
+    // that is gone, and a registration that outlived it says nothing about its session.
+    registration(
+        &home,
+        std::process::id(),
+        kept,
+        "D:\\work\\kept",
+        Value::Null,
+    );
+    registration(&home, dead_pid(), STALE, "D:\\work\\stale", Value::Null);
+
+    let rows = list(HarnessId::ClaudeCode, &scratch);
+
+    let kept_row = row(&rows, kept);
+    assert_eq!(kept_row["live"], true, "{kept_row}");
+    assert!(kept_row["unreadable"].is_null());
+    assert!(
+        rows.iter().all(|r| r["id"] != STALE),
+        "a registration whose process is gone is not a session: {rows:?}"
+    );
+}
+
+#[test]
+fn a_running_session_without_a_transcript_yet_is_listed_live_and_unreadable() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-fresh");
+    let home = scratch.join("home");
+    registration(
+        &home,
+        std::process::id(),
+        FRESH,
+        "D:\\work\\fresh",
+        serde_json::json!({ "name": "fresh start" }),
+    );
+
+    let rows = list(HarnessId::ClaudeCode, &scratch);
+
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let fresh = &rows[0];
+    assert_eq!(fresh["id"], FRESH);
+    assert_eq!(fresh["cwd"], "D:\\work\\fresh");
+    assert_eq!(fresh["title"], "fresh start");
+    assert_eq!(fresh["live"], true);
+    assert!(
+        fresh["unreadable"]
+            .as_str()
+            .is_some_and(|why| why.contains("transcript")),
+        "{fresh}"
+    );
+}
+
+#[test]
+fn sessions_with_no_running_process_are_not_live_when_the_store_keeps_a_registry() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-not-live");
+    let home = scratch.join("home");
+    let kept = support::source_id(HarnessId::ClaudeCode);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    std::fs::create_dir_all(home.join("sessions")).unwrap();
+
+    let rows = list(HarnessId::ClaudeCode, &scratch);
+
+    assert_eq!(
+        row(&rows, kept)["live"],
+        false,
+        "an empty registry is an answer"
+    );
+}
+
+#[test]
+fn a_registration_from_another_machine_leaves_its_session_unknown() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-foreign");
+    let home = scratch.join("home");
+    let kept = support::source_id(HarnessId::ClaudeCode);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    registration(
+        &home,
+        std::process::id(),
+        kept,
+        "D:\\work\\kept",
+        serde_json::json!({ "pidDomain": "plan9:elsewhere" }),
+    );
+
+    let rows = list(HarnessId::ClaudeCode, &scratch);
+
+    assert!(
+        row(&rows, kept)["live"].is_null(),
+        "a process id means nothing outside the machine that issued it: {}",
+        row(&rows, kept)
+    );
+}
+
+#[test]
+fn damaged_registrations_and_history_are_ignored() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-damaged");
+    let home = scratch.join("home");
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let sessions = home.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(sessions.join("123.json"), "{broken").unwrap();
+    std::fs::write(sessions.join("notapid.json"), "{}").unwrap();
+    std::fs::write(sessions.join("123.abc.key"), "{}").unwrap();
+    std::fs::write(sessions.join("456.json"), r#"{"pid": 456}"#).unwrap();
+    std::fs::write(home.join("history.jsonl"), b"\xff\xfe\n{}\n[]\n").unwrap();
+
+    let rows = list(HarnessId::ClaudeCode, &scratch);
+
+    assert_eq!(rows.len(), 1, "{rows:?}");
+}
+
+#[test]
+fn a_process_id_taken_by_another_process_is_not_the_session() {
+    use mukade::process::{self, Process};
+    // Only where a process's start time can be read (Windows) is a reused id told from the process.
+    let Process::Running {
+        started: Some(started),
+    } = process::inspect(std::process::id())
+    else {
+        return;
+    };
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-claude-reused-pid");
+    let home = scratch.join("home");
+    let kept = support::source_id(HarnessId::ClaudeCode);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let pid = std::process::id();
+    let json = |procstart: u64| serde_json::json!({ "procStart": procstart.to_string() });
+
+    registration(
+        &home,
+        pid,
+        kept,
+        "D:\\work\\kept",
+        json(started + 5_000_000),
+    );
+    assert_eq!(
+        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
+        true,
+        "half a second apart is the same process"
+    );
+
+    let an_hour = 3_600 * 10_000_000;
+    registration(&home, pid, kept, "D:\\work\\kept", json(started - an_hour));
+    assert_eq!(
+        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
+        false,
+        "the registration is from a process that started an hour before this one"
+    );
+
+    // A creation time in some other unit says nothing about the process.
+    registration(&home, pid, kept, "D:\\work\\kept", json(1_794_143_992_646));
+    assert_eq!(
+        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
+        true
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Claude Code: the listing remembers what it read from a session file.
+
+/// Set a file's modification time.
+fn touch(file: &Path, when: std::time::SystemTime) {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+/// A Claude Code store holding the fixture session, last modified `age` ago, and the session file.
+fn cached_store(
+    tag: &str,
+    age: std::time::Duration,
+) -> (PathBuf, mukade::roots::StoreRoots, PathBuf) {
+    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
+    support::stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let roots = support::roots(&scratch);
+    let file = scratch.join("home/projects/claude-project").join(format!(
+        "{}.jsonl",
+        support::source_id(HarnessId::ClaudeCode)
+    ));
+    touch(&file, std::time::SystemTime::now() - age);
+    (scratch, roots, file)
+}
+
+/// The fixture's working directory, as the listing reports it.
+fn listed_cwd(roots: &mukade::roots::StoreRoots, cache: &Path) -> String {
+    let listed = mukade::reader::claude_code::list_cached(roots, Some(cache)).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    listed[0].cwd.clone().expect("the fixture names its cwd")
+}
+
+/// Change the file without changing its size.
+fn change_in_place(file: &Path) {
+    let text = std::fs::read_to_string(file).unwrap();
+    assert!(text.contains("shinatama-verify"));
+    std::fs::write(file, text.replace("shinatama-verify", "SHINATAMA-VERIFY")).unwrap();
+}
+
+#[test]
+fn a_session_file_with_the_same_size_and_time_is_not_read_again() {
+    let hour = std::time::Duration::from_secs(3_600);
+    let (scratch, roots, file) = cached_store("cov-cache-hit", hour);
+    let cache = scratch.join("cache");
+    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    assert!(listed_cwd(&roots, &cache).contains("shinatama-verify"));
+
+    change_in_place(&file);
+    touch(&file, modified);
+    assert!(
+        listed_cwd(&roots, &cache).contains("shinatama-verify"),
+        "same size, same time: what was read last time is still the answer"
+    );
+
+    touch(&file, modified - std::time::Duration::from_secs(1));
+    assert!(
+        listed_cwd(&roots, &cache).contains("SHINATAMA-VERIFY"),
+        "another modification time: the file is read again"
+    );
+}
+
+#[test]
+fn a_session_file_with_another_size_is_read_again() {
+    let hour = std::time::Duration::from_secs(3_600);
+    let (scratch, roots, file) = cached_store("cov-cache-size", hour);
+    let cache = scratch.join("cache");
+    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    assert!(listed_cwd(&roots, &cache).contains("shinatama-verify"));
+
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(
+        &file,
+        text.replace("shinatama-verify", "shinatama-verified"),
+    )
+    .unwrap();
+    touch(&file, modified);
+
+    assert!(listed_cwd(&roots, &cache).contains("shinatama-verified"));
+}
+
+#[test]
+fn a_file_written_a_moment_ago_is_never_taken_from_the_cache() {
+    // A clock that ticks every few milliseconds cannot tell two writes in one tick apart.
+    let (scratch, roots, file) =
+        cached_store("cov-cache-racy", std::time::Duration::from_millis(300));
+    let cache = scratch.join("cache");
+    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    assert!(listed_cwd(&roots, &cache).contains("shinatama-verify"));
+
+    change_in_place(&file);
+    touch(&file, modified);
+
+    assert!(
+        listed_cwd(&roots, &cache).contains("SHINATAMA-VERIFY"),
+        "too recent to trust"
+    );
+}
+
+#[test]
+fn a_damaged_or_unwritable_cache_is_only_a_cold_one() {
+    let hour = std::time::Duration::from_secs(3_600);
+    let (scratch, roots, _) = cached_store("cov-cache-damaged", hour);
+    let cache = scratch.join("cache");
+    assert!(listed_cwd(&roots, &cache).contains("shinatama-verify"));
+    for entry in std::fs::read_dir(&cache).unwrap().flatten() {
+        std::fs::write(entry.path(), b"{broken").unwrap();
+    }
+    assert!(listed_cwd(&roots, &cache).contains("shinatama-verify"));
+
+    // Where the cache folder cannot be made, there is no cache and nothing fails.
+    let blocked = scratch.join("blocked");
+    std::fs::write(&blocked, "a file, not a folder").unwrap();
+    assert!(listed_cwd(&roots, &blocked.join("cache")).contains("shinatama-verify"));
+}
+
+#[test]
+fn the_cache_does_not_keep_files_that_are_gone() {
+    let hour = std::time::Duration::from_secs(3_600);
+    let (scratch, roots, file) = cached_store("cov-cache-forget", hour);
+    let cache = scratch.join("cache");
+    listed_cwd(&roots, &cache);
+    let kept: Vec<String> = std::fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .collect();
+    assert!(
+        kept.iter().any(|text| text.contains("shinatama-verify")),
+        "the first listing was remembered: {kept:?}"
+    );
+
+    std::fs::remove_file(&file).unwrap();
+    let listed = mukade::reader::claude_code::list_cached(&roots, Some(&cache)).unwrap();
+
+    assert!(listed.is_empty());
+    let kept: Vec<String> = std::fs::read_dir(&cache)
+        .unwrap()
+        .flatten()
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .collect();
+    assert!(
+        kept.iter().all(|text| !text.contains("shinatama-verify")),
+        "a listing that no longer has the file no longer remembers it: {kept:?}"
+    );
+}
+
+#[test]
+fn many_session_files_are_listed_whole_and_in_order() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cov-many");
+    let fixture = std::fs::read_to_string(support::source_path(HarnessId::ClaudeCode)).unwrap();
+    let project = scratch.join("home/projects/many");
+    std::fs::create_dir_all(&project).unwrap();
+    let source = support::source_id(HarnessId::ClaudeCode);
+    let mut ids = Vec::new();
+    for n in 0..40 {
+        let id = format!("00000000-0000-4000-8000-{n:012}");
+        std::fs::write(
+            project.join(format!("{id}.jsonl")),
+            fixture.replace(source, &id),
+        )
+        .unwrap();
+        ids.push(id);
+    }
+    let roots = support::roots(&scratch);
+
+    let first =
+        mukade::reader::claude_code::list_cached(&roots, Some(&scratch.join("cache"))).unwrap();
+    let second =
+        mukade::reader::claude_code::list_cached(&roots, Some(&scratch.join("cache"))).unwrap();
+    let uncached = mukade::reader::claude_code::ClaudeCode
+        .list(&roots)
+        .unwrap();
+
+    let listed: Vec<&str> = first.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(listed, ids, "every file once, in path order");
+    assert_eq!(first, second, "the cache changes nothing about the answer");
+    assert_eq!(first.len(), uncached.len());
+    assert!(first.iter().all(|s| s.cwd.is_some() && s.title.is_some()));
+}

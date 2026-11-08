@@ -38,6 +38,178 @@ impl ClaudeCode {
     }
 }
 
+/// [`Reader::list`], remembering in `cache` (a folder) what it read from each session file, so a
+/// file that has not changed is not read again. Listing a few hundred sessions reads up to half a
+/// megabyte of each, which on a cold disk takes seconds; with the cache only the files that
+/// changed since the last listing are read. `None` is no cache.
+pub fn list_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<SessionInfo>> {
+    let (Some(config), Some(projects)) =
+        (roots.claude_config_dir.as_deref(), roots.claude_projects())
+    else {
+        return Err(super::Lookup::NoStore(
+            "CLAUDE_CONFIG_DIR is not set: no Claude Code store to list".into(),
+        )
+        .into());
+    };
+    let files = session_files(&projects)?;
+    let mut out = peek_files(&files, &projects, cache);
+    add_what_the_transcripts_do_not_say(&mut out, config);
+    out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
+    Ok(out)
+}
+
+/// A file's size and modification time (nanoseconds since 1970): what tells that it changed.
+type Stamp = (u64, u64);
+
+fn stamp(file: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(file).ok()?;
+    let nanos = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), u64::try_from(nanos).ok()?))
+}
+
+/// A file modified this recently is not remembered: a clock that ticks every few milliseconds
+/// cannot tell two writes within one tick apart, so "same size, same time" proves nothing about
+/// it yet (the rule git applies to its index).
+const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What each session file says about its session: from `cache` where the file is as it was,
+/// otherwise from the file (the files that changed or are new, read side by side).
+fn peek_files(files: &[PathBuf], projects: &Path, cache: Option<&Path>) -> Vec<SessionInfo> {
+    use serde_json::{Map, Value};
+
+    let table_name = crate::cache::table_name("claude-list", &projects.to_string_lossy());
+    let remembered: Map<String, Value> = cache
+        .map(|dir| crate::cache::load_table(dir, &table_name))
+        .unwrap_or_default();
+    let stamps: Vec<Option<Stamp>> = files.iter().map(|file| stamp(file)).collect();
+    let mut peeked: Vec<Option<SessionInfo>> = vec![None; files.len()];
+    let mut unread = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let hit = stamps[index].and_then(|stamp| {
+            let entry = remembered.get(file.to_string_lossy().as_ref())?;
+            from_entry(entry, stamp)
+        });
+        match hit {
+            Some(info) => peeked[index] = Some(info),
+            None => unread.push(index),
+        }
+    }
+    for (index, info) in peek_many(files, &unread) {
+        peeked[index] = Some(info);
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |age| u64::try_from(age.as_nanos()).unwrap_or(u64::MAX));
+    let settled = u64::try_from(SETTLED_AFTER.as_nanos()).unwrap_or(u64::MAX);
+    let mut table = Map::new();
+    let mut out = Vec::with_capacity(files.len());
+    for ((file, stamp), info) in files.iter().zip(stamps).zip(peeked) {
+        let mut info = info.unwrap_or_default();
+        if let Some((size, modified)) = stamp
+            && modified.saturating_add(settled) <= now
+        {
+            table.insert(
+                file.to_string_lossy().into_owned(),
+                to_entry(size, modified, &info),
+            );
+        }
+        if info.id.is_empty() {
+            info.id = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| file.to_string_lossy().into_owned());
+        }
+        info.path = file.to_string_lossy().into_owned();
+        out.push(info);
+    }
+    if let Some(dir) = cache
+        && table != remembered
+    {
+        crate::cache::store_table(dir, &table_name, &table);
+    }
+    out
+}
+
+/// What the cache keeps of a session file: its stamp, and the four things a peek found.
+fn to_entry(size: u64, modified: u64, info: &SessionInfo) -> serde_json::Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("s".into(), size.into());
+    entry.insert("m".into(), modified.into());
+    for (key, value) in [
+        ("i", Some(&info.id)),
+        ("t", info.title.as_ref()),
+        ("c", info.cwd.as_ref()),
+        ("u", info.updated.as_ref()),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            entry.insert(key.into(), value.clone().into());
+        }
+    }
+    entry.into()
+}
+
+/// The peek the cache kept for a file, when the file is the one it was kept for.
+fn from_entry(entry: &serde_json::Value, (size, modified): Stamp) -> Option<SessionInfo> {
+    if entry.get("s")?.as_u64()? != size || entry.get("m")?.as_u64()? != modified {
+        return None;
+    }
+    let text = |key: &str| {
+        entry
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    };
+    Some(SessionInfo {
+        id: text("i").unwrap_or_default(),
+        title: text("t"),
+        cwd: text("c"),
+        updated: text("u"),
+        ..Default::default()
+    })
+}
+
+/// Peek at the files at `indexes`, side by side when there are many: a cold disk answers several
+/// reads at once faster than one after another.
+fn peek_many(files: &[PathBuf], indexes: &[usize]) -> Vec<(usize, SessionInfo)> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, PoisonError};
+
+    /// Below this many files starting threads costs more than it saves.
+    const SIDE_BY_SIDE_FROM: usize = 8;
+    const MOST_AT_ONCE: usize = 8;
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(MOST_AT_ONCE);
+    if indexes.len() < SIDE_BY_SIDE_FROM || workers < 2 {
+        return indexes
+            .iter()
+            .map(|&index| (index, peek(&files[index])))
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let done = Mutex::new(Vec::with_capacity(indexes.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..workers.min(indexes.len()) {
+            scope.spawn(|| {
+                while let Some(&index) = indexes.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let info = peek(&files[index]);
+                    done.lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push((index, info));
+                }
+            });
+        }
+    });
+    done.into_inner().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Read one Claude Code session file (`<CLAUDE_CONFIG_DIR>/projects/<project>/<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
@@ -799,27 +971,7 @@ impl Reader for ClaudeCode {
     }
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
-        let Some(projects) = roots.claude_projects() else {
-            return Err(super::Lookup::NoStore(
-                "CLAUDE_CONFIG_DIR is not set: no Claude Code store to list".into(),
-            )
-            .into());
-        };
-        let mut out = Vec::new();
-        for file in session_files(&projects)? {
-            let mut info = peek(&file);
-            if info.id.is_empty() {
-                info.id = file
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| file.to_string_lossy().into_owned());
-            }
-            info.path = file.to_string_lossy().into_owned();
-            out.push(info);
-        }
-        out.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(out)
+        list_cached(roots, crate::cache::dir().as_deref())
     }
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
@@ -839,11 +991,7 @@ impl Reader for ClaudeCode {
             .collect();
         match matches.as_slice() {
             [one] => read_file(one),
-            [] => Err(super::Lookup::NotFound(format!(
-                "no Claude Code session with id {id:?} under {}",
-                projects.display()
-            ))
-            .into()),
+            [] => Err(super::Lookup::NotFound(why_not_found(id, &projects, roots)).into()),
             many => Err(super::Lookup::Ambiguous(format!(
                 "{id:?} matches {} Claude Code sessions",
                 many.len()
@@ -851,6 +999,119 @@ impl Reader for ClaudeCode {
             .into()),
         }
     }
+}
+
+/// What Claude Code records about sessions beside their transcripts, added to `listed`:
+///
+/// - `history.jsonl` still names sessions whose transcript was deleted: they are listed, marked
+///   unreadable, so their projects are still seen;
+/// - `sessions/<pid>.json` registers each running session. A registration whose process is running
+///   marks its session live, and lists it when no transcript exists yet; one whose process is gone
+///   is a leftover and says nothing. Where the store keeps no `sessions/` folder, or a
+///   registration belongs to another machine, `live` stays unknown (`None`) rather than `false`.
+fn add_what_the_transcripts_do_not_say(listed: &mut Vec<SessionInfo>, config: &Path) {
+    use super::claude_history as history;
+    use super::claude_live as live;
+    use std::collections::{HashMap, HashSet};
+
+    let stem_of = |path: &str| {
+        Path::new(path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_owned)
+    };
+    let mut known: HashSet<String> = HashSet::new();
+    for info in listed.iter() {
+        known.insert(info.id.clone());
+        known.extend(stem_of(&info.path));
+    }
+    let history_file = history::path(config).to_string_lossy().into_owned();
+    for session in history::sessions(config) {
+        if !known.insert(session.id.clone()) {
+            continue;
+        }
+        listed.push(SessionInfo {
+            id: session.id,
+            title: session.title,
+            cwd: Some(session.project),
+            updated: chrono::DateTime::from_timestamp_millis(session.last_ms)
+                .map(|time| time.to_rfc3339()),
+            path: history_file.clone(),
+            unreadable: Some(
+                "its transcript is gone; the session survives only as prompts in history.jsonl"
+                    .into(),
+            ),
+            ..Default::default()
+        });
+    }
+
+    let Some(registrations) = live::registrations(config) else {
+        return;
+    };
+    // session id → Some(true) when a process runs it, None when that cannot be told from here.
+    let mut state: HashMap<String, Option<bool>> = HashMap::new();
+    for registration in &registrations {
+        match live::liveness(registration) {
+            live::Liveness::Gone => {}
+            live::Liveness::Unknown => {
+                state.entry(registration.session_id.clone()).or_insert(None);
+            }
+            live::Liveness::Running => {
+                state.insert(registration.session_id.clone(), Some(true));
+                if known.insert(registration.session_id.clone()) {
+                    listed.push(SessionInfo {
+                        id: registration.session_id.clone(),
+                        title: registration.name.clone(),
+                        cwd: registration.cwd.clone(),
+                        updated: registration
+                            .updated_ms
+                            .or(registration.started_ms)
+                            .and_then(chrono::DateTime::from_timestamp_millis)
+                            .map(|time| time.to_rfc3339()),
+                        path: registration.file.to_string_lossy().into_owned(),
+                        unreadable: Some(
+                            "its process is running but has written no transcript yet".into(),
+                        ),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+    for info in listed.iter_mut() {
+        let by_stem = stem_of(&info.path).and_then(|stem| state.get(&stem).copied());
+        info.live = match state.get(&info.id).copied().or(by_stem) {
+            Some(running) => running,
+            None => Some(false),
+        };
+    }
+}
+
+/// Why no session file carries `id`: the history or a registration may still know the session.
+fn why_not_found(id: &str, projects: &Path, roots: &StoreRoots) -> String {
+    let plain = format!(
+        "no Claude Code session with id {id:?} under {}",
+        projects.display()
+    );
+    let (Some(config), false) = (roots.claude_config_dir.as_deref(), id.is_empty()) else {
+        return plain;
+    };
+    if let Some(session) = super::claude_history::sessions(config)
+        .into_iter()
+        .find(|session| session.id.starts_with(id))
+    {
+        return format!(
+            "Claude Code session {} has no transcript any more: it is known only from prompts in {}",
+            session.id,
+            super::claude_history::path(config).display()
+        );
+    }
+    if super::claude_live::registrations(config)
+        .is_some_and(|all| all.iter().any(|r| r.session_id.starts_with(id)))
+    {
+        return format!("Claude Code session {id:?} has written no transcript yet");
+    }
+    plain
 }
 
 /// What a session file's two ends say about it, without reading the whole file

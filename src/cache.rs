@@ -22,8 +22,11 @@ pub fn dir() -> Option<PathBuf> {
     crate::portable::cache_dir()
 }
 
-fn load(dir: &Path) -> Map<String, Value> {
-    std::fs::read_to_string(dir.join(FILE))
+/// A table kept whole in its own file, for answers that come many at a time (what a listing read
+/// from each of a few hundred session files). Empty when the file is absent, unreadable or not a
+/// JSON object: a damaged table is a cold one.
+pub fn load_table(dir: &Path, name: &str) -> Map<String, Value> {
+    std::fs::read_to_string(dir.join(name))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .and_then(|value| match value {
@@ -31,6 +34,38 @@ fn load(dir: &Path) -> Map<String, Value> {
             _ => None,
         })
         .unwrap_or_default()
+}
+
+/// Replace a table. Best effort, like every write here: a table that cannot be written is not an
+/// error, and a reader never sees half of one.
+pub fn store_table(dir: &Path, name: &str, table: &Map<String, Value>) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    // Written beside the file and renamed over it.
+    let temporary = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let text = Value::Object(table.clone()).to_string();
+    if std::fs::write(&temporary, text).is_ok()
+        && std::fs::rename(&temporary, dir.join(name)).is_err()
+    {
+        let _ = std::fs::remove_file(&temporary);
+    }
+}
+
+/// A file name for a table about `subject` (a folder, say): the same subject always gets the same
+/// name, and two subjects get different ones. `<prefix>-<16 hex digits>.json`.
+pub fn table_name(prefix: &str, subject: &str) -> String {
+    // FNV-1a, 64 bits.
+    let hash = subject
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("{prefix}-{hash:016x}.json")
+}
+
+fn load(dir: &Path) -> Map<String, Value> {
+    load_table(dir, FILE)
 }
 
 /// The cached answer for `key`, if there is one.
@@ -45,17 +80,7 @@ pub fn put(dir: &Path, key: &str, value: &str) {
         entries.clear();
     }
     entries.insert(key.to_string(), Value::String(value.to_string()));
-    if std::fs::create_dir_all(dir).is_err() {
-        return;
-    }
-    // Written beside the file and renamed over it, so a reader never sees half of it.
-    let temporary = dir.join(format!(".{FILE}.{}.tmp", std::process::id()));
-    let text = Value::Object(entries).to_string();
-    if std::fs::write(&temporary, text).is_ok()
-        && std::fs::rename(&temporary, dir.join(FILE)).is_err()
-    {
-        let _ = std::fs::remove_file(&temporary);
-    }
+    store_table(dir, FILE, &entries);
 }
 
 /// What a binary's identity is, for a key: its path, size and modification time. `None` when the

@@ -572,6 +572,9 @@ fn start_load(app: &mut App, folders: Vec<std::path::PathBuf>) {
 }
 
 fn start_read(app: &mut App) {
+    if refuse_unreadable(app) {
+        return;
+    }
     let Some((location, info)) = app.selected_pair() else {
         app.status = "no session selected".to_string();
         return;
@@ -728,6 +731,9 @@ fn poll_job(app: &mut App) {
 }
 
 fn open_hop(app: &mut App) {
+    if refuse_unreadable(app) {
+        return;
+    }
     let Some((source, info)) = app.selected_pair() else {
         app.status = "no session selected".to_string();
         return;
@@ -963,6 +969,9 @@ fn resume_argv(harness: HarnessId, exe: &str, info: &SessionInfo) -> Vec<String>
 }
 
 fn resume_selected(terminal: &mut Tui, app: &mut App) -> std::io::Result<()> {
+    if refuse_unreadable(app) {
+        return Ok(());
+    }
     let (location, info) = {
         let Some((location, info)) = app.selected_pair() else {
             app.status = "no session selected".to_string();
@@ -1354,11 +1363,21 @@ fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
             let title = session_label(info);
             let when = info.updated.as_deref().unwrap_or("—");
             let archived = if info.archived { " [archived]" } else { "" };
+            let unreadable = if info.unreadable.is_some() {
+                " [unreadable]"
+            } else {
+                ""
+            };
+            let live = if info.live == Some(true) {
+                " [live]"
+            } else {
+                ""
+            };
             let fork = if info.parent.is_some() { " ↳" } else { "" };
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{title}{fork}"), Style::default().fg(Color::White)),
                 Span::styled(
-                    format!("{archived}  {when}"),
+                    format!("{live}{unreadable}{archived}  {when}"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]))
@@ -1440,6 +1459,12 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &mut App) {
             "archived",
             if info.archived { "yes" } else { "no" },
         );
+        if let Some(live) = info.live {
+            field(&mut lines, "live", if live { "yes" } else { "no" });
+        }
+        if let Some(why) = &info.unreadable {
+            field(&mut lines, "unreadable", why);
+        }
         field(&mut lines, "path", &info.path);
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -1492,6 +1517,19 @@ fn field(lines: &mut Vec<Line>, label: &str, value: &str) {
         Span::styled(format!("{label:<9}"), Style::default().fg(Color::DarkGray)),
         Span::raw(value.to_string()),
     ]));
+}
+
+/// Stop an action that needs the selected session's transcript when the listing already knows it
+/// cannot be read: say why in the status line. `true` when the action is refused.
+fn refuse_unreadable(app: &mut App) -> bool {
+    let Some(why) = app
+        .selected_session()
+        .and_then(|info| info.unreadable.clone())
+    else {
+        return false;
+    };
+    app.status = format!("cannot read this session: {why}");
+    true
 }
 
 fn session_label(info: &SessionInfo) -> String {
@@ -2094,6 +2132,88 @@ mod tests {
         app.mode = Mode::Open(String::new());
         handle_open_key(&mut app, KeyCode::Enter);
         assert!(!app.busy);
+    }
+
+    /// Claude Code with a session that can be read, one whose transcript is gone, and one whose
+    /// process runs.
+    fn app_with_unreadable_sessions() -> App {
+        let roots = StoreRoots::default();
+        let locations = location::standard_locations(&roots);
+        let sessions = vec![
+            SessionInfo {
+                id: "kept".into(),
+                cwd: Some("/projects/kept".into()),
+                path: "kept.jsonl".into(),
+                live: Some(false),
+                ..Default::default()
+            },
+            SessionInfo {
+                id: "lost".into(),
+                cwd: Some("/projects/lost".into()),
+                path: "history.jsonl".into(),
+                unreadable: Some("its transcript is gone; only prompts remain".into()),
+                live: Some(false),
+                ..Default::default()
+            },
+            SessionInfo {
+                id: "running".into(),
+                cwd: Some("/projects/running".into()),
+                path: "running.jsonl".into(),
+                live: Some(true),
+                ..Default::default()
+            },
+        ];
+        let rows = vec![
+            HarnessRow::new(locations[0].clone(), sessions, None),
+            HarnessRow::new(locations[1].clone(), Vec::new(), None),
+        ];
+        App::new(locations, roots, rows, 50)
+    }
+
+    #[test]
+    fn a_session_without_a_transcript_is_marked_and_is_not_opened_hopped_or_resumed() {
+        let mut app = app_with_unreadable_sessions();
+        let rendered = screen(&mut app, 140, 24);
+        assert!(rendered.contains("[unreadable]"), "{rendered}");
+        assert!(rendered.contains("[live]"), "{rendered}");
+
+        app.session = 1;
+        assert_eq!(app.selected_session().unwrap().id, "lost");
+        let detail = screen(&mut app, 140, 24);
+        assert!(detail.contains("its transcript is gone"), "{detail}");
+
+        assert!(refuse_unreadable(&mut app));
+        assert!(
+            app.status.contains("its transcript is gone"),
+            "{}",
+            app.status
+        );
+
+        app.status.clear();
+        open_hop(&mut app);
+        assert!(matches!(app.mode, Mode::Normal), "no hop dialog for it");
+        assert!(
+            app.status.contains("its transcript is gone"),
+            "{}",
+            app.status
+        );
+
+        app.status.clear();
+        start_read(&mut app);
+        assert!(!app.busy, "nothing is read");
+        assert!(
+            app.status.contains("its transcript is gone"),
+            "{}",
+            app.status
+        );
+
+        app.session = 0;
+        assert!(
+            !refuse_unreadable(&mut app),
+            "a session with a transcript is not refused"
+        );
+        open_hop(&mut app);
+        assert!(matches!(app.mode, Mode::Hop(_)));
     }
 
     #[test]

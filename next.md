@@ -46,6 +46,25 @@ unresumable (`docs/verification/codex-encrypted-reasoning-live.md`); the two lef
 2. **OpenAI encrypted reasoning through OpenRouter [U]:** written as `reasoning.encrypted` with
    `format: openai-responses-v1`, never exercised.
 
+## Listing (added 2026-11-08, `docs/verification/listing-coverage-2026-11-08.md`)
+
+1. **`live` off Windows [U].** Claude Code's `sessions/<pid>.json` is checked with `/proc/<pid>`
+   (or `ps -p` where there is no `/proc`) and `pidDomain` against the platform and `HOSTNAME` or
+   `/etc/hostname`; `procStart` is not compared there (its format on Linux and macOS is not known),
+   so a reused process id reads as live (the safe side for a cleaner).
+   *To settle:* run `mukade list claude_code` on Linux and macOS with a session open, and read
+   `sessions/<pid>.json` there.
+2. **The listing cache on a cold disk [U].** Warm-disk numbers are measured (285 ms the first time,
+   65–72 ms after, 303 rows); the 11 s cold-disk first run is not reproduced with an empty mukade cache.
+3. **Codex `threads` layout.** The reader asks only for columns it finds in `threads`
+   (`PRAGMA table_info`), and takes the newest `state_<n>.sqlite`; a Codex that renames them lists
+   rollouts as before and no thread from the database. Nothing watches for that.
+4. **Claude Code prompts without a `sessionId`** (an older Claude Code) name a project, not a
+   session, and are skipped: a project known only through them is not listed.
+5. **OpenCode legacy rows.** OpenCode migrates a database it opens (37 of 62 rows moved in the
+   copy it was tried on), so a legacy row may become readable once the user runs that database;
+   `list` then shows it as a plain `session_v2` row. mukade never starts OpenCode to do this.
+
 ## Across harnesses
 
 1. **Native compaction records: built and live-verified for all four destinations.**

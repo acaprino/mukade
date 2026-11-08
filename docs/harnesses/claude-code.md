@@ -125,6 +125,30 @@ Proprietary; use is subject to Anthropic's Commercial Terms of Service [25]. The
 - **Tool results.** Parallel calls: the `tool_use` rows are chained, and each `tool_result` row's `parentUuid` is its own `tool_use` row, in completion order; pairing is by `tool_use_id`, not by walking parents [1].
 - **Interrupted turn.** A killed process leaves the user row; on the next load Claude Code writes a synthetic assistant `"No response requested."` with `model: "<synthetic>"` [1].
 - **Beside the transcript.** `<session>/subagents/` (subagent transcripts, same format), `<session>/tool-results/` (large outputs), `file-history/<session>/` (pre-edit snapshots for `/rewind`, the 100 most recent checkpoints), `history.jsonl` (typed prompts), `~/.claude.json` (account, personal MCP servers, per-project state) [17][18].
+- **What outlives a transcript, and what says a session runs.** `history.jsonl` is one JSON line per
+  prompt, `{display, pastedContents, project, sessionId, timestamp (ms)}`, and stays when a session's
+  file is deleted (2026-11-08: 261 sessions in it, 214 transcripts, 88 sessions without one, in 19
+  projects no transcript names). `sessions/<pid>.json` exists while a process runs a session: `{pid,
+  sessionId, cwd, name, status, startedAt, updatedAt, procStart, pidDomain, kind, entrypoint,
+  version, …}` (2.1.319), with the `<pid>.<hash>.key` peer-messaging key beside it. `procStart` is the
+  process's creation time (a Windows FILETIME, matching the process to within a second) and
+  `pidDomain` `<platform>:<machine>` says where the pid is valid. The file goes with a clean exit; a
+  killed process leaves it behind, so a registration counts only when its process is looked at.
+- **How mukade lists them** (`src/reader/claude_code.rs`, `claude_history.rs`, `claude_live.rs`,
+  `src/process.rs`). `list` adds a session `history.jsonl` names and no transcript holds, as
+  `unreadable`; a prompt without a `sessionId` (an older Claude Code) names a project, not a session,
+  and is skipped. `live` is `true` when a registration's process runs (on Windows also when its
+  creation time matches `procStart`, so a reused pid is not the session), `false` when the store has
+  a `sessions/` folder and none does, and `null` when there is no such folder or the registration's
+  `pidDomain` is another platform or machine. A running session with no transcript yet is listed,
+  `unreadable` and `live`. The process check is two Win32 calls on Windows; `/proc` (or `ps`) elsewhere
+  **[U]**: not run on Linux or macOS, where `procStart` is not compared.
+- **The listing reads half a megabyte of each session file** (128 KiB head, 384 KiB tail). Cold, that
+  took 11 s for 214 files; warm 0.5 s. `list` now remembers what it read in
+  `mukade-data/cache/claude-list-<hash>.json`, keyed by path, size and modification time (a file
+  modified in the last 2 s is never remembered), and reads the files that changed side by side:
+  285 ms for the first listing with the disk's own cache warm, 65–72 ms after (303 rows, release
+  build, 2026-11-08). A cold disk with an empty mukade cache was not measured again **[U]**.
 - **Retention.** Files older than `cleanupPeriodDays` are deleted by a sweep: default 30, minimum 1 [18]. Transcripts are not encrypted; a credential a tool printed is in the file [18].
 
 ### Compaction
