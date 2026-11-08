@@ -2,6 +2,7 @@
 
 pub mod claude_code;
 pub mod codex;
+mod codex_state;
 pub mod json;
 pub mod opencode;
 pub mod pi;
@@ -23,6 +24,16 @@ pub struct SessionInfo {
     /// The native parent link, when the harness records one. `None` is "not recorded or no
     /// parent", never a guess.
     pub parent: Option<String>,
+    /// Why [`Reader::read`] cannot hand this session back, when the listing already knows: the
+    /// store still names the session but its transcript is gone (a Codex `threads` row whose
+    /// rollout was deleted, a Claude Code prompt in `history.jsonl` without a session file), or
+    /// it lives in a store this listing was not pointed at. `None` is "nothing known against
+    /// it", not a promise that the read will work.
+    pub unreadable: Option<String>,
+    /// Whether the harness has a process running this session now, for a harness whose store
+    /// records that (Claude Code's `sessions/<pid>.json`). `None` is "not recorded, or not
+    /// checkable from here"; it is never `false` by default.
+    pub live: Option<bool>,
 }
 
 /// One reader per harness. It turns native records into [`Session`], keeping every source record

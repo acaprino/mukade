@@ -843,48 +843,98 @@ impl Reader for Codex {
     }
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
-        let Some(sessions) = roots.codex_sessions() else {
-            return Err(super::Lookup::NoStore(
-                "CODEX_HOME is not set: no Codex store to list".into(),
-            )
-            .into());
-        };
-        // One entry per thread, at its latest file: the active page of a paginated thread.
-        let mut latest: HashMap<String, PathBuf> = HashMap::new();
-        for file in rollout_files(&sessions)? {
-            let id = rollout_id(&file);
-            if id.is_empty() {
-                continue;
-            }
-            match latest.get(&id) {
-                Some(known) if known.file_name() >= file.file_name() => {}
-                _ => {
-                    latest.insert(id, file);
-                }
-            }
-        }
-        // The catalogue is read once for the whole list: a rollout never carries its thread's name.
-        let names = sessions.parent().map(index_names).unwrap_or_default();
-        let mut out: Vec<SessionInfo> = latest
-            .into_iter()
-            .map(|(id, file)| {
-                let title = names.get(&id).cloned();
-                SessionInfo {
-                    id,
-                    title,
-                    cwd: peek_cwd(&file),
-                    path: file.to_string_lossy().into_owned(),
-                    ..Default::default()
-                }
-            })
-            .collect();
-        out.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(out)
+        list_in(roots, false)
+    }
+
+    fn list_all(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
+        list_in(roots, true)
     }
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         read_with(id, roots, Branches::Active)
     }
+}
+
+/// The threads of a Codex home: the rollouts under `sessions/`, and the threads Codex's state
+/// database still has a row for. A rollout stays the transcript and takes what it lacks (the
+/// time, the archived flag, the parent) from its row. A row whose rollout lies elsewhere is listed
+/// at that file; a row whose rollout is gone is listed as unreadable, so its project is still seen.
+/// `with_subagents` keeps the threads Codex ran for another thread (spawned subagents, guardian
+/// reviews), which are not roots: `list` leaves them out once the database says what they are.
+fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>> {
+    let (Some(home), Some(sessions)) = (roots.codex_home.as_deref(), roots.codex_sessions()) else {
+        return Err(super::Lookup::NoStore(
+            "CODEX_HOME is not set: no Codex store to list".into(),
+        )
+        .into());
+    };
+    // One entry per thread, at its latest file: the active page of a paginated thread.
+    let mut latest: HashMap<String, PathBuf> = HashMap::new();
+    for file in rollout_files(&sessions)? {
+        let id = rollout_id(&file);
+        if id.is_empty() {
+            continue;
+        }
+        match latest.get(&id) {
+            Some(known) if known.file_name() >= file.file_name() => {}
+            _ => {
+                latest.insert(id, file);
+            }
+        }
+    }
+    // The catalogue is read once for the whole list: a rollout never carries its thread's name.
+    let names = index_names(home);
+    let mut listed: HashMap<String, SessionInfo> = latest
+        .into_iter()
+        .map(|(id, file)| {
+            let info = SessionInfo {
+                id: id.clone(),
+                title: names.get(&id).cloned(),
+                cwd: peek_cwd(&file),
+                path: file.to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            (id, info)
+        })
+        .collect();
+    let catalogue = super::codex_state::catalogue(home);
+    let database = catalogue.database_name();
+    for thread in catalogue.threads {
+        if thread.subagent && !with_subagents {
+            listed.remove(&thread.id);
+            continue;
+        }
+        if let Some(info) = listed.get_mut(&thread.id) {
+            info.title = info.title.take().or(thread.title);
+            info.cwd = info.cwd.take().or(thread.cwd);
+            info.updated = thread.updated;
+            info.archived = thread.archived;
+            info.parent = thread.parent;
+            continue;
+        }
+        let on_disk = thread.rollout.as_deref().filter(|file| file.is_file());
+        let info = SessionInfo {
+            title: names.get(&thread.id).cloned().or(thread.title.clone()),
+            cwd: on_disk.and_then(peek_cwd).or(thread.cwd.clone()),
+            updated: thread.updated.clone(),
+            archived: thread.archived,
+            path: thread
+                .rollout
+                .as_deref()
+                .map(|file| file.to_string_lossy().into_owned())
+                .unwrap_or_else(|| database.clone()),
+            parent: thread.parent.clone(),
+            unreadable: on_disk.is_none().then(|| {
+                format!("rollout file is gone; the thread survives only as a row in {database}")
+            }),
+            id: thread.id.clone(),
+            ..Default::default()
+        };
+        listed.insert(thread.id, info);
+    }
+    let mut out: Vec<SessionInfo> = listed.into_values().collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
+    Ok(out)
 }
 
 /// Read only the native header; missing or damaged metadata does not hide the rollout.
@@ -935,13 +985,57 @@ pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Ses
     }
     match matches.as_slice() {
         [one] => read_file_with(one, branches),
-        [] => Err(super::Lookup::NotFound(format!(
+        [] => read_through_catalogue(id, roots, &sessions, branches),
+        many => Err(super::Lookup::Ambiguous(format!(
+            "{id:?} matches {} Codex rollouts",
+            many.len()
+        ))
+        .into()),
+    }
+}
+
+/// No rollout under `sessions/` carries `id`: the state database may still know the thread. A row
+/// whose rollout lies elsewhere (Codex moves archived threads out of `sessions/`) is read at that
+/// file; one whose rollout is gone is refused with the reason.
+fn read_through_catalogue(
+    id: &str,
+    roots: &StoreRoots,
+    sessions: &Path,
+    branches: Branches,
+) -> Result<Session> {
+    let not_found = || {
+        super::Lookup::NotFound(format!(
             "no Codex rollout with id {id:?} under {}",
             sessions.display()
         ))
-        .into()),
+    };
+    let Some(home) = roots.codex_home.as_deref() else {
+        return Err(not_found().into());
+    };
+    let catalogue = super::codex_state::catalogue(home);
+    let known: Vec<&super::codex_state::Thread> = catalogue
+        .threads
+        .iter()
+        .filter(|thread| !id.is_empty() && thread.id.starts_with(id))
+        .collect();
+    match known.as_slice() {
+        [] => Err(not_found().into()),
+        [thread] => match thread.rollout.as_deref().filter(|file| file.is_file()) {
+            Some(file) => read_file_with(file, branches),
+            None => Err(super::Lookup::NotFound(format!(
+                "Codex thread {} has no rollout any more: its row in {} points at {}, which does not exist",
+                thread.id,
+                catalogue.database_name(),
+                thread
+                    .rollout
+                    .as_deref()
+                    .map(|file| file.display().to_string())
+                    .unwrap_or_else(|| "no file".into()),
+            ))
+            .into()),
+        },
         many => Err(super::Lookup::Ambiguous(format!(
-            "{id:?} matches {} Codex rollouts",
+            "{id:?} matches {} Codex threads",
             many.len()
         ))
         .into()),

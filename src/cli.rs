@@ -444,6 +444,8 @@ pub fn run(args: &[String]) -> Result<()> {
                         "timestamp": info.updated,
                         "location": info.path,
                         "archived": info.archived,
+                        "unreadable": info.unreadable,
+                        "live": info.live,
                     })
                 );
             }

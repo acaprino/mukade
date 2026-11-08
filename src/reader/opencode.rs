@@ -23,7 +23,7 @@ use crate::model::{
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The OpenCode reader.
 #[derive(Debug, Clone, Copy, Default)]
@@ -366,6 +366,9 @@ impl Reader for Opencode {
     /// interchange document, which this reader reads. **`--standalone` is not optional** — without
     /// it the CLI hands the work to the background service of the user's real home (L1).
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
+        if let Some(why) = not_exportable_here(id, roots) {
+            return Err(super::Lookup::NotFound(why).into());
+        }
         let exe = opencode_binary();
         let argv = export_command(&exe, id);
         let mut command = std::process::Command::new(&argv[0]);
@@ -396,43 +399,233 @@ impl Reader for Opencode {
 
 /// List OpenCode sessions. `roots_only` keeps the CLI's `list` contract (one row per root
 /// session); the explorer asks for every row, forks included.
+///
+/// The selected database is listed first; when it is named like one of OpenCode's own
+/// (`opencode.db`, `opencode-<channel>.db`) the other such files beside it are listed too, because
+/// OpenCode starts a new file for a new channel and leaves the old one behind with its sessions.
+/// Those sessions are marked unreadable (see [`databases`]); a sibling that cannot be read is
+/// skipped, while the selected one is an error as before.
 fn list_in(roots: &StoreRoots, roots_only: bool) -> Result<Vec<SessionInfo>> {
-    use rusqlite::{Connection, OpenFlags};
-    let path = roots.opencode_db.as_ref().ok_or_else(|| {
+    let selected = roots.opencode_db.as_ref().ok_or_else(|| {
         super::Lookup::NoStore("OPENCODE_DB is not set: no OpenCode store to list".into())
     })?;
+    // (time_updated, row): the order across files is by time, whatever file a session is in.
+    let mut found: Vec<(i64, SessionInfo)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (index, path) in databases(selected).into_iter().enumerate() {
+        let rows = match sessions_in(&path, roots_only) {
+            Ok(rows) => rows,
+            Err(error) if index == 0 => return Err(error),
+            Err(_) => continue,
+        };
+        for (updated, mut info) in rows {
+            if !seen.insert(info.id.clone()) {
+                continue;
+            }
+            if index > 0 && info.unreadable.is_none() {
+                info.unreadable = Some(format!(
+                    "it is in {}, not in the selected {}; select that file (--root) to read it",
+                    file_name(&path),
+                    file_name(selected)
+                ));
+            }
+            found.push((updated, info));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+    Ok(found.into_iter().map(|(_, info)| info).collect())
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Whether `path` is named like one of OpenCode's own databases: `opencode.db`, or a channel
+/// build's `opencode-<channel>.db`.
+fn is_opencode_database(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|name| name.starts_with("opencode") && name.ends_with(".db"))
+}
+
+/// The database files of one OpenCode installation: the selected file first, then, when it is
+/// named like OpenCode's own, the other such files in its folder in name order. A file the caller
+/// named otherwise (a test store, a copy) stands alone: whatever lies beside it is not its.
+fn databases(selected: &Path) -> Vec<PathBuf> {
+    let mut out = vec![selected.to_path_buf()];
+    if !is_opencode_database(selected) {
+        return out;
+    }
+    let folder = selected
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut siblings: Vec<PathBuf> = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .filter(|path| is_opencode_database(path) && path.file_name() != selected.file_name())
+        .collect();
+    siblings.sort();
+    out.extend(siblings);
+    out
+}
+
+fn open_read_only(path: &Path) -> Result<rusqlite::Connection> {
+    use rusqlite::{Connection, OpenFlags};
     let db = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("open {} read-only", path.display()))?;
     db.busy_timeout(std::time::Duration::from_secs(2))?;
-    let filter = if roots_only {
-        "WHERE parent_id IS NULL "
+    Ok(db)
+}
+
+fn has_table(db: &rusqlite::Connection, table: &str) -> bool {
+    db.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// What OpenCode 2.x does with a row still in the pre-2.0 `session` table.
+const LEGACY_ROW: &str =
+    "legacy-schema row: OpenCode has not moved it to session_v2 and cannot export it";
+
+/// The sessions of one database file, each with its `time_updated`. `session_v2` is the truth;
+/// rows only the legacy `session` table has are added, marked unreadable.
+fn sessions_in(path: &Path, roots_only: bool) -> Result<Vec<(i64, SessionInfo)>> {
+    let db = open_read_only(path)?;
+    let (v2, legacy) = (has_table(&db, "session_v2"), has_table(&db, "session"));
+    if !v2 && !legacy {
+        anyhow::bail!(
+            "list sessions in {}: it has neither a session_v2 nor a session table",
+            path.display()
+        );
+    }
+    let mut out = Vec::new();
+    if v2 {
+        out.extend(
+            session_rows(&db, path, "session_v2", roots_only, None)
+                .with_context(|| format!("list sessions in {}", path.display()))?,
+        );
+    }
+    if legacy {
+        let rows = session_rows(&db, path, "session", roots_only, v2.then_some("session_v2"));
+        // Next to a readable session_v2 a legacy table this reader does not understand is
+        // nothing to fail over; on its own it is the store, and the error is the answer.
+        let rows = if v2 {
+            rows.unwrap_or_default()
+        } else {
+            rows.with_context(|| format!("list sessions in {}", path.display()))?
+        };
+        out.extend(rows.into_iter().map(|(updated, mut info)| {
+            info.unreadable = Some(LEGACY_ROW.to_string());
+            (updated, info)
+        }));
+    }
+    Ok(out)
+}
+
+/// The rows of `table` (`session_v2`, or the legacy `session`), newest first. `except` names a
+/// table whose ids are left out.
+fn session_rows(
+    db: &rusqlite::Connection,
+    path: &Path,
+    table: &str,
+    roots_only: bool,
+    except: Option<&str>,
+) -> Result<Vec<(i64, SessionInfo)>> {
+    let mut conditions = Vec::new();
+    if roots_only {
+        conditions.push("parent_id IS NULL".to_string());
+    }
+    if let Some(other) = except {
+        conditions.push(format!("id NOT IN (SELECT id FROM {other})"));
+    }
+    let filter = if conditions.is_empty() {
+        String::new()
     } else {
-        ""
+        format!("WHERE {} ", conditions.join(" AND "))
     };
     let sql = format!(
-        "SELECT id, title, directory, time_updated, time_archived, parent_id FROM session_v2 \
+        "SELECT id, title, directory, time_updated, time_archived, parent_id FROM {table} \
          {filter}ORDER BY time_updated DESC, id ASC"
     );
-    let mut query = db
-        .prepare(&sql)
-        .with_context(|| format!("list sessions in {}", path.display()))?;
+    let mut query = db.prepare(&sql)?;
     let rows = query.query_map([], |row| {
-        let updated: i64 = row.get(3)?;
-        Ok(SessionInfo {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            cwd: row.get(2)?,
-            updated: chrono::DateTime::from_timestamp_millis(updated).map(|time| time.to_rfc3339()),
-            archived: row.get::<_, Option<i64>>(4)?.is_some(),
-            path: path.to_string_lossy().into_owned(),
-            parent: row.get(5)?,
-        })
+        let updated: Option<i64> = row.get(3)?;
+        Ok((
+            updated.unwrap_or(0),
+            SessionInfo {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                cwd: row.get(2)?,
+                updated: updated
+                    .and_then(chrono::DateTime::from_timestamp_millis)
+                    .map(|time| time.to_rfc3339()),
+                archived: row.get::<_, Option<i64>>(4)?.is_some(),
+                path: path.to_string_lossy().into_owned(),
+                parent: row.get(5)?,
+                ..Default::default()
+            },
+        ))
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .context("read OpenCode session list")
+}
+
+/// Why `id` cannot be exported through the selected database, when another database file or the
+/// legacy table is where the session is. `None` when the selected `session_v2` has it, or nobody
+/// does (then the export says what it says). OpenCode is never started against a file that is not
+/// the selected one: opening a database makes OpenCode migrate it.
+fn not_exportable_here(id: &str, roots: &StoreRoots) -> Option<String> {
+    let selected = roots.opencode_db.as_deref()?;
+    let holds = |path: &Path, table: &str| {
+        open_read_only(path).ok().is_some_and(|db| {
+            has_table(&db, table)
+                && db
+                    .query_row(
+                        &format!("SELECT 1 FROM {table} WHERE id = ?1"),
+                        [id],
+                        |_| Ok(()),
+                    )
+                    .is_ok()
+        })
+    };
+    if holds(selected, "session_v2") {
+        return None;
+    }
+    if holds(selected, "session") {
+        return Some(format!(
+            "OpenCode session {id} is a {LEGACY_ROW} in {}",
+            file_name(selected)
+        ));
+    }
+    databases(selected).into_iter().skip(1).find_map(|other| {
+        if holds(&other, "session_v2") {
+            Some(format!(
+                "OpenCode session {id} is in {}, not in the selected {}; select that file (--root or OPENCODE_DB) to read it",
+                file_name(&other),
+                file_name(selected)
+            ))
+        } else if holds(&other, "session") {
+            Some(format!(
+                "OpenCode session {id} is a {LEGACY_ROW} in {}",
+                file_name(&other)
+            ))
+        } else {
+            None
+        }
+    })
 }
 
 /// Session and fork counts read from OpenCode's own store. The database is opened read-only;
