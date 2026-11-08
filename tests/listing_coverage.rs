@@ -585,16 +585,10 @@ fn prompt(session: &str, project: &str, timestamp: i64, display: &str) -> String
     .to_string()
 }
 
-/// A process id nothing runs under: that of a child that has already exited.
+/// A process id nothing runs under: above every platform's limit, so no process can ever take it
+/// (a child that has exited could have its id reused before the listing looks).
 fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new(support::BIN)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("the binary must run");
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
+    u32::MAX - 1
 }
 
 /// `<home>/sessions/<pid>.json`, the registration Claude Code keeps while a process runs a session.
