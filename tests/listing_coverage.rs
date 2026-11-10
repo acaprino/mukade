@@ -1192,3 +1192,100 @@ fn a_codex_rollout_in_archived_sessions_is_listed_as_archived_without_a_state_da
         "the dumped session is that thread"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// A paginated Codex thread that was archived: its page continues from a base file of the same
+// home, under `sessions/` or `archived_sessions/`, and never from a file outside the home.
+
+const PAGED: &str = "019e0000-0000-7000-8000-0000000000d1";
+const PAGE: &str = "019e0000-0000-7000-8000-0000000000d2";
+
+fn rollout_record(ordinal: u64, kind: &str, payload: Value) -> String {
+    serde_json::json!({
+        "timestamp": format!("2026-10-28T10:{ordinal:02}:00.000Z"), "ordinal": ordinal,
+        "type": kind, "payload": payload,
+    })
+    .to_string()
+        + "\n"
+}
+
+fn rollout_say(ordinal: u64, role: &str, text: &str) -> String {
+    let block = if role == "user" {
+        "input_text"
+    } else {
+        "output_text"
+    };
+    rollout_record(
+        ordinal,
+        "response_item",
+        serde_json::json!({"type": "message", "role": role, "content": [{"type": block, "text": text}]}),
+    )
+}
+
+/// The thread `PAGED` over two files, as Codex 0.165 writes a thread whose later turns were
+/// redone: the base file's text, and the text of a page continuing from its first three records.
+fn paged_thread() -> (String, String) {
+    let meta = serde_json::json!({"id": PAGED, "session_id": PAGED, "cwd": "D:/work/paged",
+                                  "cli_version": "0.165.0", "history_mode": "paginated"});
+    let kept = rollout_record(0, "session_meta", meta.clone())
+        + &rollout_say(1, "user", "first")
+        + &rollout_say(2, "assistant", "one");
+    let base = kept.clone() + &rollout_say(3, "user", "abandoned");
+    let mut page_meta = meta;
+    page_meta["history_base"] = serde_json::json!({
+        "thread_id": PAGED, "end_ordinal_exclusive": 3, "end_byte_offset": kept.len(),
+    });
+    let page = rollout_record(3, "session_meta", page_meta)
+        + &rollout_say(4, "user", "redo")
+        + &rollout_say(5, "assistant", "two");
+    (base, page)
+}
+
+fn base_name() -> String {
+    format!("rollout-2026-10-28T10-38-11-{PAGED}.jsonl")
+}
+
+fn page_name() -> String {
+    format!("rollout-2026-10-28T13-29-27-{PAGED}_{PAGE}.jsonl")
+}
+
+fn write(file: &Path, text: &str) {
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, text).unwrap();
+}
+
+#[test]
+fn an_archived_page_continues_from_its_base_in_either_folder_of_its_home() {
+    let scratch = support::scratch(HarnessId::Codex, "cov-codex-archived-page");
+    let home = scratch.join("home");
+    let (base, page) = paged_thread();
+    write(&home.join("sessions/2026/10/28").join(base_name()), &base);
+    write(&home.join("archived_sessions").join(page_name()), &page);
+
+    let session = mukade::reader::codex::Codex
+        .read(PAGED, &support::roots(&scratch))
+        .expect("the archived page reads with its base");
+
+    assert_eq!(support::user_texts(&session), ["first", "redo"]);
+}
+
+#[test]
+fn an_archived_page_never_takes_its_base_from_outside_its_home() {
+    let scratch = support::scratch(HarnessId::Codex, "cov-codex-archived-decoy");
+    let home = scratch.join("home");
+    let (base, page) = paged_thread();
+    write(&home.join("archived_sessions").join(page_name()), &page);
+    // A copy of the base beside the home, not in it: a backup, another home.
+    write(&scratch.join("elsewhere").join(base_name()), &base);
+
+    let error = mukade::reader::codex::Codex
+        .read(PAGED, &support::roots(&scratch))
+        .expect_err("the base is not in the page's home");
+
+    let error = format!("{error:#}");
+    assert!(error.contains("history_base"), "{error}");
+    assert!(
+        error.contains("archived_sessions"),
+        "the error names the folders it looked in: {error}"
+    );
+}

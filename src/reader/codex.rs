@@ -196,6 +196,31 @@ struct BasePrefix {
     active_len: usize,
 }
 
+/// The folders the other files of `page`'s thread can be in. A page in a Codex home (under its
+/// `sessions/` or `archived_sessions/`) looks in both of that home's folders and nowhere else: a
+/// copy beside the home is not the thread's. A page outside any home (a file named directly)
+/// looks four levels up, the depth of `sessions/YYYY/MM/DD/`.
+fn page_folders(page: &Path) -> Vec<PathBuf> {
+    let home = page
+        .ancestors()
+        .find(|dir| {
+            matches!(
+                dir.file_name().and_then(|n| n.to_str()),
+                Some("sessions" | "archived_sessions")
+            )
+        })
+        .and_then(Path::parent);
+    match home {
+        Some(home) => vec![home.join("sessions"), home.join("archived_sessions")],
+        None => vec![
+            page.ancestors()
+                .nth(4)
+                .unwrap_or(Path::new("."))
+                .to_path_buf(),
+        ],
+    }
+}
+
 /// The base a page continues from: the other rollout of its thread whose first `end_byte` bytes
 /// end with record `end_ordinal - 1`, counting the records of the files before it when it is a
 /// page itself. `chain` holds the files already in the chain, the page first.
@@ -212,15 +237,15 @@ fn base_prefix(
             base.thread
         );
     }
-    let sessions = page
-        .ancestors()
-        .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))
-        .or_else(|| page.ancestors().nth(4))
-        .unwrap_or(Path::new("."));
-    let candidates: Vec<PathBuf> = rollout_files(sessions)?
-        .into_iter()
-        .filter(|file| !chain.contains(file) && rollout_id(file) == base.thread)
-        .collect();
+    let folders = page_folders(page);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for folder in &folders {
+        candidates.extend(
+            rollout_files(folder)?
+                .into_iter()
+                .filter(|file| !chain.contains(file) && rollout_id(file) == base.thread),
+        );
+    }
     if candidates.is_empty() {
         anyhow::bail!(
             "{}: its history_base continues thread {} from its first {} records, and no other \
@@ -228,7 +253,11 @@ fn base_prefix(
             page.display(),
             base.thread,
             base.end_ordinal,
-            sessions.display()
+            folders
+                .iter()
+                .map(|folder| folder.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" or ")
         );
     }
     // Why an earlier page could not be followed, should no candidate fit.
