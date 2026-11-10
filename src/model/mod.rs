@@ -76,6 +76,20 @@ pub struct Entry {
     pub raw: Vec<Value>,
 }
 
+/// An entry that says its turn was interrupted: a step the source killed or aborted, or the abort
+/// marker the source wrote (Codex `<turn_aborted>`, Claude Code `[Request interrupted by user]`).
+fn interrupts(entry: &Entry) -> bool {
+    matches!(
+        entry.kind,
+        Kind::Step {
+            end: StepEnd::Killed | StepEnd::Aborted,
+            ..
+        } | Kind::Meta {
+            kind: MetaKind::TurnAborted
+        }
+    )
+}
+
 impl Session {
     /// The entries that are conversation, in order: everything the destination should receive.
     pub fn conversation(&self) -> impl Iterator<Item = &Entry> {
@@ -88,30 +102,47 @@ impl Session {
         self.entries.iter().find(|e| e.id == id)
     }
 
-    /// The last turn asked for but never answered: a user entry with no step after it, or only
-    /// steps that were killed or aborted before they answered. The manifest records it as
-    /// `interrupted_last_turn` (L9).
+    /// The last turn asked for and never finished (L9): a prompt with no step after it, or whose
+    /// work was interrupted — a step the source killed or aborted, or its abort marker after the
+    /// work. The manifest records it as `interrupted_last_turn`.
     pub fn interrupted_last_turn(&self) -> bool {
-        let unanswered = |e: &&Entry| {
-            matches!(
-                e.kind,
-                Kind::Step {
-                    end: StepEnd::Killed | StepEnd::Aborted,
-                    ..
-                }
-            )
+        let Some(start) = self
+            .entries
+            .iter()
+            .rposition(|e| matches!(e.kind, Kind::User { .. } | Kind::Compaction { .. }))
+        else {
+            return false;
         };
-        matches!(
-            self.entries
+        if !matches!(self.entries[start].kind, Kind::User { .. }) {
+            return false;
+        }
+        let turn = &self.entries[start + 1..];
+        turn.iter().any(interrupts)
+            || !turn
                 .iter()
-                .rev()
-                .filter(|e| !matches!(e.kind, Kind::Meta { .. }))
-                .find(|e| !unanswered(e)),
-            Some(Entry {
-                kind: Kind::User { .. },
-                ..
-            })
-        )
+                .any(|e| matches!(e.kind, Kind::Step { .. } | Kind::Results { .. }))
+    }
+
+    /// One flag per entry: whether it is work (a step, or its results) of a turn the source never
+    /// finished. A turn runs from a prompt (or a compaction) to the next one; it is interrupted
+    /// when it holds a step that was killed or aborted, or the source's own abort marker. The
+    /// prompt itself is never work: it is the user's, and complete.
+    pub fn interrupted_work(&self) -> Vec<bool> {
+        let mut work = vec![false; self.entries.len()];
+        let mut start = 0;
+        while start < self.entries.len() {
+            let end = self.entries[start + 1..]
+                .iter()
+                .position(|e| matches!(e.kind, Kind::User { .. } | Kind::Compaction { .. }))
+                .map_or(self.entries.len(), |next| start + 1 + next);
+            if self.entries[start..end].iter().any(interrupts) {
+                for (flag, entry) in work[start..end].iter_mut().zip(&self.entries[start..end]) {
+                    *flag = matches!(entry.kind, Kind::Step { .. } | Kind::Results { .. });
+                }
+            }
+            start = end;
+        }
+        work
     }
 
     /// The last compaction entry, if the source compacted the conversation at all.
@@ -120,5 +151,134 @@ impl Session {
             .iter()
             .rev()
             .find(|e| matches!(e.kind, Kind::Compaction { .. }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, kind: Kind) -> Entry {
+        Entry {
+            id: id.into(),
+            kind,
+            raw: vec![],
+        }
+    }
+
+    fn prompt(id: &str) -> Entry {
+        entry(
+            id,
+            Kind::User {
+                text: id.into(),
+                attachments: Vec::new(),
+            },
+        )
+    }
+
+    fn step(id: &str, end: StepEnd) -> Entry {
+        entry(
+            id,
+            Kind::Step {
+                model: None,
+                reasoning: Vec::new(),
+                text: vec![id.into()],
+                calls: Vec::new(),
+                end,
+            },
+        )
+    }
+
+    fn results(id: &str) -> Entry {
+        entry(
+            id,
+            Kind::Results {
+                results: Vec::new(),
+            },
+        )
+    }
+
+    fn marker(id: &str) -> Entry {
+        entry(
+            id,
+            Kind::Meta {
+                kind: MetaKind::TurnAborted,
+            },
+        )
+    }
+
+    fn session(entries: Vec<Entry>) -> Session {
+        Session {
+            meta: Meta {
+                harness: HarnessId::Pi,
+                harness_version: String::new(),
+                id: "s".into(),
+                cwd: None,
+                title: None,
+                created: None,
+                updated: None,
+                models: Vec::new(),
+                git_branch: None,
+                parent: None,
+                source_path: None,
+                source_sha256: None,
+            },
+            entries,
+        }
+    }
+
+    /// The work of an interrupted turn is every step and result between its prompt and the next
+    /// one, whether the sign is an aborted step or the source's marker. Prompts are never work.
+    #[test]
+    fn the_work_of_an_interrupted_turn_is_all_its_steps_and_results() {
+        let s = session(vec![
+            prompt("u1"),
+            step("a1", StepEnd::Completed),
+            prompt("u2"),
+            step("a2", StepEnd::ToolUse),
+            results("r2"),
+            step("a3", StepEnd::Aborted),
+            prompt("u3"),
+            step("a4", StepEnd::ToolUse),
+            results("r4"),
+            marker("x4"),
+            prompt("u4"),
+            step("a5", StepEnd::Killed),
+        ]);
+        let work: Vec<&str> = s
+            .entries
+            .iter()
+            .zip(s.interrupted_work())
+            .filter(|(_, interrupted)| *interrupted)
+            .map(|(entry, _)| entry.id.as_str())
+            .collect();
+        assert_eq!(work, ["a2", "r2", "a3", "a4", "r4", "a5"]);
+    }
+
+    /// A turn the agent worked on and then left unfinished is an interrupted last turn too, not
+    /// only one with no reply at all.
+    #[test]
+    fn a_last_turn_cut_after_some_work_is_interrupted() {
+        let cut_after_a_tool = session(vec![
+            prompt("u1"),
+            step("a1", StepEnd::ToolUse),
+            results("r1"),
+            step("a2", StepEnd::Aborted),
+        ]);
+        assert!(cut_after_a_tool.interrupted_last_turn());
+        let marked = session(vec![
+            prompt("u1"),
+            step("a1", StepEnd::ToolUse),
+            results("r1"),
+            marker("x1"),
+        ]);
+        assert!(marked.interrupted_last_turn());
+        let finished = session(vec![
+            prompt("u1"),
+            step("a1", StepEnd::Aborted),
+            prompt("u2"),
+            step("a2", StepEnd::Completed),
+        ]);
+        assert!(!finished.interrupted_last_turn());
     }
 }

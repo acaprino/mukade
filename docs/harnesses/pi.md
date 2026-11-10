@@ -316,6 +316,7 @@ elsewhere are not found [31].
 |---|---|
 | `message` `user` | `User` |
 | `message` `assistant` | `Step`: thinking (signature kept, protocol from `api`), text, all `toolCall`s; `stopReason` `toolUse` → `ToolUse`, `aborted` → `Aborted`, `error` → `Error`, any other → `Completed` |
+| an interrupted turn | a turn holding an `Aborted` step. By default it travels; `--interrupted drop` leaves its steps and results out, its prompt stays |
 | `message` `toolResult` | consecutive results gathered into one `Results` |
 | `message` `bashExecution` | `User` with Pi's own text (`bashExecutionToText`); `Meta` when `excludeFromContext` |
 | `branch_summary` | `User` with `BRANCH_SUMMARY_PREFIX` + summary + `</summary>` (`Meta` if empty) |

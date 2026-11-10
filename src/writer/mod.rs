@@ -14,6 +14,27 @@ use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
 use crate::tools::{Shell, ToolSet, offered};
 use anyhow::Result;
+/// What a writer does with the work of a turn the source never finished: the steps and results
+/// between a prompt and the interruption (L9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Interrupted {
+    /// Carry it: what the agent had done travels as it is.
+    #[default]
+    Keep,
+    /// Leave it out, counted. The turn's prompt stays: it is the user's own, and complete.
+    Drop,
+}
+
+impl Interrupted {
+    /// The name the command line and the manifest use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Interrupted::Keep => "keep",
+            Interrupted::Drop => "drop",
+        }
+    }
+}
+
 /// What a writer is told about the destination.
 #[derive(Debug, Clone, Default)]
 pub struct WriteOpts {
@@ -54,6 +75,8 @@ pub struct WriteOpts {
     pub tool_map: Vec<(String, String, serde_json::Value, serde_json::Value)>,
     /// Omit recorded tool calls and their results, retaining only conversation text.
     pub without_tools: bool,
+    /// Whether the work of interrupted turns travels. The default keeps it.
+    pub interrupted: Interrupted,
     /// Â§3.3. The default drops reasoning the destination cannot replay.
     pub reasoning: ReasoningPolicy,
     /// A title, where the destination has one.

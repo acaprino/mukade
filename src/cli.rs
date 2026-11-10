@@ -80,6 +80,10 @@ options:
   --metadata-file <path>   a JSON object to store as session metadata (OpenCode only)
   --tool-map <path>        explicit source tool bindings from the destination catalog
   --without-tools          omit historical tool calls and results (hop and write)
+  --interrupted <mode>     keep (default) | drop: leave out what the agent did in the turns the
+                           source never finished (killed or interrupted by the user), with the
+                           tool calls and results of those turns; their prompts stay
+                           (hop, write and document)
   --expect-sha256 <hash>   refuse a hop when the captured source fingerprint changed
   --reasoning <mode>       drop_foreign (default) | as_text | drop
   --compaction <mode>      none (default) | portable (the source's own summary, then its tail) |
@@ -171,6 +175,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--metadata-file" => flags.metadata_file = Some(next(rest, &mut i)?),
             "--tool-map" => flags.tool_map = Some(next(rest, &mut i)?),
             "--without-tools" => flags.without_tools = true,
+            "--interrupted" => flags.interrupted = Some(next(rest, &mut i)?),
             "--expect-sha256" => flags.expect_sha256 = Some(next(rest, &mut i)?),
             "--compaction" => flags.compaction = Some(next(rest, &mut i)?),
             "--keep-turns" => flags.keep_turns = Some(next(rest, &mut i)?),
@@ -217,6 +222,11 @@ pub fn run(args: &[String]) -> Result<()> {
     if flags.without_tools && !matches!(command.as_str(), "hop" | "write" | "document") {
         anyhow::bail!("--without-tools is supported only by hop, write and document");
     }
+    if flags.interrupted.is_some() && !matches!(command.as_str(), "hop" | "write" | "document") {
+        anyhow::bail!("--interrupted is supported only by hop, write and document");
+    }
+    // A mistyped mode is refused here, before a store is read.
+    flags.interrupted()?;
     if flags.intent.is_some() && !matches!(command.as_str(), "dump" | "hop") {
         anyhow::bail!("--intent is supported only by dump and hop");
     }
@@ -972,6 +982,7 @@ struct Flags {
     metadata_file: Option<String>,
     tool_map: Option<String>,
     without_tools: bool,
+    interrupted: Option<String>,
     expect_sha256: Option<String>,
     reasoning: Option<String>,
     compaction: Option<String>,
@@ -998,6 +1009,15 @@ struct Flags {
 }
 
 impl Flags {
+    /// `--interrupted`: whether the work of the turns the source never finished travels.
+    fn interrupted(&self) -> Result<crate::writer::Interrupted> {
+        match self.interrupted.as_deref() {
+            None | Some("keep") => Ok(crate::writer::Interrupted::Keep),
+            Some("drop") => Ok(crate::writer::Interrupted::Drop),
+            Some(other) => anyhow::bail!("unknown --interrupted {other} (keep, drop)"),
+        }
+    }
+
     /// Everything an import needs, from the flags plus the destination's own configuration.
     fn import_opts(
         &self,
@@ -1030,6 +1050,7 @@ impl Flags {
                 metadata: write.metadata,
                 tool_map: write.tool_map,
                 without_tools: write.without_tools,
+                interrupted: write.interrupted,
                 now: write.now,
                 exe: write.exe,
             },
@@ -1178,6 +1199,7 @@ impl Flags {
             metadata,
             tool_map,
             without_tools: self.without_tools,
+            interrupted: self.interrupted()?,
             reasoning,
             title: session.meta.title.clone(),
             now: None,

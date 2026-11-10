@@ -1,7 +1,8 @@
 //! Reconstruct Claude Code's selected history without relying on write order or timestamps.
 
 use super::{
-    Class, class_of, content_text, is_command_row, is_prompt_command, truthy, with_command_context,
+    Class, class_of, content_text, is_command_row, is_interruption_marker, is_prompt_command,
+    truthy, with_command_context,
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
@@ -57,10 +58,7 @@ fn real_prompt(row: &Value) -> bool {
         ]
         .iter()
         .all(|key| row.get(key).is_none())
-        && !content_text(row).is_some_and(|text| {
-            let text = text.trim();
-            text.starts_with("[Request interrupted by user") && text.ends_with(']')
-        })
+        && !content_text(row).is_some_and(|text| is_interruption_marker(&text))
 }
 
 fn expanded_prompt(row: &Value) -> bool {

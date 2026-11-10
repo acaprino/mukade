@@ -306,6 +306,13 @@ fn class_of(row: &Value) -> Class {
     }
 }
 
+/// L9: the row Claude Code writes when the user interrupts a turn (`[Request interrupted by
+/// user]`, `[Request interrupted by user for tool use]`). The user never typed it.
+fn is_interruption_marker(text: &str) -> bool {
+    let text = text.trim();
+    text.starts_with("[Request interrupted by user") && text.ends_with(']')
+}
+
 /// A command row is one Claude Code wrote for a slash command: it starts with the tag. A prompt
 /// that only mentions one is the user's own words.
 fn is_command_row(text: &str) -> bool {
@@ -586,6 +593,14 @@ impl Builder {
         let text = content_text(&row);
         let class =
             with_command_context(&row, class, text.as_deref(), &mut self.after_prompt_command);
+        // L9: a row of the resumed branch that is the harness's own interruption marker. Only
+        // here: an interruption of an abandoned branch says nothing about this one.
+        let class = match class {
+            Class::User if text.as_deref().is_some_and(is_interruption_marker) => {
+                Class::Meta(MetaKind::TurnAborted)
+            }
+            class => class,
+        };
         match class {
             Class::Assistant(message_id) => {
                 self.flush_unless_step(&message_id);
@@ -597,14 +612,21 @@ impl Builder {
                 self.unsummarized = None;
                 let id = row_id(&row, index);
                 self.results_with(index, row);
-                // The user's own text beside the results is a turn of its own, after them.
+                // The user's own text beside the results is a turn of its own, after them. An
+                // interruption written there is the harness's marker, not a turn.
                 if let Some(text) = text {
                     self.flush();
                     self.entries.push(Entry {
                         id: format!("{id}-text"),
-                        kind: Kind::User {
-                            text,
-                            attachments: Vec::new(),
+                        kind: if is_interruption_marker(&text) {
+                            Kind::Meta {
+                                kind: MetaKind::TurnAborted,
+                            }
+                        } else {
+                            Kind::User {
+                                text,
+                                attachments: Vec::new(),
+                            }
                         },
                         raw: Vec::new(),
                     });
@@ -682,6 +704,28 @@ impl Builder {
                             .and_then(Value::as_array)
                             .map(|blocks| super::json::attachments(blocks))
                             .unwrap_or_default(),
+                    },
+                    raw: vec![row],
+                });
+            }
+            Class::Meta(MetaKind::TurnAborted) => {
+                // L9: the reply the interruption cut keeps what it holds and says how it ended.
+                // Nothing of that turn continues after the marker.
+                let last = self
+                    .entries
+                    .iter()
+                    .rposition(|entry| !matches!(entry.kind, Kind::Meta { .. }));
+                if let Some(Kind::Step { end, .. }) =
+                    last.map(|index| &mut self.entries[index].kind)
+                {
+                    *end = StepEnd::Aborted;
+                }
+                self.flush();
+                self.unsummarized = None;
+                self.entries.push(Entry {
+                    id: row_id(&row, index),
+                    kind: Kind::Meta {
+                        kind: MetaKind::TurnAborted,
                     },
                     raw: vec![row],
                 });

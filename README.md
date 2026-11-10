@@ -50,6 +50,23 @@ let receipt = hop(&HopRequest {
 println!("{}", serde_json::to_string_pretty(&receipt.manifest)?);
 ```
 
+`WriteDetails` holds what the caller decides about the written session. The work of the turns the
+source never finished (killed, or interrupted by the user) travels by default; to leave it out and
+keep those turns' prompts:
+
+```rust
+use mukade::writer::Interrupted;
+
+let write = WriteDetails {
+    interrupted: Interrupted::Drop,     // default: Interrupted::Keep
+    ..Default::default()
+};
+```
+
+The manifest then states `options.interrupted`, counts `dropped_interrupted_steps` and names the
+loss. `Session::interrupted_work()` gives the same answer without writing anything: one flag per
+entry, set on the steps and results of the interrupted turns.
+
 `hop` is the whole pipeline. Its halves are public on their own: `export(&SessionRef, &roots)` reads a
 session (`export_path` reads one from a file), `import(dest, &session, &ImportOpts)` writes one you
 already hold, and `Receipt` carries the destination id, its location, the native resume command, the
@@ -89,6 +106,7 @@ mukade list  <harness> [--archived true|false]   # one JSON line per session; `u
 mukade dump  <harness> <session-id>          # the interchange document on stdout, or --output <file>
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
 mukade hop   <src-harness> <session-id> <dst-harness> [options]   # --all-branches: a Codex thread whole
+                                                                  # --interrupted drop: without the work of unfinished turns
 mukade detect <dir>                          # which harness stores the directory holds
 mukade scan  <dir> [--depth <n>]             # every installation below the directory, portable ones included
 ```
@@ -138,7 +156,17 @@ launchers included) when it runs it. An empty flag falls back to the default res
 OpenCode as a source, select its custom executable with `MUKADE_OPENCODE_EXE`.
 
 `--without-tools` on `hop` or `write` omits recorded tool calls and results; the manifest counts
-the omissions. An OpenCode destination may also receive `--dest-id`, `--dest-agent` and
+the omissions. `--interrupted drop` on `hop`, `write` or `document` leaves out what the agent did
+in the turns the source never finished (killed, or interrupted by the user) and keeps their
+prompts; the default, `keep`, carries it, so a session with no finished turn is still exported
+whole:
+
+```powershell
+mukade hop codex YOUR_CODEX_THREAD_ID pi --cwd 'C:\work\my-project' --interrupted drop
+```
+
+The manifest states the mode and counts what was left out (`dropped_interrupted_steps`); see
+[A session with interrupted turns](docs/usage.md#a-session-with-interrupted-turns). An OpenCode destination may also receive `--dest-id`, `--dest-agent` and
 `--metadata-file`: a reserved ID or supplied metadata is checked in the explicitly selected
 database after the import. An external import whose outcome cannot be confirmed returns code 5 and names
 the reserved ID; reconcile it before retrying.

@@ -342,6 +342,7 @@ Mapping:
 |---|---|
 | `user` | User, with `files` as attachments |
 | `assistant` | one Step: reasoning with `native.signature` / `native.encrypted`, or the complete Chat-compatible `native.reasoningDetails` array retained in `Opaque.chat` (native OpenAI Gateway and OpenRouter formats; see the continuity requirement below), text, one call per `tool` part plus its result. A part still `pending`/`running` has no result; an `error` part's result is `state.error.message`, marked as an error. No `finish` means killed |
+| an interrupted turn | a turn holding a step with no `finish` (`Killed`) or `finish:"aborted"` (`Aborted`). By default it travels; `--interrupted drop` leaves its steps and results out, its prompt stays |
 | `compaction`, `status:"completed"` | Compaction: `kept_from` = `metadata.keepID`, trigger from `reason` |
 | failed `compaction`, `idle`, unknown types | Meta (not conversation) |
 

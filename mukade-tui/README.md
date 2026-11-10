@@ -172,7 +172,8 @@ session for the source's folder yet cannot supply: use the CLI's `--project-id` 
 
 - No export/import dialog yet.
 - Hop options are limited to destination, compaction and resume prompt; reasoning policy,
-  historical tools, cwd override, `all-branches` and advanced destination ids stay in the CLI.
+  historical tools, interrupted turns (always kept here; `--interrupted drop` in the CLI), cwd
+  override, `all-branches` and advanced destination ids stay in the CLI.
 - Every row is named by its own store: OpenCode and a portable JanuraCode from `session_v2.title`,
   Claude Code from the rows its `/resume` picker reads, Codex from `session_index.jsonl`, Pi from its
   `session_info` display name or its first prompt. A session its store does not name — a Claude Code

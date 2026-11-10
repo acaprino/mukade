@@ -132,6 +132,7 @@ pub struct WriteDetails {
     pub metadata: Option<Value>,
     pub tool_map: Vec<(String, String, serde_json::Value, serde_json::Value)>,
     pub without_tools: bool,
+    pub interrupted: crate::writer::Interrupted,
     pub now: Option<String>,
     /// The destination harness's executable override (`crate::exe` resolves the default).
     pub exe: Option<String>,
@@ -341,6 +342,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         metadata: opts.write.metadata.clone(),
         tool_map: opts.write.tool_map.clone(),
         without_tools: opts.write.without_tools,
+        interrupted: opts.write.interrupted,
         reasoning: opts.reasoning,
         title: session.meta.title.clone(),
         now: opts.write.now.clone(),
@@ -726,6 +728,7 @@ fn manifest_of(
         .to_string(),
         resume_prompt: opts.resume.is_some(),
         without_tools: opts.write.without_tools,
+        interrupted: opts.write.interrupted.as_str().to_string(),
         counts: plan.counts.clone(),
         losses: {
             let mut losses = losses;

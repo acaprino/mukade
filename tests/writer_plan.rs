@@ -732,3 +732,119 @@ fn a_compaction_with_no_readable_summary_is_left_out_and_counted() {
         "{losses:?}"
     );
 }
+
+fn prompt(id: &str, text: &str) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::User {
+            text: text.into(),
+            attachments: Vec::new(),
+        },
+        raw: vec![],
+    }
+}
+
+fn reply(id: &str, text: &str, end: StepEnd) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec![text.into()],
+            calls: vec![],
+            end,
+        },
+        raw: vec![],
+    }
+}
+
+/// What the plan carries, one word per block, with the text of prompts and replies.
+fn carried(plan: &plan::Plan) -> Vec<String> {
+    plan.blocks
+        .iter()
+        .map(|block| match block {
+            PlannedBlock::User { text, .. } => format!("user:{text}"),
+            PlannedBlock::Step(step) => format!("step:{}", step.text.join("|")),
+            PlannedBlock::Results { .. } => "results".to_string(),
+            PlannedBlock::Compaction { .. } => "compaction".to_string(),
+        })
+        .collect()
+}
+
+/// A turn that used a tool and was then interrupted, between two turns that finished.
+fn session_with_an_interrupted_turn() -> Session {
+    session(vec![
+        prompt("u1", "FIRST"),
+        reply("a1", "DONE-1", StepEnd::Completed),
+        prompt("u2", "SECOND"),
+        step("a2", vec![read_call("toolu_1")]),
+        results("r2", &["toolu_1"]),
+        reply("a3", "PARTIAL", StepEnd::Aborted),
+        prompt("u3", "THIRD"),
+        reply("a4", "DONE-3", StepEnd::Completed),
+    ])
+}
+
+/// `--interrupted drop`: what the agent did in a turn it never finished is left out, calls and
+/// results included. The prompt is the user's and complete, so it stays; finished turns are whole.
+#[test]
+fn drop_leaves_out_the_work_of_an_interrupted_turn_and_keeps_its_prompt() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-interrupted-drop");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.interrupted = mukade::writer::Interrupted::Drop;
+    let plan = plan::plan(&session_with_an_interrupted_turn(), HarnessId::Pi, &opts);
+    assert_eq!(
+        carried(&plan),
+        [
+            "user:FIRST",
+            "step:DONE-1",
+            "user:SECOND",
+            "user:THIRD",
+            "step:DONE-3"
+        ]
+    );
+    assert_eq!(plan.counts.dropped_interrupted_steps, 2);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("interrupted turns")),
+        "{losses:?}"
+    );
+}
+
+/// The default keeps everything: an interrupted turn travels with what it holds.
+#[test]
+fn by_default_the_work_of_an_interrupted_turn_travels() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-interrupted-keep");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let plan = plan::plan(&session_with_an_interrupted_turn(), HarnessId::Pi, &opts);
+    assert_eq!(plan.blocks.len(), 8, "{:?}", carried(&plan));
+    assert!(carried(&plan).contains(&"step:PARTIAL".to_string()));
+    assert_eq!(plan.counts.dropped_interrupted_steps, 0);
+}
+
+/// An interruption after a tool answered leaves no aborted step, only the source's marker: the
+/// turn is interrupted all the same.
+#[test]
+fn drop_takes_a_turn_whose_only_sign_is_the_abort_marker() {
+    use mukade::model::MetaKind;
+    let scratch = support::scratch(HarnessId::Pi, "plan-interrupted-marker");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.interrupted = mukade::writer::Interrupted::Drop;
+    let s = session(vec![
+        prompt("u1", "FIRST"),
+        step("a1", vec![read_call("toolu_1")]),
+        results("r1", &["toolu_1"]),
+        Entry {
+            id: "x1".into(),
+            kind: Kind::Meta {
+                kind: MetaKind::TurnAborted,
+            },
+            raw: vec![],
+        },
+        prompt("u2", "SECOND"),
+        reply("a2", "DONE-2", StepEnd::Completed),
+    ]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(carried(&plan), ["user:FIRST", "user:SECOND", "step:DONE-2"]);
+    assert_eq!(plan.counts.dropped_interrupted_steps, 1);
+}

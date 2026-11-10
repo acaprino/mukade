@@ -11,7 +11,7 @@ use crate::policy::{
     ReasoningDrop, ReasoningPlan, chat_destination_fits, payload_fits, plan_reasoning,
 };
 use crate::tools::{self, Shell, Translation};
-use crate::writer::{WriteOpts, media};
+use crate::writer::{Interrupted, WriteOpts, media};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -114,6 +114,9 @@ pub struct Counts {
     /// Steps the source aborted or that failed, written as ordinary replies by a destination with
     /// no way to mark them (Pi keeps the step's end).
     pub aborted_steps_as_replies: usize,
+    /// Steps of turns the source never finished, left out on request with their results
+    /// (`Interrupted::Drop`).
+    pub dropped_interrupted_steps: usize,
     /// A call the source never answered: the provider would refuse it as a tool call (L7).
     pub unanswered_calls: usize,
     /// A step that lost everything it had and cannot be written as an empty message.
@@ -309,8 +312,20 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
         }
     }
 
-    for entry in session.conversation() {
+    // The work of turns the source never finished, left out when the caller asks: the steps and
+    // their results go together, so no call is left without its answer; the prompt stays.
+    let left_out = match opts.interrupted {
+        Interrupted::Keep => Vec::new(),
+        Interrupted::Drop => session.interrupted_work(),
+    };
+    for (index, entry) in session.entries.iter().enumerate() {
         counts.messages_in += 1;
+        if left_out.get(index).copied().unwrap_or(false) {
+            if matches!(entry.kind, Kind::Step { .. }) {
+                counts.dropped_interrupted_steps += 1;
+            }
+            continue;
+        }
         match &entry.kind {
             Kind::User { text, attachments } => {
                 // A user turn ends the previous step's pair of call lists: a stray result after it

@@ -943,3 +943,89 @@ fn listing_shows_the_thread_name_from_the_session_index() {
     std::fs::remove_file(home.join("session_index.jsonl")).unwrap();
     assert_eq!(codex::Codex.list(&roots(&home)).unwrap()[0].title, None);
 }
+
+fn rollout_record(ordinal: u64, kind: &str, payload: Value) -> Value {
+    serde_json::json!({
+        "timestamp": format!("2026-11-10T10:00:{ordinal:02}.000Z"),
+        "ordinal": ordinal, "type": kind, "payload": payload,
+    })
+}
+
+fn header() -> Value {
+    rollout_record(
+        0,
+        "session_meta",
+        serde_json::json!({"session_id": "abc", "id": "abc", "cwd": r"C:\x", "cli_version": "0.166.0"}),
+    )
+}
+
+fn prompt(ordinal: u64, text: &str) -> Value {
+    rollout_record(
+        ordinal,
+        "response_item",
+        serde_json::json!({"type": "message", "id": format!("msg_u{ordinal}"), "role": "user",
+            "content": [{"type": "input_text", "text": text}]}),
+    )
+}
+
+fn answer(ordinal: u64, turn: &str, text: &str) -> Value {
+    rollout_record(
+        ordinal,
+        "response_item",
+        serde_json::json!({"type": "message", "id": format!("msg_a{ordinal}"), "role": "assistant",
+            "content": [{"type": "output_text", "text": text}],
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn}}),
+    )
+}
+
+/// The two records a graceful interrupt writes: the marker message and the event.
+fn abort(ordinal: u64, turn: &str) -> [Value; 2] {
+    [
+        rollout_record(
+            ordinal,
+            "response_item",
+            serde_json::json!({"type": "message", "id": format!("msg_x{ordinal}"), "role": "user",
+                "content": [{"type": "input_text", "text": "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"}],
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn}}),
+        ),
+        rollout_record(
+            ordinal + 1,
+            "event_msg",
+            serde_json::json!({"type": "turn_aborted", "turn_id": turn, "reason": "interrupted"}),
+        ),
+    ]
+}
+
+/// L9: what the model had written when the user interrupted is kept, and the step says it was
+/// aborted: a destination must not take a cut-off reply for a finished one.
+#[test]
+fn a_reply_cut_by_an_abort_is_an_aborted_step() {
+    let mut rows = vec![
+        header(),
+        prompt(1, "PROMPT-1"),
+        answer(2, "turn-A", "PARTIAL-1"),
+    ];
+    rows.extend(abort(3, "turn-A"));
+    let s = codex::parse(&rows, None).unwrap();
+    let conv = conversation(&s);
+    assert_eq!(conv.len(), 2, "{conv:?}");
+    let Kind::Step { text, end, .. } = &conv[1].kind else {
+        panic!("{:?}", conv[1].kind)
+    };
+    assert_eq!(text, &["PARTIAL-1".to_string()]);
+    assert_eq!(*end, StepEnd::Aborted);
+    assert!(s.interrupted_last_turn());
+}
+
+/// An abort names its turn: a reply that an earlier turn finished is not the one it cut.
+#[test]
+fn an_abort_of_another_turn_leaves_a_finished_reply_alone() {
+    let mut rows = vec![header(), prompt(1, "PROMPT-1"), answer(2, "turn-A", "DONE-1")];
+    rows.extend(abort(3, "turn-B"));
+    let s = codex::parse(&rows, None).unwrap();
+    let conv = conversation(&s);
+    let Kind::Step { end, .. } = &conv[1].kind else {
+        panic!("{:?}", conv[1].kind)
+    };
+    assert_eq!(*end, StepEnd::Completed);
+}

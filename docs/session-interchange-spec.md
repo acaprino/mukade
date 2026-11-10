@@ -626,6 +626,12 @@ Cautions [V]:
 - An **interrupted last turn** in the source is carried as a user message without a reply. On
   resume Codex, OpenCode and Pi send two consecutive user messages; Claude Code inserts its
   synthetic `No response requested.`. Both are accepted. The manifest records `interrupted_last_turn`.
+- An **interrupted turn** is one the source never finished: it holds a step that was killed or
+  aborted, or the source's own abort marker after its work (Codex `<turn_aborted>`, Claude Code
+  `[Request interrupted by user]`; both are `Meta`, never user text). The step the marker cut is
+  `aborted` and keeps what it holds. By default the turn's work travels, so a session with no
+  finished turn is still carried whole; with `interrupted: drop` every step and result of such a
+  turn is left out and counted (`dropped_interrupted_steps`), and its prompt stays.
 
 ## 6. Destination constraints and manifest
 
@@ -644,7 +650,7 @@ Cautions [V]:
   "source": {"harness": "codex", "version": "0.164.0", "session_id": "…", "content_sha256": "…"},
   "dest":   {"harness": "claude_code", "version": "2.1.311", "session_id": "…", "location": "…"},
   "library": {"name": "shinatama-interchange", "version": "…", "reader": "codex@0.164.0", "writer": "claude_code@2.1.311"},
-  "options": {"compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": true},
+  "options": {"compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": true, "interrupted": "keep"},
   "counts":  {"messages_in": 18, "messages_out": 9, "tool_calls": 0, "reasoning_dropped": 1},
   "losses":  ["reasoning dropped: made by another provider protocol (1)", "interrupted_last_turn"],
   "strict":  {"checked": true, "violations": []}
@@ -690,7 +696,7 @@ for evidence about individual behaviors.
 | L4 | every reader turns the native compaction record into a `Compaction` entry (Claude `compact_boundary` + `isCompactSummary` row + `preservedSegment`; Codex `compacted` + `replacement_history`; OpenCode `compaction` + `metadata.keepID`; Pi `compaction` + `firstKeptEntryId`) | §2 | `Portable{SourceRecord}` works for all 12 pairs without a supplied summary |
 | L5 | Claude reader: `isMeta`, `<local-command-*>`/`<command-name>` rows, `isCompactSummary`, `isVisibleInTranscriptOnly`, attachment rows → `Meta`; rows merged by `message.id`; results paired by `tool_use_id`, not by the parent chain | §2.1 | Claude → Pi tail strict clean; no `function_call "{}"` into Codex |
 | L6 | readers keep `signature`/`encrypted` with protocol + model (`Opaque`) | §3.3 | OpenCode/Pi → Claude strict clean with `DropForeign` |
-| L9 | Codex `<turn_aborted>`/`turn_aborted` and a hard-killed last turn → `StepEnd::aborted`/`killed`; Claude `<synthetic>` reply → `Meta`; OpenCode empty assistant without `finish` → `killed` | §2 | manifest `interrupted_last_turn`; no marker text in the destination |
+| L9 | Codex `<turn_aborted>`/`turn_aborted` and a hard-killed last turn → `StepEnd::aborted`/`killed`; Claude `<synthetic>` reply and `[Request interrupted by user]` → `Meta`, the step it cut → `aborted`; OpenCode empty assistant without `finish` → `killed` | §2 | manifest `interrupted_last_turn`; no marker text in the destination; `interrupted: drop` leaves the turn's work out |
 | L10 | Codex Desktop code-mode `exec`: a script that is exactly one `tools.exec_command` / `tools.apply_patch` call → that call; any other script → one text-form call | census: 4844 of 4908 real Codex calls are `exec` | a Codex Desktop rollout converts with shell and patch calls translated |
 
 ### 8.2 Writers

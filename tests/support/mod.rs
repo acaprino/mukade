@@ -170,6 +170,7 @@ pub fn details(opts: &WriteOpts) -> WriteDetails {
         metadata: opts.metadata.clone(),
         tool_map: opts.tool_map.clone(),
         without_tools: opts.without_tools,
+        interrupted: opts.interrupted,
         now: opts.now.clone(),
         exe: opts.exe.clone(),
     }
@@ -410,6 +411,7 @@ pub fn opts(harness: HarnessId, scratch: &Path) -> WriteOpts {
         metadata: None,
         tool_map: Vec::new(),
         without_tools: false,
+        interrupted: mukade::writer::Interrupted::Keep,
         reasoning: ReasoningPolicy::DropForeign,
         title: Some("interchange test".to_string()),
         now: Some(NOW.to_string()),

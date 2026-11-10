@@ -27,6 +27,8 @@ pub struct Manifest {
     pub reasoning: String,
     pub resume_prompt: bool,
     pub without_tools: bool,
+    /// `keep` or `drop`: whether the work of interrupted turns travelled.
+    pub interrupted: String,
     pub counts: Counts,
     pub losses: Vec<String>,
     pub strict_checked: bool,
@@ -73,6 +75,10 @@ impl Manifest {
         counts.insert(
             "aborted_steps_as_replies".into(),
             json!(self.counts.aborted_steps_as_replies),
+        );
+        counts.insert(
+            "dropped_interrupted_steps".into(),
+            json!(self.counts.dropped_interrupted_steps),
         );
         counts.insert(
             "unanswered_calls".into(),
@@ -129,6 +135,7 @@ impl Manifest {
                 "reasoning": self.reasoning,
                 "resume_prompt": self.resume_prompt,
                 "without_tools": self.without_tools,
+                "interrupted": self.interrupted,
             },
             "counts": Value::Object(counts),
             "losses": self.losses,
@@ -211,6 +218,12 @@ impl Manifest {
                 counts.aborted_steps_as_replies
             ));
         }
+        if counts.dropped_interrupted_steps > 0 {
+            losses.push(format!(
+                "steps of interrupted turns omitted by request, with their tool results ({})",
+                counts.dropped_interrupted_steps
+            ));
+        }
         if counts.dropped_empty_steps > 0 {
             losses.push(format!(
                 "empty steps dropped ({})",
@@ -255,7 +268,10 @@ mod tests {
     #[test]
     fn every_loss_count_has_a_loss_line_and_a_key() {
         type Set = fn(&mut Counts);
-        let losses: [(&str, Set); 15] = [
+        let losses: [(&str, Set); 16] = [
+            ("dropped_interrupted_steps", |c| {
+                c.dropped_interrupted_steps = 1
+            }),
             ("tools_omitted", |c| c.tools_omitted = 1),
             ("tools_text_form", |c| c.tools_text_form = 1),
             ("reasoning_dropped", |c| c.reasoning_dropped = 1),
@@ -319,6 +335,7 @@ mod tests {
             reasoning: "drop_foreign".into(),
             resume_prompt: false,
             without_tools: false,
+            interrupted: "keep".into(),
             counts: counts.clone(),
             losses: vec!["reasoning dropped: foreign provider (1)".into()],
             strict_checked: true,
@@ -333,6 +350,7 @@ mod tests {
         assert_eq!(json["source"]["harness"], "codex");
         assert_eq!(json["dest"]["session_id"], "d863");
         assert_eq!(json["options"]["compaction"], "none");
+        assert_eq!(json["options"]["interrupted"], "keep");
         assert_eq!(json["counts"]["messages_in"], 18);
         assert_eq!(json["strict"]["checked"], true);
         assert_eq!(json["losses"].as_array().unwrap().len(), 1);

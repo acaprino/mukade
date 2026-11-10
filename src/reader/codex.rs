@@ -418,6 +418,8 @@ struct Builder {
     meta: MetaBuilder,
     /// The step currently being appended to, and the turn it belongs to.
     open_step: Option<(usize, String)>,
+    /// The last step read, and its turn: the one an abort marker may have cut.
+    last_step: Option<(usize, String)>,
     /// The results entry currently being appended to.
     open_results: Option<usize>,
     model: Option<ModelRef>,
@@ -526,6 +528,7 @@ impl Builder {
                 });
             }
             Class::Abort => {
+                self.abort_step(payload);
                 self.flush();
                 self.entries.push(Entry {
                     id: id_of(payload, index),
@@ -598,6 +601,36 @@ impl Builder {
         self.open_results = None;
     }
 
+    /// L9: the reply an interrupt cut. The step the aborted turn was writing keeps what it holds
+    /// and says how it ended, unless something (a result, a later prompt) came after it. An abort
+    /// that names another turn cut nothing here.
+    fn abort_step(&mut self, payload: &Value) {
+        let Some((index, step_turn)) = self.last_step.clone() else {
+            return;
+        };
+        let turn = str_at(payload, "/turn_id")
+            .or_else(|| {
+                str_at(
+                    payload,
+                    "/internal_chat_message_metadata_passthrough/turn_id",
+                )
+            })
+            .unwrap_or_default();
+        if !turn.is_empty() && !step_turn.is_empty() && turn != step_turn {
+            return;
+        }
+        let last = self
+            .entries
+            .iter()
+            .rposition(|entry| !matches!(entry.kind, Kind::Meta { .. }));
+        if last != Some(index) {
+            return;
+        }
+        if let Kind::Step { end, .. } = &mut self.entries[index].kind {
+            *end = StepEnd::Aborted;
+        }
+    }
+
     fn step_with(&mut self, index: usize, row: Value) {
         let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         let turn = str_at(
@@ -628,6 +661,7 @@ impl Builder {
                 raw: Vec::new(),
             });
             self.open_step = Some((self.entries.len() - 1, turn));
+            self.last_step = self.open_step.clone();
         }
         let (i, _) = *self.open_step.as_ref().expect("just opened");
         let entry = &mut self.entries[i];

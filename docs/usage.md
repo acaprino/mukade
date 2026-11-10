@@ -293,6 +293,104 @@ text; its `source.content_sha256` is the SHA-256 of the **source file's own byte
 check it with `Get-FileHash -Algorithm SHA256 <file>` (or `sha256sum`) and know which exact file
 was carried. See [section 4](#4-reading-the-receipt-and-the-manifest).
 
+### A session with interrupted turns
+
+*You stopped the agent in the middle of an answer, or the harness was killed, and the session
+holds half-done work.* Nothing asks for a finished turn: a session whose turns were **all**
+interrupted is exported like any other, with every prompt and whatever the agent had written or
+run before each interruption. That is the default, `--interrupted keep`:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project'
+```
+
+To carry only your requests and the turns that finished, add `--interrupted drop`. For each
+interrupted turn the prompt stays — it is yours, and complete — and everything the agent did
+after it is left out: the cut-off reply, the tool calls and their results.
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --interrupted drop
+```
+
+| `--interrupted` | what is written |
+|---|---|
+| `keep` (default) | every turn as the source holds it |
+| `drop` | finished turns whole; of an interrupted turn, the prompt alone |
+
+What each kind of turn becomes:
+
+| a turn in the source | `keep` | `drop` |
+|---|---|---|
+| finished | prompt, replies, tool calls and results | the same |
+| interrupted while the model was answering | prompt and the cut-off reply. Pi marks it `aborted`; another destination writes an ordinary reply, counted in `aborted_steps_as_replies` | the prompt |
+| interrupted after tools had run | prompt, calls and results | the prompt |
+| interrupted before anything was written | the prompt | the prompt |
+
+`hop`, `write` and `document` accept the option; any other value than `keep` or `drop`, and any
+other command, is refused before a store is read (exit 1).
+
+**How a turn is known to be interrupted.** Mukade does not guess: it reads the sign the source
+itself wrote.
+
+| source | the sign |
+|---|---|
+| Claude Code | the user row `[Request interrupted by user]`, or `[Request interrupted by user for tool use]` beside a tool result |
+| Codex | the `<turn_aborted>` message and the `turn_aborted` event |
+| OpenCode | an assistant row with no `finish`, or `finish: "aborted"` |
+| Pi | an assistant message with `stopReason: "aborted"` |
+
+Those markers are the harness's words, not yours: they are never written into the destination as
+a prompt, with either mode.
+
+**Check what was left out.** The manifest states the mode, counts the steps and adds a loss line
+(the output of a run on a hand-made Codex rollout of two turns, both interrupted):
+
+```powershell
+$env:PI_CODING_AGENT_DIR = 'C:\work\rehearsal\pi'         # an empty scratch destination
+mukade hop codex YOUR_CODEX_THREAD_ID pi --cwd 'C:\work\my-project' --interrupted drop --manifest C:\work\rehearsal\drop.json
+(Get-Content C:\work\rehearsal\drop.json | ConvertFrom-Json).counts.dropped_interrupted_steps    # 2
+```
+
+```json
+"options": { "compaction": "none", "summary": null, "reasoning": "drop_foreign",
+             "resume_prompt": false, "without_tools": false, "interrupted": "drop" },
+"counts":  { "messages_in": 5, "messages_out": 2, "dropped_interrupted_steps": 2, … },
+"losses":  [ "steps of interrupted turns omitted by request, with their tool results (2)",
+             "interrupted_last_turn" ]
+```
+
+`messages_in` counts what the source holds, `messages_out` what was written: here the two prompts.
+`interrupted_last_turn` is still stated, because the source did end on a turn it never finished.
+
+**More examples.**
+
+```powershell
+# start the last request again in the destination, without the half-written answer
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --interrupted drop --resume-prompt 'Start again from my last request.'
+
+# text only: no historical tool calls, and no interrupted work
+mukade hop pi YOUR_PI_SESSION_ID codex --cwd 'C:\work\my-project' --without-tools --interrupted drop
+
+# through a document, on another machine
+mukade dump pi YOUR_PI_SESSION_ID --output C:\work\session.json
+mukade write claude_code C:\work\session.json --cwd 'C:\work\my-project' --interrupted drop
+
+# the OpenCode import document, without writing anything
+mukade document opencode claude_code YOUR_CLAUDE_SESSION_ID --project-id YOUR_OPENCODE_PROJECT_ID --interrupted drop
+```
+
+What it does not do:
+
+- **A process killed while the model was answering leaves no sign** in a Claude Code or Codex
+  file: that reply reads as an ordinary one, and `drop` keeps it. (A turn killed before anything
+  was written is a prompt alone, and travels as one.)
+- **A document made by `dump` keeps each reply's end but not the markers.** `write --interrupted
+  drop` therefore sees the turns whose last reply was cut, not the ones interrupted right after a
+  tool answered. `hop` reads the source itself and sees both: prefer it.
+- **A summary is not rewritten.** With `--compaction portable` or `summary`, the turns folded into
+  the summary are the summary's; the option acts on the turns that travel as they are.
+- It is not a `dump` or `list` option, and the sessions explorer (`mukade-tui`) always keeps.
+
 ### A session that was rewound or branched
 
 *You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* Mukade reads the
@@ -332,6 +430,10 @@ mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project'
 To omit historical calls and their results, use `--without-tools` with `hop` or `write`. The
 manifest records `options.without_tools`, the `tools_omitted` count and the loss. It is not a
 `dump` or `list` option.
+
+To leave out what the agent did in the turns the source never finished, use `--interrupted drop`
+with `hop`, `write` or `document`: see
+[A session with interrupted turns](#a-session-with-interrupted-turns).
 
 `--expect-sha256 <hash>` on `hop` checks the captured source fingerprint before writing or
 starting a source-model summary. A mismatch is refused with exit 2. It checks the selected source
@@ -387,12 +489,14 @@ into Pi with `--compaction portable`; long paths shortened):
     "source": { "harness": "claude_code", "version": "2.1.311",
                 "session_id": "c45db7bc-…", "content_sha256": "df8f8f84d7fd3d21…" },
     "dest":   { "harness": "pi", "version": "1.2.0", "session_id": "a7b29d83-…", "location": "…" },
-    "options": { "compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": false },
+    "options": { "compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": false,
+                 "without_tools": false, "interrupted": "keep" },
     "counts": { "messages_in": 5, "messages_out": 5, "tool_calls": 0, "tools_text_form": 0,
                 "reasoning_dropped": 0, "reasoning_as_text": 0,
                 "dropped_orphan_results": 0, "dropped_duplicate_results": 0,
                 "rewritten_call_ids": 0, "dropped_off_branch": 0, "dropped_unfinished_lines": 0,
-                "aborted_steps_as_replies": 0, "unanswered_calls": 0, "dropped_empty_steps": 0,
+                "aborted_steps_as_replies": 0, "dropped_interrupted_steps": 0,
+                "unanswered_calls": 0, "dropped_empty_steps": 0,
                 "dropped_attachments": 0, "dropped_result_blocks": 0,
                 "dropped_unreadable_summaries": 0 },
     "losses": [
@@ -418,7 +522,8 @@ What the `losses` lines mean, and what to do:
 
 | line | what happened |
 |---|---|
-| `interrupted_last_turn` | the source ended on a turn with no answer (the harness was killed, or the step was aborted); it travels as a user message with no reply. Normal. |
+| `interrupted_last_turn` | the source ended on a turn it never finished (the harness was killed, or the turn was interrupted). With no reply at all it travels as a user message alone; what the agent had done before the interruption travels too, unless `--interrupted drop`. Normal. |
+| `steps of interrupted turns omitted by request, with their tool results (n)` | `--interrupted drop`: the work of the turns the source never finished was left out; their prompts travelled. |
 | `reasoning dropped: <reason> (n)` | thinking can only be replayed to a provider that speaks the same protocol and whose format can hold its signature or encrypted payload; otherwise it is dropped, one line per reason: *the destination's provider protocol is not known; name it with --dest-protocol* (OpenCode, Pi), *made by another provider protocol*, *no signature or encrypted payload to replay it with*, *the destination's format has no place for its payload*, *not carried, as --reasoning drop asks*, *encrypted only, no visible text to write as text*. `--reasoning as_text` keeps it as labelled text instead. |
 | `reasoning written as labelled text, no longer replayable by a provider (n)` | `--reasoning as_text`: the destination's model can read it, its provider cannot replay it. |
 | `tool calls written as text, not translated (n, Tool, …)` | the destination has no equivalent tool, or an argument had no counterpart; the call and its result travel as text. Nothing is invented. |
@@ -428,7 +533,7 @@ What the `losses` lines mean, and what to do:
 | `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries a Codex thread whole. |
 | `compaction summaries with no readable text (encrypted by the source's provider), not carried (n)` | Codex 0.165 keeps its compaction summary encrypted: there is no text to write, so it is left out rather than written as an empty message. The history before and after it travels. |
 | `an unfinished last line of the source left unread (n)` | a hard kill cut the last line mid-write; the rest of the session was read. |
-| `steps the source aborted or that failed, written as ordinary replies (n)` | the destination cannot mark a step as aborted (Pi can, and does). |
+| `steps the source aborted or that failed, written as ordinary replies (n)` | the destination cannot mark a step as aborted (Pi can, and does). To leave the interrupted ones out, use `--interrupted drop`. |
 | `empty steps dropped (n)` · `user attachments dropped (n)` · `structured tool-result blocks flattened to text (n)` | content the destination cannot hold (a PDF, an image toward a text-only result) is counted, never silently dropped. Images are rewritten into each harness's own shape. |
 | `the source's compaction summary travels as one user message` | `--compaction portable`. |
 | `the resume prompt did not complete: …` | the session was written but `--resume-prompt` failed (exit 5): see [troubleshooting](#11-troubleshooting). |
@@ -877,6 +982,13 @@ With `--root` the harness may be left out of `list`, `dump` and a hop's source: 
 the directory's own layout when exactly one harness is recognized, or from the only installation
 below it. `write` always needs it.
 
+`dump` exports the session as it is, interrupted turns included; what is left out is decided when
+it is written. `write` takes `--without-tools` and `--interrupted drop` like `hop` does:
+
+```powershell
+mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --interrupted drop
+```
+
 A portable installation found by `scan` can be named by its folder instead of its store:
 
 ```powershell
@@ -986,6 +1098,17 @@ mukade list codex --archived false | ConvertFrom-Json | Select-Object -ExpandPro
   retrying, which would create another session. A resume that outlives its timeout is stopped,
   including a harness behind a `.cmd` launcher. Check configuration and credentials in the process
   environment; provider availability must be verified in your own environment.
+- **The destination carries on from a half-written answer:** the source turn was interrupted and
+  its work travelled, as it does by default. Hop again with `--interrupted drop`: the prompt is
+  written without the cut-off reply (see
+  [A session with interrupted turns](#a-session-with-interrupted-turns)). The first hop's session
+  stays where it is; a hop never changes or removes one.
+- **`--interrupted drop` kept a reply that was cut:** the source wrote no sign of the
+  interruption. A harness killed while its model was answering leaves none in a Claude Code or
+  Codex file, and a document made by `dump` does not hold the markers: hop from the source itself,
+  and check `dropped_interrupted_steps` in the manifest.
+- **"unknown --interrupted …"** (exit 1): the mode is `keep` or `drop`. **"--interrupted is
+  supported only by hop, write and document"**: `dump` and `list` do not take it.
 - **Manifest could not be saved:** the session was still written, and its receipt is on stdout; the
   error names its location. Save the `manifest` field of that receipt instead of running again.
 - **It is slower than the table in [Speed](#5-speed):** run with `--timing`. A large `probe …` line

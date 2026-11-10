@@ -1619,6 +1619,14 @@ fn options_are_refused_where_they_cannot_apply() {
             "--without-tools is supported only by hop, write and document",
         ),
         (
+            vec!["list", "claude_code", "--interrupted", "drop"],
+            "--interrupted is supported only by hop, write and document",
+        ),
+        (
+            vec!["write", "pi", document, "--interrupted", "maybe"],
+            "unknown --interrupted maybe",
+        ),
+        (
             vec!["dump", "claude_code", "c45db7bc", "--expect-sha256", "abc"],
             "--expect-sha256 is supported only by hop",
         ),
@@ -1883,4 +1891,85 @@ fn native_compaction_flags_are_refused_where_they_cannot_work() {
         "--compaction".into(), "native".into(),
         "--context-window".into(), "40000".into(),
     ], "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop");
+}
+
+/// A Pi session of two turns, each interrupted after the model had begun to answer.
+fn all_interrupted_pi_source(scratch: &Path) -> (PathBuf, &'static str) {
+    let id = "01a17e17-9f07-743d-8072-8b3b13d60001";
+    let message = |id: &str, parent: Value, message: Value| {
+        serde_json::json!({"type": "message", "id": id, "parentId": parent,
+            "timestamp": "2026-11-10T10:00:01.000Z", "message": message})
+    };
+    let prompt = |text: &str| serde_json::json!({"role": "user", "content": [{"type": "text", "text": text}]});
+    let cut = |text: &str| {
+        serde_json::json!({"role": "assistant", "content": [{"type": "text", "text": text}],
+            "api": "anthropic-messages", "provider": "anthropic", "model": "claude-opus-5-5",
+            "stopReason": "aborted"})
+    };
+    let rows = [
+        serde_json::json!({"type": "session", "version": 3, "id": id,
+            "timestamp": "2026-11-10T10:00:00.000Z", "cwd": scratch.to_str().unwrap()}),
+        message("u1", Value::Null, prompt("PROMPT-1")),
+        message("a1", "u1".into(), cut("PARTIAL-1")),
+        message("u2", "a1".into(), prompt("PROMPT-2")),
+        message("a2", "u2".into(), cut("PARTIAL-2")),
+    ];
+    let file = scratch.join("all-interrupted.jsonl");
+    let text: String = rows.iter().map(|row| format!("{row}\n")).collect();
+    std::fs::write(&file, text).unwrap();
+    (file, id)
+}
+
+fn hop_all_interrupted(tag: &str, extra: &[&str]) -> (Value, String) {
+    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
+    let (source, id) = all_interrupted_pi_source(&scratch);
+    let mut args = vec![
+        "hop",
+        "pi",
+        id,
+        "claude_code",
+        "--from-file",
+        source.to_str().unwrap(),
+        "--dest-version",
+        "2.1.312",
+    ];
+    args.extend_from_slice(extra);
+    let (ok, stdout, stderr) = cli(&scratch, &args);
+    assert!(ok, "{stderr}");
+    let printed: Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
+    (printed, written)
+}
+
+/// A conversation with no finished turn at all is exported whole: nothing asks for a completed
+/// turn, and what the model had written when it was interrupted travels.
+#[test]
+fn a_session_of_only_interrupted_turns_is_exported_whole() {
+    let (printed, written) = hop_all_interrupted("cli-interrupted-keep", &[]);
+    for text in ["PROMPT-1", "PARTIAL-1", "PROMPT-2", "PARTIAL-2"] {
+        assert!(written.contains(text), "{text} did not travel");
+    }
+    assert_eq!(printed["manifest"]["options"]["interrupted"], "keep");
+    assert_eq!(printed["manifest"]["counts"]["dropped_interrupted_steps"], 0);
+}
+
+/// `--interrupted drop`, end to end: the prompts are written, the cut-off replies are not, and
+/// the manifest says what was left out.
+#[test]
+fn interrupted_drop_writes_the_prompts_without_the_cut_off_replies() {
+    let (printed, written) = hop_all_interrupted("cli-interrupted-drop", &["--interrupted", "drop"]);
+    for text in ["PROMPT-1", "PROMPT-2"] {
+        assert!(written.contains(text), "{text} did not travel");
+    }
+    assert!(!written.contains("PARTIAL"), "a cut-off reply travelled");
+    let manifest = &printed["manifest"];
+    assert_eq!(manifest["options"]["interrupted"], "drop");
+    assert_eq!(manifest["counts"]["dropped_interrupted_steps"], 2);
+    let losses = manifest["losses"].as_array().unwrap();
+    assert!(
+        losses
+            .iter()
+            .any(|loss| loss.as_str().unwrap().contains("interrupted turns")),
+        "{losses:?}"
+    );
 }

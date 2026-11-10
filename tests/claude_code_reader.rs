@@ -877,3 +877,92 @@ fn an_out_of_order_chain_with_a_malformed_tool_is_not_silently_accepted() {
     ];
     assert!(claude_code::parse(&rows, None).is_err());
 }
+
+fn assistant_row(
+    uuid: &str,
+    parent: serde_json::Value,
+    content: serde_json::Value,
+    stop: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "assistant", "uuid": uuid, "parentUuid": parent, "isSidechain": false,
+        "sessionId": SESSION_ID, "timestamp": "2026-10-27T15:40:00.000Z",
+        "message": {"id": format!("msg_{uuid}"), "role": "assistant", "model": "claude-opus-5-5",
+            "content": content, "stop_reason": stop},
+    })
+}
+
+fn turn_aborted_markers(s: &Session) -> usize {
+    s.entries
+        .iter()
+        .filter(|e| matches!(&e.kind, Kind::Meta { kind } if *kind == MetaKind::TurnAborted))
+        .count()
+}
+
+fn no_prompt_holds_the_marker(s: &Session) {
+    assert!(
+        !s.conversation().any(
+            |e| matches!(&e.kind, Kind::User { text, .. } if text.contains("[Request interrupted"))
+        ),
+        "the harness's own marker must not become the user's words"
+    );
+}
+
+/// L9: Claude Code records an interruption as a user row of its own. It is a marker, like Codex's
+/// `<turn_aborted>`, and the reply it cut keeps its text and says it was aborted.
+#[test]
+fn a_reply_cut_by_an_interruption_is_an_aborted_step() {
+    let mut rows = fixture_rows();
+    let parent = last_uuid(&rows);
+    rows.push(user_row("int-1", parent, serde_json::json!("INT-PROMPT")));
+    rows.push(assistant_row(
+        "int-2",
+        "int-1".into(),
+        serde_json::json!([{"type": "text", "text": "PARTIAL-REPLY"}]),
+        None,
+    ));
+    rows.push(user_row(
+        "int-3",
+        "int-2".into(),
+        serde_json::json!([{"type": "text", "text": "[Request interrupted by user]"}]),
+    ));
+    let s = claude_code::parse(&rows, None).unwrap();
+    no_prompt_holds_the_marker(&s);
+    assert_eq!(turn_aborted_markers(&s), 1);
+    let Kind::Step { text, end, .. } = &last_conversation(&s).kind else {
+        panic!("{:?}", last_conversation(&s).kind)
+    };
+    assert_eq!(text, &["PARTIAL-REPLY".to_string()]);
+    assert_eq!(*end, StepEnd::Aborted);
+    assert!(s.interrupted_last_turn());
+}
+
+/// An interruption while a tool was waiting is written beside the tool's result: the result
+/// travels, the marker stays a marker.
+#[test]
+fn an_interruption_beside_tool_results_is_a_marker() {
+    let mut rows = fixture_rows();
+    let parent = last_uuid(&rows);
+    rows.push(assistant_row(
+        "int-tool-1",
+        parent,
+        serde_json::json!([{"type": "tool_use", "id": "toolu_int", "name": "Read", "input": {"file_path": "x"}}]),
+        Some("tool_use"),
+    ));
+    rows.push(user_row(
+        "int-tool-2",
+        "int-tool-1".into(),
+        serde_json::json!([
+            {"type": "tool_result", "tool_use_id": "toolu_int", "content": "The user doesn't want to proceed with this tool use."},
+            {"type": "text", "text": "[Request interrupted by user for tool use]"},
+        ]),
+    ));
+    let s = claude_code::parse(&rows, None).unwrap();
+    no_prompt_holds_the_marker(&s);
+    assert_eq!(turn_aborted_markers(&s), 1);
+    assert!(
+        matches!(last_conversation(&s).kind, Kind::Results { .. }),
+        "{:?}",
+        last_conversation(&s).kind
+    );
+}

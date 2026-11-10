@@ -294,6 +294,7 @@ Sources: `src/reader/claude_code.rs`, `src/writer/claude_code.rs`, `src/writer/p
 **Known limits** [1][4]:
 - A hand-written native compaction record is built, read back by Mukade, and verified live on Claude Code 2.1.318 (2026-11-04): an oversized session resumed, answered from the summary, and added no second `compact_boundary` (spec §4.4).
 - Not exercised by a bench run: auto-compaction by threshold, a second compaction, rewind or fork in a real source (the reader follows the resumed branch, tested on hand-made records), subagent sessions, images and attachments toward Claude Code.
+- A turn the user interrupts ends with a user row `[Request interrupted by user]` (`… for tool use]` beside a tool result). Mukade reads it as a marker, not as a prompt, and the reply it cut as `aborted`; `--interrupted drop` leaves that turn's work out.
 - On resume of an interrupted last turn Claude Code inserts its synthetic `No response requested.`; the manifest records `interrupted_last_turn`. Run the resume from the session's `cwd`: from elsewhere Claude Code appends rows with the new `cwd` [1].
 - mukade does not create Claude Code's authentication or onboarding configuration [8].
 
