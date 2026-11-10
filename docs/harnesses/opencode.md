@@ -318,8 +318,8 @@ before it writes anything [34 `check_resume_prompt`][33 `is_batch`]; and on a ti
 (stdin closed, 120 s `EXPORT_TIMEOUT`; stderr with `not found` → not-found error) and parses
 `{info, messages}`; `--from-file` also takes a `{session_v2, session_message}` row dump or a bare
 message array. `list` opens the explicitly selected `OPENCODE_DB` read-only, returning root
-sessions including archived ones, without starting an OpenCode process. Mapping, after the listing
-rules:
+sessions including archived ones (`archived` = `time_archived` is set; `--archived false` leaves
+them out), without starting an OpenCode process. Mapping, after the listing rules:
 
 - **Other database files.** When the selected file is named like OpenCode's own (`opencode.db`,
   `opencode-<channel>.db`), the other such files in its folder are listed too: a channel build

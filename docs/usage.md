@@ -747,7 +747,8 @@ What to expect from such a thread:
 ### OpenCode
 
 Read OpenCode and write Pi. `list opencode` requires the selected database via `OPENCODE_DB` or
-`--root`, reads it without starting OpenCode, and includes top-level archived sessions.
+`--root`, reads it without starting OpenCode, and includes top-level archived sessions
+(`--archived false` leaves them out).
 
 ```powershell
 $env:OPENCODE_DB = 'C:\path\to\opencode.db'
@@ -805,6 +806,14 @@ mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project'
 ```
 
 A Pi destination kept in its own folder:
+`list codex` includes the threads archived with `codex archive` (their rollouts are in
+`$env:CODEX_HOME\archived_sessions`) and marks them `"archived": true`; `dump` and `hop` read them
+like any other. To see only the threads that are not archived:
+
+```powershell
+mukade list codex --archived false
+```
+
 
 ```powershell
 $env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
@@ -859,6 +868,7 @@ A trimmed answer (paths are illustrative):
 mukade detect 'D:\portable\pi\agent'
 mukade list --root 'D:\portable\pi\agent'
 mukade dump pi YOUR_PI_SESSION_ID --root 'D:\portable\pi\agent' --output 'C:\work\session.json'
+mukade list opencode --archived false                    # without the archived sessions
 $env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
 mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
 ```
@@ -908,24 +918,42 @@ mukade list codex | ConvertFrom-Json | Where-Object { -not $_.unreadable } | Sel
 mukade list claude_code | ConvertFrom-Json | Where-Object { $_.live } | Select-Object id, cwd
 ```
 
-Archived sessions are listed by default. `--archived false` leaves them out, `--archived true`
-keeps them (the default, said explicitly); any other value is refused. It works the same for every
-harness: a row is left out when its `archived` is `true`.
-
-```powershell
-mukade list codex --archived false      # only the threads that are not archived
-```
-
-| harness | `archived` is `true` when |
-|---|---|
-| Codex | the rollout is in `<CODEX_HOME>/archived_sessions/`, or its row in `state_<n>.sqlite` says `archived` |
-| OpenCode | the session has a `time_archived` |
-| Claude Code, Pi | never: their stores record no archived flag, so `--archived false` leaves nothing out |
-
 `live` is Claude Code's: it keeps `sessions/<pid>.json` while a process runs a session. The check
 looks at the process (on Windows also its start time, so a reused process id is not the session).
 Codex, OpenCode and Pi keep no such record, so their `live` is `null`: **a cleaner must read `null` as
 "not known", not as "not running".**
+
+### Archived sessions
+
+`list` takes `--archived <true|false>`, and it works the same for every harness:
+
+| value | rows printed |
+|---|---|
+| `true`, or the flag left out (the default) | every session, the archived ones included |
+| `false` | only the rows whose `archived` is `false` |
+
+Any other value, or `--archived` given to a command other than `list`, is a command-line mistake
+(exit 1, nothing printed). The flag goes anywhere after the command and combines with `--root`.
+
+| harness | `archived` is `true` when |
+|---|---|
+| Codex | the rollout is in `<CODEX_HOME>/archived_sessions/` (where `codex archive` moves it), or its row in `state_<n>.sqlite` says `archived`. Found with or without that database; `dump` and `hop` read it |
+| OpenCode | the session has a `time_archived` |
+| Claude Code, Pi | never: their stores record no archived flag, so `--archived false` leaves nothing out |
+
+```powershell
+# the threads that are not archived
+mukade list codex --archived false
+
+# the same for an OpenCode database named directly
+mukade list opencode --root 'C:\path\to\opencode.db' --archived false
+
+# only the archived ones, with where they are kept
+mukade list codex | ConvertFrom-Json | Where-Object { $_.archived } | Select-Object id, title, location
+
+# the projects that still have work not archived
+mukade list codex --archived false | ConvertFrom-Json | Select-Object -ExpandProperty cwd -Unique
+```
 
 ## 11. Troubleshooting
 

@@ -143,6 +143,9 @@ Proprietary; use is subject to Anthropic's Commercial Terms of Service [25]. The
   `pidDomain` is another platform or machine. A running session with no transcript yet is listed,
   `unreadable` and `live`. The process check is two Win32 calls on Windows; `/proc` (or `ps`) elsewhere
   **[U]**: not run on Linux or macOS, where `procStart` is not compared.
+- **No archived flag.** The store records none, so every row is `"archived": false` and
+  `list --archived false` leaves nothing out (the same flag hides archived sessions of Codex and
+  OpenCode).
 - **The listing reads half a megabyte of each session file** (128 KiB head, 384 KiB tail). Cold, that
   took 11 s for 214 files; warm 0.5 s. `list` now remembers what it read in
   `mukade-data/cache/claude-list-<hash>.json`, keyed by path, size and modification time (a file

@@ -85,7 +85,7 @@ For complete examples for each harness, including ones kept in a folder of their
 
 ```text
 mukade harnesses                           # local inventory: installed harnesses, versions, stores and session/fork counts (text output, no options)
-mukade list  <harness>                       # one JSON line per session; `unreadable` and `live` say what `dump` can read and what runs now
+mukade list  <harness> [--archived true|false]   # one JSON line per session; `unreadable` and `live` say what `dump` can read and what runs now; --archived false leaves out the archived ones
 mukade dump  <harness> <session-id>          # the interchange document on stdout, or --output <file>
 mukade write <harness> <document.json>       # checked write: id, location, resume and manifest
 mukade hop   <src-harness> <session-id> <dst-harness> [options]   # --all-branches: a Codex thread whole
