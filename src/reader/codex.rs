@@ -855,30 +855,32 @@ impl Reader for Codex {
     }
 }
 
-/// The threads of a Codex home: the rollouts under `sessions/`, and the threads Codex's state
-/// database still has a row for. A rollout stays the transcript and takes what it lacks (the
-/// time, the archived flag, the parent) from its row. A row whose rollout lies elsewhere is listed
-/// at that file; a row whose rollout is gone is listed as unreadable, so its project is still seen.
-/// `with_subagents` keeps the threads Codex ran for another thread (spawned subagents, guardian
-/// reviews), which are not roots: `list` leaves them out once the database says what they are.
+/// The threads of a Codex home: the rollouts under `sessions/` and `archived_sessions/` (archived
+/// by their folder), and the threads Codex's state database still has a row for. A rollout stays
+/// the transcript and takes what it lacks (the time, the archived flag, the parent) from its row.
+/// A row whose rollout lies elsewhere is listed at that file; a row whose rollout is gone is
+/// listed as unreadable, so its project is still seen. `with_subagents` keeps the threads Codex
+/// ran for another thread (spawned subagents, guardian reviews), which are not roots: `list`
+/// leaves them out once the database says what they are.
 fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>> {
-    let (Some(home), Some(sessions)) = (roots.codex_home.as_deref(), roots.codex_sessions()) else {
-        return Err(super::Lookup::NoStore(
-            "CODEX_HOME is not set: no Codex store to list".into(),
-        )
-        .into());
+    let Some(home) = roots.codex_home.as_deref() else {
+        return Err(
+            super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to list".into()).into(),
+        );
     };
-    // One entry per thread, at its latest file: the active page of a paginated thread.
-    let mut latest: HashMap<String, PathBuf> = HashMap::new();
-    for file in rollout_files(&sessions)? {
+    // One entry per thread, at its latest file: the active page of a paginated thread. A thread
+    // found in both folders is at its copy under `sessions/`.
+    let mut latest: HashMap<String, (PathBuf, bool)> = HashMap::new();
+    for (file, archived) in store_rollouts(roots)? {
         let id = rollout_id(&file);
         if id.is_empty() {
             continue;
         }
         match latest.get(&id) {
-            Some(known) if known.file_name() >= file.file_name() => {}
+            Some((known, known_archived))
+                if (!known_archived, known.file_name()) >= (!archived, file.file_name()) => {}
             _ => {
-                latest.insert(id, file);
+                latest.insert(id, (file, archived));
             }
         }
     }
@@ -886,11 +888,12 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
     let names = index_names(home);
     let mut listed: HashMap<String, SessionInfo> = latest
         .into_iter()
-        .map(|(id, file)| {
+        .map(|(id, (file, archived))| {
             let info = SessionInfo {
                 id: id.clone(),
                 title: names.get(&id).cloned(),
                 cwd: peek_cwd(&file),
+                archived,
                 path: file.to_string_lossy().into_owned(),
                 ..Default::default()
             };
@@ -908,7 +911,8 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
             info.title = info.title.take().or(thread.title);
             info.cwd = info.cwd.take().or(thread.cwd);
             info.updated = thread.updated;
-            info.archived = thread.archived;
+            // Archived when either says so: the folder the rollout sits in, or its row.
+            info.archived |= thread.archived;
             info.parent = thread.parent;
             continue;
         }
@@ -967,8 +971,9 @@ pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Ses
             super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to read".into()).into(),
         );
     };
-    let matches: Vec<PathBuf> = rollout_files(&sessions)?
+    let matches: Vec<PathBuf> = store_rollouts(roots)?
         .into_iter()
+        .map(|(file, _)| file)
         .filter(|f| rollout_id(f).starts_with(id))
         .collect();
     // The pages of one paginated thread share its id: the latest page is the thread.
@@ -1057,6 +1062,25 @@ fn rollout_id(file: &Path) -> String {
     } else {
         stem.to_string()
     }
+}
+
+/// Every rollout of the store, each with whether it is archived: those under `sessions/`, then
+/// those `codex archive` moved to `archived_sessions/`.
+fn store_rollouts(roots: &StoreRoots) -> Result<Vec<(PathBuf, bool)>> {
+    let mut out = Vec::new();
+    for (dir, archived) in [
+        (roots.codex_sessions(), false),
+        (roots.codex_archived_sessions(), true),
+    ] {
+        if let Some(dir) = dir {
+            out.extend(
+                rollout_files(&dir)?
+                    .into_iter()
+                    .map(|file| (file, archived)),
+            );
+        }
+    }
+    Ok(out)
 }
 
 /// Every rollout under `<CODEX_HOME>/sessions/YYYY/MM/DD/`.

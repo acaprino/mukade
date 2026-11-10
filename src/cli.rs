@@ -99,6 +99,8 @@ options:
   --all-branches           dump, hop: carry every branch the source keeps (a Codex thread whose
                            later turns were redone: the abandoned turns too); default: only the
                            branch the harness resumes
+  --archived <bool>        list: true (default) includes the sessions the harness marked archived,
+                           false leaves them out; the same for every harness
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
@@ -181,6 +183,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--resume-prompt" => flags.resume_prompt = Some(next(rest, &mut i)?),
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--all-branches" => flags.all_branches = true,
+            "--archived" => flags.archived = Some(next(rest, &mut i)?),
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--output" => flags.output = Some(next(rest, &mut i)?),
             "--timing" => crate::timing::enable(),
@@ -202,6 +205,15 @@ pub fn run(args: &[String]) -> Result<()> {
         i += 1;
     }
 
+    if flags.archived.is_some() && command != "list" {
+        anyhow::bail!("--archived is supported only by list");
+    }
+    // Every harness alike: the sessions its store marks archived are kept or left out.
+    let with_archived = match flags.archived.as_deref() {
+        None | Some("true") => true,
+        Some("false") => false,
+        Some(other) => anyhow::bail!("--archived takes true or false, not {other:?}"),
+    };
     if flags.without_tools && !matches!(command.as_str(), "hop" | "write" | "document") {
         anyhow::bail!("--without-tools is supported only by hop, write and document");
     }
@@ -434,7 +446,11 @@ pub fn run(args: &[String]) -> Result<()> {
         "list" => {
             no_more(operands, 0)?;
             let reader = crate::reader::for_harness(harness)?;
-            for info in reader.list(&roots)? {
+            for info in reader
+                .list(&roots)?
+                .into_iter()
+                .filter(|info| with_archived || !info.archived)
+            {
                 println!(
                     "{}",
                     json!({
@@ -969,6 +985,7 @@ struct Flags {
     resume_prompt: Option<String>,
     from_file: Option<String>,
     all_branches: bool,
+    archived: Option<String>,
     manifest: Option<String>,
     output: Option<String>,
     root: Option<String>,

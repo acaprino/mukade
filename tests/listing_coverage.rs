@@ -261,8 +261,9 @@ fn a_codex_rollout_outside_sessions_is_found_through_its_database_row() {
     let scratch = support::scratch(HarnessId::Codex, "cov-codex-archived-dir");
     let home = scratch.join("home");
     let full_id = support::source_id(HarnessId::Codex);
-    let moved = home
-        .join("archived_sessions")
+    // A folder no scan of the home looks in: only the row can lead there.
+    let moved = scratch
+        .join("moved-rollouts")
         .join(format!("rollout-2026-10-27T16-43-08-{full_id}.jsonl"));
     std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
     std::fs::copy(support::source_path(HarnessId::Codex), &moved).unwrap();
@@ -1039,4 +1040,155 @@ fn many_session_files_are_listed_whole_and_in_order() {
     assert_eq!(first, second, "the cache changes nothing about the answer");
     assert_eq!(first.len(), uncached.len());
     assert!(first.iter().all(|s| s.cwd.is_some() && s.title.is_some()));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Archived sessions: `--archived true` (the default) lists them, `--archived false` leaves them
+// out, the same way for every harness.
+
+/// The ids `mukade list <harness> <extra…>` printed, in order.
+fn listed_ids(harness: HarnessId, scratch: &Path, extra: &[&str]) -> Vec<String> {
+    let mut args = vec!["list", harness.as_str()];
+    args.extend_from_slice(extra);
+    let (code, stdout, stderr) = support::cli_code(scratch, &args);
+    assert_eq!(code, Some(0), "list {extra:?} failed: {stderr}");
+    stdout
+        .lines()
+        .map(|line| {
+            let row: Value = serde_json::from_str(line).expect("one JSON object per line");
+            row["id"].as_str().expect("an id").to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn archived_false_leaves_out_the_archived_sessions_of_every_harness_and_true_keeps_them() {
+    // Codex: THREAD_B is archived in the state database.
+    let codex = codex_home_without_rollouts("cov-archived-codex");
+    // OpenCode: one open and one archived root session in the store's database.
+    let opencode = support::scratch(HarnessId::OpenCode, "cov-archived-opencode");
+    let db = rusqlite::Connection::open(opencode.join("home").join("opencode.db")).unwrap();
+    db.execute_batch(&format!(
+        "CREATE TABLE session_v2 ({SESSION_COLUMNS});
+         INSERT INTO session_v2 VALUES ('ses_open', NULL, 'Open', 'D:/work', 2000, NULL);
+         INSERT INTO session_v2 VALUES ('ses_gone', NULL, 'Archived', 'D:/work', 1000, 1500);"
+    ))
+    .unwrap();
+    drop(db);
+    // Claude Code and Pi record no archived flag: nothing of theirs is ever left out.
+    let claude = support::scratch(HarnessId::ClaudeCode, "cov-archived-claude");
+    support::stage_fixture(HarnessId::ClaudeCode, &claude);
+    let pi = support::scratch(HarnessId::Pi, "cov-archived-pi");
+    support::stage_fixture(HarnessId::Pi, &pi);
+
+    let cases = [
+        (
+            HarnessId::Codex,
+            &codex,
+            vec![THREAD_A, THREAD_B],
+            vec![THREAD_A],
+        ),
+        (
+            HarnessId::OpenCode,
+            &opencode,
+            vec!["ses_open", "ses_gone"],
+            vec!["ses_open"],
+        ),
+        (
+            HarnessId::ClaudeCode,
+            &claude,
+            vec![support::source_id(HarnessId::ClaudeCode)],
+            vec![support::source_id(HarnessId::ClaudeCode)],
+        ),
+        (
+            HarnessId::Pi,
+            &pi,
+            vec![support::source_id(HarnessId::Pi)],
+            vec![support::source_id(HarnessId::Pi)],
+        ),
+    ];
+    for (harness, scratch, with_archived, without_archived) in cases {
+        let sorted = |mut ids: Vec<String>| {
+            ids.sort();
+            ids
+        };
+        let expected = |ids: &[&str]| sorted(ids.iter().map(|id| id.to_string()).collect());
+        assert_eq!(
+            sorted(listed_ids(harness, scratch, &[])),
+            expected(&with_archived),
+            "{harness:?}: archived sessions are listed by default"
+        );
+        assert_eq!(
+            sorted(listed_ids(harness, scratch, &["--archived", "true"])),
+            expected(&with_archived),
+            "{harness:?}: --archived true keeps them"
+        );
+        assert_eq!(
+            sorted(listed_ids(harness, scratch, &["--archived", "false"])),
+            expected(&without_archived),
+            "{harness:?}: --archived false leaves them out"
+        );
+    }
+}
+
+#[test]
+fn archived_takes_only_true_or_false() {
+    let scratch = codex_home_without_rollouts("cov-archived-value");
+
+    let (code, stdout, stderr) =
+        support::cli_code(&scratch, &["list", "codex", "--archived", "maybe"]);
+
+    assert_ne!(code, Some(0), "an unknown value is refused: {stdout}");
+    assert!(stdout.is_empty(), "nothing is listed: {stdout}");
+    assert!(
+        stderr.contains("--archived takes true or false"),
+        "the error names the accepted values: {stderr}"
+    );
+}
+
+#[test]
+fn archived_is_refused_outside_list() {
+    let scratch = support::scratch(HarnessId::Codex, "cov-archived-dump");
+    let id = support::stage_fixture(HarnessId::Codex, &scratch);
+
+    let (code, _, stderr) =
+        support::cli_code(&scratch, &["dump", "codex", &id, "--archived", "false"]);
+
+    assert_ne!(code, Some(0));
+    assert!(
+        stderr.contains("--archived is supported only by list"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_codex_rollout_in_archived_sessions_is_listed_as_archived_without_a_state_database() {
+    let scratch = support::scratch(HarnessId::Codex, "cov-codex-archived-nodb");
+    let home = scratch.join("home");
+    let full_id = support::source_id(HarnessId::Codex);
+    // `codex archive` moves the rollout out of `sessions/` into a flat `archived_sessions/`.
+    let moved = home
+        .join("archived_sessions")
+        .join(format!("rollout-2026-10-27T16-43-08-{full_id}.jsonl"));
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::copy(support::source_path(HarnessId::Codex), &moved).unwrap();
+
+    let rows = list(HarnessId::Codex, &scratch);
+
+    assert_eq!(rows.len(), 1, "the archived rollout is listed: {rows:?}");
+    let r = &rows[0];
+    assert_eq!(r["id"], full_id);
+    assert_eq!(r["archived"], true, "its folder says it is archived: {r}");
+    assert!(r["unreadable"].is_null(), "the file is there: {r}");
+    assert_eq!(r["location"], moved.to_string_lossy().as_ref());
+    assert!(
+        listed_ids(HarnessId::Codex, &scratch, &["--archived", "false"]).is_empty(),
+        "--archived false leaves it out"
+    );
+    let (ok, stdout, stderr) = support::cli(&scratch, &["dump", "codex", &full_id[..8]]);
+    assert!(ok, "dump reads it in archived_sessions/: {stderr}");
+    assert!(
+        stdout.contains(full_id),
+        "the dumped session is that thread"
+    );
 }

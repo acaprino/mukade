@@ -908,6 +908,20 @@ mukade list codex | ConvertFrom-Json | Where-Object { -not $_.unreadable } | Sel
 mukade list claude_code | ConvertFrom-Json | Where-Object { $_.live } | Select-Object id, cwd
 ```
 
+Archived sessions are listed by default. `--archived false` leaves them out, `--archived true`
+keeps them (the default, said explicitly); any other value is refused. It works the same for every
+harness: a row is left out when its `archived` is `true`.
+
+```powershell
+mukade list codex --archived false      # only the threads that are not archived
+```
+
+| harness | `archived` is `true` when |
+|---|---|
+| Codex | the rollout is in `<CODEX_HOME>/archived_sessions/`, or its row in `state_<n>.sqlite` says `archived` |
+| OpenCode | the session has a `time_archived` |
+| Claude Code, Pi | never: their stores record no archived flag, so `--archived false` leaves nothing out |
+
 `live` is Claude Code's: it keeps `sessions/<pid>.json` while a process runs a session. The check
 looks at the process (on Windows also its start time, so a reused process id is not the session).
 Codex, OpenCode and Pi keep no such record, so their `live` is `null`: **a cleaner must read `null` as

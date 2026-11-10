@@ -51,6 +51,13 @@ impl StoreRoots {
         self.codex_home.as_deref().map(|d| d.join("sessions"))
     }
 
+    /// Codex's `archived_sessions/` directory, where `codex archive` moves a thread's rollouts.
+    pub fn codex_archived_sessions(&self) -> Option<PathBuf> {
+        self.codex_home
+            .as_deref()
+            .map(|d| d.join("archived_sessions"))
+    }
+
     /// Pi's `sessions/` directory.
     pub fn pi_sessions(&self) -> Option<PathBuf> {
         self.pi_agent_dir.as_deref().map(|d| d.join("sessions"))

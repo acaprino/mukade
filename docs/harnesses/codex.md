@@ -324,12 +324,15 @@ deprecated alias [13].
 | `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title** from `<CODEX_HOME>/session_index.jsonl`, the newest `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent always empty** (forks and subagent spawns not linked) | `:149-181,455-470` |
 
 **Listing** (`src/reader/codex.rs`, `src/reader/codex_state.rs`). A thread is seen when it has a
-rollout under `sessions/`, **or** a row in Codex's state database, the newest `state_<n>.sqlite` of
-the home (opened read-only; a database that is missing, locked, damaged or laid out otherwise is an
-empty catalogue, and the rollouts are listed as before):
+rollout under `sessions/` or `archived_sessions/`, **or** a row in Codex's state database, the
+newest `state_<n>.sqlite` of the home (opened read-only; a database that is missing, locked, damaged
+or laid out otherwise is an empty catalogue, and the rollouts are listed as before):
 
-- a rollout on disk stays the transcript; its row fills what it lacks (the update time, `archived`,
-  the parent, a title when `session_index.jsonl` has none);
+- a rollout under `archived_sessions/` (where `codex archive` moves it) is listed `archived` with
+  or without a database, and `dump`/`hop` read it there. A thread with a rollout in both folders is
+  listed at its copy under `sessions/`;
+- a rollout on disk stays the transcript; its row fills what it lacks (the update time, `archived`
+  when the row says so, the parent, a title when `session_index.jsonl` has none);
 - a row whose `rollout_path` exists elsewhere (Codex moves archived threads out of `sessions/`) is
   listed at that file and `dump`/`hop` read it there;
 - a row whose rollout is gone is listed with `unreadable` set and `location` = the path the row
