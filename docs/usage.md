@@ -700,6 +700,14 @@ mukade list codex
 mukade hop codex YOUR_CODEX_SESSION_ID pi --cwd 'C:\work\my-project'
 ```
 
+`list codex` includes the threads archived with `codex archive` (their rollouts are in
+`$env:CODEX_HOME\archived_sessions`) and marks them `"archived": true`; `dump` and `hop` read them
+like any other. To see only the threads that are not archived:
+
+```powershell
+mukade list codex --archived false
+```
+
 A custom Codex destination:
 
 ```powershell
@@ -755,6 +763,7 @@ $env:OPENCODE_DB = 'C:\path\to\opencode.db'
 $env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
 Set-Location 'C:\work\my-project'
 mukade list opencode
+mukade list opencode --archived false                    # without the archived sessions
 mukade hop opencode YOUR_OPENCODE_SESSION_ID pi --cwd 'C:\work\my-project'
 ```
 
@@ -806,14 +815,6 @@ mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project'
 ```
 
 A Pi destination kept in its own folder:
-`list codex` includes the threads archived with `codex archive` (their rollouts are in
-`$env:CODEX_HOME\archived_sessions`) and marks them `"archived": true`; `dump` and `hop` read them
-like any other. To see only the threads that are not archived:
-
-```powershell
-mukade list codex --archived false
-```
-
 
 ```powershell
 $env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
@@ -868,7 +869,6 @@ A trimmed answer (paths are illustrative):
 mukade detect 'D:\portable\pi\agent'
 mukade list --root 'D:\portable\pi\agent'
 mukade dump pi YOUR_PI_SESSION_ID --root 'D:\portable\pi\agent' --output 'C:\work\session.json'
-mukade list opencode --archived false                    # without the archived sessions
 $env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
 mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
 ```
