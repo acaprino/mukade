@@ -7,12 +7,15 @@ mod codex;
 mod opencode;
 mod pi;
 
+pub(crate) use opencode::fork_of as opencode_fork;
+
 use crate::hop::HopError;
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
 use crate::policy::Clock;
 use crate::reader::{Reader, SessionInfo};
 use crate::roots::StoreRoots;
+use crate::summary::{Reply, SummarizeOpts, SummaryCommand};
 use crate::writer::{WriteOpts, Writer, Written, plan::Plan};
 use serde_json::Value;
 use std::path::Path;
@@ -125,6 +128,33 @@ pub trait Harness: Send + Sync {
     /// summarized from this harness's own store, by id.
     fn summarizes_from_file(&self) -> bool {
         false
+    }
+
+    /// The command that asks this harness's own binary for a summary of `session` and saves
+    /// nothing in its store. `scratch` is the folder of this run, for what the harness has to
+    /// write somewhere.
+    fn summary_command(
+        &self,
+        session: &Session,
+        opts: &SummarizeOpts,
+        scratch: &Path,
+    ) -> Result<SummaryCommand, HopError>;
+
+    /// The summary as this harness's run printed it: `stdout`, and the content of the file the
+    /// command was told to write (`output_file`). The caller trims it and refuses an empty one.
+    fn parse_summary_reply(&self, stdout: &str, output_file: Option<&str>)
+    -> Result<Reply, String>;
+
+    /// What a summarizing run leaves in this harness's store, cleaned up once it has finished,
+    /// whatever came of it. `stdout` is what the run printed. The command that removes what could
+    /// not be cleaned up, if any.
+    fn after_summary(
+        &self,
+        _command: &SummaryCommand,
+        _roots: &StoreRoots,
+        _stdout: &str,
+    ) -> Option<String> {
+        None
     }
 }
 
@@ -326,6 +356,23 @@ mod tests {
                 sessions: Err("not counted in this test".into()),
                 forks: None,
             }
+        }
+
+        fn summary_command(
+            &self,
+            _session: &Session,
+            _opts: &SummarizeOpts,
+            _scratch: &Path,
+        ) -> Result<SummaryCommand, HopError> {
+            Err(HopError::Unsupported("not summarized in this test".into()))
+        }
+
+        fn parse_summary_reply(
+            &self,
+            _stdout: &str,
+            _output_file: Option<&str>,
+        ) -> Result<Reply, String> {
+            Err("not summarized in this test".into())
         }
     }
 

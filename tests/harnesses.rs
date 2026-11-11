@@ -288,3 +288,35 @@ fn only_opencode_files_sessions_under_a_project() {
         assert!(matches!(found, Ok(None)), "{id}");
     }
 }
+
+#[test]
+fn every_adapter_builds_a_summary_command() {
+    use mukade::hop::HopError;
+    use mukade::summary::SummarizeOpts;
+    let scratch = support::scratch(HarnessId::Pi, "adapter-summary");
+    for id in HarnessId::ALL {
+        let mut session = support::read_source(id);
+        let name = mukade::exe::binary_name(id);
+        let opts = SummarizeOpts {
+            exe: Some(name.to_string()),
+            ..SummarizeOpts::default()
+        };
+        if id == HarnessId::Pi {
+            session.meta.source_path = None;
+            let refusal = get(id)
+                .summary_command(&session, &opts, &scratch)
+                .expect_err("a Pi session with no file is not summarized");
+            assert!(matches!(refusal, HopError::Unsupported(_)), "{refusal}");
+            session.meta.source_path = Some("session.jsonl".into());
+        }
+        let command = get(id)
+            .summary_command(&session, &opts, &scratch)
+            .unwrap_or_else(|error| panic!("{id}: {error}"));
+        assert_eq!(command.program, name, "{id}");
+        assert_eq!(
+            command.args.last().map(String::as_str),
+            Some(mukade::summary::SUMMARY_PROMPT),
+            "{id}"
+        );
+    }
+}

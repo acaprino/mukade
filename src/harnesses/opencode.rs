@@ -1,14 +1,17 @@
 //! OpenCode: one SQLite database, named by `OPENCODE_DB`.
 
 use super::{Harness, InterchangeDocument, StoreStats};
+use crate::hop::HopError;
 use crate::model::{HarnessId, Kind, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
 use crate::policy::Clock;
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
+use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::writer::{WriteOpts, Writer, plan::Plan};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub(super) struct OpenCode;
 
@@ -155,6 +158,133 @@ impl Harness for OpenCode {
             }
         }
     }
+    // Every `run` writes to the store: the fork is deleted once the reply is in.
+    fn summary_command(
+        &self,
+        session: &Session,
+        opts: &SummarizeOpts,
+        _scratch: &Path,
+    ) -> Result<SummaryCommand, HopError> {
+        let mut args: Vec<String> = [
+            "run",
+            "--standalone",
+            "--session",
+            &session.meta.id,
+            "--fork",
+            "--format",
+            "json",
+        ]
+        .map(String::from)
+        .to_vec();
+        // A model is named only with its provider.
+        args.extend(summary::model_args(
+            "-m",
+            opts.model.as_deref(),
+            summary::own_model(session),
+            |model| match model.provider.as_deref() {
+                Some(provider) => vec!["-m".into(), format!("{provider}/{}", model.id)],
+                None => Vec::new(),
+            },
+        ));
+        let env = vec![("OPENCODE_CONFIG_CONTENT".into(), DENY_ALL.into())];
+        summary::finish_command(session, opts, args, None, env)
+    }
+
+    /// The `text` events, joined.
+    fn parse_summary_reply(
+        &self,
+        stdout: &str,
+        _output_file: Option<&str>,
+    ) -> Result<Reply, String> {
+        let mut texts = Vec::new();
+        for event in stdout
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        {
+            match event.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = event.pointer("/part/text").and_then(Value::as_str) {
+                        texts.push(text.to_string());
+                    }
+                }
+                // A model that reached for a tool was working, not summarizing.
+                Some("tool_use") => {
+                    return Err(format!(
+                        "the model called a tool ({}) instead of only summarizing",
+                        event
+                            .pointer("/part/tool")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?")
+                    ));
+                }
+                Some("error") => {
+                    let error = event.get("error").unwrap_or(&event);
+                    let message = error
+                        .pointer("/data/message")
+                        .or_else(|| error.get("message"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| error.to_string());
+                    return Err(format!("OpenCode reported an error: {message}"));
+                }
+                _ => {}
+            }
+        }
+        Ok(Reply {
+            text: texts.join("\n\n"),
+            usage: None,
+            fork: fork_of(stdout),
+        })
+    }
+
+    /// The fork exists as soon as OpenCode names it: it goes whatever came of the run, and a
+    /// failure says how to remove one that stayed.
+    fn after_summary(
+        &self,
+        command: &SummaryCommand,
+        roots: &StoreRoots,
+        stdout: &str,
+    ) -> Option<String> {
+        fork_of(stdout).and_then(|fork| delete_fork(command, roots, &fork))
+    }
+}
+
+/// OpenCode's `run` has no switch for tools: its inline configuration denies every permission, so
+/// the summarizing run cannot edit a file or run a command (live record, "Ephemeral runs").
+const DENY_ALL: &str = r#"{"permission":{"*":"deny"}}"#;
+
+/// How long deleting OpenCode's fork may take.
+const DELETE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The session OpenCode forked for a run: the `sessionID` of the first event it printed, there as
+/// soon as the fork exists, before any text.
+pub(crate) fn fork_of(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .find_map(|event| {
+            event
+                .get("sessionID")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+/// Delete the session OpenCode forked for the summary: `None` once it is gone, else the command
+/// that removes it.
+fn delete_fork(command: &SummaryCommand, roots: &StoreRoots, fork: &str) -> Option<String> {
+    let args = ["session", "delete", fork, "--standalone"];
+    let mut process = std::process::Command::new(crate::exe::spawnable(&command.program));
+    process.args(args);
+    if let Some(cwd) = &command.cwd {
+        process.current_dir(cwd);
+    }
+    roots.apply_to(HarnessId::OpenCode, &mut process);
+    let deleted = crate::exe::run_within(&mut process, DELETE_TIMEOUT)
+        .ok()
+        .and_then(|finished| finished.status)
+        .is_some_and(|status| status.success());
+    (!deleted).then(|| format!("{} {}", command.program, args.join(" ")))
 }
 
 /// The configuration an OpenCode database in an XDG data layout has beside it:

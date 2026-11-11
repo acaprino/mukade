@@ -1,9 +1,11 @@
 //! Codex CLI: rollouts under `CODEX_HOME/sessions/`.
 
 use super::{Harness, InterchangeDocument, StoreStats};
+use crate::hop::HopError;
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
+use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::writer::{WriteOpts, Writer};
 use std::path::Path;
 
@@ -87,6 +89,46 @@ impl Harness for Codex {
             roots,
             crate::reader::codex::Branches::All,
         ))
+    }
+    // `exec resume --ephemeral` still appends to the rollout it resumes; a fork does not.
+    fn summary_command(
+        &self,
+        session: &Session,
+        opts: &SummarizeOpts,
+        scratch: &Path,
+    ) -> Result<SummaryCommand, HopError> {
+        let file = scratch.join("last-message.txt");
+        let mut args = vec![
+            "exec".into(),
+            "fork".into(),
+            session.meta.id.clone(),
+            "--ephemeral".into(),
+            "--skip-git-repo-check".into(),
+            "-c".into(),
+            "sandbox_mode=\"read-only\"".into(),
+            "-o".into(),
+            file.display().to_string(),
+        ];
+        args.extend(summary::model_args(
+            "-m",
+            opts.model.as_deref(),
+            summary::own_model(session),
+            |model| vec!["-m".into(), model.id.clone()],
+        ));
+        summary::finish_command(session, opts, args, Some(file), Vec::new())
+    }
+
+    /// The file Codex wrote its last message to.
+    fn parse_summary_reply(
+        &self,
+        _stdout: &str,
+        output_file: Option<&str>,
+    ) -> Result<Reply, String> {
+        Ok(Reply {
+            text: output_file.unwrap_or("").to_string(),
+            usage: None,
+            fork: None,
+        })
     }
 }
 

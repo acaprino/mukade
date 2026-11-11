@@ -1,10 +1,13 @@
 //! Claude Code: sessions under `CLAUDE_CONFIG_DIR/projects/`.
 
 use super::{Harness, InterchangeDocument, StoreStats};
+use crate::hop::HopError;
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
+use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::writer::{WriteOpts, Writer};
+use serde_json::{Value, json};
 use std::path::Path;
 
 pub(super) struct ClaudeCode;
@@ -60,5 +63,69 @@ impl Harness for ClaudeCode {
 
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
         super::listed_stats(self, roots)
+    }
+    // `--tools` takes several values: before `--resume`, so it cannot swallow the prompt.
+    fn summary_command(
+        &self,
+        session: &Session,
+        opts: &SummarizeOpts,
+        _scratch: &Path,
+    ) -> Result<SummaryCommand, HopError> {
+        let mut args: Vec<String> = [
+            "-p",
+            "--tools",
+            "",
+            "--resume",
+            &session.meta.id,
+            "--no-session-persistence",
+            "--output-format",
+            "json",
+        ]
+        .map(String::from)
+        .to_vec();
+        args.extend(summary::model_args(
+            "--model",
+            opts.model.as_deref(),
+            summary::own_model(session),
+            |model| vec!["--model".into(), model.id.clone()],
+        ));
+        summary::finish_command(session, opts, args, None, Vec::new())
+    }
+
+    /// The JSON `result`, read from the last line that parses.
+    fn parse_summary_reply(
+        &self,
+        stdout: &str,
+        _output_file: Option<&str>,
+    ) -> Result<Reply, String> {
+        let result: Value = stdout
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str(line.trim()).ok())
+            .or_else(|| serde_json::from_str(stdout.trim()).ok())
+            .ok_or_else(|| "Claude Code printed no JSON result".to_string())?;
+        let subtype = result.get("subtype").and_then(Value::as_str).unwrap_or("");
+        let text = result.get("result").and_then(Value::as_str).unwrap_or("");
+        if result.get("is_error").and_then(Value::as_bool) == Some(true) || subtype != "success" {
+            return Err(format!(
+                "Claude Code answered with an error ({}): {}",
+                if subtype.is_empty() {
+                    "no subtype"
+                } else {
+                    subtype
+                },
+                text.trim()
+            ));
+        }
+        let usage = json!({
+            "total_cost_usd": result.get("total_cost_usd"),
+            "usage": result.get("usage"),
+            "modelUsage": result.get("modelUsage"),
+        });
+        Ok(Reply {
+            text: text.to_string(),
+            usage: Some(usage.to_string()),
+            fork: None,
+        })
     }
 }

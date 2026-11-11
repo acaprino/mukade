@@ -1,9 +1,11 @@
 //! Pi: sessions under `PI_CODING_AGENT_DIR/sessions/`.
 
 use super::{Harness, InterchangeDocument, StoreStats};
+use crate::hop::HopError;
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
+use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::writer::{WriteOpts, Writer};
 use std::path::Path;
 
@@ -86,5 +88,56 @@ impl Harness for Pi {
     /// Pi forks a session from a file, so it summarizes one from a file too.
     fn summarizes_from_file(&self) -> bool {
         true
+    }
+    // `--no-session` cannot be combined with `--fork`: the fork goes to this run's folder.
+    fn summary_command(
+        &self,
+        session: &Session,
+        opts: &SummarizeOpts,
+        scratch: &Path,
+    ) -> Result<SummaryCommand, HopError> {
+        let file = session.meta.source_path.clone().ok_or_else(|| {
+            HopError::Unsupported(
+                "a Pi session is summarized from its own file, and this one was not read from a file"
+                    .into(),
+            )
+        })?;
+        let mut args = vec![
+            "-p".into(),
+            "--fork".into(),
+            file,
+            "--session-dir".into(),
+            scratch.join("sessions").display().to_string(),
+            "--no-tools".into(),
+        ];
+        // The provider goes apart: a model id may hold a slash itself.
+        args.extend(summary::model_args(
+            "--model",
+            opts.model.as_deref(),
+            summary::own_model(session),
+            |model| match model.provider.as_deref() {
+                Some(provider) => vec![
+                    "--provider".into(),
+                    provider.into(),
+                    "--model".into(),
+                    model.id.clone(),
+                ],
+                None => vec!["--model".into(), model.id.clone()],
+            },
+        ));
+        summary::finish_command(session, opts, args, None, Vec::new())
+    }
+
+    /// Pi prints the summary on stdout.
+    fn parse_summary_reply(
+        &self,
+        stdout: &str,
+        _output_file: Option<&str>,
+    ) -> Result<Reply, String> {
+        Ok(Reply {
+            text: stdout.to_string(),
+            usage: None,
+            fork: None,
+        })
     }
 }
