@@ -92,7 +92,11 @@ fn hunks(body: &[&str]) -> Option<Vec<(String, String)>> {
             new.push(line.strip_prefix('+')?);
         }
     }
-    if hunks.is_empty() || hunks.iter().any(|(old, _)| old.is_empty()) {
+    // A hunk must remove or add a line, and its old text must hold something to find: an
+    // insertion without anchor, or a hunk of context only (in Codex it only places the next one),
+    // is no edit.
+    let blank = |lines: &[&str]| lines.iter().all(|l| l.trim().is_empty());
+    if hunks.is_empty() || hunks.iter().any(|(old, new)| blank(old) || old == new) {
         return None;
     }
     Some(
@@ -168,6 +172,46 @@ mod tests {
         let body = patch("*** Add File: D:/w/a.txt\n+L1");
         assert_eq!(view(&json!({"input": body})), view(&json!(body)));
         assert!(view(&json!({"input": body})).is_some());
+    }
+
+    #[test]
+    fn an_insertion_with_blank_lines_is_not_an_edit() {
+        for body in [
+            "*** Update File: D:/w/a.txt
+@@
++new
+",
+            "*** Update File: D:/w/a.txt
+@@
++a
+
++b",
+            "*** Update File: D:/w/a.txt
+@@
+
+
++x",
+        ] {
+            assert_eq!(view(&json!(patch(body))), None, "{body:?}");
+        }
+    }
+
+    /// A hunk of context lines only changes nothing: in Codex it places the next hunk.
+    #[test]
+    fn a_context_only_hunk_is_not_an_edit() {
+        for body in [
+            "*** Update File: D:/w/a.txt
+@@
+ def foo():",
+            "*** Update File: D:/w/a.txt
+@@
+ def foo():
+@@
+-a
++b",
+        ] {
+            assert_eq!(view(&json!(patch(body))), None, "{body:?}");
+        }
     }
 
     #[test]

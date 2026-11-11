@@ -1362,3 +1362,21 @@ fn the_split_keeps_every_source_record() {
         "the exec call and its output, verbatim, once each"
     );
 }
+
+/// A split call keeps the shell in effect where the script ran, not one declared later on.
+#[test]
+fn a_split_call_takes_the_shell_declared_before_it() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "custom_tool_call", "status": "completed", "call_id": "call_x",
+            "name": "exec", "input": "text(await tools.exec_command({cmd:\"CMD-1\"}));"}),
+        serde_json::json!({"type": "custom_tool_call_output", "call_id": "call_x",
+            "output": exec_output(HEADER, &["OUT-1"])}),
+        serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "<environment_context>
+  <shell>bash</shell>
+</environment_context>"}]}),
+    ]);
+    let call = calls_of(&s).into_iter().find(|c| c.id == "call_x").unwrap();
+    assert_eq!(call.source_name, "exec_command");
+    assert_eq!(call.canonical, Some(CanonicalTool::PowerShell));
+}

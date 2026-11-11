@@ -457,6 +457,8 @@ struct Builder {
     /// The shell the harness runs commands with, as its own `<environment_context>` states it.
     /// It decides whether `exec_command` reads as the canonical `Bash` or `PowerShell` (L13).
     env_shell: Option<CanonicalTool>,
+    /// The shell in effect where each code-mode `exec` call was made (spec L10, L13).
+    exec_shells: HashMap<String, Option<CanonicalTool>>,
 }
 
 #[derive(Default)]
@@ -751,10 +753,14 @@ impl Builder {
                         arguments_of(payload),
                     ),
                 };
+                let id = str_at(payload, "/call_id")
+                    .or_else(|| str_at(payload, "/id"))
+                    .unwrap_or_else(|| id_of(payload, index));
+                if name == "exec" {
+                    self.exec_shells.insert(id.clone(), self.env_shell.clone());
+                }
                 calls.push(ToolCall {
-                    id: str_at(payload, "/call_id")
-                        .or_else(|| str_at(payload, "/id"))
-                        .unwrap_or_else(|| id_of(payload, index)),
+                    id,
                     canonical: Some(canonical_call(&name, &input, self.env_shell.clone())),
                     source_name: name,
                     input,
@@ -805,7 +811,7 @@ impl Builder {
 
     fn finish(mut self, source_path: Option<&Path>) -> Result<Session> {
         self.flush();
-        exec::split_code_mode(&mut self.entries, self.env_shell.clone());
+        exec::split_code_mode(&mut self.entries, &self.exec_shells);
         for i in 0..self.entries.len() {
             if !matches!(
                 self.entries[i].kind,

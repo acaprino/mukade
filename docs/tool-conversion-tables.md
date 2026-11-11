@@ -217,7 +217,10 @@ source's dialect (L13), MCP tools, `web__run` and `write_stdin` are text form (L
 `*** Update File:` section of `@@` hunks → one hunk is an `Edit` (old text = context and `-`
 lines, new text = context and `+` lines; the `@@` anchor is not part of either), several hunks a
 multi-edit (Pi only). A delete, a move, `*** End of File`, several file sections (one result
-cannot be split between files), or a hunk without old text: text form.
+cannot be split between files), a hunk whose old text is blank (an insertion with no anchor), or a
+hunk of context lines only (in Codex it only places the next hunk): text form. The `@@ <anchor>`
+text, which picks among repeated occurrences in Codex, is not carried: the edit names its old text
+only.
 
 ## 6. The destination's tool set is per version and model
 

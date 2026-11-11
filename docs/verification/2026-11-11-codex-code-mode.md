@@ -30,12 +30,13 @@ outside the providers' id alphabet (the test asserts both).
 | destination | without `--dest-shell` | with `--dest-shell powershell` |
 |---|---|---|
 | Claude Code | 59 | 59 |
-| Pi | 97 | 654 |
+| Pi | 88 | 645 |
 | Codex | 0 | 696 |
 
-- The 59 toward Claude and 97 toward Pi without the flag are `apply_patch` calls read as writes
-  and edits (Pi also takes the multi-hunk ones as a multi-edit). The other 125 patches hold
-  several files, a delete, or several hunks toward Claude, and stay text form.
+- The 59 toward Claude and 88 toward Pi without the flag are `apply_patch` calls read as writes
+  and edits (Pi also takes the multi-hunk ones as a multi-edit). The other patches hold several
+  files, a delete, a hunk of context only (in Codex it places the next hunk), or several hunks
+  toward Claude, and stay text form.
 - Every rollout declares `<shell>powershell</shell>`, so a split `exec_command` is canonical
   `PowerShell`. The dialect rule (L13) keeps it text form unless the destination's shell is
   PowerShell; Claude's `PowerShell` tool is not in its offered set. Both are the next open point

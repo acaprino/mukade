@@ -7,6 +7,7 @@
 
 use crate::model::{CanonicalTool, Entry, Kind, ToolCall, ToolResult};
 use serde_json::{Map, Number, Value};
+use std::collections::HashMap;
 
 /// Replace every `exec` call whose script and output can be read call by call with the calls it
 /// made and their results (spec L10). The first call keeps the `exec` call's id, the n-th is
@@ -14,7 +15,11 @@ use serde_json::{Map, Number, Value};
 /// the output is Codex's header (`Script completed` …), then one `input_text` item per `text()`
 /// call, in order. A script is left whole unless its shape and its output agree exactly; the
 /// source records in `raw` are never touched.
-pub(super) fn split_code_mode(entries: &mut [Entry], env_shell: Option<CanonicalTool>) {
+/// `shells` holds, per `exec` call id, the shell declared before the call (L13).
+pub(super) fn split_code_mode(
+    entries: &mut [Entry],
+    shells: &HashMap<String, Option<CanonicalTool>>,
+) {
     for step in 0..entries.len() {
         let Kind::Step { calls, .. } = &entries[step].kind else {
             continue;
@@ -30,6 +35,7 @@ pub(super) fn split_code_mode(entries: &mut [Entry], env_shell: Option<Canonical
             let Some(output) = output_of(entries, step, &id, parsed.len()) else {
                 continue;
             };
+            let shell = shells.get(&id).cloned().flatten();
             let ids: Vec<String> = (1..=parsed.len())
                 .map(|n| {
                     if n == 1 {
@@ -57,7 +63,7 @@ pub(super) fn split_code_mode(entries: &mut [Entry], env_shell: Option<Canonical
                 .zip(parsed)
                 .map(|(call_id, (name, input))| ToolCall {
                     id: call_id,
-                    canonical: Some(super::canonical_call(&name, &input, env_shell.clone())),
+                    canonical: Some(super::canonical_call(&name, &input, shell.clone())),
                     source_name: name,
                     input,
                 })
@@ -126,6 +132,7 @@ pub(super) fn parse_script(script: &str) -> Option<Vec<(String, Value)>> {
     let mut p = Parser {
         chars: script.chars().collect(),
         at: 0,
+        depth: 0,
     };
     let mut calls = Vec::new();
     p.skip_space();
@@ -139,7 +146,12 @@ pub(super) fn parse_script(script: &str) -> Option<Vec<(String, Value)>> {
 struct Parser {
     chars: Vec<char>,
     at: usize,
+    /// How many objects and arrays the current literal is inside.
+    depth: usize,
 }
+
+/// Deeper than any tool argument, and far from the stack's limit (serde_json's own cap).
+const MAX_DEPTH: usize = 128;
 
 impl Parser {
     fn done(&self) -> bool {
@@ -217,8 +229,19 @@ impl Parser {
     fn literal(&mut self) -> Option<Value> {
         self.skip_space();
         match self.peek()? {
-            '{' => self.object(),
-            '[' => self.array(),
+            '{' | '[' => {
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return None;
+                }
+                let value = if self.peek()? == '{' {
+                    self.object()
+                } else {
+                    self.array()
+                };
+                self.depth -= 1;
+                value
+            }
             '"' | '\'' => self.string().map(Value::String),
             '-' | '0'..='9' => self.number(),
             _ => match self.identifier()?.as_str() {
@@ -462,6 +485,23 @@ mod tests {
             calls(r#"text(await tools.exec_command({cmd:"x));\ntext(await tools.y({}));"}));"#);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].1["cmd"], "x));\ntext(await tools.y({}));");
+    }
+
+    /// A literal nested deeper than any tool argument is refused, not a stack overflow.
+    #[test]
+    fn deep_nesting_is_refused_not_a_crash() {
+        let deep = format!(
+            "text(await tools.a({}{}));",
+            "[".repeat(100_000),
+            "]".repeat(100_000)
+        );
+        assert_eq!(parse_script(&deep), None);
+        let fine = format!(
+            "text(await tools.a({}{}));",
+            "[".repeat(100),
+            "]".repeat(100)
+        );
+        assert!(parse_script(&fine).is_some());
     }
 
     #[test]
