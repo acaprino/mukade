@@ -189,6 +189,10 @@ fn each_destination_takes_its_own_id_format() {
     assert!(mukade::writer::validate_id_syntax(uuid).is_ok());
     assert!(mukade::writer::validate_id_syntax(opencode).is_ok());
     assert!(mukade::writer::validate_id_syntax("../invalid").is_err());
+    let malformed = mukade::writer::validate_id_syntax("ses_bad!")
+        .expect_err("a malformed OpenCode id")
+        .to_string();
+    assert_eq!(malformed, "invalid OpenCode destination session ID");
 }
 
 #[test]

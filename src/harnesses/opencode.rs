@@ -101,6 +101,11 @@ impl Harness for OpenCode {
         Ok(())
     }
 
+    /// OpenCode ids are prefixed `ses_`.
+    fn claims_id(&self, id: &str) -> bool {
+        id.starts_with("ses_")
+    }
+
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
         Some(&Document)
     }

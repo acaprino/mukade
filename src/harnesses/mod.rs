@@ -63,6 +63,12 @@ pub trait Harness: Send + Sync {
     /// silently ignored.
     fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()>;
 
+    /// Whether `id` has this harness's own session id shape, so its verdict on the id is the one
+    /// given before the destination is known.
+    fn claims_id(&self, _id: &str) -> bool {
+        false
+    }
+
     /// The interchange document the `document` command prints, for a harness whose host imports
     /// one itself. `None` is a harness without one.
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument>;

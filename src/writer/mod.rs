@@ -126,16 +126,21 @@ impl std::error::Error for WriteOutcomeUnknown {}
 
 /// The CLI validates a reserved ID before it knows the source or starts a process: an id some
 /// destination takes ([`Harness::validate_write`](crate::harnesses::Harness::validate_write)).
+/// An id in a harness's own shape ([`Harness::claims_id`](crate::harnesses::Harness::claims_id))
+/// gets that harness's verdict.
 pub fn validate_id_syntax(id: &str) -> Result<()> {
     let opts = WriteOpts {
         dest_id: Some(id.to_string()),
         ..WriteOpts::default()
     };
+    let writable = crate::harnesses::all()
+        .into_iter()
+        .filter(|harness| harness.writer().is_some());
+    if let Some(owner) = writable.clone().find(|harness| harness.claims_id(id)) {
+        return owner.validate_write(&opts);
+    }
     let mut refusal = None;
-    for harness in crate::harnesses::all() {
-        if harness.writer().is_none() {
-            continue;
-        }
+    for harness in writable {
         match harness.validate_write(&opts) {
             Ok(()) => return Ok(()),
             Err(error) => {

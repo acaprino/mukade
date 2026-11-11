@@ -334,6 +334,42 @@ fn hop_writes_into_the_installation_dest_root_names() {
     );
 }
 
+/// A reserved file the destination cannot take is refused before anything is planned (exit 2, as
+/// docs/usage.md says): OpenCode keeps no file per session, and a file destination keeps its
+/// sessions inside its own store.
+#[test]
+fn a_dest_path_the_destination_cannot_take_is_refused() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-dest-path-refused");
+    let home = scratch.join("home");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let cases = [
+        (HarnessId::OpenCode, home.join("reserved.json")),
+        (HarnessId::Pi, scratch.join("outside.jsonl")),
+        (HarnessId::ClaudeCode, scratch.join("outside.jsonl")),
+    ];
+    for (dest, path) in cases {
+        let (code, stdout, stderr) = cli_code(
+            &scratch,
+            &[
+                "hop",
+                "claude_code",
+                "c45db7bc",
+                dest.as_str(),
+                "--dest-version",
+                "1.2.0",
+                "--dest-path",
+                path.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(code, Some(2), "{dest}: {stdout}{stderr}");
+        assert!(stderr.contains("--dest-path"), "{dest}: {stderr}");
+        assert!(stdout.trim().is_empty(), "{dest}: no session reported: {stdout}");
+        assert!(!path.exists(), "{dest}: nothing written at the reserved file");
+    }
+    assert!(!home.join("sessions").exists(), "no Pi session written");
+    assert!(!home.join("opencode.db").exists(), "no OpenCode store written");
+}
+
 #[test]
 fn dest_root_is_refused_outside_hop() {
     let scratch = support::scratch(HarnessId::Pi, "cli-dest-root-list");
