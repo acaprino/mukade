@@ -594,3 +594,32 @@ fn a_failed_run_names_the_fork_it_left_behind() {
         "{error}"
     );
 }
+
+/// A tail that cannot be kept is refused before the source's model is asked: no run, no bill.
+#[test]
+fn a_tail_that_cannot_be_kept_is_refused_before_the_summary_is_paid_for() {
+    use mukade::hop::{Compaction, KeepFrom, SummarySource};
+    let scratch = scratch("summary-keep-turns-first");
+    let marker = scratch.join("ran");
+    let exe = support::launcher(
+        &scratch,
+        "fake-pi",
+        &format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display()),
+        &format!("#!/bin/sh\necho ran > '{}'\n", marker.display()),
+    );
+    let mut session = support::read_source(HarnessId::Pi);
+    session
+        .entries
+        .retain(|entry| !matches!(entry.kind, Kind::User { .. }));
+    let compaction = Compaction::Portable {
+        summary: SummarySource::SourceModel(SummarizeOpts {
+            exe: Some(exe.display().to_string()),
+            ..Default::default()
+        }),
+        keep_from: KeepFrom::LastTurns(2),
+    };
+    let error = mukade::hop::compact(&session, &compaction, &StoreRoots::default())
+        .expect_err("no user turn to keep from");
+    assert!(matches!(error, HopError::Unsupported(_)), "{error}");
+    assert!(!marker.exists(), "the source's model was not asked");
+}

@@ -541,6 +541,9 @@ pub fn compact<'a>(
             summary: SummarySource::SourceModel(opts),
             keep_from,
         } => {
+            // The tail is checked before the source's model is paid to write the summary: a
+            // generated summary has no boundary of its own, so this is the cut `select` makes.
+            cut_index(source, keep_from, None)?;
             resolved = Compaction::Portable {
                 summary: SummarySource::Generated(crate::summary::summarize(source, roots, opts)?),
                 keep_from: keep_from.clone(),
