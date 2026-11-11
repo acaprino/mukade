@@ -40,7 +40,7 @@ outside the providers' id alphabet (the test asserts both).
 - Every rollout declares `<shell>powershell</shell>`, so a split `exec_command` is canonical
   `PowerShell`. The dialect rule (L13) keeps it text form unless the destination's shell is
   PowerShell; Claude's `PowerShell` tool is not in its offered set. Both are the next open point
-  (`next.md`, *Across harnesses*, destination shell).
+  (`next.md`, *Needs code*, destination shell).
 - `write_stdin`, `web__run` and MCP tools are text form by rule (L14).
 
 ## Before

@@ -1,14 +1,16 @@
 # Windows checklist — what is left to verify
 
-Everything that could be settled on Linux is settled ([linux-2026-11-11.md](linux-2026-11-11.md)).
-What is below needs **your Windows machine**: the real harnesses, the real stores, sometimes a key.
+Each block below is one open check that needs **your Windows machine**: the real harnesses, the
+real stores, sometimes a key. Everything Linux could settle is settled
+([linux-2026-11-11.md](linux-2026-11-11.md)). `next.md` cites these steps as [n].
 
 **How to use this page**
 
-- One block = one check. Do them in order; each says how long it takes.
-- Every block has the same parts: **Needs → Do → Pass if → Write down**.
-- Tick the box when it passes. If it fails, stop and copy the output: that is the bug report.
-- 🟢 free and safe · 🟡 costs a few model calls · 🔴 needs an API key you may not have
+1. Do the blocks in order, in one PowerShell window (step 0 sets it up). Each says how long it takes.
+2. Each block: **Needs** (if any) → **Do** → **Pass if** → **Write down** / **Clean up** (if any).
+3. Tick the box when it passes. If it fails, stop and copy the output: that is the bug report.
+
+🟢 free and safe · 🟡 costs a few model calls · 🔴 needs an API key you may not have
 
 > Safety rule for every step: mukade **never changes a source session**. Each write makes a **new**
 > session. Steps that create throwaway sessions say so, and say how to remove them.
@@ -22,10 +24,18 @@ What is below needs **your Windows machine**: the real harnesses, the real store
 ```powershell
 cd D:\path\to\mukade
 git pull
-.\build.bat
+.\build.bat                       # press a key when it pauses at the end
 cargo test --workspace --no-fail-fast
-.\target\release\mukade.exe harnesses
+# Every later step runs in this window, with these:
+$env:PATH = "$PWD\target\release;$env:PATH"
+$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE\.claude"
+$env:CODEX_HOME = "$env:USERPROFILE\.codex"
+$env:PI_CODING_AGENT_DIR = "$env:USERPROFILE\.pi\agent"
+$env:OPENCODE_DB = "$env:USERPROFILE\.local\share\opencode\opencode.db"
+mukade harnesses
 ```
+
+The `mukade` commands below read and write only the stores these variables name.
 
 **Pass if**
 
@@ -42,10 +52,10 @@ New in this round: `e` and `i` in `mukade-tui`.
 
 **Do**
 
-1. `.\target\release\mukade-tui.exe`
+1. `mukade-tui`
 2. Pick a Claude Code session → press **`e`**.
 3. The box shows `document … \mukade-data\exports\claude_code-<id>.json`. Press `esc`.
-4. Press **`i`** → the path is already filled in → `tab` → choose **Pi** with `↓` → `enter` → `enter`.
+4. Press **`i`** → the path is already filled in → `tab` → `↓` until **Pi** → `enter` → `enter`.
 5. Read the result box: `destination`, `location`, `interactive`, `losses`.
 6. Run the `interactive` command it printed (`pi --session …`).
 
@@ -61,8 +71,8 @@ New in this round: `e` and `i` in `mukade-tui`.
 
 ## 2. Timeouts still stop the whole tree on Windows (3 min) 🟢
 
-The Unix path changed; the Windows path (`taskkill /T`) did **not**, and no automated test
-covers it (the tree test is Unix-only). One manual run confirms it.
+The Unix path changed; the Windows path (`taskkill /T`) did **not**, and no automated test covers
+it (the tree test is Unix-only). One manual run confirms it.
 
 **Do**
 
@@ -84,20 +94,19 @@ Get-Process ping -ErrorAction SilentlyContinue
 ## 3. Codex Desktop "code mode" on a real thread (10 min) 🟢
 
 A code-mode `exec` script of literal `text(await tools.X(...))` statements is read as its calls,
-each with its own result, and `apply_patch` as a write or edit (spec L10). The read side is
-already checked on every rollout of this machine
-([census](2026-11-11-codex-code-mode.md): 725 of 981 scripts split). What is left is one live hop.
+each with its own result; `apply_patch` is read as a write or edit (spec L10). The read side is
+checked on every rollout of this machine ([census](2026-11-11-codex-code-mode.md): 725 of 981
+scripts split). Left: one live hop.
 
 Every Desktop rollout declares PowerShell, so its shell calls translate only toward a destination
-whose shell is PowerShell (`--dest-shell powershell`); toward Claude Code only the patches
-translate until the destination-shell item of `next.md` is done.
+whose shell is PowerShell (`--dest-shell powershell`). Toward Claude Code only the patches
+translate, until the destination-shell item of `next.md` is done.
 
 **Needs:** one Codex **Desktop** thread with a few shell commands and a file edit in it.
 
 **Do**
 
 ```powershell
-$env:CODEX_HOME = "$env:USERPROFILE\.codex"
 $env:PI_CODING_AGENT_DIR = "$env:TEMP\pi-scratch"
 mukade hop codex YOUR_DESKTOP_THREAD_ID pi --dest-shell powershell --cwd 'C:\work\scratch'
 pi --session <the file the receipt names>
@@ -110,7 +119,12 @@ pi --session <the file the receipt names>
 
 **Write down:** the manifest's `tools_text_form` and the thread's `exec` count.
 
-**Clean up:** `Remove-Item -Recurse "$env:TEMP\pi-scratch"`.
+**Clean up:**
+
+```powershell
+Remove-Item -Recurse "$env:TEMP\pi-scratch"
+$env:PI_CODING_AGENT_DIR = "$env:USERPROFILE\.pi\agent"
+```
 
 ---
 
@@ -118,14 +132,14 @@ pi --session <the file the receipt names>
 
 New: a subagent's rollout now reads with `meta.parent` = the thread that spawned it.
 
+**Needs:** a subagent id: a row marked `↳` in the TUI, or a row of `state_5.sqlite` `thread_spawn_edges`.
+
 **Do**
 
 ```powershell
 mukade dump codex YOUR_SUBAGENT_THREAD_ID --output "$env:TEMP\sub.json"
 (Get-Content "$env:TEMP\sub.json" | ConvertFrom-Json).meta.parent
 ```
-
-Find a subagent id in the TUI (rows marked `↳`) or in `state_5.sqlite` `thread_spawn_edges`.
 
 **Pass if**
 
@@ -154,7 +168,7 @@ Open since 0.165: a thread edited more than once is read by following each page 
 
 ## 6. Codex: summary written by Codex's real model (5 min) 🟡
 
-Was checked against a mock only (quota).
+Checked against a mock only so far (quota).
 
 **Do**
 
@@ -170,6 +184,8 @@ mukade hop codex A_THROWAWAY_THREAD_ID pi --compaction summary --resume-prompt "
 - [ ] The summary in the new Pi session is a summary, not a work log.
 - [ ] Pi's reply answers from the summary.
 
+**Clean up:** delete the new Pi session file the receipt names.
+
 ---
 
 ## 7. A session bigger than the source model's window (10 min) 🟡
@@ -178,11 +194,12 @@ mukade hop codex A_THROWAWAY_THREAD_ID pi --compaction summary --resume-prompt "
 
 ```powershell
 mukade hop claude_code THE_BIG_SESSION pi --compaction summary
+$LASTEXITCODE
 ```
 
 **Pass if**
 
-- [ ] It ends with `summary failed` (exit 4: nothing changed), and **no** Pi session was written.
+- [ ] It ends with `summary failed` and exit code **4** (nothing changed), and **no** Pi session was written.
 - [ ] It never writes half a summary.
 
 ---
@@ -204,7 +221,8 @@ mukade hop claude_code THE_BIG_SESSION pi --compaction summary
 - [ ] The untouched copy resumes.
 - [ ] The tampered copy is **refused** by the provider.
 
-**Clean up:** step 9.
+**Clean up:** delete the written file and its copy (the receipt's `location` names the first). The
+new session sits in the source's project folder, not in the one step 9 removes.
 
 ---
 
@@ -230,6 +248,8 @@ mukade hop claude_code A_SESSION_WITH_THINKING opencode --model-provider anthrop
 
 - [ ] OpenCode answers, and the manifest says the reasoning travelled **natively**.
 
+**Clean up:** `opencode session delete <new id> --standalone`.
+
 ---
 
 ## 11. OpenAI encrypted reasoning through OpenRouter (10 min) 🔴
@@ -242,13 +262,15 @@ mukade hop claude_code A_SESSION_WITH_THINKING opencode --model-provider anthrop
 
 - [ ] OpenCode answers; the manifest says `reasoning.encrypted` was written natively.
 
+**Clean up:** `opencode session delete <new id> --standalone`.
+
 ---
 
 ## 12. The listing cache on a cold disk (5 min) 🟢
 
 **Do**
 
-1. Reboot (or wait until the disk cache is cold). Delete `mukade-data\cache\`.
+1. Reboot (or wait until the disk cache is cold). Delete `target\release\mukade-data\cache\`.
 2. `Measure-Command { mukade list claude_code }`
 3. Run it again.
 
@@ -266,6 +288,8 @@ mukade hop claude_code A_SESSION_WITH_THINKING opencode --model-provider anthrop
 
 **Write down:** the `total` line. Earlier numbers: 30 MB took 440–630 ms.
 
+**Clean up:** delete the new Pi session file the receipt names.
+
 ---
 
 ## 14. Real-life shapes nobody has hopped yet (when they happen) 🟢
@@ -281,5 +305,5 @@ Whenever one of these shows up in your normal work, hop it once and check the re
 
 ## When you are done
 
-Send back the ticked list and the "Write down" values. Each passed block becomes a dated line
-in `next.md` and a verification record, like the Linux one.
+Send back the ticked list and the "Write down" values. Each passed block becomes a dated line in
+`next.md` and a verification record, like the Linux one.
