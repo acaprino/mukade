@@ -4,7 +4,7 @@
 //! from a registration its process left behind needs this answer. It has to be quick (a listing
 //! asks once per registration), and it must not start anything: a process is looked at, never
 //! signalled. On Windows that is two Win32 calls, declared here because the dependency list is
-//! closed on purpose (`Cargo.toml`); elsewhere `/proc`, or `ps` where there is no `/proc`.
+//! closed on purpose (`Cargo.toml`); on Linux `/proc/<pid>/stat`; elsewhere `ps`.
 
 /// What looking at a process id found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,8 +12,9 @@ pub enum Process {
     /// Nothing runs under that id.
     Gone,
     /// A process runs under that id. `started` is when it started, in the platform's own unit,
-    /// where that is known: Windows' creation time (a FILETIME, in 100 ns since 1601). It tells a
-    /// process from a later one that was given the same id.
+    /// where that is known: on Windows the creation time (a FILETIME, in 100 ns since 1601), on
+    /// Linux field 22 of `/proc/<pid>/stat` (clock ticks since boot, the value Claude Code
+    /// records as `procStart` there). It tells a process from a later one given the same id.
     Running { started: Option<u64> },
 }
 
@@ -102,10 +103,18 @@ mod imp {
     pub fn inspect(pid: u32) -> Process {
         let proc = Path::new("/proc");
         if proc.join("self").exists() {
-            return if proc.join(pid.to_string()).exists() {
-                Process::Running { started: None }
-            } else {
-                Process::Gone
+            let Ok(stat) = std::fs::read_to_string(proc.join(pid.to_string()).join("stat")) else {
+                return if proc.join(pid.to_string()).exists() {
+                    Process::Running { started: None }
+                } else {
+                    Process::Gone
+                };
+            };
+            return match linux_stat(&stat) {
+                // A zombie has exited; only its parent has not collected it yet.
+                Some(('Z' | 'X', _)) => Process::Gone,
+                Some((_, started)) => Process::Running { started },
+                None => Process::Running { started: None },
             };
         }
         // No /proc (macOS, the BSDs): `ps -p` prints the id when the process exists.
@@ -120,6 +129,18 @@ mod imp {
         } else {
             Process::Gone
         }
+    }
+
+    /// The state letter and the start time (field 22, clock ticks since boot) of a
+    /// `/proc/<pid>/stat` line. The command name (field 2) is in parentheses and may itself hold
+    /// spaces and parentheses, so the fields are counted from the last `)`.
+    pub(super) fn linux_stat(stat: &str) -> Option<(char, Option<u64>)> {
+        let rest = &stat[stat.rfind(')')? + 1..];
+        let mut fields = rest.split_whitespace();
+        let state = fields.next()?.chars().next()?;
+        // Fields 4..=21 come between the state (3) and the start time (22).
+        let started = fields.nth(18).and_then(|field| field.parse().ok());
+        Some((state, started))
     }
 }
 
@@ -149,6 +170,33 @@ mod tests {
         let pid = child.id();
         child.wait().unwrap();
         assert_eq!(inspect(pid), Process::Gone, "a process that has exited");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_says_when_the_process_started() {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let expected: u64 = stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            inspect(std::process::id()),
+            Process::Running {
+                started: Some(expected)
+            }
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_stat_line_is_read_from_its_last_parenthesis() {
+        let line = "94 (my (odd) name) S 1 94 94 0 -1 4194560 1 2 3 4 5 6 7 8 20 0 11 0 153 9 9";
+        assert_eq!(imp::linux_stat(line), Some(('S', Some(153))));
+        assert_eq!(imp::linux_stat("7 (z) Z 1 2"), Some(('Z', None)));
+        assert_eq!(imp::linux_stat("garbage"), None);
     }
 
     #[cfg(windows)]
