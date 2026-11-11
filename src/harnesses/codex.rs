@@ -1,10 +1,10 @@
 //! Codex CLI: rollouts under `CODEX_HOME/sessions/`.
 
-use super::Harness;
-use crate::model::{HarnessId, Session};
+use super::{Harness, InterchangeDocument};
+use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
-use crate::writer::Writer;
+use crate::writer::{WriteOpts, Writer};
 use std::path::Path;
 
 pub(super) struct Codex;
@@ -37,5 +37,23 @@ impl Harness for Codex {
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
         let variable = crate::catalog::store_env(self.id());
         super::set_store_env(command, variable, self.store_root(roots));
+    }
+
+    fn destination_protocol(&self) -> Option<Protocol> {
+        Some(Protocol::OpenaiResponses)
+    }
+
+    /// Only `encrypted_content`. A Chat envelope is not kept: only one with a scalar conversion
+    /// fits.
+    fn payload_has_place(&self, opaque: &Opaque) -> bool {
+        crate::policy::scalar_chat_payload(opaque) && opaque.encrypted.is_some()
+    }
+
+    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
+        super::validate_file_write(self, opts)
+    }
+
+    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
+        None
     }
 }

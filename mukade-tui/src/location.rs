@@ -86,13 +86,16 @@ pub fn add_installations(
     added
 }
 
-/// Where a session at `source` can hop: every other location, the same harness elsewhere
-/// included (a Claude Code session into a portable JanuraCode, an OpenCode one into another).
+/// Where a session at `source` can hop: every other location whose harness mukade writes, the same
+/// harness elsewhere included (a Claude Code session into a portable JanuraCode, an OpenCode one
+/// into another).
 pub fn destinations(locations: &[Location], source: usize) -> Vec<Location> {
     locations
         .iter()
         .enumerate()
-        .filter(|(index, _)| *index != source)
+        .filter(|(index, location)| {
+            *index != source && mukade::harnesses::get(location.harness).writer().is_some()
+        })
         .map(|(_, location)| location.clone())
         .collect()
 }

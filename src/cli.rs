@@ -519,6 +519,7 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         "write" => {
             no_more(operands, 1)?;
+            crate::harnesses::require_writer(crate::harnesses::get(harness))?;
             let path = operands.first().context("write needs a document file")?;
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
@@ -540,9 +541,11 @@ pub fn run(args: &[String]) -> Result<()> {
             no_more(operands, 2)?;
             let source_harness: HarnessId = operands.first().context("document needs a source harness")?.parse()?;
             let dest = harness;
-            if dest != HarnessId::OpenCode {
+            let adapter = crate::harnesses::get(dest);
+            crate::harnesses::require_writer(adapter)?;
+            let Some(interchange) = adapter.interchange_document() else {
                 anyhow::bail!("document currently supports only an OpenCode destination");
-            }
+            };
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
                 (Some(path), false) => crate::hop::export_path(source_harness, std::path::Path::new(path)),
                 (Some(path), true) => crate::hop::export_path_all_branches(source_harness, std::path::Path::new(path)),
@@ -554,24 +557,12 @@ pub fn run(args: &[String]) -> Result<()> {
             }.map_err(anyhow::Error::new)?;
             anyhow::ensure!(source.conversation().any(|entry| matches!(entry.kind, crate::model::Kind::Step { .. })), "noCompleteTurn");
             let mut opts = flags.write_opts(dest, &source, &destination_roots, None)?;
-            if source_harness == HarnessId::OpenCode {
-                for entry in source.conversation() {
-                    if let crate::model::Kind::Step { calls, .. } = &entry.kind {
-                        for call in calls {
-                            if crate::tools::offered(dest).contains(&call.source_name) && call.input.is_object() {
-                                opts.tool_map.push((call.source_name.clone(), call.source_name.clone(), call.input.clone(), call.input.clone()));
-                            }
-                        }
-                    }
-                }
-            }
+            opts.tool_map.extend(interchange.source_tool_map(source_harness, &source));
             let mut clock = crate::policy::Clock::new(opts.now.as_deref());
-            let id = opts.dest_id.as_deref().unwrap_or("ses_preview");
-            crate::writer::opencode::validate_session_id(id)?;
             let plan = crate::writer::plan::plan(&source, dest, &opts);
             let violations = crate::strict::check_plan(&plan, opts.dest_protocol.as_ref());
             anyhow::ensure!(violations.is_empty(), "the document would violate the provider contract: {}", violations.join("; "));
-            let (document, native_compaction) = crate::writer::opencode::document_from_plan_report(&source, &plan, id, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
+            let (document, native_compaction) = interchange.document(&source, &plan, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
             println!("{}", json!({
                 "document": document,
                 "native_compaction": native_compaction.map(|boundary| json!({
@@ -603,13 +594,8 @@ pub fn run(args: &[String]) -> Result<()> {
                 .get(1)
                 .context("hop needs a destination harness")?
                 .parse()?;
-            if dest != HarnessId::OpenCode
-                && (flags.dest_agent.is_some() || flags.metadata_file.is_some())
-            {
-                anyhow::bail!(
-                    "--dest-agent and --metadata-file are supported only for an OpenCode destination"
-                );
-            }
+            crate::harnesses::require_writer(crate::harnesses::get(dest))?;
+            flags.check_write_flags(dest)?;
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
             let selection = flags.compaction(harness)?;
@@ -808,7 +794,7 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
                 )
             }
             None => {
-                let error = "PI_CODING_AGENT_DIR is not set: no Pi store to list".to_string();
+                let error = format!("{} is not set: no Pi store to list", store_env_name(harness));
                 (
                     Err(anyhow::anyhow!(error.clone())),
                     Some(Err(anyhow::anyhow!(error))),
@@ -994,7 +980,7 @@ struct Flags {
     dest_root: Option<String>,
     depth: Option<String>,
     /// The `--<harness>-exe` values, in [`HarnessId::ALL`] order.
-    exes: [Option<String>; 4],
+    exes: [Option<String>; HarnessId::ALL.len()],
 }
 
 impl Flags {
@@ -1056,6 +1042,21 @@ impl Flags {
         })
     }
 
+    /// The destination's own rules ([`crate::harnesses::Harness::validate_write`]) on the reserved
+    /// id, the agent and the metadata the flags ask for, before a store is read or a process
+    /// started. The metadata file is read later: here only its presence counts.
+    fn check_write_flags(&self, harness: HarnessId) -> Result<()> {
+        crate::harnesses::get(harness).validate_write(&WriteOpts {
+            dest_id: self.dest_id.clone(),
+            dest_agent: self.dest_agent.clone(),
+            metadata: self
+                .metadata_file
+                .as_ref()
+                .map(|_| serde_json::Value::Object(serde_json::Map::new())),
+            ..WriteOpts::default()
+        })
+    }
+
     /// `engine` is the executable the destination installation keeps beside its store: an
     /// explicit `--<harness>-exe` wins over it, and it wins over `MUKADE_*_EXE` and `PATH`.
     fn write_opts(
@@ -1065,23 +1066,7 @@ impl Flags {
         roots: &StoreRoots,
         engine: Option<&str>,
     ) -> Result<WriteOpts> {
-        if harness != HarnessId::OpenCode
-            && (self.dest_agent.is_some() || self.metadata_file.is_some())
-        {
-            anyhow::bail!(
-                "--dest-agent and --metadata-file are supported only for an OpenCode destination"
-            );
-        }
-        if let Some(id) = self.dest_id.as_deref() {
-            if harness == HarnessId::OpenCode {
-                crate::writer::opencode::validate_session_id(id)?;
-            } else {
-                uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination UUID"))?;
-            }
-        }
-        if let Some(agent) = self.dest_agent.as_deref() {
-            crate::writer::opencode::validate_agent(agent)?;
-        }
+        self.check_write_flags(harness)?;
         let metadata = match self.metadata_file.as_deref() {
             None => None,
             Some(file) => {

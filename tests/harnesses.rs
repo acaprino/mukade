@@ -141,3 +141,63 @@ fn the_usage_text_names_what_the_catalog_names() {
         assert!(mukade::cli::USAGE.contains(mukade::catalog::binary_env(id)), "{id}");
     }
 }
+
+#[test]
+fn only_opencode_takes_an_agent_or_metadata() {
+    use mukade::writer::WriteOpts;
+    let asks = [
+        WriteOpts {
+            dest_agent: Some("analyst".into()),
+            ..WriteOpts::default()
+        },
+        WriteOpts {
+            metadata: Some(serde_json::json!({"origin": "test"})),
+            ..WriteOpts::default()
+        },
+    ];
+    for id in HarnessId::ALL {
+        for opts in &asks {
+            let checked = get(id).validate_write(opts);
+            if id == HarnessId::OpenCode {
+                assert!(checked.is_ok(), "{id}: {checked:?}");
+            } else {
+                let error = checked.expect_err(id.as_str()).to_string();
+                assert!(error.contains("OpenCode"), "{id}: {error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn each_destination_takes_its_own_id_format() {
+    use mukade::writer::WriteOpts;
+    let with_id = |id: &str| WriteOpts {
+        dest_id: Some(id.into()),
+        ..WriteOpts::default()
+    };
+    let uuid = "00000000-0000-4000-8000-000000000001";
+    let opencode = "ses_0123abc";
+    for id in HarnessId::ALL {
+        let (taken, refused) = if id == HarnessId::OpenCode {
+            (opencode, uuid)
+        } else {
+            (uuid, opencode)
+        };
+        assert!(get(id).validate_write(&with_id(taken)).is_ok(), "{id} takes {taken}");
+        assert!(get(id).validate_write(&with_id(refused)).is_err(), "{id} refuses {refused}");
+    }
+    assert!(mukade::writer::validate_id_syntax(uuid).is_ok());
+    assert!(mukade::writer::validate_id_syntax(opencode).is_ok());
+    assert!(mukade::writer::validate_id_syntax("../invalid").is_err());
+}
+
+#[test]
+fn only_opencode_exports_an_interchange_document() {
+    for id in HarnessId::ALL {
+        assert_eq!(
+            get(id).interchange_document().is_some(),
+            id == HarnessId::OpenCode,
+            "{id}"
+        );
+    }
+}

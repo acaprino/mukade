@@ -7,9 +7,7 @@
 use crate::model::{
     Attachment, HarnessId, Kind, MetaKind, ModelRef, Protocol, ResultContent, Session, StepEnd,
 };
-use crate::policy::{
-    ReasoningDrop, ReasoningPlan, chat_destination_fits, payload_fits, plan_reasoning,
-};
+use crate::policy::{ReasoningDrop, ReasoningPlan, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::{Interrupted, WriteOpts, media};
 use serde_json::Value;
@@ -363,18 +361,16 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         // the block would be written without it and refused.
                         ReasoningPlan::Native(native)
                             if native.opaque.as_ref().is_some_and(|opaque| {
-                                payload_fits(opaque, dest)
-                                    && chat_destination_fits(
-                                        opaque,
-                                        dest,
-                                        opts.model_provider.as_deref().or_else(|| {
-                                            session
-                                                .meta
-                                                .models
-                                                .first()
-                                                .and_then(|m| m.provider.as_deref())
-                                        }),
-                                    )
+                                crate::harnesses::get(dest).payload_fits(
+                                    opaque,
+                                    opts.model_provider.as_deref().or_else(|| {
+                                        session
+                                            .meta
+                                            .models
+                                            .first()
+                                            .and_then(|m| m.provider.as_deref())
+                                    }),
+                                )
                             }) =>
                         {
                             planned.reasoning.push(ReasoningPlan::Native(native))

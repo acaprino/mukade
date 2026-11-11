@@ -124,46 +124,26 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 
 impl std::error::Error for WriteOutcomeUnknown {}
 
-/// The CLI validates a reserved ID before it knows the source or starts a process.
+/// The CLI validates a reserved ID before it knows the source or starts a process: an id some
+/// destination takes ([`Harness::validate_write`](crate::harnesses::Harness::validate_write)).
 pub fn validate_id_syntax(id: &str) -> Result<()> {
-    if id.starts_with("ses_") {
-        return opencode::validate_session_id(id);
-    }
-    uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination session ID"))?;
-    Ok(())
-}
-
-/// Options for another destination must never be silently ignored by a writer.
-pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<()> {
-    if harness != HarnessId::OpenCode && (opts.dest_agent.is_some() || opts.metadata.is_some()) {
-        anyhow::bail!("a destination agent and metadata are currently supported only for OpenCode");
-    }
-
-    if harness == HarnessId::OpenCode && opts.dest_path.is_some() {
-        anyhow::bail!("--dest-path is supported only for file-based destinations");
-    }
-    if let Some(path) = &opts.dest_path {
-        let root = crate::harnesses::get(harness).store_root(&opts.roots).ok_or_else(|| anyhow::anyhow!("a destination root is required with --dest-path"))?;
-        anyhow::ensure!(path.is_absolute() && path.starts_with(root), "--dest-path must stay inside the destination root");
-        anyhow::ensure!(!path.components().any(|component| matches!(component, std::path::Component::ParentDir)), "--dest-path must not contain parent traversal");
-    }
-    if let Some(id) = opts.dest_id.as_deref() {
-        if harness == HarnessId::OpenCode {
-            opencode::validate_session_id(id)?;
-        } else {
-            uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination session ID"))?;
+    let opts = WriteOpts {
+        dest_id: Some(id.to_string()),
+        ..WriteOpts::default()
+    };
+    let mut refusal = None;
+    for harness in crate::harnesses::all() {
+        if harness.writer().is_none() {
+            continue;
+        }
+        match harness.validate_write(&opts) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                refusal.get_or_insert(error);
+            }
         }
     }
-    if let Some(agent) = opts.dest_agent.as_deref() {
-        opencode::validate_agent(agent)?;
-    }
-    if let Some(metadata) = &opts.metadata {
-        anyhow::ensure!(
-            metadata.is_object(),
-            "session metadata must be a JSON object"
-        );
-    }
-    Ok(())
+    Err(refusal.unwrap_or_else(|| anyhow::anyhow!("invalid destination session ID")))
 }
 
 /// One writer per harness.

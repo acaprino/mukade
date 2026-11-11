@@ -35,7 +35,7 @@ impl Writer for ClaudeCode {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
-        super::validate_options(HarnessId::ClaudeCode, opts)?;
+        crate::harnesses::get(HarnessId::ClaudeCode).validate_write(opts)?;
         let root =
             opts.roots.claude_config_dir.clone().context(
                 "CLAUDE_CONFIG_DIR is not set: nowhere to write the Claude Code session",

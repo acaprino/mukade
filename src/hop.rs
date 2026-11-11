@@ -307,25 +307,8 @@ pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopErr
 
 /// Write a session we hold into a destination.
 pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
-    if dest != HarnessId::OpenCode
-        && (opts.write.dest_agent.is_some() || opts.write.metadata.is_some())
-    {
-        return Err(HopError::Unsupported(
-            "a destination agent and metadata are currently supported only for OpenCode"
-                .into(),
-        ));
-    }
-    if opts.compaction == "native" && opts.native_budget.is_none() {
-        return Err(HopError::Unsupported(
-            "compaction native needs --context-window and its optional budget flags".into(),
-        ));
-    }
-    if opts.compaction != "native" && opts.native_budget.is_some() {
-        return Err(HopError::Unsupported(
-            "a native budget goes with compaction native".into(),
-        ));
-    }
-
+    let adapter = crate::harnesses::get(dest);
+    let dest_writer = crate::harnesses::require_writer(adapter)?;
     let write_opts = WriteOpts {
         roots: opts.roots.clone(),
         cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
@@ -349,6 +332,20 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         exe: opts.write.exe.clone(),
         native_budget: opts.native_budget.clone(),
     };
+    // What the destination does not take is refused before anything is planned.
+    adapter
+        .validate_write(&write_opts)
+        .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
+    if opts.compaction == "native" && opts.native_budget.is_none() {
+        return Err(HopError::Unsupported(
+            "compaction native needs --context-window and its optional budget flags".into(),
+        ));
+    }
+    if opts.compaction != "native" && opts.native_budget.is_some() {
+        return Err(HopError::Unsupported(
+            "a native budget goes with compaction native".into(),
+        ));
+    }
 
     if let Some(prompt) = opts.resume.as_ref() {
         check_resume_prompt(&prompt.text, dest, write_opts.exe.as_deref())?;
@@ -371,7 +368,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
     }
 
     let write_span = crate::timing::span("write files");
-    let written: Written = writer::for_harness(dest)
+    let written: Written = dest_writer
         .write_planned(session, &plan, &write_opts)
         .map_err(
             |error| match error.downcast_ref::<writer::WriteOutcomeUnknown>() {
@@ -435,6 +432,7 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
 /// destination written with `destination`. Two installations of one harness (an OpenCode and a
 /// portable JanuraCode, say) cannot share one [`StoreRoots`].
 pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
+    crate::harnesses::require_writer(crate::harnesses::get(req.dest))?;
     let source = export(&req.source, &req.roots)?;
     let facts = SourceFacts::of(&source);
     let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
@@ -506,6 +504,7 @@ pub fn hop_session(
     compaction: &Compaction,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
+    crate::harnesses::require_writer(crate::harnesses::get(dest))?;
     let (selection, summary) = compact(source, compaction, &opts.roots)?;
     let opts = ImportOpts {
         native_budget: match compaction {
