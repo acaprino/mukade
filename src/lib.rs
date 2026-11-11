@@ -34,7 +34,7 @@ pub mod tools;
 pub mod wire;
 pub mod writer;
 
-pub use hop::{HopError, HopRequest, Receipt, export, hop, hop_into, import};
+pub use hop::{HopError, HopRequest, Receipt, export, hop, hop_into, import, import_document};
 pub use manifest::Manifest;
 pub use model::{Entry, HarnessId, Kind, Meta, Session};
 pub use reader::Reader;

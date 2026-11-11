@@ -421,7 +421,11 @@ fn parent_ids() -> Vec<(u32, u32)> {
                 let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
                 let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
                 // Field 4, counted from the last `)` (the command name may hold one).
-                let ppid = stat[stat.rfind(')')? + 1..].split_whitespace().nth(1)?.parse().ok()?;
+                let ppid = stat[stat.rfind(')')? + 1..]
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse()
+                    .ok()?;
                 Some((pid, ppid))
             })
             .collect();

@@ -455,6 +455,50 @@ pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, H
     import(req.dest, &selection, &opts)
 }
 
+/// The interchange document of a session, as `mukade dump` writes it: the session's messages and,
+/// when its history travels as a summary the source's model wrote, who wrote it (`summary`), for
+/// the manifest a later [`import_document`] makes.
+pub fn document(session: &Session, summary: Option<&SummaryFacts>) -> Value {
+    let mut doc = crate::wire::to_document(session);
+    if let Some(facts) = summary.and_then(|facts| serde_json::to_value(facts).ok()) {
+        doc["summary"] = facts;
+    }
+    doc
+}
+
+/// Read an interchange document back into a session ([`crate::wire::from_document`]).
+pub fn read_document(doc: &Value) -> Result<Session, HopError> {
+    crate::wire::from_document(doc).map_err(|error| HopError::Unsupported(format!("{error:#}")))
+}
+
+/// Write a document [`document`] made as a new session of `dest`. `session` is
+/// [`read_document`]'s result for `doc`; `opts` are the destination's details. What only the
+/// document knows is filled in here: who wrote its summary, if it carries one, and its fingerprint,
+/// which is that of its own messages (a document holds no source records).
+pub fn import_document(
+    dest: HarnessId,
+    doc: &Value,
+    session: &Session,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
+    let mut opts = opts.clone();
+    if let Some(facts) = doc
+        .get("summary")
+        .and_then(|facts| serde_json::from_value::<SummaryFacts>(facts.clone()).ok())
+    {
+        opts.summary = Some(facts);
+        opts.compaction = "summary".into();
+    }
+    opts.source_facts.content_sha256 = records_sha256(
+        doc.get("messages")
+            .and_then(Value::as_array)
+            .map(|messages| messages.iter())
+            .into_iter()
+            .flatten(),
+    );
+    import(dest, session, &opts)
+}
+
 /// Apply compaction to a session already read from a file, then finish the normal import path.
 pub fn hop_session(
     dest: HarnessId,

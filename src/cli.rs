@@ -21,7 +21,6 @@ use crate::native_compaction::NativeBudget;
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
 use crate::summary::SummarizeOpts;
-use crate::wire;
 use crate::writer::WriteOpts;
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -504,14 +503,11 @@ pub fn run(args: &[String]) -> Result<()> {
             // What `dump` exports is what `hop` would write: `write` imports it later.
             let (selection, summary) =
                 crate::hop::compact(&session, &compaction, &roots).map_err(anyhow::Error::new)?;
-            let mut doc = wire::to_document(&selection);
-            // Who wrote the summary travels with it, for the manifest `write` makes later.
-            if let Some(facts) = &summary {
-                if let Some(command) = &facts.summary.leftover {
-                    eprintln!("the summarizing run left a fork in the source store: run {command}");
-                }
-                doc["summary"] = serde_json::to_value(facts)?;
+            if let Some(command) = summary.as_ref().and_then(|facts| facts.summary.leftover.as_ref()) {
+                eprintln!("the summarizing run left a fork in the source store: run {command}");
             }
+            // Who wrote the summary travels with it, for the manifest `write` makes later.
+            let doc = crate::hop::document(&selection, summary.as_ref());
             let doc = serde_json::to_string_pretty(&doc)?;
             match flags.output.as_deref() {
                 // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
@@ -526,32 +522,16 @@ pub fn run(args: &[String]) -> Result<()> {
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
-            let session = wire::from_document(&doc)?;
-            let mut opts = flags.import_opts(
+            let session = crate::wire::from_document(&doc)?;
+            let opts = flags.import_opts(
                 session.meta.harness,
                 harness,
                 &session,
                 &roots,
                 write_engine.as_deref(),
             )?;
-            // A document `dump --compaction summary` made says who wrote its summary.
-            if let Some(facts) = doc
-                .get("summary")
-                .and_then(|facts| serde_json::from_value(facts.clone()).ok())
-            {
-                opts.summary = Some(facts);
-                opts.compaction = "summary".into();
-            }
-            // A document holds no source records: its fingerprint is that of its own messages.
-            opts.source_facts.content_sha256 = crate::sha256::records_sha256(
-                doc.get("messages")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|messages| messages.iter())
-                    .into_iter()
-                    .flatten(),
-            );
             deliver(
-                crate::hop::import(harness, &session, &opts),
+                crate::hop::import_document(harness, &doc, &session, &opts),
                 flags.manifest.as_deref(),
             )?;
         }
