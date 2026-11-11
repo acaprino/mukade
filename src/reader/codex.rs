@@ -744,19 +744,12 @@ impl Builder {
                 let (name, input) = match item_type {
                     "local_shell_call" => ("local_shell".to_string(), action_of(payload)),
                     "web_search_call" => ("web_search".to_string(), action_of(payload)),
-                    _ => {
-                        let name = str_at(payload, "/name").unwrap_or_default();
-                        let input = arguments_of(payload);
-                        // L10: a Codex Desktop code-mode script that is exactly one shell or patch
-                        // call is that call; any other script stays `exec`, in text form. The
-                        // record itself is kept verbatim in `raw`.
-                        match (item_type, name.as_str(), &input) {
-                            ("custom_tool_call", "exec", Value::String(script)) => {
-                                super::codex_exec::wrapped_call(script).unwrap_or((name, input))
-                            }
-                            _ => (name, input),
-                        }
-                    }
+                    // A code-mode `exec` script is read once its output is known (L10,
+                    // `exec::split_code_mode`).
+                    _ => (
+                        str_at(payload, "/name").unwrap_or_default(),
+                        arguments_of(payload),
+                    ),
                 };
                 calls.push(ToolCall {
                     id: str_at(payload, "/call_id")
@@ -812,6 +805,7 @@ impl Builder {
 
     fn finish(mut self, source_path: Option<&Path>) -> Result<Session> {
         self.flush();
+        exec::split_code_mode(&mut self.entries, self.env_shell.clone());
         for i in 0..self.entries.len() {
             if !matches!(
                 self.entries[i].kind,

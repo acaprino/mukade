@@ -1051,7 +1051,13 @@ fn a_one_call_code_mode_script_reads_as_the_call_it_wraps() {
     let output = |ordinal, id: &str| {
         record(ordinal, "response_item", serde_json::json!({
             "type": "custom_tool_call_output", "call_id": id,
-            "output": [{"type": "input_text", "text": "On branch main"}],
+            "output": [
+                {"type": "input_text", "text": "Script completed
+Wall time 0.1 seconds
+Output:
+"},
+                {"type": "input_text", "text": "On branch main"},
+            ],
         }))
     };
     let text = record(0, "session_meta", serde_json::json!({
@@ -1130,4 +1136,229 @@ fn a_subagent_rollout_names_its_parent_thread() {
     };
     assert_eq!(write("sub", parent).meta.parent.as_deref(), Some(parent));
     assert_eq!(write("root", THREAD).meta.parent, None);
+}
+
+// ------------------------------------------------------------------------- L10: code mode
+
+const HEADER: &str = "Script completed\nWall time 0.1 seconds\nOutput:\n";
+
+fn text_item(text: &str) -> Value {
+    serde_json::json!({"type": "input_text", "text": text})
+}
+
+/// A Codex Desktop `exec` call with its script and the output items Codex recorded.
+fn exec_rows(script: &str, output: Value) -> Session {
+    rows_with(vec![
+        serde_json::json!({"type": "custom_tool_call", "status": "completed", "call_id": "call_x",
+            "name": "exec", "input": script}),
+        serde_json::json!({"type": "custom_tool_call_output", "call_id": "call_x", "output": output}),
+    ])
+}
+
+fn exec_output(header: &str, items: &[&str]) -> Value {
+    let mut out = vec![text_item(header)];
+    out.extend(items.iter().map(|t| text_item(t)));
+    Value::Array(out)
+}
+
+fn results_of(s: &Session) -> Vec<mukade::model::ToolResult> {
+    s.conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Results { results } => Some(results.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+fn split_ids(s: &Session) -> Vec<String> {
+    calls_of(s)
+        .into_iter()
+        .filter(|c| c.id.starts_with("call_x"))
+        .map(|c| c.id)
+        .collect()
+}
+
+/// L10: a script of one literal call is that call, with the script's output as its result.
+#[test]
+fn a_one_call_script_reads_as_that_call() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(HEADER, &["OUT-1"]),
+    );
+    let call = calls_of(&s).into_iter().find(|c| c.id == "call_x").unwrap();
+    assert_eq!(call.source_name, "exec_command");
+    assert_eq!(call.input, serde_json::json!({"cmd": "CMD-1"}));
+    // The fixture's environment block declares PowerShell: the dialect rule (L13) still applies.
+    assert_eq!(call.canonical, Some(CanonicalTool::PowerShell));
+    assert!(calls_of(&s).iter().all(|c| c.source_name != "exec"));
+    let result = results_of(&s)
+        .into_iter()
+        .find(|r| r.call_id == "call_x")
+        .unwrap();
+    assert_eq!(result.content, ResultContent::Text("OUT-1".into()));
+    assert!(!result.is_error);
+}
+
+/// L10, widened: statements in sequence are calls in sequence, each with its own output item.
+#[test]
+fn a_sequence_reads_as_calls_with_their_own_results() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\n\
+         text(await tools.write_stdin({session_id:7, chars:\"\"}));\n\
+         text(await tools.apply_patch(\"PATCH-1\"));\n",
+        exec_output(HEADER, &["OUT-1", "OUT-2", "OUT-3"]),
+    );
+    assert_eq!(split_ids(&s), ["call_x", "call_x_2", "call_x_3"]);
+    let names: Vec<String> = calls_of(&s)
+        .into_iter()
+        .filter(|c| c.id.starts_with("call_x"))
+        .map(|c| c.source_name)
+        .collect();
+    assert_eq!(names, ["exec_command", "write_stdin", "apply_patch"]);
+    let step_holding_them = s
+        .conversation()
+        .filter(|e| match &e.kind {
+            Kind::Step { calls, .. } => calls.iter().any(|c| c.id.starts_with("call_x")),
+            _ => false,
+        })
+        .count();
+    assert_eq!(step_holding_them, 1, "the calls stay in one step");
+    let results: Vec<(String, String)> = results_of(&s)
+        .into_iter()
+        .filter(|r| r.call_id.starts_with("call_x"))
+        .map(|r| (r.call_id, r.content.text()))
+        .collect();
+    assert_eq!(
+        results,
+        [
+            ("call_x".to_string(), "OUT-1".to_string()),
+            ("call_x_2".to_string(), "OUT-2".to_string()),
+            ("call_x_3".to_string(), "OUT-3".to_string()),
+        ]
+    );
+}
+
+/// A failed one-call script is that call with an error result; with several calls it is not
+/// known which one failed, so the script stays whole.
+#[test]
+fn a_failed_one_call_script_is_an_error_result() {
+    let failed = "Script failed\nWall time 0.1 seconds\nOutput:\n";
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(failed, &["ERR-1"]),
+    );
+    let result = results_of(&s)
+        .into_iter()
+        .find(|r| r.call_id == "call_x")
+        .unwrap();
+    assert!(result.is_error);
+    assert_eq!(result.content.text(), "ERR-1");
+
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\ntext(await tools.exec_command({cmd:\"CMD-2\"}));",
+        exec_output(failed, &["ERR-1", "ERR-2"]),
+    );
+    assert_whole(&s);
+}
+
+/// The script as today's reader leaves it: one opaque `exec` call, one result.
+fn assert_whole(s: &Session) {
+    let calls: Vec<_> = calls_of(s)
+        .into_iter()
+        .filter(|c| c.id.starts_with("call_x"))
+        .collect();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].source_name, "exec");
+    assert_eq!(
+        calls[0].canonical,
+        Some(CanonicalTool::Other("exec".into()))
+    );
+    assert!(calls[0].input.is_string(), "the script stays verbatim");
+    let results: Vec<_> = results_of(s)
+        .into_iter()
+        .filter(|r| r.call_id.starts_with("call_x"))
+        .collect();
+    assert!(results.len() <= 1, "{results:?}");
+}
+
+#[test]
+fn an_item_count_mismatch_keeps_the_script_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\ntext(await tools.exec_command({cmd:\"CMD-2\"}));",
+        exec_output(HEADER, &["OUT-1"]),
+    );
+    assert_whole(&s);
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(HEADER, &["OUT-1", "OUT-2"]),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn an_exec_without_output_stays_whole() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "custom_tool_call", "status": "completed",
+        "call_id": "call_x", "name": "exec", "input": "text(await tools.exec_command({cmd:\"CMD-1\"}));"}),
+    ]);
+    assert_whole(&s);
+}
+
+#[test]
+fn a_running_script_stays_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(
+            "Script running with cell ID 3\nWall time 0.7 seconds\nOutput:\n",
+            &["OUT-1"],
+        ),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn a_string_output_stays_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        Value::String(format!("{HEADER}OUT-1")),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn an_image_output_stays_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        serde_json::json!([text_item(HEADER), {"type": "input_image", "image_url": "data:image/png;base64,AA=="}]),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn a_complex_script_stays_whole() {
+    let s = exec_rows(
+        "const r = await Promise.allSettled([tools.exec_command({cmd:\"CMD-1\"})]);\ntext(r);",
+        exec_output(HEADER, &["OUT-1"]),
+    );
+    assert_whole(&s);
+}
+
+/// The split is a reading: every source record is still kept, once, in native order.
+#[test]
+fn the_split_keeps_every_source_record() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\ntext(await tools.exec_command({cmd:\"CMD-2\"}));",
+        exec_output(HEADER, &["OUT-1", "OUT-2"]),
+    );
+    assert_eq!(split_ids(&s), ["call_x", "call_x_2"]);
+    let raw: Vec<&Value> = s.entries.iter().flat_map(|e| e.raw.iter()).collect();
+    let exec_rows_kept = raw
+        .iter()
+        .filter(|r| r["payload"]["call_id"] == "call_x")
+        .count();
+    assert_eq!(
+        exec_rows_kept, 2,
+        "the exec call and its output, verbatim, once each"
+    );
 }

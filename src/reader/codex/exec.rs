@@ -5,7 +5,116 @@
 //! arrays, strings, numbers, `true`, `false`, `null`); nothing is evaluated. Any other script is
 //! left whole, and travels as one call in text form.
 
+use crate::model::{CanonicalTool, Entry, Kind, ToolCall, ToolResult};
 use serde_json::{Map, Number, Value};
+
+/// Replace every `exec` call whose script and output can be read call by call with the calls it
+/// made and their results (spec L10). The first call keeps the `exec` call's id, the n-th is
+/// `<id>_<n>`: `_` is in every provider's id alphabet, so no writer has to rewrite it. Item 0 of
+/// the output is Codex's header (`Script completed` …), then one `input_text` item per `text()`
+/// call, in order. A script is left whole unless its shape and its output agree exactly; the
+/// source records in `raw` are never touched.
+pub(super) fn split_code_mode(entries: &mut [Entry], env_shell: Option<CanonicalTool>) {
+    for step in 0..entries.len() {
+        let Kind::Step { calls, .. } = &entries[step].kind else {
+            continue;
+        };
+        let execs: Vec<(usize, String, Vec<(String, Value)>)> = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.source_name == "exec")
+            .filter_map(|(i, c)| Some((i, c.id.clone(), parse_script(c.input.as_str()?)?)))
+            .collect();
+        // From the last, so the positions of the earlier ones stay valid.
+        for (position, id, parsed) in execs.into_iter().rev() {
+            let Some(output) = output_of(entries, step, &id, parsed.len()) else {
+                continue;
+            };
+            let ids: Vec<String> = (1..=parsed.len())
+                .map(|n| {
+                    if n == 1 {
+                        id.clone()
+                    } else {
+                        format!("{id}_{n}")
+                    }
+                })
+                .collect();
+            let results: Vec<ToolResult> = ids
+                .iter()
+                .zip(&output.items)
+                .map(|(call_id, item)| ToolResult {
+                    call_id: call_id.clone(),
+                    content: crate::reader::json::result_content(&[super::output_item(item)]),
+                    is_error: output.failed,
+                    truncated_by_source: false,
+                })
+                .collect();
+            if let Kind::Results { results: held } = &mut entries[output.entry].kind {
+                held.splice(output.result..=output.result, results);
+            }
+            let calls: Vec<ToolCall> = ids
+                .into_iter()
+                .zip(parsed)
+                .map(|(call_id, (name, input))| ToolCall {
+                    id: call_id,
+                    canonical: Some(super::canonical_call(&name, &input, env_shell.clone())),
+                    source_name: name,
+                    input,
+                })
+                .collect();
+            if let Kind::Step { calls: held, .. } = &mut entries[step].kind {
+                held.splice(position..=position, calls);
+            }
+        }
+    }
+}
+
+/// Where an `exec` call's result is, and its per-call output items.
+struct Output {
+    entry: usize,
+    result: usize,
+    items: Vec<Value>,
+    failed: bool,
+}
+
+/// The output of the `exec` call `id`, when it holds exactly `calls` text items after a header
+/// saying the script completed (or failed, for a one-call script).
+fn output_of(entries: &[Entry], step: usize, id: &str, calls: usize) -> Option<Output> {
+    let (entry, result) = entries
+        .iter()
+        .enumerate()
+        .skip(step + 1)
+        .find_map(|(e, entry)| match &entry.kind {
+            Kind::Results { results } => {
+                results.iter().position(|r| r.call_id == id).map(|r| (e, r))
+            }
+            _ => None,
+        })?;
+    let row = entries[entry].raw.iter().find(|row| {
+        row.pointer("/payload/type").and_then(Value::as_str) == Some("custom_tool_call_output")
+            && row.pointer("/payload/call_id").and_then(Value::as_str) == Some(id)
+    })?;
+    let items = row.pointer("/payload/output")?.as_array()?;
+    let (header, rest) = items.split_first()?;
+    let is_text = |item: &Value| item.get("type").and_then(Value::as_str) == Some("input_text");
+    if !is_text(header) || rest.len() != calls || !rest.iter().all(is_text) {
+        return None;
+    }
+    let header = header.get("text").and_then(Value::as_str)?;
+    let failed = if header.starts_with("Script completed") {
+        false
+    } else if header.starts_with("Script failed") && calls == 1 {
+        true
+    } else {
+        return None;
+    };
+    Some(Output {
+        entry,
+        result,
+        items: rest.to_vec(),
+        failed,
+    })
+}
 
 /// The calls a script makes, in order, when it is only literal `text(await tools.X(...))`
 /// statements; `None` for any other script. A call without arguments reads as `{}`, which is how
