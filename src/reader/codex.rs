@@ -20,6 +20,8 @@
 //!   than once; ordinals run on across the files. Codex's own state names the latest page as the
 //!   thread's rollout; each earlier file's records past its cut are a branch the thread left.
 
+mod exec;
+
 use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
