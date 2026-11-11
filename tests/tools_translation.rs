@@ -1059,6 +1059,16 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
             None,
         ),
         (
+            "edit without a path",
+            call(C::Edit, "edit", json!({"oldString": "x", "newString": "y"})),
+            None,
+        ),
+        (
+            "edit without old text",
+            call(C::Edit, "Edit", json!({"file_path": "a.txt", "new_string": "b"})),
+            None,
+        ),
+        (
             "pi edit, one change",
             call(
                 C::Edit,
@@ -1073,6 +1083,20 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
                 C::Edit,
                 "edit",
                 json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"oldText": "p", "newText": "q"}]}),
+            ),
+            None,
+        ),
+        (
+            "pi edit, no edits",
+            call(C::Edit, "edit", json!({"path": "a", "edits": []})),
+            None,
+        ),
+        (
+            "pi edit, a change without its texts",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"note": "z"}]}),
             ),
             None,
         ),
@@ -1131,6 +1155,16 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
             None,
         ),
         (
+            "grep without a pattern",
+            call(C::Grep, "grep", json!({"path": "src"})),
+            None,
+        ),
+        (
+            "grep with a file type",
+            call(C::Grep, "grep", json!({"pattern": "x", "type": "rust"})),
+            None,
+        ),
+        (
             "glob",
             call(
                 C::Glob,
@@ -1173,6 +1207,11 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
             None,
         ),
         (
+            "web fetch without a url",
+            call(C::WebFetch, "webfetch", json!({"format": "markdown"})),
+            None,
+        ),
+        (
             "web search with domains",
             call(
                 C::WebSearch,
@@ -1184,6 +1223,11 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
         (
             "web search",
             call(C::WebSearch, "websearch", json!({"query": "q"})),
+            None,
+        ),
+        (
+            "web search without a query",
+            call(C::WebSearch, "websearch", json!({"allowed_domains": ["a.org"]})),
             None,
         ),
         (
@@ -1415,6 +1459,26 @@ fn translation_is_unchanged_for_every_destination() {
             ],
         ),
         (
+            "edit without a path",
+            [
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+            ],
+        ),
+        (
+            "edit without old text",
+            [
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+            ],
+        ),
+        (
             "pi edit, one change",
             [
                 r#"Edit {"file_path":"a","old_string":"x","new_string":"y"}"#,
@@ -1432,6 +1496,26 @@ fn translation_is_unchanged_for_every_destination() {
                 r#"text: no multi-edit equivalent"#,
                 r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
                 r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+            ],
+        ),
+        (
+            "pi edit, no edits",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no edits"#,
+                r#"text: no edits"#,
+            ],
+        ),
+        (
+            "pi edit, a change without its texts",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: an edit without its old and new text"#,
+                r#"text: an edit without its old and new text"#,
             ],
         ),
         (
@@ -1495,6 +1579,26 @@ fn translation_is_unchanged_for_every_destination() {
             ],
         ),
         (
+            "grep without a pattern",
+            [
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+            ],
+        ),
+        (
+            "grep with a file type",
+            [
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+            ],
+        ),
+        (
             "glob",
             [
                 r#"Glob {"pattern":"**/*.rs","path":"src"}"#,
@@ -1555,6 +1659,16 @@ fn translation_is_unchanged_for_every_destination() {
             ],
         ),
         (
+            "web fetch without a url",
+            [
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+            ],
+        ),
+        (
             "web search with domains",
             [
                 r#"WebSearch {"query":"q","allowed_domains":["a.org"]}"#,
@@ -1572,6 +1686,16 @@ fn translation_is_unchanged_for_every_destination() {
                 r#"websearch {"query":"q"}"#,
                 r#"text: web search is server-side or absent"#,
                 r#"text: web search is server-side or absent"#,
+            ],
+        ),
+        (
+            "web search without a query",
+            [
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
             ],
         ),
         (
@@ -1653,3 +1777,4 @@ fn translation_is_unchanged_for_every_destination() {
         r#"PowerShell {"command":"Get-ChildItem","timeout":1000,"run_in_background":true}"#
     );
 }
+
