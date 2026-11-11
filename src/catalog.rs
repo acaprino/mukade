@@ -182,6 +182,21 @@ pub fn store_env(harness: HarnessId) -> &'static str {
     &entry(harness).store.env
 }
 
+/// The variable a caller sets to name a custom executable for a harness.
+pub fn binary_env(harness: HarnessId) -> &'static str {
+    &entry(harness).binary.env
+}
+
+/// The command-line flag that names a custom executable for a harness.
+pub fn binary_flag(harness: HarnessId) -> &'static str {
+    &entry(harness).binary.flag
+}
+
+/// Whether the harness's store records which session a session was forked from.
+pub fn lineage_recorded(harness: HarnessId) -> bool {
+    entry(harness).lineage.recorded
+}
+
 /// Whether the store root is the SQLite file itself (OpenCode) rather than a directory.
 pub fn store_is_file(harness: HarnessId) -> bool {
     entry(harness).store.root_is_a_file

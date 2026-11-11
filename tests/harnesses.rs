@@ -117,3 +117,27 @@ fn read_file_reads_each_fixture() {
         assert_eq!(session.meta.harness, id);
     }
 }
+
+#[test]
+fn names_from_the_catalog_are_the_ones_users_type() {
+    use mukade::catalog;
+    let store = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_DB", "PI_CODING_AGENT_DIR"];
+    let exe_env = ["MUKADE_CLAUDE_EXE", "MUKADE_CODEX_EXE", "MUKADE_OPENCODE_EXE", "MUKADE_PI_EXE"];
+    let flag = ["--claude-exe", "--codex-exe", "--opencode-exe", "--pi-exe"];
+    let lineage = [false, false, true, true];
+    for (n, id) in HarnessId::ALL.into_iter().enumerate() {
+        assert_eq!(catalog::store_env(id), store[n], "{id}");
+        assert_eq!(catalog::binary_env(id), exe_env[n], "{id}");
+        assert_eq!(catalog::binary_flag(id), flag[n], "{id}");
+        assert_eq!(catalog::lineage_recorded(id), lineage[n], "{id}");
+        assert_eq!(mukade::exe::env_var_name(id), catalog::binary_env(id), "{id}");
+    }
+}
+
+#[test]
+fn the_usage_text_names_what_the_catalog_names() {
+    for id in HarnessId::ALL {
+        assert!(mukade::cli::USAGE.contains(mukade::catalog::binary_flag(id)), "{id}");
+        assert!(mukade::cli::USAGE.contains(mukade::catalog::binary_env(id)), "{id}");
+    }
+}

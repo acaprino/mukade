@@ -35,6 +35,7 @@ impl Harness for Codex {
     }
 
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
-        super::set_store_env(command, "CODEX_HOME", self.store_root(roots));
+        let variable = crate::catalog::store_env(self.id());
+        super::set_store_env(command, variable, self.store_root(roots));
     }
 }

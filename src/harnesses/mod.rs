@@ -59,7 +59,9 @@ fn set_store_env(command: &mut std::process::Command, variable: &str, root: Opti
 }
 
 // The adapters hand out `&'static` readers and writers; `reader::for_harness` and
-// `writer::for_harness` box them. A reference forwards every method, defaults included.
+// `writer::for_harness` box them. A reference forwards every method, defaults included. A method
+// added to `Reader` or `Writer` is forwarded here too, or a boxed reader or writer silently runs
+// the trait's default.
 
 impl<R: Reader + ?Sized> Reader for &R {
     fn harness(&self) -> HarnessId {

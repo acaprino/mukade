@@ -42,9 +42,10 @@ impl Harness for OpenCode {
     /// The database is passed, or the variable removed so the process does not inherit another
     /// store (L1). XDG variables must still be supplied by the caller when OpenCode needs them.
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
+        let variable = crate::catalog::store_env(self.id());
         match self.store_root(roots) {
-            Some(db) => command.env("OPENCODE_DB", db),
-            None => command.env_remove("OPENCODE_DB"),
+            Some(db) => command.env(variable, db),
+            None => command.env_remove(variable),
         };
     }
 }

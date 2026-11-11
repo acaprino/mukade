@@ -26,16 +26,16 @@ impl StoreRoots {
     /// The roots the calling process declares through the harnesses' own variables.
     pub fn from_env() -> Self {
         // An empty variable is no store: as a path it would put the store beside the cwd.
-        let var = |name: &str| {
-            std::env::var_os(name)
+        let var = |harness: HarnessId| {
+            std::env::var_os(crate::catalog::store_env(harness))
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         };
         StoreRoots {
-            claude_config_dir: var("CLAUDE_CONFIG_DIR"),
-            codex_home: var("CODEX_HOME"),
-            opencode_db: var("OPENCODE_DB"),
-            pi_agent_dir: var("PI_CODING_AGENT_DIR"),
+            claude_config_dir: var(HarnessId::ClaudeCode),
+            codex_home: var(HarnessId::Codex),
+            opencode_db: var(HarnessId::OpenCode),
+            pi_agent_dir: var(HarnessId::Pi),
         }
     }
 
@@ -68,17 +68,15 @@ impl StoreRoots {
         crate::harnesses::get(harness).store_root(self)
     }
 
-    /// Point one harness at an explicit store, e.g. a portable installation's own. OpenCode's
-    /// store is the database file: an existing folder means its `opencode.db`.
+    /// Point one harness at an explicit store, e.g. a portable installation's own; the harness's
+    /// adapter decides how a path becomes its store.
     pub fn set_root(&mut self, harness: HarnessId, root: &Path) {
         crate::harnesses::get(harness).set_store_root(self, root);
     }
 }
 
 impl StoreRoots {
-    /// Point a harness process at this store: the variable the harness reads, set to its root when
-    /// one is configured. OpenCode's database is passed, or the variable removed so the process
-    /// does not inherit another store (L1).
+    /// Point a harness process at this store, through the variable the harness's adapter sets.
     pub fn apply_to(&self, harness: HarnessId, command: &mut std::process::Command) {
         crate::harnesses::get(harness).apply_store_env(self, command);
     }

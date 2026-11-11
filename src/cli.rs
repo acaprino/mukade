@@ -195,10 +195,11 @@ pub fn run(args: &[String]) -> Result<()> {
             "--root" => flags.root = Some(next(rest, &mut i)?),
             "--dest-root" => flags.dest_root = Some(next(rest, &mut i)?),
             "--depth" => flags.depth = Some(next(rest, &mut i)?),
-            "--claude-exe" => flags.claude_exe = Some(next(rest, &mut i)?),
-            "--codex-exe" => flags.codex_exe = Some(next(rest, &mut i)?),
-            "--opencode-exe" => flags.opencode_exe = Some(next(rest, &mut i)?),
-            "--pi-exe" => flags.pi_exe = Some(next(rest, &mut i)?),
+            other if exe_flag_harness(other).is_some() => {
+                let harness = exe_flag_harness(other).expect("checked by the guard");
+                let value = next(rest, &mut i)?;
+                *flags.exe_slot(harness) = Some(value);
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(());
@@ -700,6 +701,21 @@ fn store_env_name(harness: HarnessId) -> &'static str {
     crate::catalog::store_env(harness)
 }
 
+/// The harness whose catalog `binary.flag` is `arg`.
+fn exe_flag_harness(arg: &str) -> Option<HarnessId> {
+    HarnessId::ALL
+        .into_iter()
+        .find(|harness| crate::catalog::binary_flag(*harness) == arg)
+}
+
+/// A harness's place in [`Flags::exes`].
+fn exe_slot_index(harness: HarnessId) -> usize {
+    HarnessId::ALL
+        .iter()
+        .position(|candidate| *candidate == harness)
+        .expect("every harness is in HarnessId::ALL")
+}
+
 /// What the catalog says about lineage, in one line: the fields when the store records them, or
 /// that it does not and why.
 fn lineage_info(harness: HarnessId) -> String {
@@ -722,7 +738,7 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
         origin,
         state: "not found".into(),
         sessions: "unknown".into(),
-        forks: if matches!(harness, HarnessId::ClaudeCode | HarnessId::Codex) {
+        forks: if !crate::catalog::lineage_recorded(harness) {
             "unknown (not recorded)".into()
         } else {
             "unknown".into()
@@ -751,7 +767,7 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
             origin,
             state: "present, layout not recognized".into(),
             sessions: "unknown".into(),
-            forks: if matches!(harness, HarnessId::ClaudeCode | HarnessId::Codex) {
+            forks: if !crate::catalog::lineage_recorded(harness) {
                 "unknown (not recorded)".into()
             } else {
                 "unknown".into()
@@ -977,10 +993,8 @@ struct Flags {
     root: Option<String>,
     dest_root: Option<String>,
     depth: Option<String>,
-    claude_exe: Option<String>,
-    codex_exe: Option<String>,
-    opencode_exe: Option<String>,
-    pi_exe: Option<String>,
+    /// The `--<harness>-exe` values, in [`HarnessId::ALL`] order.
+    exes: [Option<String>; 4],
 }
 
 impl Flags {
@@ -1291,12 +1305,11 @@ impl Flags {
 
     /// The executable override stated for one harness, if any.
     fn exe_flag(&self, harness: HarnessId) -> Option<&str> {
-        match harness {
-            HarnessId::ClaudeCode => self.claude_exe.as_deref(),
-            HarnessId::Codex => self.codex_exe.as_deref(),
-            HarnessId::OpenCode => self.opencode_exe.as_deref(),
-            HarnessId::Pi => self.pi_exe.as_deref(),
-        }
+        self.exes[exe_slot_index(harness)].as_deref()
+    }
+
+    fn exe_slot(&mut self, harness: HarnessId) -> &mut Option<String> {
+        &mut self.exes[exe_slot_index(harness)]
     }
 }
 

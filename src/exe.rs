@@ -19,12 +19,7 @@ pub fn binary_name(harness: HarnessId) -> &'static str {
 
 /// The variable a caller uses to name a custom executable for this harness.
 pub fn env_var_name(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::ClaudeCode => "MUKADE_CLAUDE_EXE",
-        HarnessId::Codex => "MUKADE_CODEX_EXE",
-        HarnessId::OpenCode => "MUKADE_OPENCODE_EXE",
-        HarnessId::Pi => "MUKADE_PI_EXE",
-    }
+    crate::catalog::binary_env(harness)
 }
 
 /// Where the binary [`resolve`] returned came from, in the order the resolution tries them.
