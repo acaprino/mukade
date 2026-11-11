@@ -90,6 +90,7 @@ impl Harness for Codex {
             crate::reader::codex::Branches::All,
         ))
     }
+
     // `exec resume --ephemeral` still appends to the rollout it resumes; a fork does not.
     fn summary_command(
         &self,

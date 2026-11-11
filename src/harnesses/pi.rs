@@ -89,6 +89,7 @@ impl Harness for Pi {
     fn summarizes_from_file(&self) -> bool {
         true
     }
+
     // `--no-session` cannot be combined with `--fork`: the fork goes to this run's folder.
     fn summary_command(
         &self,

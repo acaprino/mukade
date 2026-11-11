@@ -134,6 +134,16 @@ fn a_batch_launcher_refuses_an_unsafe_prompt_before_spawning() {
     let error = summary::summary_command(&session, &opts, &dir).unwrap_err();
     assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
     assert!(error.to_string().contains("batch launcher"), "{error}");
+    let HopError::Unsupported(message) = error else {
+        unreachable!("matched above");
+    };
+    assert_eq!(
+        message,
+        format!(
+            "the summary prompt cannot be passed through the batch launcher {}: it must be one line of ASCII letters, digits, spaces and .,;:() ; name the harness's native executable, or edit the intent prompt in the intent-prompts folder to that subset",
+            launcher.display()
+        )
+    );
 }
 
 /// The commands of the live record's "Final commands" table, the prompt last.

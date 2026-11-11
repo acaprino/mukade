@@ -117,7 +117,9 @@ pub(crate) fn finish_command(
     // batch launcher is checked before it is spawned, never silently given a mangled prompt.
     if crate::exe::is_batch(&program) && !batch_safe(prompt) {
         return Err(HopError::Unsupported(format!(
-            "the summary prompt cannot be passed through the batch launcher {program}: it must be              one line of ASCII letters, digits, spaces and .,;:() ; name the harness's native              executable, or edit the intent prompt in the intent-prompts folder to that subset"
+            "the summary prompt cannot be passed through the batch launcher {program}: it must be \
+             one line of ASCII letters, digits, spaces and .,;:() ; name the harness's native \
+             executable, or edit the intent prompt in the intent-prompts folder to that subset"
         )));
     }
     args.push(prompt.into());

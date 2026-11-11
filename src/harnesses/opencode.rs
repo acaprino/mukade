@@ -158,6 +158,7 @@ impl Harness for OpenCode {
             }
         }
     }
+
     // Every `run` writes to the store: the fork is deleted once the reply is in.
     fn summary_command(
         &self,

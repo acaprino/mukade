@@ -64,6 +64,7 @@ impl Harness for ClaudeCode {
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
         super::listed_stats(self, roots)
     }
+
     // `--tools` takes several values: before `--resume`, so it cannot swallow the prompt.
     fn summary_command(
         &self,
