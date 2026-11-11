@@ -946,10 +946,9 @@ fn classify_read(error: anyhow::Error) -> HopError {
 /// file, abandoned turns included, then its active page) instead of only the part Codex resumes.
 /// Only Codex is supported; another harness is refused before anything is read.
 pub fn export_all_branches(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
-    all_branches_supported(source.harness)?;
     let _span = crate::timing::span("read source");
-    crate::reader::codex::read_with(&source.id, roots, crate::reader::codex::Branches::All)
-        .map_err(classify_read)
+    let read = crate::harnesses::get(source.harness).read_all_branches_by_id(&source.id, roots);
+    all_branches_supported(source.harness, read)
 }
 
 /// [`export_path`] with every branch the source keeps (see [`export_all_branches`]).
@@ -957,20 +956,24 @@ pub fn export_path_all_branches(
     harness: HarnessId,
     path: &std::path::Path,
 ) -> Result<Session, HopError> {
-    all_branches_supported(harness)?;
-    crate::reader::codex::read_file_with(path, crate::reader::codex::Branches::All)
-        .map_err(classify_read)
+    let read = crate::harnesses::get(harness).read_all_branches(path);
+    all_branches_supported(harness, read)
 }
 
-fn all_branches_supported(harness: HarnessId) -> Result<(), HopError> {
-    if harness == HarnessId::Codex {
-        return Ok(());
+/// What reading every branch came to: the session, or the refusal of a harness that keeps one
+/// branch only (the adapter answered `None`).
+fn all_branches_supported(
+    harness: HarnessId,
+    read: Option<anyhow::Result<Session>>,
+) -> Result<Session, HopError> {
+    match read {
+        Some(read) => read.map_err(classify_read),
+        None => Err(HopError::Unsupported(format!(
+            "--all-branches (every branch, abandoned ones included) is read for a Codex paginated \
+             thread only; {} sessions are read as the branch the harness resumes",
+            harness.as_str()
+        ))),
     }
-    Err(HopError::Unsupported(format!(
-        "--all-branches (every branch, abandoned ones included) is read for a Codex paginated \
-         thread only; {} sessions are read as the branch the harness resumes",
-        harness.as_str()
-    )))
 }
 
 pub fn export_path(harness: HarnessId, path: &std::path::Path) -> Result<Session, HopError> {

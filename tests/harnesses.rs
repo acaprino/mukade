@@ -205,3 +205,86 @@ fn only_opencode_exports_an_interchange_document() {
         );
     }
 }
+
+#[test]
+fn only_codex_reads_every_branch() {
+    for id in HarnessId::ALL {
+        let adapter = get(id);
+        let by_path = adapter.read_all_branches(&support::source_path(id));
+        let by_id = adapter.read_all_branches_by_id("any-id", &StoreRoots::default());
+        if id == HarnessId::Codex {
+            let session = by_path.expect("Codex reads every branch").expect("the fixture reads");
+            assert_eq!(session.meta.harness, id);
+            let error = by_id.expect("Codex reads every branch by id").expect_err("no store");
+            assert!(error.to_string().contains("CODEX_HOME"), "{error:#}");
+        } else {
+            assert!(by_path.is_none(), "{id}");
+            assert!(by_id.is_none(), "{id}");
+        }
+    }
+}
+
+#[test]
+fn only_pi_summarizes_from_a_file() {
+    for id in HarnessId::ALL {
+        assert_eq!(get(id).summarizes_from_file(), id == HarnessId::Pi, "{id}");
+    }
+}
+
+#[test]
+fn store_stats_count_the_fixture_store() {
+    for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+        let scratch = support::scratch(id, "adapter-stats");
+        support::stage_fixture(id, &scratch);
+        let stats = get(id).store_stats(&support::roots(&scratch));
+        let sessions = stats.sessions.unwrap_or_else(|error| panic!("{id}: {error}"));
+        assert!(sessions >= 1, "{id}: {sessions}");
+        match id {
+            HarnessId::Pi => assert!(matches!(stats.forks, Some(Ok(_))), "{id}: {:?}", stats.forks),
+            _ => assert!(stats.forks.is_none(), "{id} does not record lineage"),
+        }
+    }
+    let scratch = support::scratch(HarnessId::OpenCode, "adapter-stats");
+    let stats = get(HarnessId::OpenCode).store_stats(&support::roots(&scratch));
+    assert!(stats.sessions.is_err(), "no database to count");
+}
+
+#[test]
+fn a_destination_names_the_model_its_own_configuration_states() {
+    let scratch = support::scratch(HarnessId::Codex, "adapter-model");
+    let home = scratch.join("home");
+    std::fs::write(home.join("config.toml"), "model_provider = \"azure\"\n").unwrap();
+    let data = scratch.join("data");
+    std::fs::create_dir_all(data.join("config/opencode")).unwrap();
+    std::fs::write(
+        data.join("config/opencode/opencode.json"),
+        r#"{"model":"gateway/auto"}"#,
+    )
+    .unwrap();
+    let roots = StoreRoots {
+        codex_home: Some(home),
+        opencode_db: Some(data.join("share/opencode/opencode.db")),
+        ..StoreRoots::default()
+    };
+    for id in HarnessId::ALL {
+        let expected = match id {
+            HarnessId::Codex => Some(("azure".to_string(), None)),
+            HarnessId::OpenCode => Some(("gateway".to_string(), Some("auto".to_string()))),
+            _ => None,
+        };
+        assert_eq!(get(id).configured_model(&roots), expected, "{id}");
+        assert_eq!(
+            mukade::dest::configured_model_in(id, &roots),
+            expected,
+            "{id}: dest delegates"
+        );
+    }
+}
+
+#[test]
+fn only_opencode_files_sessions_under_a_project() {
+    for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+        let found = get(id).project_id("no-such-exe", "somewhere", &StoreRoots::default(), None);
+        assert!(matches!(found, Ok(None)), "{id}");
+    }
+}

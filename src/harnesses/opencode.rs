@@ -1,6 +1,6 @@
 //! OpenCode: one SQLite database, named by `OPENCODE_DB`.
 
-use super::{Harness, InterchangeDocument};
+use super::{Harness, InterchangeDocument, StoreStats};
 use crate::model::{HarnessId, Kind, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
 use crate::policy::Clock;
@@ -8,7 +8,7 @@ use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::writer::{WriteOpts, Writer, plan::Plan};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) struct OpenCode;
 
@@ -108,6 +108,97 @@ impl Harness for OpenCode {
 
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
         Some(&Document)
+    }
+
+    /// OpenCode's `model` is `<provider>/<model>`.
+    ///
+    /// A self-contained installation keeps its configuration beside its store: a database in an
+    /// XDG data layout (`<root>/share/opencode/opencode.db`, a portable JanuraCode's) is
+    /// configured by `<root>/config/opencode/opencode.json`. When such a file exists it alone
+    /// answers, even without a model: another installation's model is not this one's. Otherwise
+    /// OpenCode's process configuration applies (`OPENCODE_CONFIG`, then `XDG_CONFIG_HOME`).
+    fn configured_model(&self, roots: &StoreRoots) -> Option<(String, Option<String>)> {
+        let own = roots
+            .opencode_db
+            .as_deref()
+            .and_then(opencode_config_beside)
+            .filter(|path| path.is_file());
+        opencode_model(&own.or_else(opencode_process_config)?)
+    }
+
+    fn project_id(
+        &self,
+        exe: &str,
+        cwd: &str,
+        roots: &StoreRoots,
+        cache: Option<&Path>,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(crate::reader::opencode::project_id_for(exe, cwd, roots, cache))
+    }
+
+    fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
+        let counted = match roots.opencode_db.as_deref() {
+            Some(db) => crate::reader::opencode::store_counts(db),
+            None => Err(anyhow::anyhow!("no OpenCode database to count")),
+        };
+        match counted {
+            Ok(counts) => StoreStats {
+                sessions: Ok(counts.sessions),
+                forks: Some(Ok(counts.forks)),
+            },
+            Err(error) => {
+                let error = format!("{error:#}");
+                StoreStats {
+                    sessions: Err(error.clone()),
+                    forks: Some(Err(error)),
+                }
+            }
+        }
+    }
+}
+
+/// The configuration an OpenCode database in an XDG data layout has beside it:
+/// `<root>/share/opencode/opencode.db` → `<root>/config/opencode/opencode.json`.
+fn opencode_config_beside(database: &Path) -> Option<PathBuf> {
+    let opencode = database.parent()?;
+    let share = opencode.parent()?;
+    let named = |path: &Path, name: &str| path.file_name().is_some_and(|n| n == name);
+    (named(opencode, "opencode") && named(share, "share"))
+        .then(|| share.parent())
+        .flatten()
+        .map(|root| root.join("config").join("opencode").join("opencode.json"))
+}
+
+/// The configuration this process's OpenCode reads.
+fn opencode_process_config() -> Option<PathBuf> {
+    std::env::var_os("OPENCODE_CONFIG")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(|dir| PathBuf::from(dir).join("opencode").join("opencode.json"))
+        })
+}
+
+/// OpenCode's config names its model as `<provider>/<model>`.
+fn opencode_model(config: &Path) -> Option<(String, Option<String>)> {
+    let document: Value = serde_json::from_str(&std::fs::read_to_string(config).ok()?).ok()?;
+    let (provider, model) = document.get("model")?.as_str()?.split_once('/')?;
+    Some((provider.to_string(), Some(model.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opencode_config_beside;
+    use std::path::PathBuf;
+
+    #[test]
+    fn only_an_xdg_data_layout_has_a_configuration_beside_it() {
+        let root = PathBuf::from("install");
+        assert_eq!(
+            opencode_config_beside(&root.join("data/share/opencode/opencode.db")),
+            Some(root.join("data/config/opencode/opencode.json"))
+        );
+        assert_eq!(opencode_config_beside(&root.join("store/opencode.db")), None);
     }
 }
 

@@ -760,66 +760,19 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
             },
         };
     }
-    let reader = match crate::reader::for_harness(harness) {
-        Ok(reader) => reader,
-        Err(error) => {
-            return HarnessStoreInfo {
-                path: Some(path),
-                origin,
-                state: format!("read error: {error}"),
-                sessions: "unknown".into(),
-                forks: "unknown".into(),
-            };
-        }
-    };
-    let (session_count, fork_count) = if harness == HarnessId::OpenCode {
-        match crate::reader::opencode::store_counts(&path) {
-            Ok(counts) => (Ok(counts.sessions), Some(Ok(counts.forks))),
-            Err(error) => {
-                let error = format!("{error:#}");
-                (
-                    Err(anyhow::anyhow!(error.clone())),
-                    Some(Err(anyhow::anyhow!(error))),
-                )
-            }
-        }
-    } else if harness == HarnessId::Pi {
-        match roots.pi_agent_dir.as_deref().map(crate::reader::pi::store_summary) {
-            Some(Ok(summary)) => (Ok(summary.sessions), Some(summary.forks)),
-            Some(Err(error)) => {
-                let error = format!("{error:#}");
-                (
-                    Err(anyhow::anyhow!(error.clone())),
-                    Some(Err(anyhow::anyhow!(error))),
-                )
-            }
-            None => {
-                let error = format!("{} is not set: no Pi store to list", store_env_name(harness));
-                (
-                    Err(anyhow::anyhow!(error.clone())),
-                    Some(Err(anyhow::anyhow!(error))),
-                )
-            }
-        }
-    } else {
-        (reader.list(roots).map(|sessions| sessions.len()), None)
-    };
-    let state = match &session_count {
+    let stats = crate::harnesses::get(harness).store_stats(roots);
+    let oneline = |error: &str| error.replace(['\r', '\n'], " ");
+    let state = match &stats.sessions {
         Ok(_) => "recognized".to_string(),
-        Err(error) => format!(
-            "recognized, read error: {}",
-            error.to_string().replace(['\r', '\n'], " ")
-        ),
+        Err(error) => format!("recognized, read error: {}", oneline(error)),
     };
-    let sessions = session_count
+    let sessions = stats
+        .sessions
         .map(|count| count.to_string())
         .unwrap_or_else(|_| "unknown".into());
-    let forks = match fork_count {
+    let forks = match stats.forks {
         Some(Ok(count)) => count.to_string(),
-        Some(Err(error)) => format!(
-            "unknown ({})",
-            error.to_string().replace(['\r', '\n'], " ")
-        ),
+        Some(Err(error)) => format!("unknown ({})", oneline(&error)),
         None => "unknown (not recorded)".into(),
     };
     HarnessStoreInfo {
@@ -1152,10 +1105,10 @@ impl Flags {
         // is the only one that knows it, so it is asked.
         let project_id = match self.project_id.clone() {
             Some(id) => Some(id),
-            None if harness == HarnessId::OpenCode => cwd
-                .as_deref()
-                .and_then(|cwd| opencode_project_id(&resolved_exe, cwd, roots)),
-            None => None,
+            None => match cwd.as_deref() {
+                Some(cwd) => destination_project_id(harness, &resolved_exe, cwd, roots)?,
+                None => None,
+            },
         };
         Ok(WriteOpts {
             roots: StoreRoots::from_env(),
@@ -1232,7 +1185,7 @@ impl Flags {
                     )
                     .into());
                 }
-                if self.from_file.is_some() && source != HarnessId::Pi {
+                if self.from_file.is_some() && !crate::harnesses::get(source).summarizes_from_file() {
                     return Err(HopError::Unsupported(format!(
                         "--compaction summary with --from-file: {} summarizes a session from its own \
                          store, by id; only Pi forks one from a file",
@@ -1358,29 +1311,37 @@ fn installation_json(found: &crate::detect::Installation) -> serde_json::Value {
     })
 }
 
-/// The project the destination already files sessions of this directory under. The destination is
-/// asked from **inside that directory**: the CLI scopes its session list to the project it is run
-/// in, so the question has to be asked where the session will live.
-fn opencode_project_id(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
-    let _span = crate::timing::span("probe opencode project");
-    opencode_project_id_in(exe, cwd, roots, crate::cache::dir().as_deref())
-}
-
-/// [`opencode_project_id`] with the cache folder stated. The probe lives in the OpenCode reader:
-/// it asks the harness's own store, and the TUI needs the same answer without a second copy.
-fn opencode_project_id_in(
+/// The project the destination already files sessions of this directory under, for a harness
+/// that files them under one. The destination is asked from **inside that directory**: the CLI
+/// scopes its session list to the project it is run in, so the question has to be asked where the
+/// session will live.
+fn destination_project_id(
+    harness: HarnessId,
     exe: &str,
     cwd: &str,
     roots: &StoreRoots,
-    cache: Option<&std::path::Path>,
-) -> Option<String> {
-    crate::reader::opencode::project_id_for(exe, cwd, roots, cache)
+) -> Result<Option<String>> {
+    let _span = (harness == HarnessId::OpenCode)
+        .then(|| crate::timing::span("probe opencode project"));
+    crate::harnesses::get(harness).project_id(exe, cwd, roots, crate::cache::dir().as_deref())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::opencode_project_id_in;
+    use crate::model::HarnessId;
     use crate::roots::StoreRoots;
+
+    /// The project of `cwd` in the OpenCode adapter, with the cache folder stated.
+    fn opencode_project_id_in(
+        exe: &str,
+        cwd: &str,
+        roots: &StoreRoots,
+        cache: Option<&std::path::Path>,
+    ) -> Option<String> {
+        crate::harnesses::get(HarnessId::OpenCode)
+            .project_id(exe, cwd, roots, cache)
+            .unwrap()
+    }
 
     /// The project id OpenCode files a directory under takes one process start per session it has
     /// to look at: it is asked once per binary, database and directory.

@@ -1,6 +1,6 @@
 //! Codex CLI: rollouts under `CODEX_HOME/sessions/`.
 
-use super::{Harness, InterchangeDocument};
+use super::{Harness, InterchangeDocument, StoreStats};
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
@@ -55,5 +55,80 @@ impl Harness for Codex {
 
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
         None
+    }
+
+    /// `model_provider` at the top level of `config.toml`. Codex names no model there.
+    fn configured_model(&self, roots: &StoreRoots) -> Option<(String, Option<String>)> {
+        let home = roots.codex_home.as_deref()?;
+        let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
+        top_level_string(&text, "model_provider").map(|provider| (provider, None))
+    }
+
+    fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
+        super::listed_stats(self, roots)
+    }
+
+    /// A paginated thread is read whole: its base file, abandoned turns included, then its active
+    /// page.
+    fn read_all_branches(&self, path: &Path) -> Option<anyhow::Result<Session>> {
+        Some(crate::reader::codex::read_file_with(
+            path,
+            crate::reader::codex::Branches::All,
+        ))
+    }
+
+    fn read_all_branches_by_id(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+    ) -> Option<anyhow::Result<Session>> {
+        Some(crate::reader::codex::read_with(
+            id,
+            roots,
+            crate::reader::codex::Branches::All,
+        ))
+    }
+}
+
+/// A top-level `key = "value"` of a TOML file: before any `[table]`, the key exactly (not
+/// `model_providers.x`), with a trailing `# comment` left out.
+fn top_level_string(text: &str, key: &str) -> Option<String> {
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            return None;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != key {
+            continue;
+        }
+        let value = value.trim();
+        let value = match value.strip_prefix('"') {
+            Some(quoted) => quoted.split('"').next().unwrap_or_default(),
+            None => value.split('#').next().unwrap_or_default().trim(),
+        };
+        return Some(value.to_string()).filter(|value| !value.is_empty());
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::top_level_string;
+
+    /// Codex's own provider is the top-level key: not a provider table's field, not a profile's,
+    /// and not the comment after it.
+    #[test]
+    fn the_codex_provider_is_the_top_level_key_only() {
+        let config = "model = \"gpt\"\nmodel_provider = \"azure\" # the work account\n\n[model_providers.azure]\nname = \"Azure\"\n";
+        assert_eq!(
+            top_level_string(config, "model_provider").as_deref(),
+            Some("azure")
+        );
+        let nested = "[profiles.fast]\nmodel_provider = \"openai\"\n";
+        assert_eq!(top_level_string(nested, "model_provider"), None);
+        let dotted = "model_providers.azure.name = \"Azure\"\n";
+        assert_eq!(top_level_string(dotted, "model_provider"), None);
     }
 }

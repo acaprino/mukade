@@ -1,6 +1,6 @@
 //! Pi: sessions under `PI_CODING_AGENT_DIR/sessions/`.
 
-use super::{Harness, InterchangeDocument};
+use super::{Harness, InterchangeDocument, StoreStats};
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
@@ -58,5 +58,33 @@ impl Harness for Pi {
 
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
         None
+    }
+
+    /// Pi records a fork in the header of the session it forks into.
+    fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
+        let counted = match roots.pi_agent_dir.as_deref() {
+            Some(dir) => {
+                crate::reader::pi::store_summary(dir).map_err(|error| format!("{error:#}"))
+            }
+            None => Err(format!(
+                "{} is not set: no Pi store to list",
+                crate::catalog::store_env(self.id())
+            )),
+        };
+        match counted {
+            Ok(summary) => StoreStats {
+                sessions: Ok(summary.sessions),
+                forks: Some(summary.forks.map_err(|error| error.to_string())),
+            },
+            Err(error) => StoreStats {
+                sessions: Err(error.clone()),
+                forks: Some(Err(error)),
+            },
+        }
+    }
+
+    /// Pi forks a session from a file, so it summarizes one from a file too.
+    fn summarizes_from_file(&self) -> bool {
+        true
     }
 }

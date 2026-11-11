@@ -17,6 +17,16 @@ use crate::writer::{WriteOpts, Writer, Written, plan::Plan};
 use serde_json::Value;
 use std::path::Path;
 
+/// What a harness's store holds, counted without opening a session.
+#[derive(Debug)]
+pub struct StoreStats {
+    /// The number of sessions, or why they could not be counted.
+    pub sessions: Result<usize, String>,
+    /// The number of forks, or why they could not be counted. `None` is a store that does not
+    /// record lineage.
+    pub forks: Option<Result<usize, String>>,
+}
+
 /// What mukade knows about one harness.
 pub trait Harness: Send + Sync {
     fn id(&self) -> HarnessId;
@@ -72,6 +82,50 @@ pub trait Harness: Send + Sync {
     /// The interchange document the `document` command prints, for a harness whose host imports
     /// one itself. `None` is a harness without one.
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument>;
+
+    /// The provider and model this harness's own configuration names as a destination, in
+    /// `roots`. `None` is a configuration that names none.
+    fn configured_model(&self, _roots: &StoreRoots) -> Option<(String, Option<String>)> {
+        None
+    }
+
+    /// The project this harness already files sessions of `cwd` under, asked of its own binary
+    /// `exe` from inside `cwd`. Only a harness that files sessions under a project has one; the
+    /// others answer `Ok(None)`. `cache` is the caller's `mukade-data/cache` folder.
+    fn project_id(
+        &self,
+        _exe: &str,
+        _cwd: &str,
+        _roots: &StoreRoots,
+        _cache: Option<&Path>,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Count the sessions and forks of this harness's store in `roots`.
+    fn store_stats(&self, roots: &StoreRoots) -> StoreStats;
+
+    /// Read one session from its native file with every branch the harness keeps, abandoned ones
+    /// included. `None` is a harness that keeps one branch only.
+    fn read_all_branches(&self, _path: &Path) -> Option<anyhow::Result<Session>> {
+        None
+    }
+
+    /// [`Harness::read_all_branches`] for a session named by its id, read from the store in
+    /// `roots`.
+    fn read_all_branches_by_id(
+        &self,
+        _id: &str,
+        _roots: &StoreRoots,
+    ) -> Option<anyhow::Result<Session>> {
+        None
+    }
+
+    /// Whether a session is summarized from a file given on the command line. Otherwise it is
+    /// summarized from this harness's own store, by id.
+    fn summarizes_from_file(&self) -> bool {
+        false
+    }
 }
 
 /// A destination's interchange document: a session laid out as the harness's own import takes it.
@@ -120,6 +174,19 @@ pub fn get(id: HarnessId) -> &'static dyn Harness {
 /// Every adapter, in [`HarnessId::ALL`] order.
 pub fn all() -> [&'static dyn Harness; 4] {
     HarnessId::ALL.map(get)
+}
+
+/// The counts of a harness whose sessions are listed by its reader and whose store does not
+/// record lineage.
+fn listed_stats(harness: &dyn Harness, roots: &StoreRoots) -> StoreStats {
+    StoreStats {
+        sessions: harness
+            .reader()
+            .list(roots)
+            .map(|sessions| sessions.len())
+            .map_err(|error| error.to_string()),
+        forks: None,
+    }
 }
 
 /// Set `variable` to the store root, when there is one; otherwise the process inherits it.
@@ -252,6 +319,13 @@ mod tests {
 
         fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
             None
+        }
+
+        fn store_stats(&self, _roots: &StoreRoots) -> StoreStats {
+            StoreStats {
+                sessions: Err("not counted in this test".into()),
+                forks: None,
+            }
         }
     }
 

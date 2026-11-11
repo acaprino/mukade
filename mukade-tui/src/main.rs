@@ -984,18 +984,12 @@ fn import_read(
 fn write_details_for(dest: &Location, cwd: Option<&str>) -> WriteDetails {
     let exe = dest.engine();
     let configured = dest::configured_model_in(dest.harness, &dest.roots);
-    let project_id = if dest.harness == HarnessId::OpenCode {
-        cwd.and_then(|cwd| {
-            mukade::reader::opencode::project_id_for(
-                &exe,
-                cwd,
-                &dest.roots,
-                mukade::cache::dir().as_deref(),
-            )
-        })
-    } else {
-        None
-    };
+    let project_id = cwd.and_then(|cwd| {
+        mukade::harnesses::get(dest.harness)
+            .project_id(&exe, cwd, &dest.roots, mukade::cache::dir().as_deref())
+            .ok()
+            .flatten()
+    });
     WriteDetails {
         dest_version: exe::version_of(&exe),
         dest_protocol: mukade::policy::destination_protocol(dest.harness),

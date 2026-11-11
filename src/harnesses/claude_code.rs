@@ -1,6 +1,6 @@
 //! Claude Code: sessions under `CLAUDE_CONFIG_DIR/projects/`.
 
-use super::{Harness, InterchangeDocument};
+use super::{Harness, InterchangeDocument, StoreStats};
 use crate::model::{HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
@@ -56,5 +56,9 @@ impl Harness for ClaudeCode {
 
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
         None
+    }
+
+    fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
+        super::listed_stats(self, roots)
     }
 }
