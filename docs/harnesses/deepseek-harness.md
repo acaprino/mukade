@@ -42,7 +42,7 @@ None of these was run here: `dsh` is not installed on this machine (Install and 
 | | |
 |---|---|
 | Version described | 0.2.1-rc.5, tag `dsh-v0.2.1-rc.5`, dated 2026-10-29 [22]. npm `latest` and `next` on 2026-11-01; `alpha` = 0.2.2-alpha.2, not described here [31] |
-| Facts gathered | 2026-11-01, from documents and source only. Not installed here: `dsh` is not on `PATH` and no `@deepseek-ai` package is installed globally [32] **[V]**. So nothing on this page is an observation of the tool's behaviour |
+| Facts gathered | 2026-11-01, from documents and source only; `dsh` is not on `PATH` and no `@deepseek-ai` package is installed globally [32] **[V]**, so nothing here observes the tool's behaviour |
 | Vendor | DeepSeek, GitHub organisation `deepseek-ai` [1] |
 | Licence | MIT, in the repository and in the npm package metadata [1][31] |
 | Site and docs | <https://github.com/deepseek-ai/deepseek-harness>. Its `docs/` holds `tool-catalog.md`, `subsystems/*`, `cli-help.md` and `config-catalog`; online mirror at deepseek-harness.github.io/deepseek-harness [1][20]. Tags: <https://github.com/deepseek-ai/deepseek-harness/tags> [22] |
@@ -133,12 +133,7 @@ From documents and source only: no DeepSeek Harness session has been read or wri
 | `compaction/*` | compaction events (Features, Compaction) | [24] |
 | `subagent/*` | sub-agent events (Features, Branches, forks and subagents) | [24] |
 
-**From the design draft, not re-established for 0.2.1-rc.5 [U] [29].** The draft was read against an earlier tag, so none of this is fact here. Reading `docs/session-format-status.md` and the published JSON Schemas at the tag settles it all.
-- **Per event:** `surfaceOp` (`"append"` or `{op:"replace", startSeq, endSeq}`) and `sourceEventSeqs`.
-- **More families:** `step/*`, `request/*`, `permission/*`, `session/*` and `developer/message`.
-- **Messages:** `content` is an array of parts. Assistant parts: `reasoning` (plain text, no signature), `text`, `tool-call` (`arguments` as a JSON string); plus `usage` and the provider and model (`deepseek-official`, `deepseek-v4-flash` in the draft).
-- **Compatibility rule (upstream's):** a change may keep `version` 4 when it adds an optional property, an ordinary event type or a higher `data.version`. So the header `version` catches a bump, not additive drift.
-- **Unknown event types:** either `ignorable: true` or required; a reader must refuse a session holding a required one it does not know.
+**From the design draft, not re-established for 0.2.1-rc.5 [U] [29].** The draft was read against an earlier tag, so none of it is fact here; `docs/session-format-status.md` and the published JSON Schemas at the tag settle it. It adds ([draft §4.2](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#42-deepseek-harness-dsh)): per event `surfaceOp` (`"append"` or `{op:"replace", startSeq, endSeq}`) and `sourceEventSeqs`; families `step/*`, `request/*`, `permission/*`, `session/*` and `developer/message`; message `content` as parts (`reasoning` plain text without signature, `text`, `tool-call` with `arguments` as a JSON string), `usage`, provider and model (`deepseek-official`, `deepseek-v4-flash`); upstream's rule that a change may keep `version` 4 by adding an optional property, an ordinary event type or a higher `data.version`, so the header catches a bump, not additive drift; unknown event types are `ignorable: true` or required, and a reader must refuse a session holding an unknown required one.
 
 **Beside the transcript**
 - **Lineage.** A fork has `isSeeded`; a sub-agent session has `origin: 'subagent'` and `delegationDepth`; each is its own session [24]. Whether `parentSession` is filled for forks and sub-agents is **[U]**.
@@ -337,38 +332,17 @@ mukade neither reads nor writes hook configuration; it moves sessions only.
 ## How mukade reads it
 
 **Today: nothing.** No reader, writer, detector, executable lookup, tool translation or summary [30]:
-- `src/model/harness.rs` `HarnessId` has four variants and `HarnessId::ALL` four entries; `catalog/harnesses.json` describes four harnesses (`claude_code`, `codex`, `opencode`, `pi`) [30].
-- `src/reader/` and `src/writer/` hold modules for those four only; `tests/` has no DeepSeek Harness test; `fixtures/` holds the four existing harnesses only [30].
+- `src/model/harness.rs` `HarnessId` has four variants and `HarnessId::ALL` four entries; `catalog/harnesses.json` describes four harnesses (`claude_code`, `codex`, `opencode`, `pi`); `src/reader/` and `src/writer/` hold modules for those four only; `tests/` has no DeepSeek Harness test; `fixtures/` holds the four existing harnesses only [30].
 - A search of `src/`, `catalog/`, `tests/` and `Cargo.toml` on 2026-11-01 found no `deepseek` and no `zstd`, so there is no Zstandard decoder either **[V]** [30].
-- Before this page was added, the only mukade files that mentioned DeepSeek Harness were ADR-0002, its entry in the ADR index and the design draft [28][29][30].
-- So `mukade harnesses`, `list`, `dump`, `hop` and the TUI do not know it. No DeepSeek Harness session has been read, written or resumed by mukade.
+- Before this page was added, only ADR-0002, its ADR-index entry and the design draft mentioned DeepSeek Harness [28][29][30].
+- So `mukade harnesses`, `list`, `dump`, `hop` and the TUI do not know it; no session has been read, written or resumed by mukade.
 
-**Proposed, not in force.** [ADR-0002](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md), "Hermes and DeepSeek Harness enter read-first; Hermes stays source-only": status **Proposed**, version 1, 2026-10-31, `accepted_on: null` [28]. [Design draft](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md): status "design draft, awaiting approval", 2026-10-31; its "my call" decisions are the author's, and nothing in the repository implements them [29].
-
-| proposed | |
-|---|---|
-| CLI name | `deepseek_harness` [29] |
-| store root | Not discovered by running `dsh`. `mukade harnesses` would show the harness with its executable and version and a store of "not configured"; sessions reached with `--root <dir>` or found by `scan` [29] |
-| executable | Binary `dsh`, with the usual `--<name>-exe` flag and `MUKADE_*_EXE` variable [29] |
-| store detection | `--*--/<id>/session.v*.jsonl[.zstd]` [29] |
-
-*Scope and tests*
-- **Read first (ADR decision 2).** The reader ships first; the writer later (How mukade writes it) [28].
-- **Library changes (ADR consequences).** `HarnessId` grows to six variants and the catalog gains two entries; the library gains a source/destination capability; mukade gains a Zstandard decoder dependency [28].
-- **Fixtures (draft, ADR consequence).** Upstream's real v4 logs serve as input, taken at a recorded upstream commit. The draft names the earlier baseline tag `dsh-v0.2.0-rc.2`, so the baseline for 0.2.1-rc.5 is **[U]** until decided [29]. Live fixtures need the harness installed and a model provider key; until then readers are tested against recorded sessions with synthetic content [28].
-- **Rejected (ADR).** Taking Deep Code (`lessweb/deepcode-cli`) as the DeepSeek harness (RA-004) [28].
-
-*Format and decoding*
-- **One format version (ADR decision 4, INV-003).** The reader accepts only the version it was verified against, 4, and refuses any other, naming the version it found. Example EX-005: `mukade dump deepseek_harness <session-id>` on a log whose header says `"version":5` is refused naming version 5 [28].
-- **Reader steps (draft).** Read the header, check `version == 4`, decode the frames, parse events in `seq` order, build the conversation from the surface events honouring `surfaceOp` and `sourceEventSeqs`, map `compaction/*` events to compaction entries, keep every original line in the entry's `raw`. Events cut by a `surfaceOp` replace become off-branch metadata [29].
-- **Drift inside version 4 (draft).** An unknown optional property is kept in `raw`; an unknown event type with `ignorable: true` is kept and reported; an unknown event type without it, or a conversation-bearing event with a higher `data.version`, is refused naming the type and version [29].
-- **Zstandard and torn tails (draft, ADR consequence).** The `ruzstd` crate: the decoder must stay pure Rust so the single-executable build is kept [28][29]. A torn tail is read up to the last complete frame, reported, never repaired in place [29].
-- **ADR context is older.** ADR-0002 describes the store as at tag `dsh-v0.2.0-rc.2`. This page describes 0.2.1-rc.5 only, so the ADR's format statements are not relied on here; the format version it pins (4) is the `version` the research reports in the header [24][28].
-
-*What a read would show*
-- **Lineage (draft).** Sessions with `isSeeded` or `delegationDepth > 0` are listed with those facts; no parent link is invented, because the draft's header names none. The research reports a `parentSession` header field [24]; reconciling the two is **[U]** until a real header is read.
-- **Reasoning (draft).** Recorded as plain text with no payload, so under the default `drop_foreign` policy it is dropped, and written as labelled text only with `--reasoning as_text` [29].
-- **Tools (draft).** Names go into `docs/tool-conversion-tables.md` once collected from fixtures; none is collected yet [29][30].
+**Proposed, not in force:** [ADR-0002](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) (status **Proposed**, version 1, 2026-10-31, `accepted_on: null`) [28] and the [design draft](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md) (status "design draft, awaiting approval"; its "my call" decisions are the author's, none implemented) [29].
+- **Reader first, one format version.** The reader ships first; only version 4 is accepted, any other refused naming the version (EX-005: a header saying `"version":5`) ([ADR Decision](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#decision) 2 and 4, INV-003; steps in [draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers)).
+- **Decoding and drift.** Pure-Rust `ruzstd` decoder; a torn tail is read up to the last complete frame, reported, never repaired; drift inside version 4 is kept in `raw`, reported or refused by upstream's own rules ([draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers), [ADR Consequences](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#consequences)).
+- **Name, discovery, library.** Id `deepseek_harness`, binary `dsh`, `--root <dir>` or `scan`, `mukade harnesses` showing the store as "not configured"; `HarnessId` grows to six with a source/destination capability ([draft §5.1, §5.2](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#51-capability-on-the-harness-definition), [ADR Consequences](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#consequences)). RA-004 rejects Deep Code as the harness ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#rejected-alternatives)).
+- **What a read shows.** Sessions with `isSeeded` or `delegationDepth > 0` are listed with those facts and no parent link is invented, because the draft's header names none; the research reports a `parentSession` header field [24], and reconciling the two is **[U]** until a real header is read. Reasoning is plain text with no payload, so default `drop_foreign` drops it and `--reasoning as_text` keeps it as labelled text; tool names go into `docs/tool-conversion-tables.md` once collected, none yet ([draft §5.3, §5.4, §5.5](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#54-reasoning-and-protocol)) [29][30].
+- **Fixtures and baseline.** Upstream's real v4 logs, taken at a recorded commit; the draft names the earlier tag `dsh-v0.2.0-rc.2`, so the baseline for 0.2.1-rc.5 is **[U]** (Open points 4). Live fixtures need `dsh` and a provider key ([draft §7](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#7-phasing-and-verification)). ADR-0002 describes the store at `dsh-v0.2.0-rc.2`; this page describes 0.2.1-rc.5 only, so the ADR's format statements are not relied on here beyond the pinned `version` 4, which the research also reports in the header [24][28].
 
 **Shinatama today.** Until a reviewed mukade pin carries a DeepSeek Harness reader, Shinatama's adapter declares `list_sessions`, `read_transcript` and `export` unsupported: the agent resumes natively and receives seeds, nothing more [25].
 - Shinatama runs `dsh --profile acp` as an ACP client in a native pane [26]; a seed is delivered by ACP `session/new`, then `session/prompt` [24].
@@ -377,14 +351,13 @@ mukade neither reads nor writes hook configuration; it moves sessions only.
 ## How mukade writes it
 
 - **Today: nothing** [30]. DeepSeek Harness has no import of any kind, so a mukade writer would be the only route in, and it would have to respect the store's single-writer lock [25].
-- **Gate (ADR decision 2, INV-004, proposed).** The writer is enabled only after a session written by mukade has been resumed by a live `dsh` and that run is recorded under `docs/verification/` [28]. In the draft this is phase 3, with its own design and plan after the readers ship; the published v4 JSON Schemas validate what it writes [29].
-- **Destination capability (ADR decision 3, INV-002, proposed).** Whether a harness can be a destination becomes part of its definition in the library. A hop or write toward one that cannot is refused with exit code 2 and the reason, before any plan or write. Example EX-004: `mukade hop claude_code <session-id> deepseek_harness` before the writer is enabled is refused, and nothing is written [28].
-- **Rejected (ADR).** Shipping the reader and the writer together (RA-003) [28].
-- **Open (draft).** Whether `ruzstd`'s encoder emits frame checksums, which the writer phase needs **[U]** [29].
+- **Gate** (INV-004, proposed): enabled only after a mukade-written session is resumed by a live `dsh` and the run is recorded under `docs/verification/`; phase 3 in the draft, validated by the published v4 JSON Schemas ([ADR Decision](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#decision) 2, [draft §7](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#7-phasing-and-verification)) [28][29].
+- **Refusal until then** (INV-002; EX-004: `mukade hop claude_code <session-id> deepseek_harness`): exit code 2 before any plan or write, nothing written ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#enforceable-invariants)) [28]. RA-003 (reader and writer together) was rejected ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#rejected-alternatives)).
+- **Open.** Whether `ruzstd`'s encoder emits frame checksums, which the writer phase needs **[U]** ([draft §8](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#8-open-points)) [29].
 
 ## How mukade summarizes it
 
-- **Not implemented.** The design draft refuses `--compaction summary` from a DeepSeek Harness source, with a reason, in the first phase [29].
+- **Not implemented.** The design draft refuses `--compaction summary` from a DeepSeek Harness source, with a reason, in the first phase ([draft §5.6](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#56-cli-tui-docs)) [29].
 - **Why no summary run is designed.** The research's headless candidate (`DSH_PERMISSION_MODE=read-only`) is not established as answer-only, and a headless run may store a session (Features, Ephemeral runs) **[U]**.
 
 ## Open points
