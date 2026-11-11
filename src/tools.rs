@@ -18,6 +18,7 @@
 
 mod patch;
 
+use crate::harnesses;
 use crate::model::{CanonicalTool, HarnessId, ResultContent, ToolCall, ToolResult};
 use serde_json::{Map, Value};
 
@@ -42,66 +43,7 @@ impl ToolSet {
 
 /// What each destination offers, for the versions the bench pinned.
 pub fn offered(harness: HarnessId) -> ToolSet {
-    match harness {
-        HarnessId::ClaudeCode => ToolSet {
-            names: &[
-                "Agent",
-                "Bash",
-                "CronCreate",
-                "CronDelete",
-                "CronList",
-                "Edit",
-                "EnterWorktree",
-                "ExitWorktree",
-                "Glob",
-                "Grep",
-                "ListAgents",
-                "Monitor",
-                "NotebookEdit",
-                "Read",
-                "ReportFindings",
-                "ScheduleWakeup",
-                "SendMessage",
-                "Skill",
-                "TaskStop",
-                "WebFetch",
-                "WebSearch",
-                "Workflow",
-                "Write",
-            ],
-        },
-        HarnessId::Codex => ToolSet {
-            names: &[
-                "exec_command",
-                "write_stdin",
-                "request_user_input",
-                "view_image",
-                "get_goal",
-                "create_goal",
-                "update_goal",
-                "web_search",
-            ],
-        },
-        HarnessId::OpenCode => ToolSet {
-            names: &[
-                "edit",
-                "glob",
-                "grep",
-                "question",
-                "read",
-                "shell",
-                "skill",
-                "subagent",
-                "webfetch",
-                "websearch",
-                "write",
-                "execute",
-            ],
-        },
-        HarnessId::Pi => ToolSet {
-            names: &["read", "bash", "edit", "write"],
-        },
-    }
+    harnesses::get(harness).offered()
 }
 
 /// The outcome of translating one call.
@@ -165,46 +107,12 @@ pub fn translate_with(
         Some((canonical, input)) => (canonical, input),
         None => (canonical, &call.input),
     };
-    let out = match canonical {
-        CanonicalTool::Bash | CanonicalTool::PowerShell => {
-            shell(canonical, input, dest, dest_shell)
-        }
-        CanonicalTool::Read => match dest {
-            HarnessId::ClaudeCode => read_claude(input),
-            HarnessId::OpenCode => read_opencode(input),
-            HarnessId::Pi => read_pi(input),
-            HarnessId::Codex => Translation::Text {
-                why: "Codex offers no read tool",
-            },
-        },
-        CanonicalTool::Write => match dest {
-            HarnessId::ClaudeCode => write_claude(input),
-            HarnessId::OpenCode => write_oc_pi(input, "write"),
-            HarnessId::Pi => write_oc_pi(input, "write"),
-            HarnessId::Codex => Translation::Text {
-                why: "Codex offers no apply_patch here",
-            },
-        },
-        CanonicalTool::Edit | CanonicalTool::MultiEdit => edit(canonical, input, dest),
-        CanonicalTool::Grep => grep(&call.source_name, input, dest),
-        CanonicalTool::Glob => glob(input, dest),
-        CanonicalTool::Ls => match dest {
-            HarnessId::Pi => call_pi_ls(input),
-            _ => Translation::Text {
-                why: "no ls tool offered",
-            },
-        },
-        CanonicalTool::WebFetch => web_fetch(input, dest),
-        CanonicalTool::WebSearch => web_search(input, dest),
-        // Subagents, skills, questions, MCP servers and harness-internal tools are text form on
-        // purpose (L14): the destination's agent types, skills and MCP servers are not the source's.
-        _ => Translation::Text {
-            why: "capability is not the destination's",
-        },
-    };
+    // The destination's adapter gives the call its own tool's shape.
+    let adapter = harnesses::get(dest);
+    let out = adapter.translate(canonical, &call.source_name, input, dest_shell);
     // Tables §1.2: every argument the call used maps to the destination's tool, or has no effect
     // on the recorded result (§4.1); one with no counterpart makes the call not equivalent.
-    if out.is_call() && !uses_only(input, accepted_keys(canonical, dest)) {
+    if out.is_call() && !uses_only(input, adapter.accepted_keys(canonical)) {
         return Translation::Text {
             why: "an argument has no counterpart",
         };
@@ -218,36 +126,21 @@ pub fn translate_with(
     }
 }
 
-/// The argument keys, in any harness's spelling, that a translation into `dest` maps or may
-/// drop because they do not change the recorded result (tables §4). A call that used any other
-/// key is not equivalent.
-fn accepted_keys(canonical: &CanonicalTool, dest: HarnessId) -> &'static [&'static str] {
+/// Subagents, skills, questions, MCP servers and harness-internal tools are text form on purpose
+/// (L14): the destination's agent types, skills and MCP servers are not the source's.
+pub(crate) const OTHER_CAPABILITY: Translation = Translation::Text {
+    why: "capability is not the destination's",
+};
+
+/// The argument keys, in any harness's spelling, that a translation maps or may drop because they
+/// do not change the recorded result (tables §4), where the destination's adapter names no others.
+/// A call that used any other key is not equivalent.
+pub(crate) fn common_keys(canonical: &CanonicalTool) -> &'static [&'static str] {
     use CanonicalTool as C;
-    use HarnessId as H;
-    match (canonical, dest) {
-        // Codex's and OpenCode's shells take a working directory; Claude's and Pi's run in the
-        // session's. The rest either maps or does not change what the command printed.
-        (C::Bash | C::PowerShell, H::Codex | H::OpenCode) => &[
-            "command",
-            "cmd",
-            "workdir",
-            "cwd",
-            "timeout",
-            "description",
-            "justification",
-            "run_in_background",
-            "background",
-            "yield_time_ms",
-            "max_output_tokens",
-            "shell",
-            "login",
-            "tty",
-            "sandbox_permissions",
-            "with_escalated_permissions",
-            "prefix_rule",
-            "dangerouslyDisableSandbox",
-        ],
-        (C::Bash | C::PowerShell, _) => &[
+    match canonical {
+        // A shell that runs in the session's directory. The rest either maps or does not change
+        // what the command printed.
+        C::Bash | C::PowerShell => &[
             "command",
             "cmd",
             "timeout",
@@ -265,17 +158,9 @@ fn accepted_keys(canonical: &CanonicalTool, dest: HarnessId) -> &'static [&'stat
             "prefix_rule",
             "dangerouslyDisableSandbox",
         ],
-        (C::Read, H::ClaudeCode) => &[
-            "file_path",
-            "path",
-            "offset",
-            "limit",
-            "pages",
-            "allow_large",
-        ],
-        (C::Read, _) => &["file_path", "path", "offset", "limit"],
-        (C::Write, _) => &["file_path", "path", "content"],
-        (C::Edit, _) => &[
+        C::Read => &["file_path", "path", "offset", "limit"],
+        C::Write => &["file_path", "path", "content"],
+        C::Edit => &[
             "file_path",
             "path",
             "old_string",
@@ -286,41 +171,8 @@ fn accepted_keys(canonical: &CanonicalTool, dest: HarnessId) -> &'static [&'stat
             "replaceAll",
             "edits",
         ],
-        (C::MultiEdit, _) => &["file_path", "path", "edits"],
-        (C::Grep, H::ClaudeCode) => &[
-            "pattern",
-            "path",
-            "glob",
-            "include",
-            "type",
-            "output_mode",
-            "-i",
-            "ignoreCase",
-            "caseSensitive",
-            "-n",
-            "-A",
-            "-B",
-            "-C",
-            "context",
-            "head_limit",
-            "limit",
-            "offset",
-            "multiline",
-        ],
-        (C::Grep, H::OpenCode) => &[
-            "pattern",
-            "path",
-            "glob",
-            "include",
-            "-i",
-            "ignoreCase",
-            "caseSensitive",
-            "literal",
-            "head_limit",
-            "limit",
-            "output_mode",
-        ],
-        (C::Grep, _) => &[
+        C::MultiEdit => &["file_path", "path", "edits"],
+        C::Grep => &[
             "pattern",
             "path",
             "glob",
@@ -335,39 +187,66 @@ fn accepted_keys(canonical: &CanonicalTool, dest: HarnessId) -> &'static [&'stat
             "limit",
             "output_mode",
         ],
-        (C::Glob, H::OpenCode) => &["pattern", "path", "hidden", "limit"],
-        (C::Glob, H::Pi) => &["pattern", "path", "limit"],
-        (C::Glob, _) => &["pattern", "path"],
-        (C::Ls, _) => &["path", "limit"],
-        (C::WebFetch, H::ClaudeCode) => &["url", "prompt"],
-        (C::WebFetch, _) => &["url", "format", "timeout"],
-        (C::WebSearch, H::ClaudeCode) => &["query", "allowed_domains", "blocked_domains"],
-        (C::WebSearch, _) => &["query"],
+        C::Glob => &["pattern", "path"],
+        C::Ls => &["path", "limit"],
+        C::WebFetch => &["url", "format", "timeout"],
+        C::WebSearch => &["query"],
         _ => &[],
     }
 }
 
+/// A shell's keys where the shell takes a working directory (Codex's, OpenCode's); Claude's and
+/// Pi's run in the session's.
+pub(crate) const SHELL_KEYS_WITH_WORKDIR: &[&str] = &[
+    "command",
+    "cmd",
+    "workdir",
+    "cwd",
+    "timeout",
+    "description",
+    "justification",
+    "run_in_background",
+    "background",
+    "yield_time_ms",
+    "max_output_tokens",
+    "shell",
+    "login",
+    "tty",
+    "sandbox_permissions",
+    "with_escalated_permissions",
+    "prefix_rule",
+    "dangerouslyDisableSandbox",
+];
+
 // ---------------------------------------------------------------------------------------------
 // argument helpers
 
-fn arg<'a>(input: &'a Value, key: &str) -> Option<&'a Value> {
+pub(crate) fn arg<'a>(input: &'a Value, key: &str) -> Option<&'a Value> {
     input.get(key).filter(|v| !v.is_null())
 }
 
-fn required(input: &Value, key: &str) -> Option<Value> {
+pub(crate) fn required(input: &Value, key: &str) -> Option<Value> {
     arg(input, key).cloned()
 }
 
 /// The first of several spellings of one argument.
-fn either(input: &Value, keys: &[&str]) -> Option<Value> {
+pub(crate) fn either(input: &Value, keys: &[&str]) -> Option<Value> {
     keys.iter().find_map(|key| required(input, key))
 }
 
-fn flag(input: &Value, key: &str) -> bool {
+pub(crate) fn flag(input: &Value, key: &str) -> bool {
     arg(input, key).and_then(Value::as_bool) == Some(true)
 }
 
-fn obj<const N: usize>(pairs: [(&str, Value); N]) -> Value {
+pub(crate) fn obj<const N: usize>(pairs: [(&str, Value); N]) -> Value {
+    let mut map = Map::new();
+    for (k, v) in pairs {
+        map.insert(k.to_string(), v);
+    }
+    Value::Object(map)
+}
+
+pub(crate) fn obj_pairs(pairs: Vec<(&str, Value)>) -> Value {
     let mut map = Map::new();
     for (k, v) in pairs {
         map.insert(k.to_string(), v);
@@ -383,147 +262,45 @@ fn uses_only(input: &Value, allowed: &[&str]) -> bool {
     }
 }
 
+/// The path argument, under either spelling: Claude's `file_path`, OpenCode's and Pi's `path`.
+pub(crate) fn path_of(input: &Value) -> Option<Value> {
+    either(input, &["file_path", "path"])
+}
+
 // ---------------------------------------------------------------------------------------------
 // shell
 
-fn shell(
+/// The text form of a shell call toward a shell of another dialect, or of one not known: the
+/// command string is never rewritten.
+pub(crate) fn other_dialect(
     canonical: &CanonicalTool,
-    input: &Value,
-    dest: HarnessId,
     dest_shell: Option<Shell>,
-) -> Translation {
+) -> Option<Translation> {
     let source_shell = if *canonical == CanonicalTool::PowerShell {
         Shell::PowerShell
     } else {
         Shell::Posix
     };
-    if dest == HarnessId::ClaudeCode {
-        // Claude offers both tools; a PowerShell call needs the PowerShell tool.
-        return match source_shell {
-            Shell::Posix => translate_claude_shell(input, "Bash"),
-            Shell::PowerShell => translate_claude_shell(input, "PowerShell"),
-        };
-    }
-    if dest_shell != Some(source_shell) {
-        return Translation::Text {
-            why: "shell dialect differs from the destination's",
-        };
-    }
-    match dest {
-        HarnessId::Codex => translate_codex_shell(input),
-        HarnessId::OpenCode => translate_opencode_shell(input),
-        HarnessId::Pi => translate_pi_shell(input),
-        HarnessId::ClaudeCode => unreachable!(),
-    }
-}
-
-/// Background, under either spelling: Claude's `run_in_background`, OpenCode's `background`.
-fn in_background(input: &Value) -> bool {
-    flag(input, "run_in_background") || flag(input, "background")
-}
-
-fn translate_claude_shell(input: &Value, tool: &'static str) -> Translation {
-    let Some(command) = command_of(input) else {
-        return Translation::Text { why: "no command" };
-    };
-    let mut pairs: Vec<(&str, Value)> = vec![("command", command)];
-    if let Some(t) = arg(input, "timeout") {
-        pairs.push(("timeout", t.clone()));
-    }
-    if let Some(d) = either(input, &["description", "justification"]) {
-        pairs.push(("description", d));
-    }
-    if in_background(input) {
-        pairs.push(("run_in_background", Value::Bool(true)));
-    }
-    if let Some(unsandboxed) = arg(input, "dangerouslyDisableSandbox") {
-        pairs.push(("dangerouslyDisableSandbox", unsandboxed.clone()));
-    }
-    Translation::Call {
-        name: tool,
-        input: obj_pairs(pairs),
-    }
-}
-
-fn translate_codex_shell(input: &Value) -> Translation {
-    let Some(command) = command_of(input) else {
-        return Translation::Text { why: "no command" };
-    };
-    if in_background(input) {
-        // Codex has no background flag; it keeps a session with `write_stdin` instead.
-        return Translation::Text {
-            why: "background execution is not available",
-        };
-    }
-    let mut pairs: Vec<(&str, Value)> = vec![("cmd", command)];
-    if let Some(workdir) = either(input, &["workdir", "cwd"]) {
-        pairs.push(("workdir", workdir));
-    }
-    if let Some(justification) = either(input, &["justification", "description"]) {
-        pairs.push(("justification", justification));
-    }
-    // `timeout` is dropped: Codex has no timeout for exec_command and the recorded result does
-    // not depend on it (tables §4.1). `yield_time_ms` is not a timeout and is not emitted.
-    Translation::Call {
-        name: "exec_command",
-        input: obj_pairs(pairs),
-    }
-}
-
-fn translate_opencode_shell(input: &Value) -> Translation {
-    let Some(command) = command_of(input) else {
-        return Translation::Text { why: "no command" };
-    };
-    let mut pairs: Vec<(&str, Value)> = vec![("command", command)];
-    if let Some(workdir) = either(input, &["workdir", "cwd"]) {
-        pairs.push(("workdir", workdir));
-    }
-    if let Some(timeout) = arg(input, "timeout") {
-        pairs.push(("timeout", timeout.clone()));
-    }
-    if in_background(input) {
-        pairs.push(("background", Value::Bool(true)));
-    }
-    Translation::Call {
-        name: "shell",
-        input: obj_pairs(pairs),
-    }
-}
-
-/// L12: Pi measures the timeout in **seconds**, the canonical form in milliseconds.
-fn translate_pi_shell(input: &Value) -> Translation {
-    let Some(command) = command_of(input) else {
-        return Translation::Text { why: "no command" };
-    };
-    if in_background(input) {
-        return Translation::Text {
-            why: "background execution is not available",
-        };
-    }
-    let mut pairs: Vec<(&str, Value)> = vec![("command", command)];
-    if let Some(ms) = arg(input, "timeout").and_then(Value::as_u64) {
-        pairs.push(("timeout", Value::from(ms.div_ceil(1000))));
-    }
-    Translation::Call {
-        name: "bash",
-        input: obj_pairs(pairs),
-    }
+    (dest_shell != Some(source_shell)).then_some(Translation::Text {
+        why: "shell dialect differs from the destination's",
+    })
 }
 
 /// The command string, under either spelling: Claude's `command`, Codex's `cmd`.
-fn command_of(input: &Value) -> Option<Value> {
+pub(crate) fn command_of(input: &Value) -> Option<Value> {
     either(input, &["command", "cmd"])
 }
 
-/// The path argument, under either spelling: Claude's `file_path`, OpenCode's and Pi's `path`.
-fn path_of(input: &Value) -> Option<Value> {
-    either(input, &["file_path", "path"])
+/// Background, under either spelling: Claude's `run_in_background`, OpenCode's `background`.
+pub(crate) fn in_background(input: &Value) -> bool {
+    flag(input, "run_in_background") || flag(input, "background")
 }
 
 // ---------------------------------------------------------------------------------------------
-// read
+// read / write
 
-fn read_opencode(input: &Value) -> Translation {
+/// OpenCode's and Pi's `read`: `path`, `offset` and `limit`.
+pub(crate) fn read_by_path(input: &Value) -> Translation {
     if arg(input, "pages").is_some() || arg(input, "allow_large").is_some() {
         return Translation::Text {
             why: "pages/allow_large has no counterpart",
@@ -544,83 +321,65 @@ fn read_opencode(input: &Value) -> Translation {
     }
 }
 
-fn read_pi(input: &Value) -> Translation {
-    let out = read_opencode(input);
-    match out {
-        Translation::Call { input, .. } => Translation::Call {
-            name: "read",
-            input,
-        },
-        other => other,
-    }
-}
-
-fn read_claude(input: &Value) -> Translation {
-    // A Claude destination keeps its own `Read`: `file_path`, not `path`.
-    let Some(path) = path_of(input) else {
-        return Translation::Text { why: "no path" };
-    };
-    let mut pairs: Vec<(&str, Value)> = vec![("file_path", path)];
-    for key in ["offset", "limit", "pages", "allow_large"] {
-        if let Some(v) = arg(input, key) {
-            pairs.push((key, v.clone()));
-        }
-    }
-    Translation::Call {
-        name: "Read",
-        input: obj_pairs(pairs),
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
-// write / edit
-
-fn write_claude(input: &Value) -> Translation {
+/// OpenCode's and Pi's `write`: `path` and `content`.
+pub(crate) fn write_by_path(input: &Value) -> Translation {
     match path_of(input) {
         Some(path) => Translation::Call {
-            name: "Write",
-            input: obj([("file_path", path), ("content", required_content(input))]),
-        },
-        None => Translation::Text { why: "no path" },
-    }
-}
-
-fn write_oc_pi(input: &Value, tool: &'static str) -> Translation {
-    match path_of(input) {
-        Some(path) => Translation::Call {
-            name: tool,
+            name: "write",
             input: obj([("path", path), ("content", required_content(input))]),
         },
         None => Translation::Text { why: "no path" },
     }
 }
 
-fn required_content(input: &Value) -> Value {
+pub(crate) fn required_content(input: &Value) -> Value {
     arg(input, "content")
         .cloned()
         .unwrap_or_else(|| Value::String(String::new()))
 }
 
+// ---------------------------------------------------------------------------------------------
+// edit
+
+/// An Edit or MultiEdit call, read in any harness's spelling.
+pub(crate) enum EditCall<'a> {
+    /// One change; `replace_all` is "all occurrences".
+    One {
+        path: Value,
+        old: Value,
+        new: Value,
+        replace_all: bool,
+    },
+    /// Several changes in one call, as the call lists them.
+    Several { path: Value, entries: &'a [Value] },
+}
+
 /// One change of an edit, in any harness's spelling: Claude's `old_string`/`new_string`,
 /// OpenCode's `oldString`/`newString`, a Pi `edits` entry's `oldText`/`newText`.
-fn change_of(entry: &Value) -> Option<(Value, Value)> {
+pub(crate) fn change_of(entry: &Value) -> Option<(Value, Value)> {
     let old = either(entry, &["old_string", "oldString", "oldText"])?;
     let new = either(entry, &["new_string", "newString", "newText"])?;
     Some((old, new))
 }
 
-/// Edit and MultiEdit. "All occurrences" (`replace_all`, OpenCode's `replaceAll`) has no
-/// counterpart in Pi or Codex's one-hunk patch, so it blocks translation there (L13). Pi's own
-/// `edit` holds its changes in `edits`: one change is an ordinary edit everywhere, several are a
+/// Read an Edit or MultiEdit call; `Err` is its text form. "All occurrences" (`replace_all`,
+/// OpenCode's `replaceAll`) is read for the destination to keep or refuse (L13). Pi's own `edit`
+/// holds its changes in `edits`: one change is an ordinary edit everywhere, several are a
 /// multi-edit.
-fn edit(canonical: &CanonicalTool, input: &Value, dest: HarnessId) -> Translation {
+pub(crate) fn edit_call<'a>(
+    canonical: &CanonicalTool,
+    input: &'a Value,
+) -> Result<EditCall<'a>, Translation> {
     let Some(path) = path_of(input) else {
-        return Translation::Text { why: "no path" };
+        return Err(Translation::Text { why: "no path" });
     };
     let entries = input.get("edits").and_then(Value::as_array);
     let single_pi_edit = *canonical == CanonicalTool::Edit && entries.is_some_and(|e| e.len() == 1);
     if (*canonical == CanonicalTool::MultiEdit || entries.is_some()) && !single_pi_edit {
-        return multi_edit(path, entries.map(Vec::as_slice).unwrap_or_default(), dest);
+        return Ok(EditCall::Several {
+            path,
+            entries: entries.map(Vec::as_slice).unwrap_or_default(),
+        });
     }
     let (change, replace_all) = match entries {
         Some(entries) => (change_of(&entries[0]), flag(&entries[0], "replace_all")),
@@ -634,119 +393,50 @@ fn edit(canonical: &CanonicalTool, input: &Value, dest: HarnessId) -> Translatio
         ),
     };
     let Some((old, new)) = change else {
-        return Translation::Text {
+        return Err(Translation::Text {
             why: "no old_string",
-        };
+        });
     };
-
-    match dest {
-        HarnessId::OpenCode => {
-            let mut pairs: Vec<(&str, Value)> =
-                vec![("path", path), ("oldString", old), ("newString", new)];
-            if replace_all {
-                pairs.push(("replaceAll", Value::Bool(true)));
-            }
-            Translation::Call {
-                name: "edit",
-                input: obj_pairs(pairs),
-            }
-        }
-        HarnessId::Pi => {
-            if replace_all {
-                return Translation::Text {
-                    why: "replace_all has no counterpart in Pi",
-                };
-            }
-            let edits = Value::Array(vec![obj([("oldText", old), ("newText", new)])]);
-            Translation::Call {
-                name: "edit",
-                input: obj([("path", path), ("edits", edits)]),
-            }
-        }
-        HarnessId::ClaudeCode => {
-            let mut pairs: Vec<(&str, Value)> = vec![
-                ("file_path", path),
-                ("old_string", old),
-                ("new_string", new),
-            ];
-            if replace_all {
-                pairs.push(("replace_all", Value::Bool(true)));
-            }
-            Translation::Call {
-                name: "Edit",
-                input: obj_pairs(pairs),
-            }
-        }
-        HarnessId::Codex => {
-            // The patch form (tables §4.3) is not written yet: the pinned Codex of the bench does
-            // not offer `apply_patch` at all, and a form no destination has accepted is not worth
-            // guessing at. The call travels as text until a fixture proves it.
-            Translation::Text {
-                why: "Codex's apply_patch form is not written yet",
-            }
-        }
-    }
-}
-
-/// Several changes in one call. Only Pi's `edit` takes a list; OpenCode has no multi-edit, Claude
-/// 2.1.311 no MultiEdit and Codex's patch is one hunk, and one result cannot be split.
-fn multi_edit(path: Value, entries: &[Value], dest: HarnessId) -> Translation {
-    if dest != HarnessId::Pi {
-        return Translation::Text {
-            why: "no multi-edit equivalent",
-        };
-    }
-    if entries.is_empty() {
-        return Translation::Text { why: "no edits" };
-    }
-    let mut mapped = Vec::new();
-    for entry in entries {
-        if flag(entry, "replace_all") || flag(entry, "replaceAll") {
-            return Translation::Text {
-                why: "replace_all has no counterpart in Pi",
-            };
-        }
-        let Some((old, new)) = change_of(entry) else {
-            return Translation::Text {
-                why: "an edit without its old and new text",
-            };
-        };
-        mapped.push(obj([("oldText", old), ("newText", new)]));
-    }
-    Translation::Call {
-        name: "edit",
-        input: obj([("path", path), ("edits", Value::Array(mapped))]),
-    }
+    Ok(EditCall::One {
+        path,
+        old,
+        new,
+        replace_all,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
 // search
 
-fn grep(source_name: &str, input: &Value, dest: HarnessId) -> Translation {
-    // A Claude source keeps its own call: every argument is Claude's.
-    if dest == HarnessId::ClaudeCode && source_name == "Grep" {
-        return Translation::Call {
-            name: "Grep",
-            input: input.clone(),
-        };
-    }
-    // Translated only when the call used the shared subset: pattern, path, file filter, case,
-    // literal and limit, plus context where the destination has it. Another `output_mode`,
-    // line numbers and `multiline` block it (tables §4.4, L13).
+/// A grep call over the subset the destinations share: pattern, path, file filter, case, literal
+/// and limit, plus context where the destination has it.
+pub(crate) struct GrepCall {
+    /// The pattern and the path, which every destination spells alike.
+    pub(crate) pairs: Vec<(&'static str, Value)>,
+    pub(crate) filter: Option<Value>,
+    pub(crate) limit: Option<Value>,
+    pub(crate) context: Option<Value>,
+    pub(crate) ignore_case: Option<bool>,
+    pub(crate) literal: Option<Value>,
+}
+
+/// Read a grep call in any harness's spelling; `Err` is its text form. Another `output_mode`,
+/// line numbers and `multiline` block it (tables §4.4, L13).
+pub(crate) fn grep_call(input: &Value) -> Result<GrepCall, Translation> {
     if let Some(mode) = arg(input, "output_mode").and_then(Value::as_str)
         && mode != "files_with_matches"
     {
-        return Translation::Text {
+        return Err(Translation::Text {
             why: "output_mode has no counterpart",
-        };
+        });
     }
     if arg(input, "type").is_some() {
-        return Translation::Text {
+        return Err(Translation::Text {
             why: "a file `type` has no counterpart",
-        };
+        });
     }
     let Some(pattern) = required(input, "pattern") else {
-        return Translation::Text { why: "no pattern" };
+        return Err(Translation::Text { why: "no pattern" });
     };
     let filter = either(input, &["glob", "include"]);
     let limit = either(input, &["head_limit", "limit"]);
@@ -760,191 +450,50 @@ fn grep(source_name: &str, input: &Value, dest: HarnessId) -> Translation {
                 .map(|s| !s)
         });
     let literal = arg(input, "literal").cloned();
-    let mut pairs: Vec<(&str, Value)> = vec![("pattern", pattern)];
+    let mut pairs: Vec<(&'static str, Value)> = vec![("pattern", pattern)];
     if let Some(path) = required(input, "path") {
         pairs.push(("path", path));
     }
-
-    match dest {
-        HarnessId::ClaudeCode => {
-            // OpenCode and Pi print the matching lines with their numbers.
-            if literal.is_some() {
-                return Translation::Text {
-                    why: "Claude's Grep has no literal search",
-                };
-            }
-            if let Some(filter) = filter {
-                pairs.push(("glob", filter));
-            }
-            if let Some(i) = ignore_case {
-                pairs.push(("-i", Value::Bool(i)));
-            }
-            if let Some(context) = context {
-                pairs.push(("-C", context));
-            }
-            if let Some(limit) = limit {
-                pairs.push(("head_limit", limit));
-            }
-            pairs.push(("output_mode", Value::String("content".into())));
-            pairs.push(("-n", Value::Bool(true)));
-            Translation::Call {
-                name: "Grep",
-                input: obj_pairs(pairs),
-            }
-        }
-        HarnessId::OpenCode => {
-            if let Some(filter) = filter {
-                pairs.push(("include", filter));
-            }
-            if let Some(limit) = limit {
-                pairs.push(("limit", limit));
-            }
-            if let Some(i) = ignore_case {
-                pairs.push(("caseSensitive", Value::Bool(!i)));
-            }
-            if let Some(literal) = literal {
-                pairs.push(("literal", literal));
-            }
-            Translation::Call {
-                name: "grep",
-                input: obj_pairs(pairs),
-            }
-        }
-        HarnessId::Pi => {
-            if let Some(filter) = filter {
-                pairs.push(("glob", filter));
-            }
-            if let Some(i) = ignore_case {
-                pairs.push(("ignoreCase", Value::Bool(i)));
-            }
-            if let Some(literal) = literal {
-                pairs.push(("literal", literal));
-            }
-            if let Some(context) = context {
-                pairs.push(("context", context));
-            }
-            if let Some(limit) = limit {
-                pairs.push(("limit", limit));
-            }
-            Translation::Call {
-                name: "grep",
-                input: obj_pairs(pairs),
-            }
-        }
-        HarnessId::Codex => Translation::Text {
-            why: "no grep tool offered",
-        },
-    }
+    Ok(GrepCall {
+        pairs,
+        filter,
+        limit,
+        context,
+        ignore_case,
+        literal,
+    })
 }
 
-fn glob(input: &Value, dest: HarnessId) -> Translation {
+/// A glob call's input, which every destination with a glob tool spells alike; `Err` is its text
+/// form. OpenCode's `hidden` and `limit` and Pi's `limit` reach only the tools that have them: the
+/// accepted keys turn any other use into text form.
+pub(crate) fn glob_input(input: &Value) -> Result<Value, Translation> {
     let Some(pattern) = required(input, "pattern") else {
-        return Translation::Text { why: "no pattern" };
+        return Err(Translation::Text { why: "no pattern" });
     };
     let mut pairs: Vec<(&str, Value)> = vec![("pattern", pattern)];
     if let Some(path) = arg(input, "path") {
         pairs.push(("path", path.clone()));
     }
-    let name = match dest {
-        HarnessId::ClaudeCode => "Glob",
-        HarnessId::OpenCode => "glob",
-        HarnessId::Pi => "find",
-        HarnessId::Codex => {
-            return Translation::Text {
-                why: "no glob tool offered",
-            };
-        }
-    };
-    // OpenCode's `hidden` and `limit` and Pi's `limit` reach only the tools that have them; the
-    // accepted keys turn any other use into text form.
     for key in ["hidden", "limit"] {
         if let Some(v) = arg(input, key) {
             pairs.push((key, v.clone()));
         }
     }
-    Translation::Call {
-        name,
-        input: obj_pairs(pairs),
-    }
+    Ok(obj_pairs(pairs))
 }
 
-fn web_fetch(input: &Value, dest: HarnessId) -> Translation {
-    let Some(url) = required(input, "url") else {
-        return Translation::Text { why: "no url" };
-    };
-    match dest {
-        // Claude's WebFetch needs the prompt it answers.
-        HarnessId::ClaudeCode => match required(input, "prompt") {
-            Some(prompt) => Translation::Call {
-                name: "WebFetch",
-                input: obj([("url", url), ("prompt", prompt)]),
-            },
-            None => Translation::Text { why: "no prompt" },
-        },
-        HarnessId::OpenCode => {
-            let mut pairs: Vec<(&str, Value)> = vec![("url", url)];
-            for key in ["format", "timeout"] {
-                if let Some(v) = arg(input, key) {
-                    pairs.push((key, v.clone()));
-                }
-            }
-            Translation::Call {
-                name: "webfetch",
-                input: obj_pairs(pairs),
-            }
-        }
-        _ => Translation::Text {
-            why: "no webfetch tool offered",
-        },
-    }
+// ---------------------------------------------------------------------------------------------
+// web
+
+/// A web fetch's `url`; `Err` is the text form of a call without one.
+pub(crate) fn url_of(input: &Value) -> Result<Value, Translation> {
+    required(input, "url").ok_or(Translation::Text { why: "no url" })
 }
 
-fn web_search(input: &Value, dest: HarnessId) -> Translation {
-    let Some(query) = required(input, "query") else {
-        return Translation::Text { why: "no query" };
-    };
-    match dest {
-        HarnessId::ClaudeCode => {
-            let mut pairs: Vec<(&str, Value)> = vec![("query", query)];
-            for key in ["allowed_domains", "blocked_domains"] {
-                if let Some(v) = arg(input, key) {
-                    pairs.push((key, v.clone()));
-                }
-            }
-            Translation::Call {
-                name: "WebSearch",
-                input: obj_pairs(pairs),
-            }
-        }
-        HarnessId::OpenCode => Translation::Call {
-            name: "websearch",
-            input: obj([("query", query)]),
-        },
-        _ => Translation::Text {
-            why: "web search is server-side or absent",
-        },
-    }
-}
-
-fn call_pi_ls(input: &Value) -> Translation {
-    let mut pairs: Vec<(&str, Value)> = Vec::new();
-    for key in ["path", "limit"] {
-        if let Some(v) = arg(input, key) {
-            pairs.push((key, v.clone()));
-        }
-    }
-    Translation::Call {
-        name: "ls",
-        input: obj_pairs(pairs),
-    }
-}
-
-fn obj_pairs(pairs: Vec<(&str, Value)>) -> Value {
-    let mut map = Map::new();
-    for (k, v) in pairs {
-        map.insert(k.to_string(), v);
-    }
-    Value::Object(map)
+/// A web search's `query`; `Err` is the text form of a call without one.
+pub(crate) fn query_of(input: &Value) -> Result<Value, Translation> {
+    required(input, "query").ok_or(Translation::Text { why: "no query" })
 }
 
 /// Whether a call's input used nothing but the keys this crate knows how to map, outside the

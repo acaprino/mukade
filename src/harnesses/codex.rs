@@ -2,11 +2,13 @@
 
 use super::{Harness, InterchangeDocument, StoreStats};
 use crate::hop::HopError;
-use crate::model::{HarnessId, Opaque, Protocol, Session};
+use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
+use crate::tools::{self, EditCall, Shell, ToolSet, Translation};
 use crate::writer::{WriteOpts, Writer};
+use serde_json::Value;
 use std::path::Path;
 
 pub(super) struct Codex;
@@ -131,6 +133,82 @@ impl Harness for Codex {
             fork: None,
         })
     }
+
+    fn offered(&self) -> ToolSet {
+        ToolSet {
+            names: &[
+                "exec_command",
+                "write_stdin",
+                "request_user_input",
+                "view_image",
+                "get_goal",
+                "create_goal",
+                "update_goal",
+                "web_search",
+            ],
+        }
+    }
+
+    /// The pinned Codex runs commands and nothing else of the file and search tools; it searches
+    /// the web server-side. The reason a call would not translate anywhere comes first.
+    fn translate(
+        &self,
+        canonical: &CanonicalTool,
+        _source_name: &str,
+        input: &Value,
+        dest_shell: Option<Shell>,
+    ) -> Translation {
+        match canonical {
+            CanonicalTool::Bash | CanonicalTool::PowerShell => shell(canonical, input, dest_shell),
+            CanonicalTool::Read => Translation::Text {
+                why: "Codex offers no read tool",
+            },
+            CanonicalTool::Write => Translation::Text {
+                why: "Codex offers no apply_patch here",
+            },
+            CanonicalTool::Edit | CanonicalTool::MultiEdit => edit(canonical, input),
+            CanonicalTool::Grep => match tools::grep_call(input) {
+                Ok(_) => Translation::Text {
+                    why: "no grep tool offered",
+                },
+                Err(text) => text,
+            },
+            CanonicalTool::Glob => match tools::glob_input(input) {
+                Ok(_) => Translation::Text {
+                    why: "no glob tool offered",
+                },
+                Err(text) => text,
+            },
+            CanonicalTool::Ls => Translation::Text {
+                why: "no ls tool offered",
+            },
+            CanonicalTool::WebFetch => match tools::url_of(input) {
+                Ok(_) => Translation::Text {
+                    why: "no webfetch tool offered",
+                },
+                Err(text) => text,
+            },
+            CanonicalTool::WebSearch => match tools::query_of(input) {
+                Ok(_) => Translation::Text {
+                    why: "web search is server-side or absent",
+                },
+                Err(text) => text,
+            },
+            _ => tools::OTHER_CAPABILITY,
+        }
+    }
+
+    fn accepted_keys(&self, canonical: &CanonicalTool) -> &'static [&'static str] {
+        match canonical {
+            CanonicalTool::Bash | CanonicalTool::PowerShell => tools::SHELL_KEYS_WITH_WORKDIR,
+            _ => tools::common_keys(canonical),
+        }
+    }
+
+    /// The writer writes a result's text: its other blocks are dropped and counted.
+    fn flattens_result_blocks(&self) -> bool {
+        true
+    }
 }
 
 /// A top-level `key = "value"` of a TOML file: before any `[table]`, the key exactly (not
@@ -154,6 +232,53 @@ fn top_level_string(text: &str, key: &str) -> Option<String> {
         return Some(value.to_string()).filter(|value| !value.is_empty());
     }
     None
+}
+
+// ---------------------------------------------------------------------------------------------
+// tools toward Codex
+
+fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) -> Translation {
+    if let Some(text) = tools::other_dialect(canonical, dest_shell) {
+        return text;
+    }
+    let Some(command) = tools::command_of(input) else {
+        return Translation::Text { why: "no command" };
+    };
+    if tools::in_background(input) {
+        // Codex has no background flag; it keeps a session with `write_stdin` instead.
+        return Translation::Text {
+            why: "background execution is not available",
+        };
+    }
+    let mut pairs: Vec<(&str, Value)> = vec![("cmd", command)];
+    if let Some(workdir) = tools::either(input, &["workdir", "cwd"]) {
+        pairs.push(("workdir", workdir));
+    }
+    if let Some(justification) = tools::either(input, &["justification", "description"]) {
+        pairs.push(("justification", justification));
+    }
+    // `timeout` is dropped: Codex has no timeout for exec_command and the recorded result does
+    // not depend on it (tables §4.1). `yield_time_ms` is not a timeout and is not emitted.
+    Translation::Call {
+        name: "exec_command",
+        input: tools::obj_pairs(pairs),
+    }
+}
+
+fn edit(canonical: &CanonicalTool, input: &Value) -> Translation {
+    match tools::edit_call(canonical, input) {
+        // The patch form (tables §4.3) is not written yet: the pinned Codex of the bench does not
+        // offer `apply_patch` at all, and a form no destination has accepted is not worth
+        // guessing at. The call travels as text until a fixture proves it.
+        Ok(EditCall::One { .. }) => Translation::Text {
+            why: "Codex's apply_patch form is not written yet",
+        },
+        // Codex's patch is one hunk, and one result cannot be split.
+        Ok(EditCall::Several { .. }) => Translation::Text {
+            why: "no multi-edit equivalent",
+        },
+        Err(text) => text,
+    }
 }
 
 #[cfg(test)]

@@ -10,12 +10,13 @@ mod pi;
 pub(crate) use opencode::fork_of as opencode_fork;
 
 use crate::hop::HopError;
-use crate::model::{HarnessId, Opaque, Protocol, Session};
+use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
 use crate::policy::Clock;
 use crate::reader::{Reader, SessionInfo};
 use crate::roots::StoreRoots;
 use crate::summary::{Reply, SummarizeOpts, SummaryCommand};
+use crate::tools::{self, Shell, ToolSet, Translation};
 use crate::writer::{WriteOpts, Writer, Written, plan::Plan};
 use serde_json::Value;
 use std::path::Path;
@@ -155,6 +156,41 @@ pub trait Harness: Send + Sync {
         _stdout: &str,
     ) -> Option<String> {
         None
+    }
+
+    /// The tools this harness offers as a destination, for the version the bench pinned (tables
+    /// §2, L11).
+    fn offered(&self) -> ToolSet;
+
+    /// One canonical call in this destination's own tool shape, or its text form. `input` is the
+    /// call's input (a Codex patch already read as the write or edit it makes), `source_name` the
+    /// name the source harness gave it, `dest_shell` the shell this destination runs commands
+    /// with, when known. The caller checks the keys against [`Harness::accepted_keys`] and the name
+    /// against the offered set.
+    fn translate(
+        &self,
+        canonical: &CanonicalTool,
+        source_name: &str,
+        input: &Value,
+        dest_shell: Option<Shell>,
+    ) -> Translation;
+
+    /// The argument keys, in any harness's spelling, that a translation into this destination maps
+    /// or may drop because they do not change the recorded result (tables §4).
+    fn accepted_keys(&self, canonical: &CanonicalTool) -> &'static [&'static str] {
+        tools::common_keys(canonical)
+    }
+
+    /// Whether a step that ended aborted or in error is written as an ordinary reply, because the
+    /// format records no such end.
+    fn failed_steps_are_replies(&self) -> bool {
+        true
+    }
+
+    /// Whether this destination's writer flattens a result's structured blocks to text, so the
+    /// plan keeps them as they are and counts what is not text.
+    fn flattens_result_blocks(&self) -> bool {
+        false
     }
 }
 
@@ -373,6 +409,20 @@ mod tests {
             _output_file: Option<&str>,
         ) -> Result<Reply, String> {
             Err("not summarized in this test".into())
+        }
+
+        fn offered(&self) -> ToolSet {
+            ToolSet { names: &[] }
+        }
+
+        fn translate(
+            &self,
+            _canonical: &CanonicalTool,
+            _source_name: &str,
+            _input: &Value,
+            _dest_shell: Option<Shell>,
+        ) -> Translation {
+            tools::OTHER_CAPABILITY
         }
     }
 

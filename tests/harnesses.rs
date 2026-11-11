@@ -232,6 +232,28 @@ fn only_pi_summarizes_from_a_file() {
 }
 
 #[test]
+fn only_pi_keeps_the_end_of_a_failed_step() {
+    for id in HarnessId::ALL {
+        assert_eq!(
+            get(id).failed_steps_are_replies(),
+            id != HarnessId::Pi,
+            "{id}"
+        );
+    }
+}
+
+#[test]
+fn claude_code_and_codex_flatten_result_blocks() {
+    for id in HarnessId::ALL {
+        assert_eq!(
+            get(id).flattens_result_blocks(),
+            matches!(id, HarnessId::ClaudeCode | HarnessId::Codex),
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn store_stats_count_the_fixture_store() {
     for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
         let scratch = support::scratch(id, "adapter-stats");

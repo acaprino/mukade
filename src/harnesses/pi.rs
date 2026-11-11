@@ -2,11 +2,13 @@
 
 use super::{Harness, InterchangeDocument, StoreStats};
 use crate::hop::HopError;
-use crate::model::{HarnessId, Opaque, Protocol, Session};
+use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
+use crate::tools::{self, EditCall, GrepCall, Shell, ToolSet, Translation};
 use crate::writer::{WriteOpts, Writer};
+use serde_json::Value;
 use std::path::Path;
 
 pub(super) struct Pi;
@@ -140,5 +142,184 @@ impl Harness for Pi {
             usage: None,
             fork: None,
         })
+    }
+
+    fn offered(&self) -> ToolSet {
+        ToolSet {
+            names: &["read", "bash", "edit", "write"],
+        }
+    }
+
+    /// Pi offers `grep`, `find` and `ls` only when it is told to; a caller that knows it widens the
+    /// offered set, and the calls take these shapes.
+    fn translate(
+        &self,
+        canonical: &CanonicalTool,
+        _source_name: &str,
+        input: &Value,
+        dest_shell: Option<Shell>,
+    ) -> Translation {
+        match canonical {
+            CanonicalTool::Bash | CanonicalTool::PowerShell => shell(canonical, input, dest_shell),
+            CanonicalTool::Read => tools::read_by_path(input),
+            CanonicalTool::Write => tools::write_by_path(input),
+            CanonicalTool::Edit | CanonicalTool::MultiEdit => edit(canonical, input),
+            CanonicalTool::Grep => grep(input),
+            CanonicalTool::Glob => match tools::glob_input(input) {
+                Ok(input) => Translation::Call {
+                    name: "find",
+                    input,
+                },
+                Err(text) => text,
+            },
+            CanonicalTool::Ls => ls(input),
+            CanonicalTool::WebFetch => match tools::url_of(input) {
+                Ok(_) => Translation::Text {
+                    why: "no webfetch tool offered",
+                },
+                Err(text) => text,
+            },
+            CanonicalTool::WebSearch => match tools::query_of(input) {
+                Ok(_) => Translation::Text {
+                    why: "web search is server-side or absent",
+                },
+                Err(text) => text,
+            },
+            _ => tools::OTHER_CAPABILITY,
+        }
+    }
+
+    fn accepted_keys(&self, canonical: &CanonicalTool) -> &'static [&'static str] {
+        match canonical {
+            CanonicalTool::Glob => &["pattern", "path", "limit"],
+            _ => tools::common_keys(canonical),
+        }
+    }
+
+    /// A step that ended aborted or in error keeps that end as its `stopReason`.
+    fn failed_steps_are_replies(&self) -> bool {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// tools toward Pi
+
+/// L12: Pi measures the timeout in **seconds**, the canonical form in milliseconds.
+fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) -> Translation {
+    if let Some(text) = tools::other_dialect(canonical, dest_shell) {
+        return text;
+    }
+    let Some(command) = tools::command_of(input) else {
+        return Translation::Text { why: "no command" };
+    };
+    if tools::in_background(input) {
+        return Translation::Text {
+            why: "background execution is not available",
+        };
+    }
+    let mut pairs: Vec<(&str, Value)> = vec![("command", command)];
+    if let Some(ms) = tools::arg(input, "timeout").and_then(Value::as_u64) {
+        pairs.push(("timeout", Value::from(ms.div_ceil(1000))));
+    }
+    Translation::Call {
+        name: "bash",
+        input: tools::obj_pairs(pairs),
+    }
+}
+
+/// Pi's `edit` holds its changes in `edits`. "All occurrences" has no counterpart in it, so it
+/// blocks translation (L13).
+fn edit(canonical: &CanonicalTool, input: &Value) -> Translation {
+    let (path, old, new, replace_all) = match tools::edit_call(canonical, input) {
+        Ok(EditCall::One {
+            path,
+            old,
+            new,
+            replace_all,
+        }) => (path, old, new, replace_all),
+        Ok(EditCall::Several { path, entries }) => return multi_edit(path, entries),
+        Err(text) => return text,
+    };
+    if replace_all {
+        return Translation::Text {
+            why: "replace_all has no counterpart in Pi",
+        };
+    }
+    let edits = Value::Array(vec![tools::obj([("oldText", old), ("newText", new)])]);
+    Translation::Call {
+        name: "edit",
+        input: tools::obj([("path", path), ("edits", edits)]),
+    }
+}
+
+/// Several changes in one call, which only Pi's `edit` takes.
+fn multi_edit(path: Value, entries: &[Value]) -> Translation {
+    if entries.is_empty() {
+        return Translation::Text { why: "no edits" };
+    }
+    let mut mapped = Vec::new();
+    for entry in entries {
+        if tools::flag(entry, "replace_all") || tools::flag(entry, "replaceAll") {
+            return Translation::Text {
+                why: "replace_all has no counterpart in Pi",
+            };
+        }
+        let Some((old, new)) = tools::change_of(entry) else {
+            return Translation::Text {
+                why: "an edit without its old and new text",
+            };
+        };
+        mapped.push(tools::obj([("oldText", old), ("newText", new)]));
+    }
+    Translation::Call {
+        name: "edit",
+        input: tools::obj([("path", path), ("edits", Value::Array(mapped))]),
+    }
+}
+
+fn grep(input: &Value) -> Translation {
+    let GrepCall {
+        mut pairs,
+        filter,
+        limit,
+        context,
+        ignore_case,
+        literal,
+    } = match tools::grep_call(input) {
+        Ok(grep) => grep,
+        Err(text) => return text,
+    };
+    if let Some(filter) = filter {
+        pairs.push(("glob", filter));
+    }
+    if let Some(i) = ignore_case {
+        pairs.push(("ignoreCase", Value::Bool(i)));
+    }
+    if let Some(literal) = literal {
+        pairs.push(("literal", literal));
+    }
+    if let Some(context) = context {
+        pairs.push(("context", context));
+    }
+    if let Some(limit) = limit {
+        pairs.push(("limit", limit));
+    }
+    Translation::Call {
+        name: "grep",
+        input: tools::obj_pairs(pairs),
+    }
+}
+
+fn ls(input: &Value) -> Translation {
+    let mut pairs: Vec<(&str, Value)> = Vec::new();
+    for key in ["path", "limit"] {
+        if let Some(v) = tools::arg(input, key) {
+            pairs.push((key, v.clone()));
+        }
+    }
+    Translation::Call {
+        name: "ls",
+        input: tools::obj_pairs(pairs),
     }
 }

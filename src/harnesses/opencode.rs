@@ -2,12 +2,13 @@
 
 use super::{Harness, InterchangeDocument, StoreStats};
 use crate::hop::HopError;
-use crate::model::{HarnessId, Kind, Opaque, Protocol, Session};
+use crate::model::{CanonicalTool, HarnessId, Kind, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
 use crate::policy::Clock;
 use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
+use crate::tools::{self, EditCall, GrepCall, Shell, ToolSet, Translation};
 use crate::writer::{WriteOpts, Writer, plan::Plan};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -248,6 +249,81 @@ impl Harness for OpenCode {
     ) -> Option<String> {
         fork_of(stdout).and_then(|fork| delete_fork(command, roots, &fork))
     }
+
+    fn offered(&self) -> ToolSet {
+        ToolSet {
+            names: &[
+                "edit",
+                "glob",
+                "grep",
+                "question",
+                "read",
+                "shell",
+                "skill",
+                "subagent",
+                "webfetch",
+                "websearch",
+                "write",
+                "execute",
+            ],
+        }
+    }
+
+    fn translate(
+        &self,
+        canonical: &CanonicalTool,
+        _source_name: &str,
+        input: &Value,
+        dest_shell: Option<Shell>,
+    ) -> Translation {
+        match canonical {
+            CanonicalTool::Bash | CanonicalTool::PowerShell => shell(canonical, input, dest_shell),
+            CanonicalTool::Read => tools::read_by_path(input),
+            CanonicalTool::Write => tools::write_by_path(input),
+            CanonicalTool::Edit | CanonicalTool::MultiEdit => edit(canonical, input),
+            CanonicalTool::Grep => grep(input),
+            CanonicalTool::Glob => match tools::glob_input(input) {
+                Ok(input) => Translation::Call {
+                    name: "glob",
+                    input,
+                },
+                Err(text) => text,
+            },
+            CanonicalTool::Ls => Translation::Text {
+                why: "no ls tool offered",
+            },
+            CanonicalTool::WebFetch => web_fetch(input),
+            CanonicalTool::WebSearch => match tools::query_of(input) {
+                Ok(query) => Translation::Call {
+                    name: "websearch",
+                    input: tools::obj([("query", query)]),
+                },
+                Err(text) => text,
+            },
+            _ => tools::OTHER_CAPABILITY,
+        }
+    }
+
+    fn accepted_keys(&self, canonical: &CanonicalTool) -> &'static [&'static str] {
+        match canonical {
+            CanonicalTool::Bash | CanonicalTool::PowerShell => tools::SHELL_KEYS_WITH_WORKDIR,
+            CanonicalTool::Grep => &[
+                "pattern",
+                "path",
+                "glob",
+                "include",
+                "-i",
+                "ignoreCase",
+                "caseSensitive",
+                "literal",
+                "head_limit",
+                "limit",
+                "output_mode",
+            ],
+            CanonicalTool::Glob => &["pattern", "path", "hidden", "limit"],
+            _ => tools::common_keys(canonical),
+        }
+    }
 }
 
 /// OpenCode's `run` has no switch for tools: its inline configuration denies every permission, so
@@ -377,5 +453,105 @@ impl InterchangeDocument for Document {
         let id = opts.dest_id.as_deref().unwrap_or("ses_preview");
         crate::writer::opencode::validate_session_id(id)?;
         crate::writer::opencode::document_from_plan_report(session, plan, id, cwd, opts, clock)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// tools toward OpenCode
+
+fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) -> Translation {
+    if let Some(text) = tools::other_dialect(canonical, dest_shell) {
+        return text;
+    }
+    let Some(command) = tools::command_of(input) else {
+        return Translation::Text { why: "no command" };
+    };
+    let mut pairs: Vec<(&str, Value)> = vec![("command", command)];
+    if let Some(workdir) = tools::either(input, &["workdir", "cwd"]) {
+        pairs.push(("workdir", workdir));
+    }
+    if let Some(timeout) = tools::arg(input, "timeout") {
+        pairs.push(("timeout", timeout.clone()));
+    }
+    if tools::in_background(input) {
+        pairs.push(("background", Value::Bool(true)));
+    }
+    Translation::Call {
+        name: "shell",
+        input: tools::obj_pairs(pairs),
+    }
+}
+
+fn edit(canonical: &CanonicalTool, input: &Value) -> Translation {
+    let (path, old, new, replace_all) = match tools::edit_call(canonical, input) {
+        Ok(EditCall::One {
+            path,
+            old,
+            new,
+            replace_all,
+        }) => (path, old, new, replace_all),
+        // OpenCode has no multi-edit, and one result cannot be split.
+        Ok(EditCall::Several { .. }) => {
+            return Translation::Text {
+                why: "no multi-edit equivalent",
+            };
+        }
+        Err(text) => return text,
+    };
+    let mut pairs: Vec<(&str, Value)> =
+        vec![("path", path), ("oldString", old), ("newString", new)];
+    if replace_all {
+        pairs.push(("replaceAll", Value::Bool(true)));
+    }
+    Translation::Call {
+        name: "edit",
+        input: tools::obj_pairs(pairs),
+    }
+}
+
+fn grep(input: &Value) -> Translation {
+    let GrepCall {
+        mut pairs,
+        filter,
+        limit,
+        ignore_case,
+        literal,
+        ..
+    } = match tools::grep_call(input) {
+        Ok(grep) => grep,
+        Err(text) => return text,
+    };
+    if let Some(filter) = filter {
+        pairs.push(("include", filter));
+    }
+    if let Some(limit) = limit {
+        pairs.push(("limit", limit));
+    }
+    if let Some(i) = ignore_case {
+        pairs.push(("caseSensitive", Value::Bool(!i)));
+    }
+    if let Some(literal) = literal {
+        pairs.push(("literal", literal));
+    }
+    Translation::Call {
+        name: "grep",
+        input: tools::obj_pairs(pairs),
+    }
+}
+
+fn web_fetch(input: &Value) -> Translation {
+    let url = match tools::url_of(input) {
+        Ok(url) => url,
+        Err(text) => return text,
+    };
+    let mut pairs: Vec<(&str, Value)> = vec![("url", url)];
+    for key in ["format", "timeout"] {
+        if let Some(v) = tools::arg(input, key) {
+            pairs.push((key, v.clone()));
+        }
+    }
+    Translation::Call {
+        name: "webfetch",
+        input: tools::obj_pairs(pairs),
     }
 }

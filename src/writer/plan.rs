@@ -244,7 +244,7 @@ fn carry_result_content(
     let ResultContent::Blocks(blocks) = content else {
         return content.clone();
     };
-    if source == dest || matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex) {
+    if source == dest || crate::harnesses::get(dest).flattens_result_blocks() {
         return content.clone();
     }
     let mut carried = Vec::new();
@@ -343,7 +343,9 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 calls,
                 end,
             } => {
-                if matches!(end, StepEnd::Aborted | StepEnd::Error) && dest != HarnessId::Pi {
+                if matches!(end, StepEnd::Aborted | StepEnd::Error)
+                    && crate::harnesses::get(dest).failed_steps_are_replies()
+                {
                     counts.aborted_steps_as_replies += 1;
                 }
                 let mut planned = PlannedStep {
@@ -450,7 +452,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     }
                     step_answered.push(result.call_id.clone());
                     if last_step_native.contains(&result.call_id) {
-                        if matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex)
+                        if crate::harnesses::get(dest).flattens_result_blocks()
                             && let ResultContent::Blocks(blocks) = &result.content
                         {
                             counts.dropped_result_blocks += blocks
