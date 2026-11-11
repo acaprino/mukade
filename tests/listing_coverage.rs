@@ -815,7 +815,8 @@ fn damaged_registrations_and_history_are_ignored() {
 #[test]
 fn a_process_id_taken_by_another_process_is_not_the_session() {
     use mukade::process::{self, Process};
-    // Only where a process's start time can be read (Windows) is a reused id told from the process.
+    // Only where a process's start time can be read (Windows, Linux) is a reused id told from the
+    // process. The unit is the platform's: a FILETIME on Windows, clock ticks since boot on Linux.
     let Process::Running {
         started: Some(started),
     } = process::inspect(std::process::id())
@@ -828,34 +829,29 @@ fn a_process_id_taken_by_another_process_is_not_the_session() {
     support::stage_fixture(HarnessId::ClaudeCode, &scratch);
     let pid = std::process::id();
     let json = |procstart: u64| serde_json::json!({ "procStart": procstart.to_string() });
+    let live = |procstart: u64| {
+        registration(&home, pid, kept, "D:\\work\\kept", json(procstart));
+        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"].clone()
+    };
 
-    registration(
-        &home,
-        pid,
-        kept,
-        "D:\\work\\kept",
-        json(started + 5_000_000),
-    );
-    assert_eq!(
-        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
-        true,
-        "half a second apart is the same process"
-    );
-
-    let an_hour = 3_600 * 10_000_000;
-    registration(&home, pid, kept, "D:\\work\\kept", json(started - an_hour));
-    assert_eq!(
-        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
-        false,
-        "the registration is from a process that started an hour before this one"
-    );
-
-    // A creation time in some other unit says nothing about the process.
-    registration(&home, pid, kept, "D:\\work\\kept", json(1_794_143_992_646));
-    assert_eq!(
-        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
-        true
-    );
+    if cfg!(windows) {
+        assert_eq!(live(started + 5_000_000), true, "half a second apart is the same process");
+        let an_hour = 3_600 * 10_000_000;
+        assert_eq!(
+            live(started - an_hour),
+            false,
+            "the registration is from a process that started an hour before this one"
+        );
+        // A creation time in some other unit says nothing about the process.
+        assert_eq!(live(1_794_143_992_646), true);
+    } else {
+        assert_eq!(live(started), true, "the kernel's own count, read the same way");
+        assert_eq!(
+            live(started + 1),
+            false,
+            "a process that started one tick later is another process"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
