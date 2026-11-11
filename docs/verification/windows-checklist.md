@@ -83,38 +83,34 @@ Get-Process ping -ErrorAction SilentlyContinue
 
 ## 3. Codex Desktop "code mode" on a real thread (10 min) 🟢
 
-New in this round: a one-call `exec` script is read as the shell or patch call it wraps (spec L10).
-Only hand-made rollouts were tested so far.
+A code-mode `exec` script of literal `text(await tools.X(...))` statements is read as its calls,
+each with its own result, and `apply_patch` as a write or edit (spec L10). The read side is
+already checked on every rollout of this machine
+([census](2026-11-11-codex-code-mode.md): 725 of 981 scripts split). What is left is one live hop.
 
-**Needs:** one Codex **Desktop** thread with a few shell commands in it.
+Every Desktop rollout declares PowerShell, so its shell calls translate only toward a destination
+whose shell is PowerShell (`--dest-shell powershell`); toward Claude Code only the patches
+translate until the destination-shell item of `next.md` is done.
+
+**Needs:** one Codex **Desktop** thread with a few shell commands and a file edit in it.
 
 **Do**
 
 ```powershell
 $env:CODEX_HOME = "$env:USERPROFILE\.codex"
-mukade list codex | Select-Object -First 5
-mukade dump codex YOUR_DESKTOP_THREAD_ID --output "$env:TEMP\desktop.json"
-# How many calls became shell calls, and how many stayed exec?
-(Get-Content "$env:TEMP\desktop.json" | ConvertFrom-Json).messages.content |
-  Where-Object type -eq 'tool_use' | Group-Object name | Select-Object Count, Name
-```
-
-Then hop it to Claude Code, writing to a scratch folder:
-
-```powershell
-$env:CLAUDE_CONFIG_DIR = "$env:TEMP\claude-scratch"
-mukade hop codex YOUR_DESKTOP_THREAD_ID claude_code --cwd 'C:\work\scratch'
+$env:PI_CODING_AGENT_DIR = "$env:TEMP\pi-scratch"
+mukade hop codex YOUR_DESKTOP_THREAD_ID pi --dest-shell powershell --cwd 'C:\work\scratch'
+pi --session <the file the receipt names>
 ```
 
 **Pass if**
 
-- [ ] Most calls are named `exec_command` (and some `apply_patch`); only multi-call scripts stay `exec`.
-- [ ] The hop's manifest counts **fewer** `tools_text_form` than before this change.
-- [ ] `claude --resume <id>` (with the same `CLAUDE_CONFIG_DIR`) shows Bash calls, not text blocks.
+- [ ] The manifest's losses name far fewer text-form calls than the thread has `exec` calls.
+- [ ] Pi shows the shell commands as `bash` calls with their output, and the edits as `edit` calls.
 
-**Write down:** the `Group-Object` counts, and `tools_text_form` from the manifest.
+**Write down:** the manifest's `tools_text_form` and the thread's `exec` count.
 
-**Clean up:** `Remove-Item -Recurse "$env:TEMP\claude-scratch"`.
+**Clean up:** `Remove-Item -Recurse "$env:TEMP\pi-scratch"`.
 
 ---
 

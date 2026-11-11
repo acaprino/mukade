@@ -196,11 +196,28 @@ as **one custom tool `exec`** whose input is a script, for example (strings and 
 The output is a list of content items. Read as an opaque tool, every Codex Desktop call would
 become text form at best.
 
-Rule (spec L10): a script that is **exactly one** `tools.exec_command({...})` or
-`tools.apply_patch("...")` call wrapped in `text(await …)` with literal arguments is read as that
-call (`Bash` / `Edit`/`Write` via the existing `apply_patch` parser); any other script (several
-calls, variables, `ALL_TOOLS`, `web__run`, `view_image`) stays one call in **text form**, its
-script verbatim.
+Rule (spec L10, built 2026-11-11): a script made **only** of statements
+`text(await tools.<name>(<literal>));` (one or several, the last `;` optional) is read as those
+calls, in order. The arguments must be literals: objects (bare or quoted keys), arrays, `"`/`'`
+strings with JavaScript's escapes, numbers, `true`, `false`, `null`; a call without arguments is
+`{}`. The output must be a list: item 0 a header beginning `Script completed` (or `Script failed`
+for a one-call script, whose result is then an error), then exactly one `input_text` item per
+statement, which is that call's result. The first call keeps the `exec` call's id, the n-th is
+`<id>_<n>` (inside every provider's id alphabet, so no writer rewrites it). Any other script
+(variables, `Promise.allSettled`, `ALL_TOOLS`, `image(...)`, comments), a running script, a
+string output, an image item or a count that does not match: one call in **text form**, its
+script verbatim. Census of 981 real scripts: 725 split, 256 kept whole.
+
+The calls a split script made follow the ordinary rules: `exec_command` is a shell call in the
+source's dialect (L13), MCP tools, `web__run` and `write_stdin` are text form (L14).
+
+`apply_patch` (inside `exec` or as Codex's own call, its input a bare patch string or
+`{"input": …}`) is read at translate time, its recorded input staying the patch: exactly one
+`*** Add File:` section → `Write` (the `+` lines, each ending in a line break); exactly one
+`*** Update File:` section of `@@` hunks → one hunk is an `Edit` (old text = context and `-`
+lines, new text = context and `+` lines; the `@@` anchor is not part of either), several hunks a
+multi-edit (Pi only). A delete, a move, `*** End of File`, several file sections (one result
+cannot be split between files), or a hunk without old text: text form.
 
 ## 6. The destination's tool set is per version and model
 

@@ -364,15 +364,17 @@ or laid out otherwise is an empty catalogue, and the rollouts are listed as befo
 
 **Known limits:**
 
-- **Code mode: one-call scripts are read as their call (L10).** An `exec` script that is exactly
-  `text(await tools.exec_command({...}))` or `text(await tools.apply_patch(...))` with literal
-  arguments reads as `exec_command` / `apply_patch`, the way Codex CLI records them, so its shell
-  commands translate to the destination's shell tool (`src/reader/codex_exec.rs`). Any other
-  script (several calls, `Promise.allSettled`, variables, a template with `${…}`, `view_image`,
-  `web__run`) stays `exec` and travels as text, its script verbatim. The record is kept in `raw`.
-  Tested on hand-made rollouts; a real Desktop rollout has not been hopped since **[U]**.
-- **Codex `apply_patch` calls** read as canonical `Edit`, but their patch input has no path or
-  `old_string`, so they become text form everywhere (`src/tools.rs:595-619`).
+- **Code mode is read by its literal shape (L10).** A script of literal
+  `text(await tools.X(...));` statements becomes those calls, each paired with its own output
+  item (`src/reader/codex/exec.rs`); any other script stays one `exec` call in text form. A split
+  `exec_command` keeps the rollout's declared shell, and every Desktop rollout seen declares
+  PowerShell, so its shell calls translate only toward a PowerShell destination
+  (`--dest-shell powershell`). Census 2026-11-11: 725 of 981 scripts split
+  (`../verification/2026-11-11-codex-code-mode.md`).
+- **Codex `apply_patch` calls** are read at translate time (`src/tools/patch.rs`): one added file
+  is a write, one updated file with one hunk an edit, several hunks a multi-edit (Pi only). A
+  delete, a move or several files in one patch stay text form; toward Codex an edit stays text
+  form (Codex's patch form is not written).
 - **Native compaction.** A `portable` hop still writes the summary as a user message.
   `--compaction native` keeps the whole rollout and appends a `compacted` record. Its
   `replacement_history` carries the deterministic summary as the first user input item, then the

@@ -15,7 +15,8 @@ needs a key, what needs a decision. Unverified facts are marked **[U]** here and
 | Timeout off Windows | only the child was stopped; its subprocesses kept running | the whole process tree is stopped; Ctrl-C still reaches the harness |
 | Test suite on Linux | 6 tests failed (test-harness bugs) | **519 / 519 pass** |
 | TUI export / import | missing | `e` exports, `i` imports into any installation |
-| Codex code mode (L10) | every Desktop `exec` call travelled as text | one-call scripts read as `exec_command` / `apply_patch` |
+| Codex code mode (L10) | every Desktop `exec` call travelled as text | literal scripts read as their calls, each with its own result: 725 of 981 real scripts ([census](docs/verification/2026-11-11-codex-code-mode.md)) |
+| Codex `apply_patch` | an edit with no path, always text | one added file → write, one hunk → edit, several hunks → multi-edit (Pi) |
 | Codex subagent parent | `meta.parent` always empty | read from `session_meta.session_id` |
 | `updated` for Codex and Pi | always empty | Pi: newest record time; Codex: database, else file time |
 | `--keep-turns` with `--compaction summary` | the summary was paid for before the turn check | the check comes first |
@@ -29,7 +30,8 @@ Checklist step in brackets.
 1. **Setup + whole suite on Windows** [0]: `cargo test --workspace --no-fail-fast` → 0 failed.
 2. **TUI export / import by hand** [1].
 3. **Windows timeout still kills the tree** [2]: unchanged code, but no automated test covers it.
-4. **Codex code mode on a real Desktop thread** [3] [U]: tested on hand-made rollouts only.
+4. **Codex code mode on a real Desktop thread** [3]: the read-only census over 34 real rollouts passed
+   (every split call has one result); a live hop of a real Desktop thread into a destination is not done yet.
 5. **Codex subagent parent on a real thread** [4].
 6. **Codex chain of pages** [5] [U]: one page in 982 rollouts, its base a plain file; never a chain.
 7. **Remove the old Claude Code test sessions** [9]: folder `…-scratchpad-live-claude-work`.
@@ -37,6 +39,15 @@ Checklist step in brackets.
 9. **100 MB session speed** [13]: 1, 10, 30 MB were re-measured, 100 MB not.
 10. **Real-life shapes** [14] [U]: auto-compaction by threshold, a second compaction, rewind or
     `/tree`, an image going to Claude Code. Hop one whenever it happens.
+
+## 🔵 Needs code (next)
+
+- **Destination shell (L11/L13).** A hop with no `--dest-shell` knows no destination dialect, so
+  every shell call is text form, and Claude's `PowerShell` tool is not in its offered set even
+  where it is enabled. On the real Desktop rollouts: of 696 split `exec_command` calls, 0 translate
+  toward Codex without the flag and 696 with `--dest-shell powershell`; toward Claude none do.
+  *To do:* take the destination's shell from its own configuration (Codex `config.toml`, Claude
+  settings and platform, Pi settings), and add `PowerShell` to Claude's offered set where enabled.
 
 ## 🟡 Needs a few model calls
 
@@ -65,8 +76,10 @@ Not bugs. Each is stated in the docs where it applies.
 
 - **Codex subagent threads are not carried** with their root thread in a hop: each is its own
   session. The parent is now known; carrying children needs a destination format for them.
-- **Codex `apply_patch`** reads as an edit with no path, so it travels as text. The patch form
-  toward Codex is not written either.
+- **Codex `apply_patch`** with several files, a delete or a move travels as text, and the patch
+  form toward Codex is not written.
+- **Codex code-mode scripts with variables, `Promise.allSettled` or `ALL_TOOLS`** (256 of 981
+  real ones) stay one `exec` call in text form: nothing is evaluated.
 - **Codex `threads` layout**: the reader asks only for columns it finds (`PRAGMA table_info`). A
   Codex that renames them lists rollouts as before, without the database rows; nothing warns.
 - **Claude Code prompts without a `sessionId`** (old Claude Code) name a project, not a session: skipped.

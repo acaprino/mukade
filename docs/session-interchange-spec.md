@@ -697,7 +697,7 @@ for evidence about individual behaviors.
 | L5 | Claude reader: `isMeta`, `<local-command-*>`/`<command-name>` rows, `isCompactSummary`, `isVisibleInTranscriptOnly`, attachment rows → `Meta`; rows merged by `message.id`; results paired by `tool_use_id`, not by the parent chain | §2.1 | Claude → Pi tail strict clean; no `function_call "{}"` into Codex |
 | L6 | readers keep `signature`/`encrypted` with protocol + model (`Opaque`) | §3.3 | OpenCode/Pi → Claude strict clean with `DropForeign` |
 | L9 | Codex `<turn_aborted>`/`turn_aborted` and a hard-killed last turn → `StepEnd::aborted`/`killed`; Claude `<synthetic>` reply and `[Request interrupted by user]` → `Meta`, the step it cut → `aborted`; OpenCode empty assistant without `finish` → `killed` | §2 | manifest `interrupted_last_turn`; no marker text in the destination; `interrupted: drop` leaves the turn's work out |
-| L10 | Codex Desktop code-mode `exec`: a script that is exactly one `tools.exec_command` / `tools.apply_patch` call → that call; any other script → one text-form call | census: 4844 of 4908 real Codex calls are `exec` | a Codex Desktop rollout converts with shell and patch calls translated |
+| L10 | Codex Desktop code-mode `exec`: a script made only of literal `text(await tools.X(...));` statements, whose output holds the header and one text item per statement → those calls, each with its own result (first id the `exec` call's, then `<id>_<n>`); any other script → one text-form call. Codex `apply_patch` input → `Write` / `Edit` / multi-edit when it is one plain file section | census: 4844 of 4908 real Codex calls are `exec`; 2026-11-11: 725 of 981 scripts split (`docs/verification/2026-11-11-codex-code-mode.md`) | a Codex Desktop rollout converts with shell and patch calls translated |
 
 ### 8.2 Writers
 
@@ -736,10 +736,11 @@ describe additional harness runs, their environments and their coverage limitati
 - [U] Codex 0.165: a chain of pages (a page whose base is itself a page) is read by following
   each `history_base` back to the first file, the latest version winning; tested on hand-made files
   only, since none has been seen on disk (one page in 982 rollouts, its base a plain file).
-- L10 is implemented (`src/reader/codex_exec.rs`): a one-call `exec` script with literal
-  arguments reads as the `exec_command` / `apply_patch` call it wraps; any other script stays
-  `exec`, in text form. Verified on hand-made rollouts only [U] for a real Codex Desktop rollout.
-  An `apply_patch` call still reads as an edit without a path, so it is text form.
+- L10 reads code mode without evaluating it: a script with variables, `Promise.allSettled`,
+  `ALL_TOOLS`, `image(...)`, or an output whose items do not match its statements, stays one
+  opaque call in text form. A split `exec_command` keeps the source's shell dialect, so the calls
+  of a PowerShell-declared Desktop rollout translate only toward a PowerShell destination
+  (`--dest-shell powershell`); the destination's default shell is open (L11, `next.md`).
 - Open verification: auto-compaction by threshold, a second compaction, a rewind or
   tree navigation in the source (the readers follow the resumed branch, tested on hand-made
   records; Claude `--fork-session` and Pi fork shapes are recorded, not converted), subagent

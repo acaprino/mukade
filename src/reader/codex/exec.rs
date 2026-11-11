@@ -19,7 +19,7 @@ pub(super) fn split_code_mode(entries: &mut [Entry], env_shell: Option<Canonical
         let Kind::Step { calls, .. } = &entries[step].kind else {
             continue;
         };
-        let execs: Vec<(usize, String, Vec<(String, Value)>)> = calls
+        let execs: Vec<ParsedExec> = calls
             .iter()
             .enumerate()
             .filter(|(_, c)| c.source_name == "exec")
@@ -68,6 +68,9 @@ pub(super) fn split_code_mode(entries: &mut [Entry], env_shell: Option<Canonical
         }
     }
 }
+
+/// An `exec` call's position in its step, its id, and the calls its script made.
+type ParsedExec = (usize, String, Vec<(String, Value)>);
 
 /// Where an `exec` call's result is, and its per-call output items.
 struct Output {

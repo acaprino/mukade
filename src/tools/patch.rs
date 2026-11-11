@@ -88,10 +88,8 @@ fn hunks(body: &[&str]) -> Option<Vec<(String, String)>> {
             new.push(rest);
         } else if let Some(rest) = line.strip_prefix('-') {
             old.push(rest);
-        } else if let Some(rest) = line.strip_prefix('+') {
-            new.push(rest);
         } else {
-            return None;
+            new.push(line.strip_prefix('+')?);
         }
     }
     if hunks.is_empty() || hunks.iter().any(|(old, _)| old.is_empty()) {
