@@ -460,6 +460,9 @@ struct Builder {
 #[derive(Default)]
 struct MetaBuilder {
     id: Option<String>,
+    /// `session_meta.session_id`: the thread's own id, except in a subagent's rollout, where it
+    /// names the thread that spawned it.
+    session_id: Option<String>,
     cwd: Option<String>,
     version: Option<String>,
     created: Option<String>,
@@ -479,6 +482,9 @@ impl MetaBuilder {
                     .filter(|s| !s.is_empty())
                     .or_else(|| str_at(payload, "/session_id"))
                     .filter(|s| !s.is_empty());
+            }
+            if self.session_id.is_none() {
+                self.session_id = str_at(payload, "/session_id").filter(|s| !s.is_empty());
             }
             if self.cwd.is_none() {
                 self.cwd = str_at(payload, "/cwd");
@@ -736,10 +742,19 @@ impl Builder {
                 let (name, input) = match item_type {
                     "local_shell_call" => ("local_shell".to_string(), action_of(payload)),
                     "web_search_call" => ("web_search".to_string(), action_of(payload)),
-                    _ => (
-                        str_at(payload, "/name").unwrap_or_default(),
-                        arguments_of(payload),
-                    ),
+                    _ => {
+                        let name = str_at(payload, "/name").unwrap_or_default();
+                        let input = arguments_of(payload);
+                        // L10: a Codex Desktop code-mode script that is exactly one shell or patch
+                        // call is that call; any other script stays `exec`, in text form. The
+                        // record itself is kept verbatim in `raw`.
+                        match (item_type, name.as_str(), &input) {
+                            ("custom_tool_call", "exec", Value::String(script)) => {
+                                super::codex_exec::wrapped_call(script).unwrap_or((name, input))
+                            }
+                            _ => (name, input),
+                        }
+                    }
                 };
                 calls.push(ToolCall {
                     id: str_at(payload, "/call_id")
@@ -814,6 +829,10 @@ impl Builder {
             }
         }
         let m = self.meta;
+        // A subagent's rollout names the thread that spawned it in `session_id`.
+        let parent = m
+            .session_id
+            .filter(|session| m.id.as_deref().is_some_and(|id| id != session));
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::Codex,
@@ -825,7 +844,7 @@ impl Builder {
                 updated: m.updated,
                 models: m.models,
                 git_branch: m.git_branch,
-                parent: None,
+                parent,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },

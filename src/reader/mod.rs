@@ -4,6 +4,7 @@ pub mod claude_code;
 mod claude_history;
 mod claude_live;
 pub mod codex;
+mod codex_exec;
 mod codex_state;
 pub mod json;
 pub mod opencode;

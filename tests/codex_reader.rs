@@ -1029,3 +1029,105 @@ fn an_abort_of_another_turn_leaves_a_finished_reply_alone() {
     };
     assert_eq!(*end, StepEnd::Completed);
 }
+
+/// L10: in a Codex Desktop rollout a code-mode `exec` script that is exactly one shell call reads
+/// as that call and reaches Claude Code as its `Bash` tool; a script of several calls stays `exec`
+/// and travels as text. Both records are kept verbatim.
+#[test]
+fn a_one_call_code_mode_script_reads_as_the_call_it_wraps() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("mukade-tests")
+        .join("codex-code-mode")
+        .join(std::process::id().to_string());
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let one = r#"text(await tools.exec_command({cmd: "git status", yield_time_ms: 1000}));"#;
+    let many = r#"const r = await Promise.allSettled([tools.exec_command({cmd: "a"}), tools.exec_command({cmd: "b"})]); text(r);"#;
+    let exec = |ordinal, id: &str, script: &str| {
+        record(ordinal, "response_item", serde_json::json!({
+            "type": "custom_tool_call", "call_id": id, "name": "exec", "input": script,
+        }))
+    };
+    let output = |ordinal, id: &str| {
+        record(ordinal, "response_item", serde_json::json!({
+            "type": "custom_tool_call_output", "call_id": id,
+            "output": [{"type": "input_text", "text": "On branch main"}],
+        }))
+    };
+    let text = record(0, "session_meta", serde_json::json!({
+            "id": THREAD, "cwd": "/work", "cli_version": "0.166.0", "originator": "codex_work_desktop",
+        }))
+        + &say(1, "user", "status?")
+        + &exec(2, "call_one", one)
+        + &output(3, "call_one")
+        + &exec(4, "call_many", many)
+        + &output(5, "call_many")
+        + &say(6, "assistant", "clean");
+    let file = dir.join(format!("rollout-2026-10-28T10-38-11-{THREAD}.jsonl"));
+    std::fs::write(&file, &text).unwrap();
+
+    let session = codex::read_file(&file).expect("the rollout reads");
+    let calls: Vec<_> = session
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.kind {
+            Kind::Step { calls, .. } => Some(calls.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0].source_name, "exec_command");
+    assert_eq!(calls[0].input["cmd"], "git status");
+    assert_eq!(calls[0].canonical, Some(CanonicalTool::Bash));
+    assert_eq!(calls[1].source_name, "exec");
+    assert_eq!(calls[1].input, Value::String(many.into()));
+    let raw = serde_json::to_string(&session.entries.iter().flat_map(|e| e.raw.iter()).collect::<Vec<_>>()).unwrap();
+    assert!(raw.contains("tools.exec_command"), "the scripts stay in the raw records");
+
+    let scratch = support::scratch(HarnessId::ClaudeCode, "codex-code-mode");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let plan = mukade::writer::plan::plan(&session, HarnessId::ClaudeCode, &opts);
+    let planned: Vec<_> = plan
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            mukade::writer::plan::PlannedBlock::Step(step) => Some(step),
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = planned
+        .iter()
+        .flat_map(|step| step.calls.iter().map(|call| call.name.as_str()))
+        .collect();
+    assert_eq!(names, ["Bash"], "the one-call script is a Bash call; the other is text");
+    assert!(
+        planned.iter().flat_map(|step| step.text.iter()).any(|t| t.contains("Promise.allSettled")),
+        "the several-call script travels as text"
+    );
+}
+
+/// A subagent's rollout names the thread that spawned it in `session_meta.session_id`; a root
+/// thread's `session_id` is its own id and names no parent.
+#[test]
+fn a_subagent_rollout_names_its_parent_thread() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("mukade-tests")
+        .join("codex-subagent-parent")
+        .join(std::process::id().to_string());
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let parent = "01a181df-0000-7000-8000-000000000001";
+    let write = |name: &str, session_id: &str| {
+        let text = record(0, "session_meta", serde_json::json!({
+                "id": THREAD, "session_id": session_id, "cwd": "/work", "cli_version": "0.166.0",
+            }))
+            + &say(1, "user", "go")
+            + &say(2, "assistant", "done");
+        let file = dir.join(format!("rollout-2026-10-28T10-38-11-{name}.jsonl"));
+        std::fs::write(&file, text).unwrap();
+        codex::read_file(&file).expect("the rollout reads")
+    };
+    assert_eq!(write("sub", parent).meta.parent.as_deref(), Some(parent));
+    assert_eq!(write("root", THREAD).meta.parent, None);
+}
