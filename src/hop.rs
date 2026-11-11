@@ -975,11 +975,7 @@ fn all_branches_supported(harness: HarnessId) -> Result<(), HopError> {
 }
 
 pub fn export_path(harness: HarnessId, path: &std::path::Path) -> Result<Session, HopError> {
-    let session = match harness {
-        HarnessId::ClaudeCode => crate::reader::claude_code::read_file(path),
-        HarnessId::Codex => crate::reader::codex::read_file(path),
-        HarnessId::OpenCode => crate::reader::opencode::read_file(path),
-        HarnessId::Pi => crate::reader::pi::read_file(path),
-    };
-    session.map_err(classify_read)
+    crate::harnesses::get(harness)
+        .read_file(path)
+        .map_err(classify_read)
 }

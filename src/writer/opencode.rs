@@ -116,7 +116,7 @@ impl Writer for Opencode {
         let argv = import_command(&exe, &file, &cwd);
         let mut command = Command::new(&argv[0]);
         command.args(&argv[1..]);
-        crate::reader::opencode::opencode_environment(&mut command, &opts.roots);
+        opts.roots.apply_to(HarnessId::OpenCode, &mut command);
         let output = crate::exe::run_within(&mut command, IMPORT_TIMEOUT).map_err(|error| {
             failed_import(
                 &id,

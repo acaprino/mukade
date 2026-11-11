@@ -373,7 +373,7 @@ impl Reader for Opencode {
         let argv = export_command(&exe, id);
         let mut command = std::process::Command::new(&argv[0]);
         command.args(&argv[1..]);
-        opencode_environment(&mut command, roots);
+        roots.apply_to(HarnessId::OpenCode, &mut command);
         let output = crate::exe::run_within(&mut command, EXPORT_TIMEOUT)
             .with_context(|| format!("run {}", argv.join(" ")))?;
         let Some(status) = output.status else {
@@ -662,16 +662,6 @@ pub fn store_counts(db: &Path) -> Result<StoreCounts> {
 /// `PATH`, then the well-known install locations.
 fn opencode_binary() -> String {
     crate::exe::resolve(HarnessId::OpenCode, None)
-}
-
-/// Carry the caller's explicit OpenCode store into the subprocess rather than silently using the
-/// process environment. XDG variables must still be supplied by the caller when OpenCode needs them.
-pub fn opencode_environment(command: &mut std::process::Command, roots: &StoreRoots) {
-    if let Some(db) = &roots.opencode_db {
-        command.env("OPENCODE_DB", db);
-    } else {
-        command.env_remove("OPENCODE_DB");
-    }
 }
 
 /// How long `opencode session export` may take before it is stopped.

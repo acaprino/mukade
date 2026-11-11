@@ -65,30 +65,13 @@ impl StoreRoots {
 
     /// One harness's store, as its variable names it.
     pub fn root(&self, harness: HarnessId) -> Option<&Path> {
-        match harness {
-            HarnessId::ClaudeCode => self.claude_config_dir.as_deref(),
-            HarnessId::Codex => self.codex_home.as_deref(),
-            HarnessId::OpenCode => self.opencode_db.as_deref(),
-            HarnessId::Pi => self.pi_agent_dir.as_deref(),
-        }
+        crate::harnesses::get(harness).store_root(self)
     }
 
     /// Point one harness at an explicit store, e.g. a portable installation's own. OpenCode's
     /// store is the database file: an existing folder means its `opencode.db`.
     pub fn set_root(&mut self, harness: HarnessId, root: &Path) {
-        let root = root.to_path_buf();
-        match harness {
-            HarnessId::ClaudeCode => self.claude_config_dir = Some(root),
-            HarnessId::Codex => self.codex_home = Some(root),
-            HarnessId::OpenCode => {
-                self.opencode_db = Some(if root.is_dir() {
-                    root.join("opencode.db")
-                } else {
-                    root
-                })
-            }
-            HarnessId::Pi => self.pi_agent_dir = Some(root),
-        }
+        crate::harnesses::get(harness).set_store_root(self, root);
     }
 }
 
@@ -97,18 +80,7 @@ impl StoreRoots {
     /// one is configured. OpenCode's database is passed, or the variable removed so the process
     /// does not inherit another store (L1).
     pub fn apply_to(&self, harness: HarnessId, command: &mut std::process::Command) {
-        let (variable, root) = match harness {
-            HarnessId::ClaudeCode => ("CLAUDE_CONFIG_DIR", &self.claude_config_dir),
-            HarnessId::Codex => ("CODEX_HOME", &self.codex_home),
-            HarnessId::Pi => ("PI_CODING_AGENT_DIR", &self.pi_agent_dir),
-            HarnessId::OpenCode => {
-                crate::reader::opencode::opencode_environment(command, self);
-                return;
-            }
-        };
-        if let Some(root) = root {
-            command.env(variable, root);
-        }
+        crate::harnesses::get(harness).apply_store_env(self, command);
     }
 }
 

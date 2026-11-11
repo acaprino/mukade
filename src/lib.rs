@@ -16,6 +16,7 @@ pub mod cli;
 pub mod dest;
 pub mod detect;
 pub mod exe;
+pub mod harnesses;
 pub mod hop;
 pub mod intent;
 pub mod manifest;

@@ -8,7 +8,6 @@
 use mukade::hop::{ImportOpts, ResumePrompt, SourceFacts, WriteDetails};
 use mukade::model::{HarnessId, Kind, Protocol, Session};
 use mukade::policy::ReasoningPolicy;
-use mukade::reader::{claude_code, codex, opencode, pi};
 use mukade::roots::StoreRoots;
 use mukade::tools::Shell;
 use mukade::writer::WriteOpts;
@@ -51,14 +50,9 @@ pub fn source_id(harness: HarnessId) -> &'static str {
 
 /// Read a harness's own source session with our reader.
 pub fn read_source(harness: HarnessId) -> Session {
-    let path = source_path(harness);
-    match harness {
-        HarnessId::ClaudeCode => claude_code::read_file(&path),
-        HarnessId::Codex => codex::read_file(&path),
-        HarnessId::OpenCode => opencode::read_file(&path),
-        HarnessId::Pi => pi::read_file(&path),
-    }
-    .expect("the fixture must read")
+    mukade::harnesses::get(harness)
+        .read_file(&source_path(harness))
+        .expect("the fixture must read")
 }
 
 /// A fresh scratch directory for one test, under the harness's own scratch area. The process id
@@ -197,14 +191,9 @@ pub fn import_opts(
 
 /// Read a session a writer just wrote, with the reader its destination provides.
 pub fn read_destination(harness: HarnessId, location: &str) -> Session {
-    let path = Path::new(location);
-    match harness {
-        HarnessId::ClaudeCode => claude_code::read_file(path),
-        HarnessId::Codex => codex::read_file(path),
-        HarnessId::OpenCode => opencode::read_file(path),
-        HarnessId::Pi => pi::read_file(path),
-    }
-    .expect("the destination session must read back")
+    mukade::harnesses::get(harness)
+        .read_file(Path::new(location))
+        .expect("the destination session must read back")
 }
 
 /// The name a kind is asserted by, the same in every reader's conformance test.

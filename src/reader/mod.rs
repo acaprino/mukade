@@ -81,10 +81,5 @@ impl std::error::Error for Lookup {}
 
 /// The reader for a harness.
 pub fn for_harness(harness: HarnessId) -> anyhow::Result<Box<dyn Reader>> {
-    Ok(match harness {
-        HarnessId::ClaudeCode => Box::new(claude_code::ClaudeCode),
-        HarnessId::Codex => Box::new(codex::Codex),
-        HarnessId::OpenCode => Box::new(opencode::Opencode),
-        HarnessId::Pi => Box::new(pi::Pi),
-    })
+    Ok(Box::new(crate::harnesses::get(harness).reader()))
 }

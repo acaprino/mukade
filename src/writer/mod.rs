@@ -143,12 +143,7 @@ pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<(
         anyhow::bail!("--dest-path is supported only for file-based destinations");
     }
     if let Some(path) = &opts.dest_path {
-        let root = match harness {
-            HarnessId::ClaudeCode => opts.roots.claude_config_dir.as_ref(),
-            HarnessId::Codex => opts.roots.codex_home.as_ref(),
-            HarnessId::Pi => opts.roots.pi_agent_dir.as_ref(),
-            HarnessId::OpenCode => None,
-        }.ok_or_else(|| anyhow::anyhow!("a destination root is required with --dest-path"))?;
+        let root = crate::harnesses::get(harness).store_root(&opts.roots).ok_or_else(|| anyhow::anyhow!("a destination root is required with --dest-path"))?;
         anyhow::ensure!(path.is_absolute() && path.starts_with(root), "--dest-path must stay inside the destination root");
         anyhow::ensure!(!path.components().any(|component| matches!(component, std::path::Component::ParentDir)), "--dest-path must not contain parent traversal");
     }
@@ -198,12 +193,11 @@ pub trait Writer {
 
 /// The writer for a harness.
 pub fn for_harness(harness: HarnessId) -> Box<dyn Writer> {
-    match harness {
-        HarnessId::ClaudeCode => Box::new(claude_code::ClaudeCode),
-        HarnessId::Codex => Box::new(codex::Codex),
-        HarnessId::OpenCode => Box::new(opencode::Opencode),
-        HarnessId::Pi => Box::new(pi::Pi),
-    }
+    Box::new(
+        crate::harnesses::get(harness)
+            .writer()
+            .expect("the four harnesses each have a writer"),
+    )
 }
 
 /// Write a session's rows to a file, as JSON Lines with a trailing newline.

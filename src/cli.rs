@@ -693,12 +693,7 @@ fn inventory_roots() -> StoreRoots {
 }
 
 fn store_path(harness: HarnessId, roots: &StoreRoots) -> Option<&std::path::Path> {
-    match harness {
-        HarnessId::ClaudeCode => roots.claude_config_dir.as_deref(),
-        HarnessId::Codex => roots.codex_home.as_deref(),
-        HarnessId::OpenCode => roots.opencode_db.as_deref(),
-        HarnessId::Pi => roots.pi_agent_dir.as_deref(),
-    }
+    crate::harnesses::get(harness).store_root(roots)
 }
 
 fn store_env_name(harness: HarnessId) -> &'static str {
