@@ -831,3 +831,92 @@ fn encrypted_argument_values_are_not_written_into_text_form() {
 fn call_with_input(input: Value) -> ToolCall {
     call(CanonicalTool::Other("exec".into()), "exec", input)
 }
+
+// ------------------------------------------------------------------- Codex apply_patch
+
+fn apply_patch(input: Value) -> ToolCall {
+    call(CanonicalTool::Edit, "apply_patch", input)
+}
+
+fn patch(body: &str) -> String {
+    format!("*** Begin Patch\n{body}\n*** End Patch")
+}
+
+/// A Codex patch that adds one file is a write, wherever the destination has one.
+#[test]
+fn an_added_file_is_a_write() {
+    let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1\n+L2")));
+    let claude = translate(&c, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Write");
+    assert_eq!(
+        input_of(&claude),
+        &json!({"file_path": "D:/w/a.txt", "content": "L1\nL2\n"})
+    );
+    let pi = translate(&c, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "write");
+    assert_eq!(input_of(&pi), &json!({"path": "D:/w/a.txt", "content": "L1\nL2\n"}));
+}
+
+/// One hunk is an ordinary edit; the `@@` anchor line is not part of the texts.
+#[test]
+fn one_hunk_is_an_edit() {
+    let c = apply_patch(json!(patch(
+        "*** Update File: D:/w/a.txt\n@@ fn anchor()\n ctx\n-old\n+new\n ctx2"
+    )));
+    let claude = translate(&c, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Edit");
+    assert_eq!(
+        input_of(&claude),
+        &json!({"file_path": "D:/w/a.txt", "old_string": "ctx\nold\nctx2", "new_string": "ctx\nnew\nctx2"})
+    );
+    assert_eq!(name_of(&translate(&c, HarnessId::OpenCode, None)), "edit");
+    assert_eq!(name_of(&translate(&c, HarnessId::Pi, None)), "edit");
+}
+
+/// Several hunks reach Pi as one edit with its list of changes; elsewhere they are text form.
+#[test]
+fn several_hunks_are_a_multi_edit() {
+    let c = apply_patch(json!(patch(
+        "*** Update File: D:/w/a.txt\n@@\n-a\n+b\n@@\n x\n-c\n+d"
+    )));
+    let pi = translate(&c, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "edit");
+    assert_eq!(input_of(&pi)["edits"].as_array().map(Vec::len), Some(2));
+    assert!(matches!(
+        translate(&c, HarnessId::ClaudeCode, None),
+        Translation::Text { .. }
+    ));
+}
+
+/// Codex records the patch as a bare string (custom tool) or under `input` (function call).
+#[test]
+fn the_object_shape_of_a_patch_reads_too() {
+    let c = apply_patch(json!({"input": patch("*** Add File: D:/w/a.txt\n+L1")}));
+    assert_eq!(name_of(&translate(&c, HarnessId::ClaudeCode, None)), "Write");
+}
+
+/// A patch that is not one plain file stays text form, its patch intact.
+#[test]
+fn a_patch_that_is_not_one_plain_file_stays_text() {
+    for body in [
+        "*** Delete File: D:/w/a.txt",
+        "*** Add File: D:/w/a.txt\n+L1\n*** Add File: D:/w/b.txt\n+L2",
+        "*** Update File: D:/w/a.txt\n@@\n+only-added",
+    ] {
+        let c = apply_patch(json!(patch(body)));
+        assert!(
+            matches!(translate(&c, HarnessId::ClaudeCode, None), Translation::Text { .. }),
+            "{body}"
+        );
+    }
+}
+
+/// Toward Codex a patch is still text form: Codex's own apply_patch form is not written.
+#[test]
+fn a_patch_toward_codex_stays_text() {
+    let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1")));
+    assert!(matches!(
+        translate(&c, HarnessId::Codex, Some(Shell::PowerShell)),
+        Translation::Text { .. }
+    ));
+}

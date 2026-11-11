@@ -16,6 +16,8 @@
 //! Never synthesize a call the source did not make: a read is not rewritten as a shell command,
 //! and a missing tool is not emulated with another one.
 
+mod patch;
+
 use crate::model::{CanonicalTool, HarnessId, ResultContent, ToolCall, ToolResult};
 use serde_json::{Map, Value};
 
@@ -154,7 +156,15 @@ pub fn translate_with(
             why: "no canonical form",
         };
     };
-    let input = &call.input;
+    // A Codex patch is read as the write or edit it makes; its recorded input stays the patch.
+    let read_patch = match call.source_name.as_str() {
+        "apply_patch" => patch::view(&call.input),
+        _ => None,
+    };
+    let (canonical, input) = match &read_patch {
+        Some((canonical, input)) => (canonical, input),
+        None => (canonical, &call.input),
+    };
     let out = match canonical {
         CanonicalTool::Bash | CanonicalTool::PowerShell => {
             shell(canonical, input, dest, dest_shell)
