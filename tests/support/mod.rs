@@ -367,7 +367,13 @@ pub fn launcher(dir: &Path, name: &str, windows: &str, unix: &str) -> PathBuf {
         path
     } else {
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{unix}\n")).expect("write the launcher");
+        // The tests run mukade with an empty PATH, so no real harness is found; the fake one still
+        // needs the system's own tools (`cp`, `cat`), which on Windows are built into `cmd`.
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\n{unix}\n"),
+        )
+        .expect("write the launcher");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

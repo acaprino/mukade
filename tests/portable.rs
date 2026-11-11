@@ -235,14 +235,14 @@ fn mukade_keeps_every_file_it_makes_beside_its_executable() {
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    assert_eq!(
-        made,
-        [
-            "intent-prompts".to_string(),
-            "mukade-data".to_string(),
-            exe_name
-        ]
-    );
+    // Sorted both sides: `mukade.exe` sorts after `mukade-data`, a bare `mukade` before it.
+    let mut expected = vec![
+        "intent-prompts".to_string(),
+        "mukade-data".to_string(),
+        exe_name,
+    ];
+    expected.sort();
+    assert_eq!(made, expected);
 }
 
 /// An executable somewhere it cannot make its folder (a read-only install; staged here with a

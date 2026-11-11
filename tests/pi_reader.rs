@@ -754,8 +754,9 @@ fn listing_exposes_the_parent_session_without_reading_the_transcript() {
     );
     assert_eq!(info.title.as_deref(), Some("Una domanda"));
     assert_eq!(
-        info.updated, None,
-        "the header's stamp is the creation, not an update"
+        info.updated.as_deref(),
+        Some("2026-09-01T10:00:01.000Z"),
+        "the newest record's time, not the header's creation stamp"
     );
 }
 
