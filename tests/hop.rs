@@ -916,3 +916,82 @@ fn hop_to_pi_with_native_compaction_keeps_the_history_and_appends_pi_entry() {
     assert!(compaction.0.contains("mukade native compaction"));
     assert!(compaction.1.is_some(), "Pi's native record names the retained tail");
 }
+
+/// L10: a Codex Desktop session whose calls are code-mode scripts reaches Claude Code and Pi with
+/// the shell and edit calls those scripts made, each with its own result, and no loss reported
+/// for them.
+#[test]
+fn a_code_mode_rollout_reaches_claude_and_pi_with_native_calls() {
+    let mut rows: Vec<Value> =
+        std::fs::read_to_string(support::source_path(HarnessId::Codex))
+            .unwrap()
+            .replace("<shell>powershell</shell>", "<shell>bash</shell>")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    let script = "text(await tools.exec_command({cmd:\"ls CMD-1\"}));\n\
+        text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: D:/w/a.txt\\n@@\\n-a\\n+b\\n*** End Patch\"));";
+    for payload in [
+        serde_json::json!({"type": "custom_tool_call", "status": "completed", "call_id": "call_x",
+            "name": "exec", "input": script}),
+        serde_json::json!({"type": "custom_tool_call_output", "call_id": "call_x", "output": [
+            {"type": "input_text", "text": "Script completed\nWall time 0.1 seconds\nOutput:\n"},
+            {"type": "input_text", "text": "OUT-LS"},
+            {"type": "input_text", "text": "Success. Updated the following files:\nM D:/w/a.txt"},
+        ]}),
+        serde_json::json!({"type": "message", "role": "assistant", "id": "msg_done",
+            "content": [{"type": "output_text", "text": "DONE-L10"}]}),
+    ] {
+        rows.push(serde_json::json!({
+            "timestamp": "2026-10-27T16:50:00.000Z", "type": "response_item", "payload": payload,
+        }));
+    }
+    let source = mukade::reader::codex::parse(&rows, None).unwrap();
+
+    for (dest, shell_name, edit_name) in [
+        (HarnessId::ClaudeCode, "Bash", "Edit"),
+        (HarnessId::Pi, "bash", "edit"),
+    ] {
+        let scratch = support::scratch(dest, "hop-code-mode");
+        let write_opts = support::opts(dest, &scratch);
+        let opts = support::import_opts(&write_opts, &source, None);
+        let receipt = hop::import(dest, &source, &opts).unwrap();
+        let written = read_destination(dest, &receipt.location);
+        let calls: Vec<(String, String)> = written
+            .conversation()
+            .filter_map(|e| match &e.kind {
+                Kind::Step { calls, .. } => Some(calls.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|c| c.id.starts_with("call_x"))
+            .map(|c| (c.id, c.source_name))
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                ("call_x".to_string(), shell_name.to_string()),
+                ("call_x_2".to_string(), edit_name.to_string()),
+            ],
+            "{dest:?}"
+        );
+        let results = written
+            .conversation()
+            .filter_map(|e| match &e.kind {
+                Kind::Results { results } => Some(results.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|r| r.call_id.starts_with("call_x"))
+            .count();
+        assert_eq!(results, 2, "{dest:?}");
+        let counts = &receipt.manifest["counts"];
+        assert_eq!(counts["rewritten_call_ids"], 0, "{dest:?}: {counts}");
+        let losses = receipt.manifest["losses"].to_string();
+        assert!(
+            !losses.contains("exec") && !losses.contains("apply_patch"),
+            "{dest:?}: {losses}"
+        );
+    }
+}
