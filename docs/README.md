@@ -3,8 +3,9 @@
 ## Getting started
 
 - [Command-line usage](usage.md): setup, commands, compaction, summary intents, examples and troubleshooting.
-- [Sessions TUI](../mukade-tui/README.md): the native terminal explorer, its commands, keys, resume and hop examples.
-- [Open questions](../next.md): outstanding verification and known limitations.
+- [Sessions TUI](../mukade-tui/README.md): the native terminal explorer, its keys, resume, hop, export and import.
+- [Open points](../next.md): the status board — done, to verify, known limits.
+- [Windows checklist](verification/windows-checklist.md): every open check as a step-by-step, with what counts as a pass.
 
 ## Technical reference
 
@@ -23,6 +24,7 @@ These are records of particular runs, not guarantees for later harness versions.
 - [Native compaction records](verification/native-compaction-live.md): live acceptance of §4.4's hand-written records by Claude Code, Codex, OpenCode and Pi.
 - [Pi session and reasoning verification](verification/pi-session-and-reasoning-verification.md): mock-provider import and real-provider signed reasoning, with separate results and limitations.
 - [Source-model summary](verification/source-model-summary-live.md): summary runs and their isolation.
+- [Linux verification 2026-11-11](verification/linux-2026-11-11.md): Claude Code `live` on Linux (a bug found and fixed), the process-tree kill on timeout, the whole suite green on Linux.
 - [Listing coverage](verification/listing-coverage-2026-11-08.md): sessions whose transcripts are gone (Codex `state_5.sqlite`, Claude Code `history.jsonl`, OpenCode's other databases), `live`, and the listing cache, counted on one machine before and after.
 
 Supporting scripts are kept next to these records in `verification/live-hops/`, `verification/native-compaction-live/`, `verification/pi-live/` and `verification/pi-reasoning-live/`.

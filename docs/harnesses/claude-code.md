@@ -131,18 +131,23 @@ Proprietary; use is subject to Anthropic's Commercial Terms of Service [25]. The
   projects no transcript names). `sessions/<pid>.json` exists while a process runs a session: `{pid,
   sessionId, cwd, name, status, startedAt, updatedAt, procStart, pidDomain, kind, entrypoint,
   version, …}` (2.1.319), with the `<pid>.<hash>.key` peer-messaging key beside it. `procStart` is the
-  process's creation time (a Windows FILETIME, matching the process to within a second) and
-  `pidDomain` `<platform>:<machine>` says where the pid is valid. The file goes with a clean exit; a
+  process's start time in the platform's own unit: a Windows FILETIME (matching the process to
+  within a second), on Linux field 22 of `/proc/<pid>/stat` (clock ticks since boot, equal exactly).
+  `pidDomain` says where the pid is valid: `win32:<computer name>` on Windows,
+  `linux:<machine id>:pid:[<pid namespace>]` on Linux (`/etc/machine-id` and `/proc/self/ns/pid`;
+  seen with 2.1.322 on 2026-11-11). The file goes with a clean exit; a
   killed process leaves it behind, so a registration counts only when its process is looked at.
 - **How mukade lists them** (`src/reader/claude_code.rs`, `claude_history.rs`, `claude_live.rs`,
   `src/process.rs`). `list` adds a session `history.jsonl` names and no transcript holds, as
   `unreadable`; a prompt without a `sessionId` (an older Claude Code) names a project, not a session,
-  and is skipped. `live` is `true` when a registration's process runs (on Windows also when its
-  creation time matches `procStart`, so a reused pid is not the session), `false` when the store has
+  and is skipped. `live` is `true` when a registration's process runs and its start time matches
+  `procStart` (Windows and Linux; so a reused pid is not the session), `false` when the store has
   a `sessions/` folder and none does, and `null` when there is no such folder or the registration's
-  `pidDomain` is another platform or machine. A running session with no transcript yet is listed,
-  `unreadable` and `live`. The process check is two Win32 calls on Windows; `/proc` (or `ps`) elsewhere
-  **[U]**: not run on Linux or macOS, where `procStart` is not compared.
+  `pidDomain` is another platform, machine or pid namespace (a container). A running session with
+  no transcript yet is listed, `unreadable` and `live`. The process check is two Win32 calls on
+  Windows and `/proc/<pid>/stat` on Linux, both verified live (Linux: Claude Code 2.1.322,
+  2026-11-11: running → `true`, a changed `procStart` → `false`, another pid namespace → `null`).
+  On macOS it is `ps -p` and `procStart` is not compared **[U]**: a reused pid reads as live.
 - **No archived flag.** The store records none, so every row is `"archived": false` and
   `list --archived false` leaves nothing out (the same flag hides archived sessions of Codex and
   OpenCode).

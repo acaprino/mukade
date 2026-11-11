@@ -322,7 +322,7 @@ deprecated alias [13].
 | `function_call_output`, `custom_tool_call_output` | string → text; **array (images, MCP content) → structured blocks kept** (`input_text`/`output_text` → `{"type":"text"}`, other items as recorded); `is_error` always `false` | `:399-433,481-489` |
 | `compacted` | `Compaction{summary: message, kept_from: next non-Meta entry, trigger: Unknown, tokens_before: latest_token_usage_record.usage.input_tokens}`; the step of the same `turn_id` that wrote the summary is folded in; `replacement_history` stays in `raw` only. An empty `message` (0.165's encrypted summary) is never written as an empty user message: the plan leaves it out and counts it (`dropped_unreadable_summaries`), and `--compaction portable` is refused, exit 2 | `:271-300,435-455`; `src/writer/plan.rs`, `src/hop.rs` `select` |
 | `event_msg`, `turn_context`, `world_state`, `token_usage_record` | `Meta`, kept raw; models from `event_msg/thread_settings_applied` | `:69-80,195-207` |
-| `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title** from `<CODEX_HOME>/session_index.jsonl`, the newest `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent always empty** (forks and subagent spawns not linked) | `:149-181,455-470` |
+| `session_meta` | id (`id`, else `session_id`: a subagent's `session_id` is its parent thread's [26]), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title** from `<CODEX_HOME>/session_index.jsonl`, the newest `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent** = `session_id` when it differs from `id` (a subagent's rollout names the thread that spawned it [26]); forks are not linked | `:149-181,455-470` |
 
 **Listing** (`src/reader/codex.rs`, `src/reader/codex_state.rs`). A thread is seen when it has a
 rollout under `sessions/` or `archived_sessions/`, **or** a row in Codex's state database, the
@@ -364,11 +364,13 @@ or laid out otherwise is an empty catalogue, and the rollouts are listed as befo
 
 **Known limits:**
 
-- **Code mode is not parsed yet.** Requirement L10 (read a one-call `exec` script as that call)
-  is specified [19 §8.1][21 §5] but is not in `src/`. An `exec` call reads as
-  `CanonicalTool::Other("exec")` and travels as text form in every direction, Codex → Codex
-  included (`src/model/tool.rs:97-107`, `src/tools.rs:178-183`). So most Codex Desktop calls arrive
-  as text.
+- **Code mode: one-call scripts are read as their call (L10).** An `exec` script that is exactly
+  `text(await tools.exec_command({...}))` or `text(await tools.apply_patch(...))` with literal
+  arguments reads as `exec_command` / `apply_patch`, the way Codex CLI records them, so its shell
+  commands translate to the destination's shell tool (`src/reader/codex_exec.rs`). Any other
+  script (several calls, `Promise.allSettled`, variables, a template with `${…}`, `view_image`,
+  `web__run`) stays `exec` and travels as text, its script verbatim. The record is kept in `raw`.
+  Tested on hand-made rollouts; a real Desktop rollout has not been hopped since **[U]**.
 - **Codex `apply_patch` calls** read as canonical `Edit`, but their patch input has no path or
   `old_string`, so they become text form everywhere (`src/tools.rs:595-619`).
 - **Native compaction.** A `portable` hop still writes the summary as a user message.

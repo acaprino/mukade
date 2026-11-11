@@ -12,6 +12,36 @@ It is a library first (`cargo add mukade --git https://github.com/acaprino/mukad
 crates.io yet) and a command line second (`mukade`), because a task runner that hosts these
 harnesses wants the pipeline in-process, not behind a subprocess.
 
+> **In 30 seconds**
+>
+> ```text
+> mukade harnesses                              # what is installed, where its sessions are
+> mukade list claude_code                       # the sessions, one JSON line each
+> mukade hop claude_code <session-id> pi        # continue that session in Pi
+> mukade-tui                                    # the same, in a window: h hop · e export · i import · R resume
+> ```
+>
+> The receipt it prints tells you the **new id**, **how to open it**, and **what did not travel**.
+> The source session is **never** changed.
+
+## What works, per harness
+
+| | Claude Code | Codex CLI | OpenCode | Pi |
+|---|:-:|:-:|:-:|:-:|
+| `list` | ✅ | ✅ | ✅ | ✅ |
+| `list` also shows sessions whose transcript is gone | ✅ | ✅ | ✅ | — |
+| `dump` (export to a document) | ✅ | ✅ | ✅ | ✅ |
+| `write` (import a document) | ✅ | ✅ | ✅ | ✅ |
+| `hop` source / destination | ✅ / ✅ | ✅ / ✅ | ✅ / ✅ | ✅ / ✅ |
+| `--compaction summary` (source's own model) | ✅ | ✅ ¹ | ✅ | ✅ |
+| `--compaction native` (destination's own record) | ✅ | ✅ | ✅ | ✅ |
+| TUI: browse, resume, hop, export, import | ✅ | ✅ | ✅ | ✅ |
+| `live` (is it running now?) | ✅ ² | — | — | — |
+
+¹ checked against a mock only. ² Windows and Linux verified; macOS does not compare the start time.
+Open checks, and the step-by-step to settle them: [next.md](next.md) and the
+[Windows checklist](docs/verification/windows-checklist.md).
+
 ## What it does
 
 | step | what happens |
@@ -69,7 +99,8 @@ entry, set on the steps and results of the interrupted turns.
 
 `hop` is the whole pipeline. Its halves are public on their own: `export(&SessionRef, &roots)` reads a
 session (`export_path` reads one from a file), `import(dest, &session, &ImportOpts)` writes one you
-already hold, and `Receipt` carries the destination id, its location, the native resume command, the
+already hold, `hop::document` / `hop::read_document` / `import_document` do the same through the
+JSON document `mukade dump` and `mukade write` use, and `Receipt` carries the destination id, its location, the native resume command, the
 manifest and — when a resume prompt was given — the destination's reply. `compact(&session,
 &Compaction, &roots)` is the step between them: the session a compaction policy hands to the writer,
 with the summary the source's model wrote when one is asked for (`summary::summarize` runs it).
@@ -80,10 +111,10 @@ Two helpers cover the harnesses themselves: `exe::resolve(harness, override)` fi
 spawn (explicit override → `MUKADE_*_EXE` → `PATH` → well-known install locations), and
 `detect::detect_store(dir)` reports which harness stores a directory holds, with the evidence. `WriteDetails::exe` carries a destination-side override, which
 the resume command also names. Every harness process mukade starts, except the interactive resume
-of `mukade-tui`, runs with a deadline (`exe::run_within`). At the deadline mukade stops the process,
-on Windows with everything it started; elsewhere only the process itself, so a harness that started
-subprocesses of its own can leave them running (mukade stops waiting for their output pipes one
-second after the process exits). A timeout too large for the clock sets no deadline: mukade waits
+of `mukade-tui`, runs with a deadline (`exe::run_within`). At the deadline mukade stops the process
+**with everything it started** (an MCP server, a shell): on Windows with `taskkill /T`, on Linux and
+macOS by walking the process tree (`/proc`, or `ps`). A process that detached itself from the tree
+is not found; mukade stops waiting for output pipes one second after the process exits. A timeout too large for the clock sets no deadline: mukade waits
 for the process to exit.
 
 Each harness has its own page — what it is, how it is installed and launched, its store, compaction,
@@ -197,8 +228,9 @@ after the write).
 ## Sessions TUI
 
 `mukade-tui` is a separate native terminal explorer and manager for the same stores: the four
-harnesses and their sessions in one window, a transcript, interactive resume and hop. It is built
-only on request, so the `mukade` CLI stays a single binary with its own dependency list.
+harnesses and their sessions in one window, a transcript, interactive resume (`R`), hop (`h`),
+export to a document (`e`) and import of a document (`i`). It is built only on request, so the
+`mukade` CLI stays a single binary with its own dependency list.
 
 ```text
 cargo run -p mukade-tui

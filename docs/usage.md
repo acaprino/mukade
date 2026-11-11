@@ -13,6 +13,15 @@ Paths, session IDs, project IDs, model names and provider names in the examples 
 PowerShell; on macOS or Linux use the corresponding paths and `export NAME=value` instead of
 `$env:NAME = 'value'`.
 
+> **Start here (30 seconds)**
+>
+> 1. `mukade harnesses` — what is installed, where the stores are.
+> 2. `mukade list <harness>` — the sessions, one JSON line each.
+> 3. `mukade hop <from> <session-id> <to>` — the session continues in the other harness.
+> 4. Read the receipt: `id` (the new session), `resume` (how to open it), `losses` (what did not travel).
+>
+> Prefer a window? `mukade-tui`: arrows to choose, `h` hop, `e` export, `i` import, `R` resume.
+
 ## Contents
 
 1. [Get it](#1-get-it) · 2. [Quick start](#2-quick-start) · 3. [Use cases](#3-use-cases) ·
@@ -761,9 +770,10 @@ A resume prompt that starts with `-` is refused, because every harness CLI would
 option; so is one with line breaks when the destination's executable is a `.cmd` launcher, which
 cannot take them. Both are refused before anything is written. Every harness process mukade
 starts, except the interactive resume of `mukade-tui`, runs with a deadline; one that outlives it is
-stopped, on Windows together with everything it started, elsewhere the process itself only, so
-subprocesses the harness started may keep running. A timeout too large for the clock sets no
-deadline: mukade waits for the process to exit.
+stopped **together with everything it started** (an MCP server, a shell): on Windows with
+`taskkill /T`, on Linux and macOS by walking the process tree. A process that detached itself from
+the tree (a daemon) is not found. A timeout too large for the clock sets no deadline: mukade waits
+for the process to exit.
 
 ## 9. Per-harness examples
 
@@ -939,6 +949,10 @@ compaction, tools, plugins and hooks: [`docs/harnesses/`](harnesses/).
 
 ## 10. Discover, export, import
 
+> **In short:** `mukade dump` = export a session to one JSON document. `mukade write` = import
+> that document as a **new** session of any harness. In `mukade-tui` the same two steps are the
+> keys **`e`** (export) and **`i`** (import).
+
 `detect` inspects the evidence of one folder; `scan` walks a folder and reports every installation
 below it, with the executable kept beside each store (see
 [Find supported harnesses and existing installations](#find-supported-harnesses-and-existing-installations)).
@@ -1007,7 +1021,8 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\Janu
 
 | key | meaning |
 |---|---|
-| `id`, `title`, `cwd`, `timestamp` | what the store records; any may be `null` |
+| `id`, `title`, `cwd` | what the store records; any may be `null` |
+| `timestamp` | the session's **last activity**: Claude Code and OpenCode from the store, Codex from its state database or else the rollout file's last write, Pi from the newest record time; `null` when nothing says |
 | `location` | the file (or database) the session is recorded in |
 | `archived` | the harness marked it archived |
 | `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
@@ -1031,7 +1046,9 @@ mukade list claude_code | ConvertFrom-Json | Where-Object { $_.live } | Select-O
 ```
 
 `live` is Claude Code's: it keeps `sessions/<pid>.json` while a process runs a session. The check
-looks at the process (on Windows also its start time, so a reused process id is not the session).
+looks at the process and its start time, so a reused process id is not the session: on Windows the
+creation time, on Linux `/proc/<pid>/stat` (verified with Claude Code 2.1.322 on 2026-11-11). On
+macOS the start time is not compared, so a reused id reads as live.
 Codex, OpenCode and Pi keep no such record, so their `live` is `null`: **a cleaner must read `null` as
 "not known", not as "not running".**
 

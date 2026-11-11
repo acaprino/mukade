@@ -2,11 +2,13 @@
 
 Status: design draft, awaiting approval. Date: 2026-10-30.
 
-Implementation note (2026-10-30): a native TUI now exists in
-[`mukade-tui/`](../../../mukade-tui/): harnesses, their sessions, transcript, interactive resume
-and a first hop dialog (destination, compaction, resume prompt). It shares this design's
-information model but not yet all of its manager actions or the library changes in §7. This
-document remains the target for the full GUI explorer/manager.
+Implementation note (2026-10-30, updated 2026-11-11): a native TUI exists in
+[`mukade-tui/`](../../../mukade-tui/): harnesses, their sessions, a folder filter, transcript,
+interactive resume, a hop dialog (destination, compaction, resume prompt), and since 2026-11-11
+quick export (`e`, to `mukade-data/exports/`) and import (`i`, a document into any installation).
+Not built from this design: the GUI itself, "Save as…" and a native file picker, `ui.json`, the `/`
+metadata filter and the advanced hop options. This document remains the target for the full GUI
+explorer/manager.
 
 Interaction reference: [`docs/mockups/tui.html`](../../mockups/tui.html). That mockup is a
 terminal-shaped HTML prototype, not an implementation choice; this design keeps its information

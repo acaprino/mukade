@@ -736,11 +736,10 @@ describe additional harness runs, their environments and their coverage limitati
 - [U] Codex 0.165: a chain of pages (a page whose base is itself a page) is read by following
   each `history_base` back to the first file, the latest version winning; tested on hand-made files
   only, since none has been seen on disk (one page in 982 rollouts, its base a plain file).
-- Not implemented: L10, reading a Codex Desktop code-mode `exec` script as the single
-  `tools.exec_command` / `tools.apply_patch` call it wraps. An `exec` call is read as one opaque
-  call and travels in text form in every direction; an `apply_patch` call reads as an edit but
-  carries no path, so it is text form too. Most calls of a Codex Desktop rollout are of this kind
-  (tables §2).
+- L10 is implemented (`src/reader/codex_exec.rs`): a one-call `exec` script with literal
+  arguments reads as the `exec_command` / `apply_patch` call it wraps; any other script stays
+  `exec`, in text form. Verified on hand-made rollouts only [U] for a real Codex Desktop rollout.
+  An `apply_patch` call still reads as an edit without a path, so it is text form.
 - Open verification: auto-compaction by threshold, a second compaction, a rewind or
   tree navigation in the source (the readers follow the resumed branch, tested on hand-made
   records; Claude `--fork-session` and Pi fork shapes are recorded, not converted), subagent
