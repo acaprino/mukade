@@ -9,6 +9,7 @@
 //! - `<CLAUDE_CONFIG_DIR>\projects\<cwd, non-alphanumerics → ->\<uuid>.jsonl`; no index is needed,
 //!   a session file written outside Claude Code resumes by id [V].
 
+use super::media::Image;
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written, write_jsonl};
 use crate::model::{HarnessId, Reasoning, Session};
@@ -423,4 +424,12 @@ fn user_text(row: &Value) -> Option<String> {
 
 fn new_uuid() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// An image as Claude Code holds it, in a user turn or a tool result (Anthropic messages).
+pub(crate) fn image_block(image: &Image) -> Value {
+    json!({
+        "type": "image",
+        "source": {"type": "base64", "media_type": image.mime, "data": image.data},
+    })
 }

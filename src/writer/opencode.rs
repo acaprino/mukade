@@ -13,6 +13,7 @@
 //! - **L1**: every `opencode` command carries `--standalone`; without it OpenCode 2.1.4 hands the
 //!   work to the background service of the user's real home.
 
+use super::media::Image;
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written};
 use crate::model::{HarnessId, Opaque, Protocol, Reasoning, Session, ToolResult};
@@ -645,4 +646,18 @@ pub fn validate_agent(agent: &str) -> Result<()> {
 
 fn message_id() -> String {
     format!("msg_{}", uuid::Uuid::new_v4().simple())
+}
+
+/// An image as a user attachment of OpenCode 2.1.4 (`Prompt.FileAttachment`).
+pub(crate) fn image_attachment(image: &Image) -> Value {
+    json!({"data": image.data, "mime": image.mime, "source": {"type": "inline"}})
+}
+
+/// An image in a tool result of OpenCode 2.1.4 (`Tool.FileContent`).
+pub(crate) fn image_block(image: &Image) -> Value {
+    json!({
+        "type": "file",
+        "uri": format!("data:{};base64,{}", image.mime, image.data),
+        "mime": image.mime,
+    })
 }

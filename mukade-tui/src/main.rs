@@ -1905,19 +1905,14 @@ fn wrap_cells(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// The stores this process's variables name, each missing one at the catalog's default location.
 fn resolve_roots() -> StoreRoots {
     let mut roots = StoreRoots::from_env();
-    if roots.claude_config_dir.is_none() {
-        roots.claude_config_dir = catalog::store_default(HarnessId::ClaudeCode);
-    }
-    if roots.codex_home.is_none() {
-        roots.codex_home = catalog::store_default(HarnessId::Codex);
-    }
-    if roots.opencode_db.is_none() {
-        roots.opencode_db = catalog::store_default(HarnessId::OpenCode);
-    }
-    if roots.pi_agent_dir.is_none() {
-        roots.pi_agent_dir = catalog::store_default(HarnessId::Pi);
+    for harness in mukade::harnesses::all() {
+        let root = harness.store_root_mut(&mut roots);
+        if root.is_none() {
+            *root = catalog::store_default(harness.id());
+        }
     }
     roots
 }

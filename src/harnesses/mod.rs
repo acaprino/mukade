@@ -17,9 +17,9 @@ use crate::reader::{Reader, SessionInfo};
 use crate::roots::StoreRoots;
 use crate::summary::{Reply, SummarizeOpts, SummaryCommand};
 use crate::tools::{self, Shell, ToolSet, Translation};
-use crate::writer::{WriteOpts, Writer, Written, plan::Plan};
+use crate::writer::{WriteOpts, Writer, Written, media::Image, plan::Plan};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// What a harness's store holds, counted without opening a session.
 #[derive(Debug)]
@@ -47,8 +47,24 @@ pub trait Harness: Send + Sync {
     /// This harness's store in `roots`.
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path>;
 
+    /// This harness's field of `roots`, set as it is: no path is read as anything else.
+    fn store_root_mut<'a>(&self, roots: &'a mut StoreRoots) -> &'a mut Option<PathBuf>;
+
     /// Point this harness at an explicit store.
-    fn set_store_root(&self, roots: &mut StoreRoots, root: &Path);
+    fn set_store_root(&self, roots: &mut StoreRoots, root: &Path) {
+        *self.store_root_mut(roots) = Some(root.to_path_buf());
+    }
+
+    /// The store `path` names, read the way this harness reads its store variable. `vars` are the
+    /// variables the catalog's default locations are built from.
+    fn resolve_store_path(&self, path: PathBuf, _vars: &crate::catalog::Vars) -> PathBuf {
+        path
+    }
+
+    /// Whether `root` names a store that lives in memory only and keeps nothing.
+    fn store_is_in_memory(&self, _root: &Path) -> bool {
+        false
+    }
 
     /// Point a process of this harness at its store in `roots`, through the variable it reads.
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command);
@@ -191,6 +207,14 @@ pub trait Harness: Send + Sync {
     /// plan keeps them as they are and counts what is not text.
     fn flattens_result_blocks(&self) -> bool {
         false
+    }
+
+    /// An image as a tool result of this destination carries it.
+    fn image_in_result(&self, image: &Image) -> Value;
+
+    /// An image as a user turn of this destination carries it.
+    fn image_in_user_turn(&self, image: &Image) -> Value {
+        self.image_in_result(image)
     }
 }
 
@@ -363,11 +387,13 @@ mod tests {
             anyhow::bail!("not read in this test: {}", path.display())
         }
 
-        fn store_root<'a>(&self, _roots: &'a StoreRoots) -> Option<&'a Path> {
-            None
+        fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
+            roots.pi_agent_dir.as_deref()
         }
 
-        fn set_store_root(&self, _roots: &mut StoreRoots, _root: &Path) {}
+        fn store_root_mut<'a>(&self, roots: &'a mut StoreRoots) -> &'a mut Option<PathBuf> {
+            &mut roots.pi_agent_dir
+        }
 
         fn apply_store_env(&self, _roots: &StoreRoots, _command: &mut std::process::Command) {}
 
@@ -423,6 +449,10 @@ mod tests {
             _dest_shell: Option<Shell>,
         ) -> Translation {
             tools::OTHER_CAPABILITY
+        }
+
+        fn image_in_result(&self, _image: &Image) -> Value {
+            Value::Null
         }
     }
 

@@ -25,18 +25,15 @@ pub struct StoreRoots {
 impl StoreRoots {
     /// The roots the calling process declares through the harnesses' own variables.
     pub fn from_env() -> Self {
-        // An empty variable is no store: as a path it would put the store beside the cwd.
-        let var = |harness: HarnessId| {
-            std::env::var_os(crate::catalog::store_env(harness))
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        };
-        StoreRoots {
-            claude_config_dir: var(HarnessId::ClaudeCode),
-            codex_home: var(HarnessId::Codex),
-            opencode_db: var(HarnessId::OpenCode),
-            pi_agent_dir: var(HarnessId::Pi),
+        let mut roots = StoreRoots::default();
+        for harness in crate::harnesses::all() {
+            // An empty variable is no store: as a path it would put the store beside the cwd.
+            *harness.store_root_mut(&mut roots) =
+                std::env::var_os(crate::catalog::store_env(harness.id()))
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from);
         }
+        roots
     }
 
     /// Claude Code's `projects/` directory, where one folder per project holds the session files.

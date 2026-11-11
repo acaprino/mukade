@@ -11,6 +11,7 @@
 //! - one `toolResult` record per result, in the same order as the calls;
 //! - `bash.timeout` is in **seconds** (L12), so the canonical milliseconds are converted.
 
+use super::media::Image;
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
 use super::{WriteOpts, Writer, Written, write_jsonl};
 use crate::model::{HarnessId, Reasoning, Session, StepEnd, ToolResult};
@@ -386,4 +387,9 @@ fn user_text(row: &Value) -> Option<String> {
 /// Pi stamps every record with a short hex id of its own.
 fn short_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
+/// An image as Pi holds it, in a user turn or a tool result (pi-ai `ImageContent`).
+pub(crate) fn image_block(image: &Image) -> Value {
+    json!({"type": "image", "data": image.data, "mimeType": image.mime})
 }

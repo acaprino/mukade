@@ -7,9 +7,9 @@ use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::tools::{self, EditCall, Shell, ToolSet, Translation};
-use crate::writer::{WriteOpts, Writer};
+use crate::writer::{WriteOpts, Writer, media::Image};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) struct Codex;
 
@@ -34,8 +34,8 @@ impl Harness for Codex {
         roots.codex_home.as_deref()
     }
 
-    fn set_store_root(&self, roots: &mut StoreRoots, root: &Path) {
-        roots.codex_home = Some(root.to_path_buf());
+    fn store_root_mut<'a>(&self, roots: &'a mut StoreRoots) -> &'a mut Option<PathBuf> {
+        &mut roots.codex_home
     }
 
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
@@ -208,6 +208,10 @@ impl Harness for Codex {
     /// The writer writes a result's text: its other blocks are dropped and counted.
     fn flattens_result_blocks(&self) -> bool {
         true
+    }
+
+    fn image_in_result(&self, image: &Image) -> Value {
+        crate::writer::codex::image_block(image)
     }
 }
 

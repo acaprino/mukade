@@ -62,6 +62,51 @@ fn an_opencode_root_folder_means_its_database() {
     }
 }
 
+/// The field is set as it is: a folder stays a folder, even OpenCode's, as `StoreRoots::from_env`
+/// and the inventory read a variable.
+#[test]
+fn the_store_field_is_set_as_it_is() {
+    let dir = support::scratch(HarnessId::OpenCode, "adapter-field");
+    for adapter in all() {
+        let mut roots = StoreRoots::default();
+        *adapter.store_root_mut(&mut roots) = Some(dir.clone());
+        assert_eq!(adapter.store_root(&roots), Some(dir.as_path()), "{}", adapter.id());
+    }
+}
+
+/// OpenCode reads a relative database path beneath its data directory and keeps `:memory:`; the
+/// others read a path as it is.
+#[test]
+fn a_store_path_is_resolved_the_way_its_harness_reads_it() {
+    let vars = mukade::catalog::Vars {
+        home: Some(PathBuf::from("/home/u")),
+        xdg_data_home: Some(PathBuf::from("/data")),
+        ..Default::default()
+    };
+    let opencode = get(HarnessId::OpenCode);
+    let data = mukade::catalog::store_default_with(HarnessId::OpenCode, &vars)
+        .and_then(|default| default.parent().map(Path::to_path_buf))
+        .expect("an OpenCode data directory");
+    assert_eq!(
+        opencode.resolve_store_path(PathBuf::from("custom.db"), &vars),
+        data.join("custom.db")
+    );
+    assert_eq!(
+        opencode.resolve_store_path(PathBuf::from(":memory:"), &vars),
+        PathBuf::from(":memory:")
+    );
+    assert!(opencode.store_is_in_memory(Path::new(":memory:")));
+    for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+        let adapter = get(id);
+        assert_eq!(
+            adapter.resolve_store_path(PathBuf::from("custom"), &vars),
+            PathBuf::from("custom"),
+            "{id}"
+        );
+        assert!(!adapter.store_is_in_memory(Path::new(":memory:")), "{id}");
+    }
+}
+
 #[test]
 fn the_store_env_names_the_root_or_clears_opencode() {
     let roots = StoreRoots {

@@ -9,7 +9,7 @@ use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::tools::{self, EditCall, GrepCall, Shell, ToolSet, Translation};
-use crate::writer::{WriteOpts, Writer, plan::Plan};
+use crate::writer::{WriteOpts, Writer, media::Image, plan::Plan};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -37,6 +37,10 @@ impl Harness for OpenCode {
         roots.opencode_db.as_deref()
     }
 
+    fn store_root_mut<'a>(&self, roots: &'a mut StoreRoots) -> &'a mut Option<PathBuf> {
+        &mut roots.opencode_db
+    }
+
     /// The store is the database file: an existing folder means its `opencode.db`.
     fn set_store_root(&self, roots: &mut StoreRoots, root: &Path) {
         roots.opencode_db = Some(if root.is_dir() {
@@ -44,6 +48,22 @@ impl Harness for OpenCode {
         } else {
             root.to_path_buf()
         });
+    }
+
+    /// OpenCode reads a relative `OPENCODE_DB` beneath its data directory, not the cwd:
+    /// `$XDG_DATA_HOME/opencode/custom.db` (or the same fallback the catalog uses).
+    fn resolve_store_path(&self, path: PathBuf, vars: &crate::catalog::Vars) -> PathBuf {
+        if path.is_absolute() || self.store_is_in_memory(&path) {
+            return path;
+        }
+        crate::catalog::store_default_with(self.id(), vars)
+            .and_then(|default| default.parent().map(|dir| dir.join(&path)))
+            .unwrap_or(path)
+    }
+
+    /// SQLite's `:memory:` database.
+    fn store_is_in_memory(&self, root: &Path) -> bool {
+        root.as_os_str() == ":memory:"
     }
 
     /// The database is passed, or the variable removed so the process does not inherit another
@@ -137,6 +157,7 @@ impl Harness for OpenCode {
         roots: &StoreRoots,
         cache: Option<&Path>,
     ) -> anyhow::Result<Option<String>> {
+        let _span = crate::timing::span("probe opencode project");
         Ok(crate::reader::opencode::project_id_for(exe, cwd, roots, cache))
     }
 
@@ -323,6 +344,14 @@ impl Harness for OpenCode {
             CanonicalTool::Glob => &["pattern", "path", "hidden", "limit"],
             _ => tools::common_keys(canonical),
         }
+    }
+
+    fn image_in_result(&self, image: &Image) -> Value {
+        crate::writer::opencode::image_block(image)
+    }
+
+    fn image_in_user_turn(&self, image: &Image) -> Value {
+        crate::writer::opencode::image_attachment(image)
     }
 }
 

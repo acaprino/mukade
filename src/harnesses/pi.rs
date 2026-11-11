@@ -7,9 +7,9 @@ use crate::reader::Reader;
 use crate::roots::StoreRoots;
 use crate::summary::{self, Reply, SummarizeOpts, SummaryCommand};
 use crate::tools::{self, EditCall, GrepCall, Shell, ToolSet, Translation};
-use crate::writer::{WriteOpts, Writer};
+use crate::writer::{WriteOpts, Writer, media::Image};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) struct Pi;
 
@@ -34,8 +34,8 @@ impl Harness for Pi {
         roots.pi_agent_dir.as_deref()
     }
 
-    fn set_store_root(&self, roots: &mut StoreRoots, root: &Path) {
-        roots.pi_agent_dir = Some(root.to_path_buf());
+    fn store_root_mut<'a>(&self, roots: &'a mut StoreRoots) -> &'a mut Option<PathBuf> {
+        &mut roots.pi_agent_dir
     }
 
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
@@ -199,6 +199,10 @@ impl Harness for Pi {
     /// A step that ended aborted or in error keeps that end as its `stopReason`.
     fn failed_steps_are_replies(&self) -> bool {
         false
+    }
+
+    fn image_in_result(&self, image: &Image) -> Value {
+        crate::writer::pi::image_block(image)
     }
 }
 

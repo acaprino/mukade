@@ -655,28 +655,16 @@ struct HarnessStoreInfo {
 fn inventory_roots() -> StoreRoots {
     use std::path::PathBuf;
     let vars = crate::catalog::Vars::from_env();
-    let pick = |harness: HarnessId| {
-        std::env::var_os(crate::catalog::store_env(harness))
+    let mut roots = StoreRoots::default();
+    for harness in crate::harnesses::all() {
+        let id = harness.id();
+        *harness.store_root_mut(&mut roots) = std::env::var_os(crate::catalog::store_env(id))
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .or_else(|| crate::catalog::store_default_with(harness, &vars))
-    };
-    let opencode_db = pick(HarnessId::OpenCode).map(|path| {
-        if path.is_absolute() || path.as_os_str() == ":memory:" {
-            return path;
-        }
-        // OpenCode resolves a relative OPENCODE_DB beneath its data directory, not mukade's cwd:
-        // `$XDG_DATA_HOME/opencode/custom.db` (or the same fallback the catalog uses).
-        crate::catalog::store_default_with(HarnessId::OpenCode, &vars)
-            .and_then(|default| default.parent().map(|dir| dir.join(&path)))
-            .unwrap_or(path)
-    });
-    StoreRoots {
-        claude_config_dir: pick(HarnessId::ClaudeCode),
-        codex_home: pick(HarnessId::Codex),
-        opencode_db,
-        pi_agent_dir: pick(HarnessId::Pi),
+            .or_else(|| crate::catalog::store_default_with(id, &vars))
+            .map(|path| harness.resolve_store_path(path, &vars));
     }
+    roots
 }
 
 fn store_path(harness: HarnessId, roots: &StoreRoots) -> Option<&std::path::Path> {
@@ -733,7 +721,7 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
     let Some(path) = path.clone() else {
         return missing();
     };
-    if harness == HarnessId::OpenCode && path.as_os_str() == ":memory:" {
+    if crate::harnesses::get(harness).store_is_in_memory(&path) {
         return HarnessStoreInfo {
             path: Some(path),
             origin,
@@ -1321,8 +1309,6 @@ fn destination_project_id(
     cwd: &str,
     roots: &StoreRoots,
 ) -> Result<Option<String>> {
-    let _span = (harness == HarnessId::OpenCode)
-        .then(|| crate::timing::span("probe opencode project"));
     crate::harnesses::get(harness).project_id(exe, cwd, roots, crate::cache::dir().as_deref())
 }
 
