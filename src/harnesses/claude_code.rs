@@ -304,11 +304,7 @@ fn edit(canonical: &CanonicalTool, input: &Value) -> Translation {
             replace_all,
         }) => (path, old, new, replace_all),
         // Claude 2.1.311 has no MultiEdit, and one result cannot be split.
-        Ok(EditCall::Several { .. }) => {
-            return Translation::Text {
-                why: "no multi-edit equivalent",
-            };
-        }
+        Ok(EditCall::Several { .. }) => return tools::NO_MULTI_EDIT,
         Err(text) => return text,
     };
     let mut pairs: Vec<(&str, Value)> = vec![

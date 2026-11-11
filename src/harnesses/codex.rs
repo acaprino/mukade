@@ -250,9 +250,7 @@ fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) ->
     };
     if tools::in_background(input) {
         // Codex has no background flag; it keeps a session with `write_stdin` instead.
-        return Translation::Text {
-            why: "background execution is not available",
-        };
+        return tools::NO_BACKGROUND;
     }
     let mut pairs: Vec<(&str, Value)> = vec![("cmd", command)];
     if let Some(workdir) = tools::either(input, &["workdir", "cwd"]) {
@@ -278,9 +276,7 @@ fn edit(canonical: &CanonicalTool, input: &Value) -> Translation {
             why: "Codex's apply_patch form is not written yet",
         },
         // Codex's patch is one hunk, and one result cannot be split.
-        Ok(EditCall::Several { .. }) => Translation::Text {
-            why: "no multi-edit equivalent",
-        },
+        Ok(EditCall::Several { .. }) => tools::NO_MULTI_EDIT,
         Err(text) => text,
     }
 }

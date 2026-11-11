@@ -218,9 +218,7 @@ fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) ->
         return Translation::Text { why: "no command" };
     };
     if tools::in_background(input) {
-        return Translation::Text {
-            why: "background execution is not available",
-        };
+        return tools::NO_BACKGROUND;
     }
     let mut pairs: Vec<(&str, Value)> = vec![("command", command)];
     if let Some(ms) = tools::arg(input, "timeout").and_then(Value::as_u64) {

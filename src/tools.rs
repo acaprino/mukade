@@ -132,6 +132,17 @@ pub(crate) const OTHER_CAPABILITY: Translation = Translation::Text {
     why: "capability is not the destination's",
 };
 
+/// Several changes in one call, toward a destination whose edit makes one: one result cannot be
+/// split.
+pub(crate) const NO_MULTI_EDIT: Translation = Translation::Text {
+    why: "no multi-edit equivalent",
+};
+
+/// A shell call in the background, toward a destination whose shell has no background mode.
+pub(crate) const NO_BACKGROUND: Translation = Translation::Text {
+    why: "background execution is not available",
+};
+
 /// The argument keys, in any harness's spelling, that a translation maps or may drop because they
 /// do not change the recorded result (tables §4), where the destination's adapter names no others.
 /// A call that used any other key is not equivalent.
@@ -420,8 +431,9 @@ pub(crate) struct GrepCall {
     pub(crate) literal: Option<Value>,
 }
 
-/// Read a grep call in any harness's spelling; `Err` is its text form. Another `output_mode`,
-/// line numbers and `multiline` block it (tables §4.4, L13).
+/// Read a grep call in any harness's spelling; `Err` is its text form. Another `output_mode` and a
+/// file `type` block it (tables §4.4, L13). Line numbers and `multiline` are blocked by the
+/// destination's accepted keys; Claude Code's accept them.
 pub(crate) fn grep_call(input: &Value) -> Result<GrepCall, Translation> {
     if let Some(mode) = arg(input, "output_mode").and_then(Value::as_str)
         && mode != "files_with_matches"

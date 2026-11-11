@@ -181,8 +181,9 @@ pub trait Harness: Send + Sync {
     /// One canonical call in this destination's own tool shape, or its text form. `input` is the
     /// call's input (a Codex patch already read as the write or edit it makes), `source_name` the
     /// name the source harness gave it, `dest_shell` the shell this destination runs commands
-    /// with, when known. The caller checks the keys against [`Harness::accepted_keys`] and the name
-    /// against the offered set.
+    /// with, when known. A destination that runs one shell dialect answers a shell call through
+    /// `tools::other_dialect` first: a command string is never rewritten (L13). The caller checks
+    /// the keys against [`Harness::accepted_keys`] and the name against the offered set.
     fn translate(
         &self,
         canonical: &CanonicalTool,
