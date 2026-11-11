@@ -276,10 +276,10 @@ pub struct Finished {
 }
 
 /// Run a command with stdin closed, its output collected, and a deadline. Past the deadline the
-/// command is stopped, on Windows with everything it started: an npm install puts a `.cmd` launcher
-/// in front of the harness, so the child is `cmd.exe` and killing it alone would leave the harness
-/// running. Elsewhere only the command itself is stopped (see `kill_tree`), so subprocesses it
-/// started can outlive it. Once the command has exited, a process it left behind holding the pipes
+/// command is stopped with everything it started (see `kill_tree`): on Windows an npm install puts
+/// a `.cmd` launcher in front of the harness, so the child is `cmd.exe` and killing it alone would
+/// leave the harness running; anywhere, a harness can have started an MCP server or a shell.
+/// Once the command has exited, a process it left behind holding the pipes
 /// open does not keep the caller waiting. A timeout beyond what the clock can represent sets no
 /// deadline: the caller waits for the command to exit.
 pub fn run_within(command: &mut Command, timeout: Duration) -> std::io::Result<Finished> {
@@ -359,11 +359,91 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-/// Elsewhere a launcher `exec`s the harness, so the child is the harness itself. Only that
-/// process is stopped: nothing puts it in a process group, so what it started can outlive it.
+/// Elsewhere the child and every process below it are stopped. The child stays in mukade's own
+/// process group (so the terminal's Ctrl-C still reaches the harness), which means there is no
+/// group to signal: the tree is read from the parent ids instead (`/proc`, or `ps` where there is
+/// none), stopped with `SIGSTOP` so it cannot start more, read again, then killed. A process that
+/// detached itself (a daemon that left the tree) is not found this way.
 #[cfg(not(windows))]
 fn kill_tree(child: &mut std::process::Child) {
+    let root = child.id();
+    let first = descendants(root);
+    signal("-STOP", &first);
+    let mut all = descendants(root);
+    for pid in first {
+        if !all.contains(&pid) {
+            all.push(pid);
+        }
+    }
     let _ = child.kill();
+    signal("-KILL", &all);
+}
+
+/// Send `signal` to `pids` with the system's `kill` (no new dependency, no FFI).
+#[cfg(not(windows))]
+fn signal(signal: &str, pids: &[u32]) {
+    if pids.is_empty() {
+        return;
+    }
+    let _ = Command::new("kill")
+        .arg(signal)
+        .args(pids.iter().map(u32::to_string))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Every process below `root`, children first.
+#[cfg(not(windows))]
+fn descendants(root: u32) -> Vec<u32> {
+    let pairs = parent_ids();
+    let mut found = Vec::new();
+    let mut frontier = vec![root];
+    while let Some(parent) = frontier.pop() {
+        for &(pid, ppid) in &pairs {
+            if ppid == parent && pid != root && !found.contains(&pid) {
+                found.push(pid);
+                frontier.push(pid);
+            }
+        }
+    }
+    found
+}
+
+/// `(pid, parent pid)` of every process this user can see.
+#[cfg(not(windows))]
+fn parent_ids() -> Vec<(u32, u32)> {
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        let pairs: Vec<(u32, u32)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+                let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+                // Field 4, counted from the last `)` (the command name may hold one).
+                let ppid = stat[stat.rfind(')')? + 1..].split_whitespace().nth(1)?.parse().ok()?;
+                Some((pid, ppid))
+            })
+            .collect();
+        if !pairs.is_empty() {
+            return pairs;
+        }
+    }
+    let Ok(out) = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -617,5 +697,34 @@ mod tests {
             assert!(env_var_name(harness).starts_with("MUKADE_"));
             assert!(env_var_name(harness).ends_with("_EXE"));
         }
+    }
+
+    /// A harness that starts a subprocess of its own (an MCP server, a shell) and then outlives
+    /// its deadline is stopped with that subprocess, not without it.
+    #[cfg(unix)]
+    #[test]
+    fn a_timeout_stops_what_the_command_started() {
+        let dir = std::env::temp_dir().join(format!("mukade-kill-tree-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("grandchild.pid");
+        // The grandchild writes its pid, then both wait far past the deadline.
+        let script = format!(
+            "sh -c 'echo $$ > {}; exec sleep 60' & sleep 60",
+            pidfile.display()
+        );
+        let finished = run_within(
+            Command::new("sh").args(["-c", &script]),
+            Duration::from_millis(500),
+        )
+        .unwrap();
+        assert!(finished.status.is_none(), "the deadline passed");
+        let pid = std::fs::read_to_string(&pidfile).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let pid: u32 = pid.trim().parse().unwrap();
+        let gone = (0..40).any(|_| {
+            std::thread::sleep(Duration::from_millis(50));
+            crate::process::inspect(pid) == crate::process::Process::Gone
+        });
+        assert!(gone, "the grandchild {pid} still runs");
     }
 }
