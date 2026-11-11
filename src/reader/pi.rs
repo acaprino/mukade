@@ -688,6 +688,7 @@ impl Reader for Pi {
 fn peek(file: &Path) -> SessionInfo {
     let mut info = SessionInfo::default();
     let mut titles = TitleBuilder::default();
+    let mut latest: Option<String> = None;
     {
         let mut into = |row: Value| {
             if row.get("type").and_then(Value::as_str) == Some("session") {
@@ -699,10 +700,17 @@ fn peek(file: &Path) -> SessionInfo {
                 }
             }
             titles.observe(&row);
+            // Every Pi record carries its own ISO time; the newest one seen is the last activity.
+            if let Some(time) = str_at(&row, "/timestamp") {
+                if latest.as_deref().is_none_or(|known| time.as_str() > known) {
+                    latest = Some(time);
+                }
+            }
         };
         super::json::peek_ends(file, &mut into);
     }
     info.title = titles.pick();
+    info.updated = latest;
     info
 }
 

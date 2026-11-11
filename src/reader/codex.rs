@@ -956,6 +956,8 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
                 id: id.clone(),
                 title: names.get(&id).cloned(),
                 cwd: peek_cwd(&file),
+                // A rollout is only ever appended to: its last write is the thread's last activity.
+                updated: super::json::modified_rfc3339(&file),
                 archived,
                 path: file.to_string_lossy().into_owned(),
                 ..Default::default()
@@ -973,7 +975,8 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
         if let Some(info) = listed.get_mut(&thread.id) {
             info.title = info.title.take().or(thread.title);
             info.cwd = info.cwd.take().or(thread.cwd);
-            info.updated = thread.updated;
+            // The database's own `updated_at` is the thread's; the file time stands in without it.
+            info.updated = thread.updated.or(info.updated.take());
             // Archived when either says so: the folder the rollout sits in, or its row.
             info.archived |= thread.archived;
             info.parent = thread.parent;

@@ -173,6 +173,15 @@ const MAX_RECORD_BYTES: usize = 1024 * 1024;
 /// be opened yields nothing. A line that is not a whole record (the tail window's first one), is
 /// longer than [`MAX_RECORD_BYTES`] or is not JSON is skipped; a line that is not UTF-8 ends that
 /// window, so a damaged transcript never hides the session.
+/// When a file was last written, as an RFC 3339 UTC time with milliseconds: the last activity of a
+/// session whose harness only ever appends to its transcript (a Codex rollout). `None` when the
+/// file system does not say.
+pub fn modified_rfc3339(path: &std::path::Path) -> Option<String> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let time: chrono::DateTime<chrono::Utc> = modified.into();
+    Some(time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
 pub fn peek_ends(path: &std::path::Path, into: &mut dyn FnMut(Value)) {
     use std::io::{BufReader, Seek, SeekFrom};
     let Ok(mut handle) = std::fs::File::open(path) else {

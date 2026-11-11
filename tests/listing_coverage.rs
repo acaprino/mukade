@@ -1285,3 +1285,39 @@ fn an_archived_page_never_takes_its_base_from_outside_its_home() {
         "the error names the folders it looked in: {error}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// `timestamp`: the last activity, for every harness.
+
+/// Pi's list reads a session file's two ends: the newest record time there is its last activity.
+#[test]
+fn a_pi_row_says_when_the_session_was_last_active() {
+    let scratch = support::scratch(HarnessId::Pi, "cov-pi-updated");
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let id = "01a17e17-9f07-743d-8072-8b3b13d65ab5";
+    let last = std::fs::read_to_string(support::source_path(HarnessId::Pi))
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|row| row["timestamp"].as_str().map(str::to_owned))
+        .max()
+        .expect("Pi records carry their time");
+    let rows = list(HarnessId::Pi, &scratch);
+    assert_eq!(row(&rows, id)["timestamp"], last.as_str());
+}
+
+/// A Codex rollout is only appended to: without a database row its file time is its last activity.
+#[test]
+fn a_codex_row_without_a_database_says_when_its_rollout_was_last_written() {
+    let scratch = support::scratch(HarnessId::Codex, "cov-codex-updated");
+    support::stage_fixture(HarnessId::Codex, &scratch);
+    let rows = list(HarnessId::Codex, &scratch);
+    let stamp = row(&rows, "01a17e07-93f7-7a73-85c7-9f0205836600")["timestamp"]
+        .as_str()
+        .expect("a time")
+        .to_owned();
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&stamp).is_ok(),
+        "{stamp} is an RFC 3339 time"
+    );
+}
