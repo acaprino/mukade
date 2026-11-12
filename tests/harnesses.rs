@@ -327,6 +327,22 @@ fn store_stats_count_the_fixture_store() {
     assert!(stats.sessions.is_err(), "no database to count");
 }
 
+/// Lineage is one fact: `harnesses` says "not recorded" from the catalog for a store it cannot
+/// read and from the adapter's fork count for one it reads, so the two agree for every harness.
+#[test]
+fn the_catalog_records_lineage_where_the_adapter_counts_forks() {
+    for id in HarnessId::ALL {
+        let scratch = support::scratch(id, "adapter-lineage");
+        for roots in [StoreRoots::default(), support::roots(&scratch)] {
+            assert_eq!(
+                get(id).store_stats(&roots).forks.is_some(),
+                mukade::catalog::lineage_recorded(id),
+                "{id}: the catalog's lineage and the adapter's fork count disagree"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_destination_names_the_model_its_own_configuration_states() {
     let scratch = support::scratch(HarnessId::Codex, "adapter-model");
