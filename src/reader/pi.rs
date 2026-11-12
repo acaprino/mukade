@@ -612,7 +612,7 @@ impl Builder {
                 models: m.models,
                 git_branch: None,
                 // Pi's `parentSession` is the session this one was forked from.
-                parent_kind: m.parent.as_ref().map(|_| ParentKind::Fork),
+                parent_kind: m.parent.as_ref().map(|_| ParentKind::fork()),
                 parent: m.parent,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
@@ -699,7 +699,7 @@ fn peek(file: &Path) -> SessionInfo {
                 }
                 if info.parent.is_none() {
                     info.parent = str_at(&row, "/parentSession").filter(|p| !p.is_empty());
-                    info.parent_kind = info.parent.as_ref().map(|_| ParentKind::Fork);
+                    info.parent_kind = info.parent.as_ref().map(|_| ParentKind::fork());
                 }
             }
             titles.observe(&row);

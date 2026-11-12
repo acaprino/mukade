@@ -202,7 +202,7 @@ fn lineage(header: &Value) -> (Option<String>, Option<ParentKind>) {
             inherits_context: seeded,
         }
     } else {
-        ParentKind::Fork
+        ParentKind::fork()
     };
     (Some(parent), Some(kind))
 }

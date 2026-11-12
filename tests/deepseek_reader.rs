@@ -890,7 +890,7 @@ fn a_subagent_a_seeded_subagent_and_a_fork_are_told_apart() {
             ..
         })
     ));
-    assert_eq!(read("kid-3").parent_kind, Some(ParentKind::Fork));
+    assert_eq!(read("kid-3").parent_kind, Some(ParentKind::fork()));
     assert_eq!(read("session-p").parent_kind, None);
 }
 

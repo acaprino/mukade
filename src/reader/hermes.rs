@@ -170,7 +170,7 @@ fn lineage(session: &Value, parent_end: Option<&str>) -> Lineage {
 
 fn parent_of(lineage: &Lineage) -> (Option<String>, Option<ParentKind>) {
     match lineage {
-        Lineage::Fork(parent) => (Some(parent.clone()), Some(ParentKind::Fork)),
+        Lineage::Fork(parent) => (Some(parent.clone()), Some(ParentKind::fork())),
         Lineage::Spawn(Some(parent)) => (Some(parent.clone()), Some(ParentKind::spawn())),
         _ => (None, None),
     }

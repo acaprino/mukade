@@ -211,7 +211,7 @@ fn a_document_carries_the_parent_link_and_its_kind() {
     );
     assert_eq!(from_document(&doc).unwrap().meta, source.meta);
 
-    source.meta.parent_kind = Some(ParentKind::Fork);
+    source.meta.parent_kind = Some(ParentKind::fork());
     let doc = to_document(&source);
     assert_eq!(
         doc["meta"]["parent_kind"],

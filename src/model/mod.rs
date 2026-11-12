@@ -68,9 +68,15 @@ pub struct Meta {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ParentKind {
-    /// A copy of the parent's conversation, continued on its own (Pi `parentSession`, OpenCode
-    /// `fork`).
-    Fork,
+    /// A copy of the parent's conversation, continued on its own (Claude Code `/branch`, Codex
+    /// `fork`, OpenCode `fork`, Pi `parentSession`).
+    Fork {
+        /// The parent's entry the copy ends at, where the source says (Claude `forkedFrom`'s
+        /// `messageUuid`, Codex's fork ordinal, OpenCode's `fork_boundary`). `None` is "not
+        /// recorded", never a guess.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<String>,
+    },
     /// A subagent the parent's agent started (Claude Code `Agent`, Codex `spawn_agent`, OpenCode
     /// `subagent`).
     Spawn {
@@ -89,6 +95,11 @@ pub enum ParentKind {
 }
 
 impl ParentKind {
+    /// A fork whose boundary the source does not record.
+    pub fn fork() -> Self {
+        ParentKind::Fork { at: None }
+    }
+
     /// A spawn with neither its call nor its agent recorded.
     pub fn spawn() -> Self {
         ParentKind::Spawn {
@@ -101,7 +112,7 @@ impl ParentKind {
     /// `fork` or `spawn`.
     pub fn name(&self) -> &'static str {
         match self {
-            ParentKind::Fork => "fork",
+            ParentKind::Fork { .. } => "fork",
             ParentKind::Spawn { .. } => "spawn",
         }
     }

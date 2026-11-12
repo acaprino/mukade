@@ -755,12 +755,12 @@ fn listing_exposes_the_parent_session_without_reading_the_transcript() {
     );
     assert_eq!(
         info.parent_kind,
-        Some(mukade::model::ParentKind::Fork),
+        Some(mukade::model::ParentKind::fork()),
         "Pi's `parentSession` is the session this one was forked from"
     );
     let read = pi::read_file(&file).unwrap().meta;
     assert_eq!(read.parent, info.parent);
-    assert_eq!(read.parent_kind, Some(mukade::model::ParentKind::Fork));
+    assert_eq!(read.parent_kind, Some(mukade::model::ParentKind::fork()));
     assert_eq!(info.title.as_deref(), Some("Una domanda"));
     assert_eq!(
         info.updated.as_deref(),

@@ -388,7 +388,7 @@ fn a_listing_shows_the_sessions_a_picker_shows() {
     assert_eq!(ids, ["tip", "gone", "branch", "root"]);
     let branch = listed.iter().find(|i| i.id == "branch").unwrap();
     assert_eq!(branch.parent.as_deref(), Some("root"));
-    assert_eq!(branch.parent_kind, Some(ParentKind::Fork));
+    assert_eq!(branch.parent_kind, Some(ParentKind::fork()));
     let tip = listed.iter().find(|i| i.id == "tip").unwrap();
     assert!(
         tip.parent.is_none(),
@@ -465,7 +465,7 @@ fn a_subagent_and_a_branch_read_with_their_parent_and_kind() {
     assert_eq!(child.meta.parent_kind, Some(ParentKind::spawn()));
     let branch = read(&roots, "branch").unwrap();
     assert_eq!(branch.meta.parent.as_deref(), Some("root"));
-    assert_eq!(branch.meta.parent_kind, Some(ParentKind::Fork));
+    assert_eq!(branch.meta.parent_kind, Some(ParentKind::fork()));
 }
 
 #[test]

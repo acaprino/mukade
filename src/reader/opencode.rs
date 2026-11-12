@@ -374,7 +374,7 @@ fn lineage(session: &Value) -> Option<(String, ParentKind)> {
     };
     bounded("/fork/sessionID", "/fork/boundary")
         .or_else(|| bounded("/fork_session_id", "/fork_boundary"))
-        .map(|source| (source, ParentKind::Fork))
+        .map(|source| (source, ParentKind::fork()))
 }
 
 fn id_of(m: &Value, index: usize) -> String {
@@ -621,7 +621,7 @@ fn session_rows(
         let bounded = row.get_ref(7)?.data_type() != rusqlite::types::Type::Null;
         let (parent, parent_kind) = match (spawner, fork_source) {
             (Some(parent), _) => (Some(parent), Some(ParentKind::spawn())),
-            (None, Some(source)) if bounded => (Some(source), Some(ParentKind::Fork)),
+            (None, Some(source)) if bounded => (Some(source), Some(ParentKind::fork())),
             _ => (None, None),
         };
         Ok((
