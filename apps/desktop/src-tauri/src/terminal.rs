@@ -125,12 +125,13 @@ fn terminal_command(
     Ok(command)
 }
 
-/// `$TERMINAL`, else the Debian alternative every desktop installs, both with `-e`.
+/// `$TERMINAL`, else the Debian alternative every desktop installs. Terminals disagree on how a
+/// command is handed over: [`linux_terminal_args`] knows the common ones.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn terminal_command(
     program: &str,
     args: &[String],
-    _cwd: Option<&Path>,
+    cwd: Option<&Path>,
     _env: &[(OsString, Option<OsString>)],
 ) -> Result<Command, String> {
     let terminal = std::env::var("TERMINAL")
@@ -142,9 +143,49 @@ fn terminal_command(
             "no terminal to open: set TERMINAL, or install {terminal}"
         ));
     }
-    let mut command = Command::new(terminal);
-    command.arg("-e").arg(program).args(args);
+    let mut command = Command::new(&terminal);
+    command.args(linux_terminal_args(&terminal, program, args, cwd));
     Ok(command)
+}
+
+/// The arguments that make `terminal` run `program args` (in `cwd` where the terminal is a
+/// server that ignores its own working folder). `-e` with the command's words after it, as
+/// Debian's `x-terminal-emulator` policy states, for any other.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+fn linux_terminal_args(
+    terminal: &str,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Vec<OsString> {
+    let name = Path::new(terminal)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let command = std::iter::once(OsString::from(program)).chain(args.iter().map(OsString::from));
+    let mut out: Vec<OsString> = Vec::new();
+    match name.as_str() {
+        // GNOME's terminals take the command after `--`; their server keeps its own folder.
+        "gnome-terminal" | "kgx" | "ptyxis" | "mate-terminal" | "tilix" => {
+            if let Some(cwd) = cwd {
+                out.push(format!("--working-directory={}", cwd.display()).into());
+            }
+            out.push("--".into());
+        }
+        "wezterm" => {
+            out.push("start".into());
+            if let Some(cwd) = cwd {
+                out.push("--cwd".into());
+                out.push(cwd.into());
+            }
+            out.push("--".into());
+        }
+        // kitty and foot take the command itself.
+        "kitty" | "foot" => {}
+        _ => out.push("-e".into()),
+    }
+    out.extend(command);
+    out
 }
 
 #[cfg(test)]
@@ -159,6 +200,30 @@ mod tests {
         });
         assert!(env.contains(&("CODEX_HOME".into(), Some("/stores/codex".into()))));
         assert!(env.contains(&("CLAUDE_CONFIG_DIR".into(), None)));
+    }
+
+    #[test]
+    fn each_terminal_gets_the_command_its_own_way() {
+        let args = ["--resume".to_string(), "id".to_string()];
+        let words = |terminal: &str| {
+            linux_terminal_args(terminal, "claude", &args, Some(Path::new("/w")))
+                .into_iter()
+                .map(|word| word.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            words("/usr/bin/gnome-terminal"),
+            ["--working-directory=/w", "--", "claude", "--resume", "id"]
+        );
+        assert_eq!(
+            words("x-terminal-emulator"),
+            ["-e", "claude", "--resume", "id"]
+        );
+        assert_eq!(words("kitty"), ["claude", "--resume", "id"]);
+        assert_eq!(
+            words("wezterm"),
+            ["start", "--cwd", "/w", "--", "claude", "--resume", "id"]
+        );
     }
 
     #[test]

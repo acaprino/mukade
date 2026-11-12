@@ -44,6 +44,9 @@ struct Opened {
 pub struct Shared {
     standard: StoreRoots,
     listings: Mutex<Vec<Listing>>,
+    /// Held for a whole scan-and-list, so a reload during a scan lists the scanned
+    /// installations too instead of replacing them with what it read before.
+    inventory: Mutex<()>,
     opened: Mutex<Option<Opened>>,
     /// Hops and imports running now: the window refuses to close while one does (spec §4.2).
     pub busy: AtomicUsize,
@@ -143,6 +146,7 @@ impl Shared {
         Self {
             standard,
             listings: Mutex::new(listings),
+            inventory: Mutex::new(()),
             opened: Mutex::new(None),
             busy: AtomicUsize::new(0),
             args,
@@ -204,6 +208,7 @@ pub struct Inventory {
 
 /// Scan `folders` for installations (spec F10), then list every store again (F11).
 pub fn inventory(shared: &Shared, folders: &[String]) -> Inventory {
+    let _one_at_a_time = lock(&shared.inventory);
     let mut locations: Vec<Location> = lock(&shared.listings)
         .iter()
         .map(|listing| listing.location.clone())
@@ -302,17 +307,17 @@ fn label(info: &SessionInfo) -> String {
 
 pub fn transcript(shared: &Shared, key: usize, id: &str, turns: usize) -> CmdResult<Transcript> {
     let (location, info) = shared.info(key, id)?;
-    let session = {
+    {
+        // Built from the cached session in place: a big session is not copied to change turns.
         let opened = lock(&shared.opened);
-        opened
+        if let Some(opened) = opened
             .as_ref()
             .filter(|opened| opened.key == key && opened.id == id)
-            .map(|opened| opened.session.clone())
-    };
-    let session = match session {
-        Some(session) => session,
-        None => read(&location, &info)?,
-    };
+        {
+            return Ok(view::transcript(&opened.session, &label(&info), turns));
+        }
+    }
+    let session = read(&location, &info)?;
     let view = view::transcript(&session, &label(&info), turns);
     *lock(&shared.opened) = Some(Opened {
         key,
@@ -416,8 +421,10 @@ pub fn hop_options(shared: &Shared, key: usize, id: &str) -> CmdResult<HopOption
         })
         .collect();
     let (subagents, forks) = children_of(&listing.sessions, id);
+    // Whether the reader keeps branches at all: asked with no file, so it answers at once
+    // (`None`: one branch only) instead of reading the whole session to find out.
     let all_branches_supported = mukade::harnesses::get(source.harness)
-        .read_all_branches_by_id(id, &source.roots)
+        .read_all_branches(Path::new(""))
         .is_some();
     Ok(HopOptions {
         source_label: source.label,
@@ -717,6 +724,7 @@ pub struct Resumed {
     pub launched: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refusal: Option<String>,
+    /// The interactive command launched, or with a refusal the headless one that continues it.
     pub command: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -729,11 +737,18 @@ pub fn resume_plan(shared: &Shared, key: usize, id: &str) -> CmdResult<(Resumed,
         return Err(CmdError::refused(format!("{id} cannot be read: {why}")));
     }
     if let Some(refusal) = mukade::harnesses::get(location.harness).resume_refusal(&info) {
+        // What continues it instead: the harness's own (headless) resume command.
+        let command = mukade::catalog::resume(
+            location.harness,
+            &location.engine(),
+            &info.id,
+            Some(Path::new(&info.path)),
+        );
         return Ok((
             Resumed {
                 launched: false,
                 refusal: Some(refusal),
-                command: Vec::new(),
+                command,
                 cwd: info.cwd.clone(),
             },
             location,
@@ -966,6 +981,55 @@ mod tests {
         let total: usize = reloaded.installations.iter().map(|i| i.count).sum();
         assert!(total > 1, "the written sessions are listed after a reload");
         eprintln!("hopped into: {written:?}");
+    }
+
+    #[test]
+    fn the_branch_probe_answers_without_a_session() {
+        let answers: Vec<bool> = mukade::harnesses::all()
+            .into_iter()
+            .map(|harness| harness.read_all_branches(Path::new("")).is_some())
+            .collect();
+        assert!(
+            answers.iter().any(|&kept| kept),
+            "some reader keeps branches"
+        );
+        assert!(
+            answers.iter().any(|&kept| !kept),
+            "some reader keeps one branch"
+        );
+    }
+
+    #[test]
+    fn a_refused_resume_carries_the_command_that_continues_it() {
+        let refusing = mukade::harnesses::all().into_iter().find(|harness| {
+            harness
+                .resume_refusal(&SessionInfo {
+                    id: "s".into(),
+                    ..Default::default()
+                })
+                .is_some()
+        });
+        let Some(harness) = refusing else { return };
+        let mut roots = StoreRoots::default();
+        *harness.store_root_mut(&mut roots) = Some(PathBuf::from("store"));
+        let shared = Shared::new(roots, args(&["app"]));
+        let key = shared
+            .installations()
+            .iter()
+            .position(|installation| installation.harness == harness.id().as_str())
+            .unwrap();
+        lock(&shared.listings)[key].sessions = vec![SessionInfo {
+            id: "s1".into(),
+            path: "s1.log".into(),
+            ..Default::default()
+        }];
+        let (plan, _) = resume_plan(&shared, key, "s1").unwrap();
+        assert!(plan.refusal.is_some());
+        assert!(
+            plan.command.iter().any(|part| part.contains("s1")),
+            "{:?}",
+            plan.command
+        );
     }
 
     fn first_claude_fixture(root: &Path) -> Option<PathBuf> {
