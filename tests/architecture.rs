@@ -269,9 +269,10 @@ impl Lexer {
                         last = Some('"');
                     }
                     '\'' => {
-                        // A character literal is skipped; a lifetime or a label is one quote.
+                        // A character literal is skipped; a lifetime or a label is one quote. An
+                        // escape is skipped with the character it escapes, which may be a quote.
                         if next == Some('\\') {
-                            i += 2;
+                            i += 3;
                             while i < chars.len() && chars[i] != '\'' {
                                 i += 1;
                             }
@@ -298,11 +299,12 @@ impl Lexer {
     }
 }
 
-/// The number of `#` of a raw string that opens at `chars[i]` (`r"`, `r#"`, `br#"`), if one does.
+/// The number of `#` of a raw string that opens at `chars[i]` (`r"`, `r#"`, `br#"`, `cr#"`), if
+/// one does.
 fn raw_string_hashes(chars: &[char], i: usize) -> Option<usize> {
     let ident = |k: usize| chars[k].is_alphanumeric() || chars[k] == '_';
     let starts_a_token =
-        i == 0 || !ident(i - 1) || (chars[i - 1] == 'b' && (i == 1 || !ident(i - 2)));
+        i == 0 || !ident(i - 1) || (matches!(chars[i - 1], 'b' | 'c') && (i == 1 || !ident(i - 2)));
     if !starts_a_token {
         return None;
     }
@@ -453,4 +455,87 @@ HarnessId::Pi
 }
 ";
     assert_eq!(reported(text), [8]);
+}
+
+/// An escaped quote in a character literal closes nothing: the literal ends at its own quote.
+#[test]
+fn an_escaped_quote_character_ends_at_its_own_quote() {
+    let text = r##"#[cfg(test)]
+const Q: [char; 2] = ['\'','('];
+const P: HarnessId = HarnessId::Pi;
+#[cfg(test)]
+const R: [char; 2] = ['\'','"'];
+fn f() -> HarnessId {
+    HarnessId::Codex
+}
+"##;
+    assert_eq!(reported(text), [3, 7]);
+}
+
+/// A character literal with a longer escape is skipped whole, the bracket it names included.
+#[test]
+fn a_character_with_a_long_escape_is_skipped_whole() {
+    let text = r##"#[cfg(test)]
+const E: [char; 5] = ['\u{7b}','\x28','\\','\n','('];
+const P: HarnessId = HarnessId::Pi;
+"##;
+    assert_eq!(reported(text), [3]);
+}
+
+/// Raw strings with a `b` or `c` prefix close at their own quote: a backslash escapes nothing.
+#[test]
+fn raw_byte_and_c_strings_end_at_their_own_quote() {
+    let text = r###"#[cfg(test)]
+const C: &core::ffi::CStr = cr"a\";
+const P: HarnessId = HarnessId::Pi;
+#[cfg(test)]
+const D: &core::ffi::CStr = cr#"b\"#;
+const Q: HarnessId = HarnessId::Codex;
+#[cfg(test)]
+const B: &[u8] = br"c\";
+const R: HarnessId = HarnessId::OpenCode;
+"###;
+    assert_eq!(reported(text), [3, 6, 9]);
+}
+
+/// A lifetime and a loop label are one quote, not the start of a character literal.
+#[test]
+fn a_lifetime_and_a_label_open_nothing() {
+    let text = r##"#[cfg(test)]
+fn l<'a>(x: &'a str) -> &'a str {
+    'outer: loop {
+        break 'outer;
+    }
+    x
+}
+const P: HarnessId = HarnessId::Pi;
+"##;
+    assert_eq!(reported(text), [8]);
+}
+
+/// Block comments nest: the brackets inside the inner and the outer comment count for nothing.
+#[test]
+fn nested_block_comments_count_nothing() {
+    let text = r##"#[cfg(test)]
+fn n() {
+    /* outer { /* inner { */
+    still the outer comment { */
+}
+const P: HarnessId = HarnessId::Pi;
+"##;
+    assert_eq!(reported(text), [6]);
+}
+
+/// A byte string and a `//` inside a string are strings: their brackets count for nothing, and the
+/// code after them on the line is read.
+#[test]
+fn byte_strings_and_slashes_in_strings_are_strings() {
+    let text = r##"#[cfg(test)]
+const B: &[u8] = b"{";
+const P: HarnessId = HarnessId::Pi;
+#[cfg(test)]
+const S: [&str; 1] = ["// {"];
+const Q: HarnessId = HarnessId::Codex;
+"##;
+    assert_eq!(reported(text), [3, 6]);
 }

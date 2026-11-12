@@ -97,8 +97,8 @@ catalog entry. Nothing else branches on it.
 1. Walks every `.rs` file under `src/` and `mukade-tui/src/`.
 2. Skips the adapter files (`ADAPTER_FILES`, exact files and folders): `src/harnesses/`, the
    readers, writers and detectors of one harness, `src/model/harness.rs`.
-3. Skips test code: the item after a `#[cfg(test)]` line, brackets counted outside strings and
-   comments. It ends at its own last line, or before a line indented less than the attribute;
+3. Skips test code: the item after a `#[cfg(test)]` line, brackets counted outside strings (raw,
+   byte and C ones included), character literals and comments. It ends at its own last line, or before a line indented less than the attribute;
    where unsure it ends early, so production code is read, never hidden.
 4. Fails on any other line naming `HarnessId::ClaudeCode`, `Codex`, `OpenCode` or `Pi`, listing
    each `file:line`.
@@ -106,8 +106,9 @@ catalog entry. Nothing else branches on it.
    inside the adapters, and every `ADAPTER_FILES` entry still present.
 
 The scanner has its own tests in the same file: test items of every shape (a multi-line `use`, a
-field, a `const`, a match arm, a parameter, a string spanning lines, a module), each followed by a
-production line that must be reported.
+field, a `const`, a match arm, a parameter, a string spanning lines, a module) and every literal
+that holds a bracket or a quote (escaped characters, raw byte and C strings, nested comments,
+lifetimes and labels), each followed by a production line that must be reported.
 
 `ALLOWED` lists files exempted, each with its reason. It is empty; an entry whose file no longer
 names a harness fails the test.
