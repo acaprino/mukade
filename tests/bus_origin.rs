@@ -86,8 +86,12 @@ fn fixture_user_prompts_are_typed_for_every_harness() {
 #[test]
 fn hermes_scaffolding_is_injected_and_a_plain_user_row_is_typed() {
     let typed = json!({"role": "user", "content": "fix the test"});
-    assert_eq!(origin_of(HarnessId::Hermes, &user(vec![typed])), Origin::Typed);
-    let scaffolding = json!({"role": "user", "content": "done", "display_kind": "process_complete"});
+    assert_eq!(
+        origin_of(HarnessId::Hermes, &user(vec![typed])),
+        Origin::Typed
+    );
+    let scaffolding =
+        json!({"role": "user", "content": "done", "display_kind": "process_complete"});
     assert_eq!(
         origin_of(HarnessId::Hermes, &user(vec![scaffolding])),
         Origin::Injected("hermes_scaffolding")
@@ -96,15 +100,16 @@ fn hermes_scaffolding_is_injected_and_a_plain_user_row_is_typed() {
 
 #[test]
 fn deepseek_harness_names_typed_prompts_and_other_agents_messages() {
-    let message = |kind: &str| {
-        json!({"type": "user/message", "seq": 1, "data": {"source": {"kind": kind}, "content": []}})
-    };
+    let message = |kind: &str| json!({"type": "user/message", "seq": 1, "data": {"source": {"kind": kind}, "content": []}});
     assert_eq!(
         origin_of(HarnessId::DeepSeekHarness, &user(vec![message("user")])),
         Origin::Typed
     );
     assert_eq!(
-        origin_of(HarnessId::DeepSeekHarness, &user(vec![message("subagent-settled")])),
+        origin_of(
+            HarnessId::DeepSeekHarness,
+            &user(vec![message("subagent-settled")])
+        ),
         Origin::Injected("dsh_agent_message")
     );
     assert_eq!(
