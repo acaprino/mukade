@@ -277,6 +277,19 @@ impl Destination for OpenCode {
         Ok(crate::reader::opencode::project_id_for(exe, cwd, roots, cache))
     }
 
+    /// The configuration's `shell`, then `$SHELL`, then PowerShell on Windows (OpenCode tries
+    /// `pwsh` and `powershell` before Git Bash and `cmd`).
+    fn default_shell(&self, roots: &StoreRoots, cwd: Option<&Path>) -> Option<Shell> {
+        let var = |name: &str| std::env::var(name).ok();
+        let home = crate::catalog::Vars::from_env().home;
+        let host = Host {
+            var: &var,
+            home: home.as_deref(),
+            windows: cfg!(windows),
+        };
+        opencode_shell(roots, cwd, &host)
+    }
+
     fn offered(&self) -> ToolSet {
         ToolSet {
             names: &[
@@ -428,6 +441,161 @@ fn opencode_model(config: &Path) -> Option<(String, Option<String>)> {
     Some((provider.to_string(), Some(model.to_string())))
 }
 
+/// What OpenCode's shell lookup reads besides its files: a process variable by name, the home
+/// folder and the platform. Tests state them instead of reading the machine.
+struct Host<'a> {
+    var: &'a dyn Fn(&str) -> Option<String>,
+    home: Option<&'a Path>,
+    windows: bool,
+}
+
+impl Host<'_> {
+    /// A variable, unset when empty.
+    fn var(&self, name: &str) -> Option<String> {
+        (self.var)(name).filter(|value| !value.is_empty())
+    }
+}
+
+/// The shell OpenCode runs in `cwd`: the configuration's `shell`, then `$SHELL`, then PowerShell
+/// on Windows. A shell of no known dialect (`fish`, `nu`, `cmd`, another) answers nothing there,
+/// and the next source is asked.
+fn opencode_shell(roots: &StoreRoots, cwd: Option<&Path>, host: &Host) -> Option<Shell> {
+    configured_shell(roots, cwd, host)
+        .and_then(|name| tools::shell_named(&name))
+        .or_else(|| host.var("SHELL").and_then(|name| tools::shell_named(&name)))
+        .or_else(|| host.windows.then_some(Shell::PowerShell))
+}
+
+/// The `shell` the first source that sets one names, nearest first: `OPENCODE_CONFIG_CONTENT`;
+/// the project files from `cwd` up to its git worktree; `OPENCODE_CONFIG`; the global file.
+fn configured_shell(roots: &StoreRoots, cwd: Option<&Path>, host: &Host) -> Option<String> {
+    if let Some(shell) = host
+        .var("OPENCODE_CONFIG_CONTENT")
+        .and_then(|text| shell_in_jsonc(&text))
+    {
+        return Some(shell);
+    }
+    let project = cwd.into_iter().flat_map(project_config_files);
+    let named = host.var("OPENCODE_CONFIG").map(PathBuf::from);
+    let global = global_config_files(roots, host);
+    project
+        .chain(named)
+        .chain(global)
+        .find_map(|file| shell_in_jsonc(&std::fs::read_to_string(file).ok()?))
+}
+
+/// The project files OpenCode reads, nearest folder first, from `cwd` up to the folder that holds
+/// `.git` (its worktree), or the root.
+fn project_config_files(cwd: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for folder in cwd.ancestors() {
+        for name in [".opencode/opencode.jsonc", ".opencode/opencode.json"] {
+            files.push(folder.join(name));
+        }
+        for name in ["opencode.jsonc", "opencode.json"] {
+            files.push(folder.join(name));
+        }
+        if folder.join(".git").exists() {
+            break;
+        }
+    }
+    files
+}
+
+/// OpenCode's global file: the configuration beside a self-contained database when there is one,
+/// else `$XDG_CONFIG_HOME/opencode/`, else `~/.config/opencode/`; `.jsonc` before `.json`.
+fn global_config_files(roots: &StoreRoots, host: &Host) -> Vec<PathBuf> {
+    let in_folder =
+        |folder: &Path| vec![folder.join("opencode.jsonc"), folder.join("opencode.json")];
+    let beside = roots
+        .opencode_db
+        .as_deref()
+        .and_then(opencode_config_beside)
+        .and_then(|file| file.parent().map(in_folder))
+        .filter(|files| files.iter().any(|file| file.is_file()));
+    if let Some(files) = beside {
+        return files;
+    }
+    let folder = host
+        .var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| host.home.map(|home| home.join(".config")));
+    folder
+        .map(|folder| in_folder(&folder.join("opencode")))
+        .unwrap_or_default()
+}
+
+/// The non-empty `shell` string of a JSONC document.
+fn shell_in_jsonc(text: &str) -> Option<String> {
+    let document: Value = serde_json::from_str(&strip_jsonc(text)).ok()?;
+    document
+        .get("shell")?
+        .as_str()
+        .filter(|shell| !shell.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// JSONC as JSON: comments and trailing commas left out; strings kept as they are.
+fn strip_jsonc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                out.push(c);
+                while let Some(c) = chars.next() {
+                    out.push(c);
+                    match c {
+                        '\\' => out.extend(chars.next()),
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            '/' if skip_comment(&mut chars) => {}
+            ',' if closes_next(chars.clone()) => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// After a `/`: the rest of a `//` or `/* */` comment that starts there is skipped.
+fn skip_comment(chars: &mut std::iter::Peekable<std::str::Chars>) -> bool {
+    match chars.peek() {
+        Some('/') => {
+            while chars.next_if(|&c| c != '\n').is_some() {}
+            true
+        }
+        Some('*') => {
+            chars.next();
+            let mut last = '\0';
+            for c in chars.by_ref() {
+                if last == '*' && c == '/' {
+                    break;
+                }
+                last = c;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Whether what follows, past blanks and comments, closes an object or an array: the comma before
+/// it is a trailing one.
+fn closes_next(mut chars: std::iter::Peekable<std::str::Chars>) -> bool {
+    while let Some(c) = chars.next() {
+        match c {
+            '/' if skip_comment(&mut chars) => {}
+            c if c.is_whitespace() => {}
+            '}' | ']' => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// OpenCode's interchange format: what `opencode session import` takes.
 struct Document;
 
@@ -573,8 +741,11 @@ fn web_fetch(input: &Value) -> Translation {
 
 #[cfg(test)]
 mod tests {
-    use super::opencode_config_beside;
-    use std::path::PathBuf;
+    use super::{Host, opencode_config_beside, opencode_shell, strip_jsonc};
+    use crate::roots::StoreRoots;
+    use crate::tools::Shell;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn only_an_xdg_data_layout_has_a_configuration_beside_it() {
@@ -584,5 +755,209 @@ mod tests {
             Some(root.join("data/config/opencode/opencode.json"))
         );
         assert_eq!(opencode_config_beside(&root.join("store/opencode.db")), None);
+    }
+
+    #[test]
+    fn jsonc_comments_and_trailing_commas_are_left_out_and_strings_kept() {
+        let text = "{\n  // the shell\n  \"shell\": \"pwsh\", /* inline */\n  \"url\": \"https://x//y\",\n  \"say\": \"a /* b */, }\",\n  \"list\": [1, 2,],\n}\n";
+        let value: serde_json::Value = serde_json::from_str(&strip_jsonc(text)).unwrap();
+        assert_eq!(value["shell"], "pwsh");
+        assert_eq!(value["url"], "https://x//y");
+        assert_eq!(value["say"], "a /* b */, }");
+        assert_eq!(value["list"], serde_json::json!([1, 2]));
+        let escaped = r#"{"say": "a \" // b",}"#;
+        let value: serde_json::Value = serde_json::from_str(&strip_jsonc(escaped)).unwrap();
+        assert_eq!(value["say"], "a \" // b");
+    }
+
+    /// A scratch project inside a git worktree of its own, so the walk up stops inside it.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mukade-opencode-shell-{tag}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(dir.join("repo/.git")).unwrap();
+        std::fs::create_dir_all(dir.join("repo/app/src")).unwrap();
+        dir
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// The shell OpenCode runs in `cwd`, with the variables `vars`, the home `home` and the
+    /// platform `windows`.
+    fn shell_with(
+        roots: &StoreRoots,
+        cwd: &Path,
+        vars: &[(&str, &str)],
+        home: &Path,
+        windows: bool,
+    ) -> Option<Shell> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let var = |name: &str| vars.get(name).cloned();
+        opencode_shell(
+            roots,
+            Some(cwd),
+            &Host {
+                var: &var,
+                home: Some(home),
+                windows,
+            },
+        )
+    }
+
+    #[test]
+    fn opencode_takes_the_nearest_configuration_that_names_a_shell() {
+        let dir = scratch("order");
+        let home = dir.join("home");
+        let repo = dir.join("repo");
+        let cwd = repo.join("app/src");
+        let roots = StoreRoots::default();
+        let shell = |vars: &[(&str, &str)]| shell_with(&roots, &cwd, vars, &home, false);
+
+        assert_eq!(shell(&[]), None, "nothing names a shell off Windows");
+
+        write(
+            &home.join(".config/opencode/opencode.jsonc"),
+            "{\n  // global\n  \"shell\": \"/bin/zsh\",\n}",
+        );
+        assert_eq!(shell(&[]), Some(Shell::Posix), "the global file");
+
+        let xdg = dir.join("xdg");
+        write(&xdg.join("opencode/opencode.json"), r#"{"shell":"pwsh"}"#);
+        let xdg_var = xdg.to_str().unwrap();
+        assert_eq!(
+            shell(&[("XDG_CONFIG_HOME", xdg_var)]),
+            Some(Shell::PowerShell),
+            "XDG_CONFIG_HOME names the global folder"
+        );
+
+        let named = dir.join("named.json");
+        write(&named, r#"{"shell":"pwsh"}"#);
+        let named_var = named.to_str().unwrap();
+        assert_eq!(
+            shell(&[("OPENCODE_CONFIG", named_var)]),
+            Some(Shell::PowerShell),
+            "OPENCODE_CONFIG over the global file"
+        );
+
+        write(&repo.join("opencode.json"), r#"{"shell":"bash"}"#);
+        assert_eq!(
+            shell(&[("OPENCODE_CONFIG", named_var)]),
+            Some(Shell::Posix),
+            "a project file over OPENCODE_CONFIG"
+        );
+
+        write(&repo.join("app/opencode.json"), r#"{"shell":"pwsh"}"#);
+        assert_eq!(shell(&[]), Some(Shell::PowerShell), "the nearer folder");
+
+        write(&repo.join("app/opencode.jsonc"), r#"{"shell":"zsh",}"#);
+        assert_eq!(shell(&[]), Some(Shell::Posix), ".jsonc before .json");
+
+        write(
+            &repo.join("app/.opencode/opencode.json"),
+            r#"{"shell":"powershell"}"#,
+        );
+        assert_eq!(
+            shell(&[]),
+            Some(Shell::PowerShell),
+            ".opencode/ before the folder's own file"
+        );
+
+        assert_eq!(
+            shell(&[("OPENCODE_CONFIG_CONTENT", r#"{"shell":"sh"}"#)]),
+            Some(Shell::Posix),
+            "OPENCODE_CONFIG_CONTENT over every file"
+        );
+    }
+
+    #[test]
+    fn a_shell_of_no_known_dialect_passes_to_the_next_source() {
+        let dir = scratch("unknown");
+        let home = dir.join("home");
+        let cwd = dir.join("repo/app/src");
+        let roots = StoreRoots::default();
+        let shell = |vars: &[(&str, &str)], windows| shell_with(&roots, &cwd, vars, &home, windows);
+
+        assert_eq!(shell(&[("SHELL", "/bin/bash")], false), Some(Shell::Posix));
+        assert_eq!(shell(&[], true), Some(Shell::PowerShell), "Windows");
+        assert_eq!(shell(&[("SHELL", "")], false), None, "an empty $SHELL");
+        assert_eq!(
+            shell(&[("SHELL", "/usr/bin/fish")], true),
+            Some(Shell::PowerShell),
+            "$SHELL of no known dialect"
+        );
+
+        // The nearest file that sets `shell` is OpenCode's: a farther one is not read, and a
+        // shell of no known dialect there goes on to $SHELL.
+        write(
+            &home.join(".config/opencode/opencode.json"),
+            r#"{"shell":"bash"}"#,
+        );
+        write(&dir.join("repo/opencode.json"), r#"{"shell":"fish"}"#);
+        assert_eq!(shell(&[], false), None, "the global bash is not OpenCode's");
+        assert_eq!(
+            shell(&[("SHELL", "/bin/zsh")], false),
+            Some(Shell::Posix),
+            "fish goes on to $SHELL"
+        );
+        write(&dir.join("repo/opencode.json"), r#"{"shell":"cmd.exe"}"#);
+        assert_eq!(shell(&[], true), Some(Shell::PowerShell), "cmd goes on too");
+
+        // A file that does not parse, or names no shell, sets nothing.
+        write(&dir.join("repo/opencode.json"), "{ not json");
+        assert_eq!(
+            shell(&[], false),
+            Some(Shell::Posix),
+            "the global bash again"
+        );
+    }
+
+    #[test]
+    fn the_walk_up_stops_at_the_git_worktree() {
+        let dir = scratch("worktree");
+        let home = dir.join("home");
+        write(&dir.join("opencode.json"), r#"{"shell":"pwsh"}"#);
+        let cwd = dir.join("repo/app/src");
+        assert_eq!(
+            shell_with(&StoreRoots::default(), &cwd, &[], &home, false),
+            None,
+            "a file above the worktree is not OpenCode's"
+        );
+    }
+
+    /// A self-contained installation's configuration beside its database is its global file,
+    /// whatever XDG_CONFIG_HOME names.
+    #[test]
+    fn a_self_contained_opencode_names_its_shell_beside_its_data() {
+        let dir = scratch("beside");
+        let home = dir.join("home");
+        let data = dir.join("JanuraCode/data");
+        write(
+            &data.join("config/opencode/opencode.jsonc"),
+            "{ \"shell\": \"pwsh\", }",
+        );
+        let xdg = dir.join("xdg");
+        write(&xdg.join("opencode/opencode.json"), r#"{"shell":"bash"}"#);
+        let roots = StoreRoots {
+            opencode_db: Some(data.join("share/opencode/opencode.db")),
+            ..Default::default()
+        };
+        let cwd = dir.join("repo/app/src");
+        assert_eq!(
+            shell_with(
+                &roots,
+                &cwd,
+                &[("XDG_CONFIG_HOME", xdg.to_str().unwrap())],
+                &home,
+                false
+            ),
+            Some(Shell::PowerShell)
+        );
     }
 }

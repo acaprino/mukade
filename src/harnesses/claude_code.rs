@@ -138,33 +138,13 @@ impl Destination for ClaudeCode {
     }
 
     fn offered(&self) -> ToolSet {
-        ToolSet {
-            names: &[
-                "Agent",
-                "Bash",
-                "CronCreate",
-                "CronDelete",
-                "CronList",
-                "Edit",
-                "EnterWorktree",
-                "ExitWorktree",
-                "Glob",
-                "Grep",
-                "ListAgents",
-                "Monitor",
-                "NotebookEdit",
-                "Read",
-                "ReportFindings",
-                "ScheduleWakeup",
-                "SendMessage",
-                "Skill",
-                "TaskStop",
-                "WebFetch",
-                "WebSearch",
-                "Workflow",
-                "Write",
-            ],
-        }
+        ToolSet { names: PINNED }
+    }
+
+    /// The pinned list, plus `PowerShell` where this installation runs it.
+    fn offered_in(&self, roots: &StoreRoots, cwd: Option<&Path>) -> ToolSet {
+        let var = std::env::var(POWERSHELL_VAR).ok();
+        offered_for(var.as_deref(), roots, cwd)
     }
 
     /// Claude offers both shells and runs either, whatever the session's shell.
@@ -243,6 +223,181 @@ impl Destination for ClaudeCode {
     fn image_in_result(&self, image: &Image) -> Value {
         crate::writer::claude_code::image_block(image)
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// the offered set
+
+/// The tools of the pinned version, followed by `extra`.
+macro_rules! claude_tools {
+    ($($extra:literal),*) => {
+        &[
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterWorktree",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+            $($extra),*
+        ]
+    };
+}
+
+/// The tools the pinned Claude Code offers in the bench.
+const PINNED: &[&str] = claude_tools!();
+
+/// The same, where the installation runs its `PowerShell` tool.
+const WITH_POWERSHELL: &[&str] = claude_tools!("PowerShell");
+
+/// The variable that turns the `PowerShell` tool on (`1`) or off (`0`).
+const POWERSHELL_VAR: &str = "CLAUDE_CODE_USE_POWERSHELL_TOOL";
+
+/// How much of a transcript's end is read for its environment snapshot.
+const TRANSCRIPT_TAIL: u64 = 1 << 20;
+
+/// How many of the newest transcripts are tried for one.
+const TRANSCRIPTS_TRIED: usize = 5;
+
+/// The offered set, with `var` the process's value of [`POWERSHELL_VAR`].
+fn offered_for(var: Option<&str>, roots: &StoreRoots, cwd: Option<&Path>) -> ToolSet {
+    let config = roots.claude_config_dir.as_deref();
+    let names = if powershell_enabled(var, config, cwd) {
+        WITH_POWERSHELL
+    } else {
+        PINNED
+    };
+    ToolSet { names }
+}
+
+/// Whether the installation configured in `config` runs its `PowerShell` tool in the project
+/// `cwd`; the first answer wins: the process variable `var`; the same variable under `env` in the
+/// settings, nearest first; the environment snapshot of its newest transcripts. Else off.
+fn powershell_enabled(var: Option<&str>, config: Option<&Path>, cwd: Option<&Path>) -> bool {
+    let settings = [
+        cwd.map(|cwd| cwd.join(".claude").join("settings.local.json")),
+        cwd.map(|cwd| cwd.join(".claude").join("settings.json")),
+        config.map(|config| config.join("settings.json")),
+    ];
+    switch(var)
+        .or_else(|| {
+            settings
+                .into_iter()
+                .flatten()
+                .find_map(|file| settings_switch(&file))
+        })
+        .or_else(|| config.and_then(transcript_evidence))
+        .unwrap_or(false)
+}
+
+/// The variable's value read as on (`1`) or off (`0`); anything else is no answer.
+fn switch(value: Option<&str>) -> Option<bool> {
+    match value?.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// The variable under `env` in a settings file, as a string or a number.
+fn settings_switch(file: &Path) -> Option<bool> {
+    let settings: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let value = settings.get("env")?.get(POWERSHELL_VAR)?;
+    match value {
+        Value::String(text) => switch(Some(text)),
+        Value::Number(number) => switch(Some(&number.to_string())),
+        _ => None,
+    }
+}
+
+/// What the newest transcripts under `<config>/projects/*/` say: the last environment snapshot of
+/// the newest one that has one, on when its shell starts with `PowerShell`.
+fn transcript_evidence(config: &Path) -> Option<bool> {
+    newest_transcripts(&config.join("projects"), TRANSCRIPTS_TRIED)
+        .iter()
+        .find_map(|file| snapshot_shell(&tail(file, TRANSCRIPT_TAIL)?))
+        .map(|shell| shell.starts_with("PowerShell"))
+}
+
+/// The `limit` newest `.jsonl` files directly inside the project folders of `projects`.
+fn newest_transcripts(projects: &Path, limit: usize) -> Vec<PathBuf> {
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(projects)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|project| {
+            std::fs::read_dir(project.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+        })
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
+            Some((metadata.modified().ok()?, entry.path()))
+        })
+        .collect();
+    files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    files
+        .into_iter()
+        .take(limit)
+        .map(|(_, path)| path)
+        .collect()
+}
+
+/// The last `limit` bytes of a file, from the first whole line in them.
+fn tail(file: &Path, limit: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut handle = std::fs::File::open(file).ok()?;
+    let length = handle.metadata().ok()?.len();
+    let start = length.saturating_sub(limit);
+    handle.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    handle.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    Some(match start {
+        0 => text.into_owned(),
+        _ => text
+            .split_once('\n')
+            .map_or_else(String::new, |(_, rest)| rest.to_string()),
+    })
+}
+
+/// The shell the last environment snapshot in `text` names: a line
+/// `{"type":"attachment","attachment":{"type":"environment","snapshot":{"shell":…}}}`.
+fn snapshot_shell(text: &str) -> Option<String> {
+    text.lines()
+        .rev()
+        .filter(|line| line.contains("\"environment\""))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find_map(|record| {
+            let attachment = record.get("attachment")?;
+            (record.get("type")?.as_str()? == "attachment"
+                && attachment.get("type")?.as_str()? == "environment")
+                .then(|| {
+                    attachment
+                        .pointer("/snapshot/shell")?
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .flatten()
+        })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -413,5 +568,216 @@ fn web_search(input: &Value) -> Translation {
     Translation::Call {
         name: "WebSearch",
         input: tools::obj_pairs(pairs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PINNED, WITH_POWERSHELL, offered_for, powershell_enabled, snapshot_shell};
+    use crate::roots::StoreRoots;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    const POWERSHELL_SHELL: &str = "PowerShell (primary); Bash tool also available for POSIX scripts — each takes its own syntax.";
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "mukade-claude-powershell-{tag}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        dir
+    }
+
+    fn put(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// A settings file whose `env` sets the variable to `value`.
+    fn settings(value: &str) -> String {
+        serde_json::json!({"env": {"CLAUDE_CODE_USE_POWERSHELL_TOOL": value}}).to_string()
+    }
+
+    /// One transcript line as Claude Code records its environment snapshot.
+    fn snapshot(shell: &str) -> String {
+        serde_json::json!({
+            "parentUuid": "p",
+            "isSidechain": false,
+            "attachment": {
+                "type": "environment",
+                "snapshot": {"platform": "win32", "shell": shell, "isGitRepo": false}
+            },
+            "type": "attachment",
+            "uuid": "u"
+        })
+        .to_string()
+    }
+
+    fn user_line() -> String {
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": "hi"}})
+            .to_string()
+    }
+
+    /// A transcript of `lines` under `<config>/projects/<project>/`, modified `age` seconds after
+    /// the epoch: a larger age is a newer file.
+    fn transcript(config: &Path, project: &str, name: &str, lines: &[String], age: u64) {
+        let path = config.join("projects").join(project).join(name);
+        put(&path, &(lines.join("\n") + "\n"));
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(age))
+            .unwrap();
+    }
+
+    #[test]
+    fn the_extended_list_is_the_pinned_one_plus_powershell() {
+        let mut extended: Vec<&str> = WITH_POWERSHELL.to_vec();
+        extended.retain(|name| *name != "PowerShell");
+        assert_eq!(extended, PINNED);
+        assert!(!PINNED.contains(&"PowerShell"));
+        assert_eq!(WITH_POWERSHELL.len(), PINNED.len() + 1);
+    }
+
+    #[test]
+    fn the_process_variable_decides_first() {
+        let dir = scratch("variable");
+        let (config, work) = (dir.join("config"), dir.join("work"));
+        put(&work.join(".claude/settings.local.json"), &settings("1"));
+        assert!(!powershell_enabled(Some("0"), Some(&config), Some(&work)));
+        put(&work.join(".claude/settings.local.json"), &settings("0"));
+        assert!(powershell_enabled(Some("1"), Some(&config), Some(&work)));
+        // Empty, or a value other than 1 and 0, is no answer: the settings decide.
+        assert!(!powershell_enabled(Some(""), Some(&config), Some(&work)));
+        assert!(!powershell_enabled(Some("yes"), Some(&config), Some(&work)));
+        assert!(powershell_enabled(Some("1"), None, None));
+    }
+
+    #[test]
+    fn the_settings_nearest_the_project_decide_next() {
+        let dir = scratch("settings");
+        let (config, work) = (dir.join("config"), dir.join("work"));
+        let enabled = || powershell_enabled(None, Some(&config), Some(&work));
+
+        assert!(!enabled(), "no settings and no transcript");
+        put(&config.join("settings.json"), &settings("1"));
+        assert!(enabled(), "the configuration folder's settings");
+        put(&work.join(".claude/settings.json"), &settings("0"));
+        assert!(
+            !enabled(),
+            "the project's settings over the configuration's"
+        );
+        put(&work.join(".claude/settings.local.json"), r#"{"env":{}}"#);
+        assert!(
+            !enabled(),
+            "a local file without the key leaves the project's"
+        );
+        put(&work.join(".claude/settings.local.json"), &settings("1"));
+        assert!(enabled(), "the local settings over the project's");
+        put(&work.join(".claude/settings.local.json"), "{ not json");
+        assert!(!enabled(), "a file that does not parse says nothing");
+    }
+
+    #[test]
+    fn the_settings_decide_before_the_transcripts() {
+        let dir = scratch("settings-first");
+        let (config, work) = (dir.join("config"), dir.join("work"));
+        transcript(&config, "p", "a.jsonl", &[snapshot(POWERSHELL_SHELL)], 100);
+        assert!(powershell_enabled(None, Some(&config), Some(&work)));
+        put(&config.join("settings.json"), &settings("0"));
+        assert!(!powershell_enabled(None, Some(&config), Some(&work)));
+    }
+
+    #[test]
+    fn the_newest_transcript_with_a_snapshot_is_the_evidence() {
+        let dir = scratch("transcripts");
+        let config = dir.join("config");
+        let enabled = || powershell_enabled(None, Some(&config), None);
+
+        transcript(
+            &config,
+            "p1",
+            "old.jsonl",
+            &[snapshot(POWERSHELL_SHELL)],
+            100,
+        );
+        assert!(enabled(), "PowerShell (primary)");
+        transcript(&config, "p2", "newer.jsonl", &[snapshot("bash")], 200);
+        assert!(!enabled(), "the newest transcript names bash");
+        // The last snapshot of a file wins.
+        transcript(
+            &config,
+            "p2",
+            "newest.jsonl",
+            &[snapshot("bash"), user_line(), snapshot("PowerShell")],
+            300,
+        );
+        assert!(enabled(), "the newest file's last snapshot");
+        // A newer file without a snapshot passes to the next one; a subagent's file below a
+        // project folder is not a transcript of its own.
+        transcript(&config, "p3", "plain.jsonl", &[user_line()], 400);
+        transcript(
+            &config,
+            "p3/subagents",
+            "agent.jsonl",
+            &[snapshot("zsh (login shell: bash)")],
+            500,
+        );
+        assert!(enabled(), "skipped to the newest file with a snapshot");
+    }
+
+    #[test]
+    fn at_most_five_transcripts_are_tried() {
+        let dir = scratch("five");
+        let config = dir.join("config");
+        transcript(
+            &config,
+            "p",
+            "evidence.jsonl",
+            &[snapshot("PowerShell")],
+            100,
+        );
+        for age in 0..4 {
+            let name = format!("plain-{age}.jsonl");
+            transcript(&config, "p", &name, &[user_line()], 200 + age);
+        }
+        assert!(powershell_enabled(None, Some(&config), None), "the fifth");
+        transcript(&config, "p", "plain-4.jsonl", &[user_line()], 300);
+        assert!(!powershell_enabled(None, Some(&config), None), "a sixth");
+    }
+
+    #[test]
+    fn only_the_last_mebibyte_of_a_transcript_is_read() {
+        let dir = scratch("tail");
+        let config = dir.join("config");
+        transcript(&config, "p", "older.jsonl", &[snapshot("bash")], 100);
+        let filler = serde_json::json!({"type": "user", "message": {"content": "x".repeat(1000)}})
+            .to_string();
+        let mut lines = vec![snapshot("PowerShell")];
+        lines.extend(std::iter::repeat_n(filler, 1100));
+        transcript(&config, "p", "long.jsonl", &lines, 200);
+        assert!(
+            !powershell_enabled(None, Some(&config), None),
+            "the snapshot more than 1 MiB from the end is not read; the older file decides"
+        );
+    }
+
+    #[test]
+    fn a_snapshot_names_its_shell() {
+        let text = [snapshot("bash"), user_line(), snapshot(POWERSHELL_SHELL)].join("\n");
+        assert_eq!(snapshot_shell(&text).as_deref(), Some(POWERSHELL_SHELL));
+        assert_eq!(snapshot_shell(&user_line()), None);
+        // A partial first line, as a tail read starts, is skipped.
+        assert_eq!(snapshot_shell("ell\":\"x\"}}}\n"), None);
+    }
+
+    #[test]
+    fn powershell_joins_the_offered_set_when_enabled() {
+        let roots = StoreRoots::default();
+        assert_eq!(offered_for(Some("1"), &roots, None).names, WITH_POWERSHELL);
+        assert_eq!(offered_for(None, &roots, None).names, PINNED);
     }
 }
