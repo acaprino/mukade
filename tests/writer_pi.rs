@@ -256,6 +256,31 @@ fn the_recorded_protocol_is_written_only_when_the_caller_states_it() {
     );
 }
 
+/// A Claude Code session records its model without a provider: Claude Code speaks only to
+/// Anthropic. Pi restores the last assistant message's `provider`/`model`, and without a provider
+/// it warns `Could not restore model undefined/<model>` (Pi 1.4.0, live on 2026-11-12).
+#[test]
+fn a_claude_code_model_is_written_with_the_anthropic_provider() {
+    let scratch = support::scratch(HarnessId::Pi, "writer-pi-claude-provider");
+    let session = support::read_source(HarnessId::ClaudeCode);
+    assert!(session.meta.models.iter().all(|m| m.provider.is_none()));
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.model_provider = None;
+    let written = for_harness(HarnessId::Pi)
+        .write(&session, &opts)
+        .expect("write");
+    let rows = support::read_jsonl(Path::new(&written.location));
+    let assistants: Vec<&Value> = messages(&rows)
+        .into_iter()
+        .filter(|r| r["message"]["role"] == "assistant")
+        .collect();
+    assert!(!assistants.is_empty());
+    for row in assistants {
+        assert_eq!(row["message"]["provider"], "anthropic", "{row}");
+        assert!(row["message"]["model"].is_string());
+    }
+}
+
 /// Pi 1.2.0's own rule (`getDefaultSessionDirPath`): the resolved path, one leading separator
 /// dropped, and only `/`, `\` and `:` replaced.
 fn pi_project_dir_name(cwd: &std::path::Path) -> String {

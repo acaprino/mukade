@@ -408,6 +408,20 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
         let _span = crate::timing::span("resumed branch");
         order::reconstruct(&rows, sidechain)?
     };
+    // Each link the reconstruction had to give, said where it was given; taken before the rows
+    // move into their entries.
+    let uuid_of = |index: usize| rows[index].get("uuid").cloned().unwrap_or(Value::Null);
+    let relinked: Vec<Value> = reconstruction
+        .relinked
+        .iter()
+        .map(|link| {
+            serde_json::json!({
+                "uuid": uuid_of(link.row),
+                "missingParent": link.missing,
+                "readAfter": uuid_of(link.read_after),
+            })
+        })
+        .collect();
     let mut b = Builder {
         sidechain,
         ..Builder::default()
@@ -425,7 +439,17 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
         }
     }
     let _span = crate::timing::span("finish");
-    b.finish(source_path)
+    let mut session = b.finish(source_path)?;
+    for link in relinked {
+        session.entries.push(Entry {
+            id: super::json::fallback_id("relinked", session.entries.len()),
+            kind: Kind::Meta {
+                kind: MetaKind::Relinked,
+            },
+            raw: vec![link],
+        });
+    }
+    Ok(session)
 }
 
 /// A subagent's transcript: its conversation rows are all `isSidechain`. A session's own file

@@ -6,7 +6,9 @@
 //!   `{timestamp, ordinal, type, payload}`;
 //! - `session_meta` carrying **Codex's own fields**: `originator`, the **destination's**
 //!   `cli_version` and the destination config's `model_provider` — the probe wrote the source's
-//!   `cli_version` and `model_provider: "openai"`, which is the bug L7 exists for;
+//!   `cli_version` and `model_provider: "openai"`, which is the bug L7 exists for (with no provider
+//!   stated or configured, Codex's own default `openai` is written: without one Codex refuses to
+//!   resume);
 //! - no `state_5.sqlite` row: `threads.rollout_path` wins over the file on disk, and a row pointing
 //!   at a missing file fails hard (P5). This writer never opens that database, and a fresh id
 //!   cannot have a stale row. Codex rebuilds its SQLite stores from the rollout by itself;
@@ -26,6 +28,10 @@ use std::path::PathBuf;
 /// The Codex CLI writer.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Codex;
+
+/// The provider Codex runs when its `config.toml` names none (`model_provider` defaults to
+/// `openai`).
+const CODEX_DEFAULT_PROVIDER: &str = "openai";
 
 impl Writer for Codex {
     fn harness(&self) -> HarnessId {
@@ -111,6 +117,89 @@ struct Lay {
     ordinal: u64,
     turn: u64,
     user_rows: u64,
+    /// The thread id the screen's events name.
+    thread: String,
+    /// The `cwd` of a drawn command, as Codex writes it (a `file://` URL).
+    cwd_url: String,
+    /// The shell a drawn command names before its text.
+    shell: Vec<&'static str>,
+    /// The turn begun and not yet ended, with the text it last answered.
+    open_turn: Option<(String, String)>,
+    /// The `exec_command` calls waiting for their result, by call id: what the screen draws as
+    /// `Ran <command>`.
+    commands: std::collections::HashMap<String, String>,
+}
+
+impl Lay {
+    /// End the open turn: a turn without `task_complete` is drawn `Conversation interrupted`.
+    fn close_turn(&mut self, clock: &mut Clock) {
+        if let Some((turn_id, last)) = self.open_turn.take() {
+            push(
+                &mut self.out,
+                &mut self.ordinal,
+                "event_msg",
+                json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":last}),
+                clock,
+            );
+        }
+    }
+
+    /// One thing the screen draws: Codex 0.167 rebuilds a resumed `paginated` thread's screen from
+    /// these events alone, never from the response items the model reads.
+    fn draw(&mut self, item: Value, clock: &mut Clock) {
+        let at = clock.next_millis();
+        push(
+            &mut self.out,
+            &mut self.ordinal,
+            "event_msg",
+            json!({
+                "type": "item_completed",
+                "thread_id": self.thread,
+                "turn_id": format!("turn-{}", self.turn),
+                "item": item,
+                "started_at_ms": at,
+                "completed_at_ms": at,
+            }),
+            clock,
+        );
+    }
+
+    /// A user message the model reads, drawn as Codex draws a prompt.
+    fn draw_user(&mut self, text: &str, clock: &mut Clock) {
+        self.draw(
+            json!({
+                "type": "UserMessage",
+                "id": crate::policy::new_session_id(),
+                "content": [{"type": "text", "text": text, "text_elements": []}],
+            }),
+            clock,
+        );
+    }
+}
+
+/// What the screen draws for a command's result, and its exit code. Codex records the result of
+/// its own `exec_command` as a unified-exec envelope (`chunk_id`, `exit_code`, `output`, …), and
+/// draws only the output inside it; any other result is drawn whole, with 0, or 1 for a failed
+/// call (the source keeps no code).
+fn drawn_output(text: &str, is_error: bool) -> (String, i64) {
+    let implied = i64::from(is_error);
+    if let Ok(Value::Object(envelope)) = serde_json::from_str::<Value>(text)
+        && envelope.contains_key("chunk_id")
+        && let Some(output) = envelope.get("output").and_then(Value::as_str)
+    {
+        let code = envelope
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .unwrap_or(implied);
+        return (output.to_string(), code);
+    }
+    (text.to_string(), implied)
+}
+
+/// A working directory as Codex's command items carry it: `file:///D:/work`, `file:///home/x`.
+fn file_url(cwd: &str) -> String {
+    let path = cwd.replace('\\', "/");
+    format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" })
 }
 
 fn push(out: &mut Vec<Value>, ordinal: &mut u64, kind: &str, payload: Value, clock: &mut Clock) {
@@ -137,15 +226,19 @@ fn lay(
     for (index, block) in plan.chain(chain).iter().enumerate() {
         match block {
             PlannedBlock::User { text, attachments } => {
+                // The turn before ended when the user wrote again.
+                st.close_turn(clock);
                 st.turn += 1;
                 st.user_rows += 1;
+                let turn_id = format!("turn-{}", st.turn);
                 push(
                     &mut st.out,
                     &mut st.ordinal,
                     "event_msg",
-                    json!({"type":"task_started", "turn_id":format!("turn-{}", st.turn)}),
+                    json!({"type":"task_started", "turn_id":turn_id}),
                     clock,
                 );
+                st.open_turn = Some((turn_id, String::new()));
                 let mut content = vec![json!({"type": "input_text", "text": text})];
                 content.extend(
                     attachments
@@ -159,6 +252,7 @@ fn lay(
                     json!({"type": "message", "id": local_message_id(), "role": "user", "content": content}),
                     clock,
                 );
+                st.draw_user(text, clock);
             }
             PlannedBlock::Compaction { summary: text } => {
                 st.user_rows += 1;
@@ -169,6 +263,7 @@ fn lay(
                     user_message(text),
                     clock,
                 );
+                st.draw_user(text, clock);
             }
             PlannedBlock::Step(step) => {
                 let turn_id = format!("turn-{}", st.turn);
@@ -209,15 +304,38 @@ fn lay(
                         .iter()
                         .map(|t| json!({"type": "output_text", "text": t}))
                         .collect();
+                    let phase = if matches!(step.end, crate::model::StepEnd::Completed) {
+                        "final_answer"
+                    } else {
+                        "commentary"
+                    };
+                    let id = assistant_message_id();
                     push(
                         &mut st.out,
                         &mut st.ordinal,
                         "response_item",
-                        json!({"type": "message", "role": "assistant", "phase": if matches!(step.end, crate::model::StepEnd::Completed) { "final_answer" } else { "commentary" }, "content": content, "id": assistant_message_id()}),
+                        json!({"type": "message", "role": "assistant", "phase": phase, "content": content, "id": id}),
                         clock,
                     );
+                    let drawn: Vec<Value> = step
+                        .text
+                        .iter()
+                        .map(|t| json!({"type": "Text", "text": t}))
+                        .collect();
+                    st.draw(
+                        json!({"type": "AgentMessage", "id": id, "content": drawn, "phase": phase}),
+                        clock,
+                    );
+                    if let Some((_, last)) = st.open_turn.as_mut() {
+                        *last = step.text.join("\n");
+                    }
                 }
                 for call in &step.calls {
+                    if call.name == "exec_command"
+                        && let Some(command) = call.input.get("cmd").and_then(Value::as_str)
+                    {
+                        st.commands.insert(call.id.clone(), command.to_string());
+                    }
                     push(
                         &mut st.out,
                         &mut st.ordinal,
@@ -239,20 +357,45 @@ fn lay(
                         json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":step.text.join("\n")}),
                         clock,
                     );
+                    st.open_turn = None;
                 }
             }
             PlannedBlock::Results { results } => {
                 for result in results {
                     match result {
                         PlannedResult::Native {
-                            call_id, content, ..
-                        } => push(
-                            &mut st.out,
-                            &mut st.ordinal,
-                            "response_item",
-                            json!({"type": "function_call_output", "call_id": call_id, "output": content.text()}),
-                            clock,
-                        ),
+                            call_id,
+                            content,
+                            is_error,
+                        } => {
+                            let output = content.text();
+                            push(
+                                &mut st.out,
+                                &mut st.ordinal,
+                                "response_item",
+                                json!({"type": "function_call_output", "call_id": call_id, "output": output}),
+                                clock,
+                            );
+                            if let Some(command) = st.commands.remove(call_id) {
+                                let mut argv: Vec<Value> =
+                                    st.shell.iter().map(|part| json!(part)).collect();
+                                argv.push(json!(command));
+                                let (drawn, exit_code) = drawn_output(&output, *is_error);
+                                let item = json!({
+                                    "type": "CommandExecution",
+                                    "id": call_id,
+                                    "command": argv,
+                                    "cwd": st.cwd_url,
+                                    "parsed_cmd": [{"type": "unknown", "cmd": command}],
+                                    "source": "unified_exec_startup",
+                                    "status": if *is_error { "failed" } else { "completed" },
+                                    "aggregated_output": drawn,
+                                    "exit_code": exit_code,
+                                    "duration": {"secs": 0, "nanos": 0},
+                                });
+                                st.draw(item, clock);
+                            }
+                        }
                         // A call that travelled as text answers with text, in the same place.
                         PlannedResult::Text(t) => {
                             st.user_rows += 1;
@@ -262,7 +405,8 @@ fn lay(
                                 "response_item",
                                 user_message(t),
                                 clock,
-                            )
+                            );
+                            st.draw_user(t, clock);
                         }
                     }
                 }
@@ -325,9 +469,16 @@ fn rows(
     meta.insert("originator".into(), Value::String("codex_cli_rs".into()));
     meta.insert("source".into(), Value::String("cli".into()));
     meta.insert("cli_version".into(), Value::String(version.to_string()));
-    if let Some(provider) = opts.model_provider.as_ref() {
-        meta.insert("model_provider".into(), Value::String(provider.clone()));
-    }
+    // A rollout without a provider is indexed under the empty one, and Codex 0.167.2 refuses to
+    // resume it; with none stated or configured, Codex itself runs its default.
+    let provider = opts
+        .model_provider
+        .as_deref()
+        .unwrap_or(CODEX_DEFAULT_PROVIDER);
+    meta.insert("model_provider".into(), Value::String(provider.to_string()));
+    // The thread keeps its screen in `item_completed` events (below), as Codex 0.167's own threads
+    // do; a thread without this mode is drawn from events the writer does not write.
+    meta.insert("history_mode".into(), Value::String("paginated".into()));
     if let Some(branch) = session.meta.git_branch.as_ref() {
         meta.insert("git".into(), json!({"branch": branch}));
     }
@@ -364,11 +515,21 @@ fn rows(
         clock,
     );
 
+    let shell = match opts.dest_shell {
+        Some(crate::tools::Shell::PowerShell) => vec!["pwsh", "-Command"],
+        Some(crate::tools::Shell::Posix) => vec!["bash", "-lc"],
+        None => Vec::new(),
+    };
     let mut st = Lay {
         out,
         ordinal,
         turn,
         user_rows: 0,
+        thread: id.to_string(),
+        cwd_url: file_url(cwd),
+        shell,
+        open_turn: None,
+        commands: std::collections::HashMap::new(),
     };
     // A branch that leaves before the first block comes first.
     for n in plan.branches_after(None) {
@@ -477,4 +638,25 @@ pub(crate) fn image_block(image: &Image) -> Value {
         "type": "input_image",
         "image_url": format!("data:{};base64,{}", image.mime, image.data),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Codex records a command's result as its unified-exec envelope; its screen draws the
+    /// output and the exit code inside it.
+    #[test]
+    fn a_unified_exec_result_is_drawn_as_its_output_and_exit_code() {
+        let envelope = r#"{"chunk_id":"70781c","wall_time_seconds":0.3,"exit_code":2,"original_token_count":4,"output":"no such file\n"}"#;
+        assert_eq!(drawn_output(envelope, false), ("no such file\n".to_string(), 2));
+    }
+
+    /// Any other result is drawn as it is, with the code the call's outcome implies.
+    #[test]
+    fn a_plain_result_is_drawn_as_it_is() {
+        assert_eq!(drawn_output("total 0\n", false), ("total 0\n".to_string(), 0));
+        assert_eq!(drawn_output("boom", true), ("boom".to_string(), 1));
+        assert_eq!(drawn_output(r#"{"output":"x"}"#, false), (r#"{"output":"x"}"#.to_string(), 0));
+    }
 }

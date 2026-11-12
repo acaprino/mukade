@@ -259,7 +259,10 @@ prompts and compaction summaries are recovered only when their dependencies iden
 position; an explicit conversational parent on an abandoned branch takes precedence over
 `sourceToolAssistantUUID`, and such a result is not recovered into the active conversation; source
 records remain in `Entry::raw`; excluded branch records become `Meta(OffBranch)`, counted in the
-destination manifest, not replayed.
+destination manifest, not replayed. A row of the resumed chain whose parent no row of the file holds
+is read after the nearest earlier row of the conversation not below it, and recorded as
+`Meta(Relinked)` (`relinked_parents`); a recovered parallel block with a missing parent is still
+refused.
 
 Verification limits: regression tests cover the review's branch-selection and abandoned-result
 cases, shuffled fixture rows, a 20,000-row reverse-written chain and native-format round trips
@@ -846,6 +849,7 @@ above zero also has a `losses` line.**
 | `dropped_unreadable_summaries` | a compaction summary with no readable text |
 | `dropped_subagent_messages` | a message between a subagent and its parent with no readable text (Codex's encrypted `agent_message`) |
 | `dropped_unfinished_lines` | a last source line cut off mid-write, kept as text and not read |
+| `relinked_parents` | rows whose parent the source file does not hold, read after the row before them (`Meta(Relinked)`: Claude Code) |
 | `aborted_steps_as_replies` | aborted or failed steps written as ordinary replies where the destination cannot mark them (Pi keeps the step's end) |
 
 ### 6.4 Subagent sessions (`children`)

@@ -12,6 +12,17 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 pub(super) struct Reconstruction {
     pub order: Vec<usize>,
     pub on_branch: Vec<bool>,
+    /// Rows of the active chain whose parent the file does not hold, each read after the row
+    /// before it in the file.
+    pub relinked: Vec<Relinked>,
+}
+
+/// A row of the active chain read after the row before it, its own parent being nowhere in the
+/// file.
+pub(super) struct Relinked {
+    pub row: usize,
+    pub missing: String,
+    pub read_after: usize,
 }
 
 fn text<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
@@ -164,7 +175,7 @@ impl<'a> History<'a> {
             && let Some(last) = last
             && last != at
         {
-            let path = self.walk(last)?;
+            let (path, _) = self.walk(last)?;
             // A checkpoint flushed before its own leaf is not an ordering barrier for a
             // rewind. Only an already recorded checkpoint leaf establishes that barrier.
             let recorded_checkpoint = checkpoint_position.is_some_and(|position| at < position);
@@ -327,8 +338,9 @@ impl<'a> History<'a> {
         bail!("cycle in Claude Code preservedSegment")
     }
 
-    fn walk(&self, leaf: usize) -> Result<Vec<usize>> {
+    fn walk(&self, leaf: usize) -> Result<(Vec<usize>, Vec<Relinked>)> {
         let mut chain = Vec::new();
+        let mut relinked = Vec::new();
         let mut seen = HashSet::new();
         let mut at = Some(leaf);
         while let Some(index) = at {
@@ -338,10 +350,44 @@ impl<'a> History<'a> {
                 "Claude Code sidechain on the active parent chain"
             );
             chain.push(index);
-            at = self.parent(index)?;
+            at = match self.parent(index) {
+                Ok(parent) => parent,
+                Err(error) => {
+                    // Claude Code appends its rows in order: a parent that was never written is
+                    // most likely the row before. Without one, the chain cannot be read.
+                    let Some((missing, before)) = self.missing_parent(index, &seen) else {
+                        return Err(error);
+                    };
+                    relinked.push(Relinked {
+                        row: index,
+                        missing: missing.to_string(),
+                        read_after: before,
+                    });
+                    Some(before)
+                }
+            };
         }
         chain.reverse();
-        Ok(chain)
+        Ok((chain, relinked))
+    }
+
+    /// A row's `parentUuid` no row of the file holds (a boundary's own links excepted), with the
+    /// nearest earlier row of the conversation it can be read after: one with a UUID, of this
+    /// conversation, and not already below it on the chain.
+    fn missing_parent(&self, at: usize, below: &HashSet<usize>) -> Option<(&'a str, usize)> {
+        let row = &self.rows[at];
+        if boundary(row) {
+            return None;
+        }
+        let missing = text(row, "parentUuid").filter(|id| !self.by_uuid.contains_key(id))?;
+        let before = (0..at).rev().find(|&index| {
+            let earlier = &self.rows[index];
+            uuid(earlier).is_some()
+                && self.main(earlier)
+                && (conversational(earlier) || boundary(earlier))
+                && !below.contains(&index)
+        })?;
+        Some((missing, before))
     }
 
     fn check_compactions(&self, chain: &[usize], ordered: &[usize]) -> Result<()> {
@@ -958,9 +1004,10 @@ pub(super) fn reconstruct(rows: &[Value], sidechain: bool) -> Result<Reconstruct
         return Ok(Reconstruction {
             order: (0..rows.len()).collect(),
             on_branch: vec![true; rows.len()],
+            relinked: Vec::new(),
         });
     };
-    let chain = history.walk(leaf)?;
+    let (chain, relinked) = history.walk(leaf)?;
     let mut selected = vec![false; rows.len()];
     for &index in &chain {
         selected[index] = true;
@@ -1061,5 +1108,9 @@ pub(super) fn reconstruct(rows: &[Value], sidechain: bool) -> Result<Reconstruct
                         && matches!(class_of(row), Class::Meta(super::MetaKind::Command))))
         })
         .collect();
-    Ok(Reconstruction { order, on_branch })
+    Ok(Reconstruction {
+        order,
+        on_branch,
+        relinked,
+    })
 }

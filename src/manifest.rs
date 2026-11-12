@@ -109,6 +109,10 @@ impl Manifest {
             "dropped_subagent_messages".into(),
             json!(self.counts.dropped_subagent_messages),
         );
+        counts.insert(
+            "relinked_parents".into(),
+            json!(self.counts.relinked_parents),
+        );
         counts.insert("branches_kept".into(), json!(self.counts.branches_kept));
         counts.insert(
             "branches_dropped".into(),
@@ -283,6 +287,13 @@ impl Manifest {
                 counts.dropped_subagent_messages
             ));
         }
+        if counts.relinked_parents > 0 {
+            losses.push(format!(
+                "rows whose parent the source file does not hold, read after the row before \
+                 them ({})",
+                counts.relinked_parents
+            ));
+        }
         if interrupted_last_turn {
             losses.push("interrupted_last_turn".into());
         }
@@ -302,7 +313,7 @@ mod tests {
     #[test]
     fn every_loss_count_has_a_loss_line_and_a_key() {
         type Set = fn(&mut Counts);
-        let losses: [(&str, Set); 18] = [
+        let losses: [(&str, Set); 19] = [
             ("dropped_interrupted_steps", |c| {
                 c.dropped_interrupted_steps = 1
             }),
@@ -333,6 +344,7 @@ mod tests {
             ("dropped_subagent_messages", |c| {
                 c.dropped_subagent_messages = 1
             }),
+            ("relinked_parents", |c| c.relinked_parents = 1),
         ];
         assert!(Manifest::losses_for(&Counts::default(), false, false).is_empty());
         for (key, set) in losses {

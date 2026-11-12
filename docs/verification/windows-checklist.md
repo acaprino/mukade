@@ -44,7 +44,7 @@ folder sits in another repository needs `$env:TMP = $env:TEMP = "D:\mukade-test-
 
 **Pass if**
 
-- [ ] `cargo test` ends with **0 failed** in every suite (519 tests on Linux on 2026-11-11; 1105 on Windows on 2026-11-12).
+- [ ] `cargo test` ends with **0 failed** in every suite (519 tests on Linux on 2026-11-11; 1116 on Windows on 2026-11-12).
 - [ ] `harnesses` lists Claude Code, Codex, OpenCode and Pi with a version and a store each.
 
 **Write down:** the four versions.
@@ -127,10 +127,7 @@ pi --session <the file the receipt names>
 ```
 
 
-> Until the Codex writer names a provider by itself, add `--model-provider openai` (or the one your
-> `config.toml` uses) to the Codex hop: without it `codex resume` refuses the copy
-> (``Model provider `` not found``). Its screen then shows no history (Codex 0.167 draws it from
-> records the writer does not write); the check runs on the file and on Pi. On resume Codex asks
+> On resume Codex asks
 > for a working directory (pick one of the first two: the "Always" ones write the config) and may
 > ask to review hooks (`esc` skips). Behind a TLS proxy Codex does not trust, start it without
 > `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`. Run on 2026-11-12: [record](windows-2026-11-12.md).
@@ -138,8 +135,8 @@ pi --session <the file the receipt names>
 **Pass if**
 
 - [ ] Both manifests' losses name far fewer text-form calls than the thread has `exec` calls.
-- [ ] Codex shows the shell commands as `exec_command` calls with their output (the edits stay
-  text: Codex's patch form is not written).
+- [ ] Codex shows the shell commands as `Ran <command>` with their output (the edits stay text:
+  Codex's patch form is not written). Only the last turn shows at first; scroll for the rest.
 - [ ] Pi shows the shell commands as `bash` calls with their output, and the edits as `edit` calls.
 
 **Write down:** each manifest's `tools_text_form` and the thread's `exec` count.

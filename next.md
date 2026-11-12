@@ -50,7 +50,7 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 1. **Setup + whole suite on Windows** [0]: suite done on 2026-11-12 at `90c3d91` plus two Windows
    fixes (a launch file's path took `/`; a test fixture path took `/` that `cmd`'s `type` refuses):
-   `cargo test --workspace --no-fail-fast` **1105 passed, 0 failed**, 5 ignored (CLI, TUI, desktop
+   `cargo test --workspace --no-fail-fast` **1105 passed, 0 failed**, 5 ignored (1116 after the fixes of the same day) (CLI, TUI, desktop
    `mukade-ui`); `npm test` 16 / 16; `mukade harnesses` lists all six ([record](docs/verification/windows-2026-11-12.md)). Left: `build.bat`
    built `mukade.exe` and `mukade-tui.exe`, its `mukade-ui` link failed while another session built
    the same `target` (`LNK1181`); rerun it alone.
@@ -59,10 +59,10 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 **Codex**
 
-4. **Code mode on a real Desktop thread** [3]: hopped live on 2026-11-12 (24 `exec`: 17 shell calls
-   and 4 patches split out, 7 kept whole). **Pi passes** (16 `bash`, 3 `write`, 1 `edit`, each with
-   its result). **Codex fails:** the copy does not resume without `--model-provider`, and its
-   screen shows no history (Needs code, *Codex writer*).
+4. ✅ **Code mode on a real Desktop thread** [3]: hopped live on 2026-11-12 (24 `exec`: 17 shell
+   calls and 4 patches split out, 7 kept whole). Pi: 16 `bash`, 3 `write`, 1 `edit`, each with its
+   result. Codex, after the writer fixes of the same day: resumes with no flag, draws its prompts,
+   answers and `Ran <command>` with the output.
 5. ✅ **Subagent parent on a real thread** [4]: `dump` and `list --children` name the
    `thread_spawn_edges` parent (2026-11-12).
 6. **Chain of pages** [5] [U]: one page in 982 rollouts, its base a plain file; never a chain. Needs
@@ -98,18 +98,20 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 ## 🔵 Needs code (next)
 
-**Found on Windows, 2026-11-12** ([record](docs/verification/windows-2026-11-12.md)); each changes behaviour, so each waits for a go:
+**Found on Windows, 2026-11-12, fixed the same day** ([record](docs/verification/windows-2026-11-12.md)),
+each checked live:
 
-- *Codex writer, provider:* no `session_meta.model_provider` when neither `--model-provider` nor a
-  top-level `model_provider` in `config.toml` names one; Codex 0.167.2 then refuses to resume the
-  thread (``Model provider `` not found``). Codex's own default is `openai`.
-- *Codex writer, screen:* Codex 0.167 draws a resumed thread from `event_msg item_completed`
-  records, which the writer does not write: the model has the history, the screen shows none;
-  turns written without `task_complete` print `Conversation interrupted`.
-- *Claude Code reader:* one row whose `parentUuid` exists nowhere refuses the whole session
-  (`missing Claude Code parent`, a real 98 MB transcript).
-- *Pi writer from Claude Code:* `model` without `provider`; Pi warns `undefined/<model>` and takes
-  its default. The TUI's import has no `--model-provider`.
+- ✅ *Codex writer, provider:* with none stated or configured, `session_meta.model_provider` is
+  Codex's own default `openai`; without one Codex 0.167.2 refused to resume (``Model provider ``
+  not found``).
+- ✅ *Codex writer, screen:* a written thread is `history_mode: "paginated"` and carries the
+  `item_completed` events Codex 0.167 draws from (`UserMessage`, `AgentMessage`,
+  `CommandExecution`); every turn another prompt follows gets its `task_complete`. Left [U]:
+  whether the screen leaves out a branch written and rolled back (`--all-branches`).
+- ✅ *Claude Code reader:* a row of the resumed chain whose `parentUuid` is nowhere in the file is
+  read after the row before it, counted as `relinked_parents` (the real 98 MB transcript: 1).
+- ✅ *Pi writer from Claude Code:* `provider: "anthropic"` (Claude Code's only provider), so Pi
+  names `anthropic/<model>`, never `undefined/<model>`.
 
 **Forks, left open** ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)).
 

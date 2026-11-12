@@ -26,6 +26,11 @@ impl Harness for ClaudeCode {
         Some(self)
     }
 
+    /// Claude Code's models are Anthropic's: its rows carry `message.model` and no provider.
+    fn sole_provider(&self) -> Option<&'static str> {
+        Some("anthropic")
+    }
+
     fn read_file(&self, path: &Path) -> anyhow::Result<Session> {
         crate::reader::claude_code::read_file(path)
     }

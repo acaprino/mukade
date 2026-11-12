@@ -130,6 +130,8 @@ pub struct Counts {
     /// Messages between a subagent and its parent with no readable text (Codex's encrypted
     /// `agent_message`), not written.
     pub dropped_subagent_messages: usize,
+    /// Rows whose parent the source file does not hold, read after the row before them.
+    pub relinked_parents: usize,
     /// Branches of the session written to the destination.
     pub branches_kept: usize,
     /// Branches of the session left out: the destination keeps one conversation, cannot say where
@@ -369,6 +371,7 @@ fn plan_conversation<E: Borrow<Entry>>(
         dropped_off_branch: source_records(MetaKind::OffBranch),
         dropped_unfinished_lines: source_records(MetaKind::Unfinished),
         dropped_subagent_messages: source_records(MetaKind::SubagentMessage),
+        relinked_parents: source_records(MetaKind::Relinked),
         ..Counts::default()
     };
     // The calls of the step just planned: which of them the destination took natively, and which
@@ -897,10 +900,19 @@ pub fn model_id(step: &PlannedStep, session: &Session, opts: &WriteOpts) -> Opti
 
 /// The provider id a plan writes into the destination's records.
 pub fn provider_id(step: &PlannedStep, session: &Session, opts: &WriteOpts) -> Option<String> {
-    opts.model_provider.clone().or_else(|| {
-        step.model
-            .clone()
-            .or_else(|| session.meta.models.first().cloned())
-            .and_then(|m| m.provider)
-    })
+    opts.model_provider
+        .clone()
+        .or_else(|| {
+            step.model
+                .clone()
+                .or_else(|| session.meta.models.first().cloned())
+                .and_then(|m| m.provider)
+        })
+        // The one provider a source talks to, which its records never name: a destination that
+        // restores a model by provider and id (Pi) otherwise reads `undefined/<model>`.
+        .or_else(|| {
+            crate::harnesses::get(session.meta.harness)
+                .sole_provider()
+                .map(str::to_owned)
+        })
 }

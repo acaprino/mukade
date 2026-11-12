@@ -62,6 +62,10 @@ pub enum MetaKind {
     /// A message between a subagent and its parent that the source keeps unreadable (Codex's
     /// encrypted `agent_message`): kept, not carried.
     SubagentMessage,
+    /// A row of the conversation whose parent the source file does not hold (Claude Code
+    /// `parentUuid`), read after the row before it in the file. Its `raw` names the row, the
+    /// missing parent and the row it was read after.
+    Relinked,
 }
 
 /// One unit of the interchange model.

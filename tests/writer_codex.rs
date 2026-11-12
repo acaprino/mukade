@@ -63,6 +63,22 @@ fn session_meta_states_the_destination_and_never_the_source() {
     );
 }
 
+/// With no provider stated and none configured, the rollout names Codex's own default: Codex
+/// 0.167.2 indexes a rollout without `model_provider` under the empty provider and refuses to
+/// resume it (``Model provider `` not found``, live on 2026-11-12).
+#[test]
+fn session_meta_names_codex_default_provider_when_none_is_known() {
+    let scratch = support::scratch(HarnessId::Codex, "writer-codex-default-provider");
+    let session = support::read_source(HarnessId::ClaudeCode);
+    let mut opts = support::opts(HarnessId::Codex, &scratch);
+    opts.model_provider = None;
+    let written = for_harness(HarnessId::Codex)
+        .write(&session, &opts)
+        .expect("write");
+    let rows = support::read_jsonl(Path::new(&written.location));
+    assert_eq!(rows[0]["payload"]["model_provider"], "openai");
+}
+
 /// A branch, when the source session has one, travels into `session_meta` — the shape Codex writes.
 #[test]
 fn a_git_branch_is_carried_when_the_source_has_one() {
@@ -283,4 +299,130 @@ fn a_native_budget_appends_a_codex_compacted_record_without_dropping_history() {
     let read_back = mukade::reader::codex::read_file(Path::new(&written.location))
         .expect("Codex reads its own compacted record");
     assert!(read_back.entries.iter().any(|entry| matches!(&entry.kind, Kind::Compaction { summary, .. } if summary.contains("mukade native compaction"))));
+}
+
+/// The `item_completed` events of a rollout, with the turn each names.
+fn items(rows: &[Value]) -> Vec<Value> {
+    payloads(rows, "item_completed")
+}
+
+/// Codex 0.167 draws a resumed thread from `item_completed` events of a `paginated` thread, never
+/// from the response items the model reads (live, 2026-11-12: a written thread showed an empty
+/// screen; the same thread with these records shows its prompts and answers).
+#[test]
+fn the_history_codex_draws_travels_as_item_completed_events() {
+    let (written, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-screen");
+    assert_eq!(rows[0]["payload"]["history_mode"], "paginated");
+
+    let items = items(&rows);
+    assert!(
+        items
+            .iter()
+            .all(|e| e["thread_id"] == written.id && e["turn_id"].is_string()),
+        "each event names the thread and its turn"
+    );
+
+    // One UserMessage per prompt, with the prompt's text.
+    let prompts: Vec<String> = payloads(&rows, "message")
+        .iter()
+        .filter(|m| m["role"] == "user")
+        .filter_map(|m| m["content"][0]["text"].as_str().map(str::to_owned))
+        .filter(|t| !t.starts_with("<environment_context>"))
+        .collect();
+    let users: Vec<String> = items
+        .iter()
+        .filter(|e| e["item"]["type"] == "UserMessage")
+        .map(|e| e["item"]["content"][0]["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(users, prompts);
+
+    // One AgentMessage per assistant message, with its text and phase.
+    let answers: Vec<(String, Value)> = payloads(&rows, "message")
+        .iter()
+        .filter(|m| m["role"] == "assistant")
+        .map(|m| (m["content"][0]["text"].as_str().unwrap().to_owned(), m["phase"].clone()))
+        .collect();
+    let agents: Vec<(String, Value)> = items
+        .iter()
+        .filter(|e| e["item"]["type"] == "AgentMessage")
+        .map(|e| {
+            let item = &e["item"];
+            (item["content"][0]["text"].as_str().unwrap().to_owned(), item["phase"].clone())
+        })
+        .collect();
+    assert!(!answers.is_empty());
+    assert_eq!(agents, answers);
+}
+
+/// A shell call Codex can run shows as `Ran <command>` with its output: a `CommandExecution`.
+#[test]
+fn a_shell_call_is_drawn_as_a_command_execution_with_its_output() {
+    let (_, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-screen-calls");
+    let calls = payloads(&rows, "function_call");
+    let outputs = payloads(&rows, "function_call_output");
+    let executions: Vec<Value> = items(&rows)
+        .into_iter()
+        .filter(|e| e["item"]["type"] == "CommandExecution")
+        .map(|e| e["item"].clone())
+        .collect();
+    assert_eq!(executions.len(), calls.len(), "one per exec_command call");
+    for (call, execution) in calls.iter().zip(&executions) {
+        let arguments: Value = serde_json::from_str(call["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(execution["id"], call["call_id"]);
+        assert_eq!(execution["parsed_cmd"][0]["cmd"], arguments["cmd"]);
+        assert_eq!(execution["command"].as_array().unwrap().last().unwrap(), &arguments["cmd"]);
+        let output = outputs
+            .iter()
+            .find(|o| o["call_id"] == call["call_id"])
+            .expect("the call's result");
+        assert_eq!(execution["aggregated_output"], output["output"]);
+        assert_eq!(execution["status"], "completed");
+    }
+}
+
+/// A turn another prompt follows ended: without its `task_complete`, Codex draws `Conversation
+/// interrupted` under it (live, 2026-11-12, three times in one written thread).
+#[test]
+fn every_turn_another_prompt_follows_is_completed() {
+    let mut session = support::read_source(HarnessId::ClaudeCode);
+    // Every turn of the fixture ends on a final answer; make the first one end on its calls, as a
+    // turn does when the user writes again before the model answers.
+    let second_prompt = session
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(e.kind, Kind::User { .. }))
+        .nth(1)
+        .map(|(i, _)| i)
+        .expect("a second prompt");
+    for entry in session.entries[..second_prompt].iter_mut() {
+        if let Kind::Step { end, .. } = &mut entry.kind {
+            *end = mukade::model::StepEnd::ToolUse;
+        }
+    }
+    let scratch = support::scratch(HarnessId::Codex, "writer-codex-turns");
+    let opts = support::opts(HarnessId::Codex, &scratch);
+    let written = for_harness(HarnessId::Codex)
+        .write(&session, &opts)
+        .expect("write");
+    let rows = support::read_jsonl(Path::new(&written.location));
+    let events: Vec<Value> = rows
+        .iter()
+        .filter(|r| r["type"] == "event_msg")
+        .map(|r| r["payload"].clone())
+        .filter(|p| p["type"] == "task_started" || p["type"] == "task_complete")
+        .collect();
+    let started: Vec<&Value> = events.iter().filter(|p| p["type"] == "task_started").collect();
+    assert!(started.len() > 1, "the fixture has several prompts");
+    for (n, turn) in started.iter().enumerate().take(started.len() - 1) {
+        let id = &turn["turn_id"];
+        let at = events.iter().position(|p| p == *turn).unwrap();
+        let next = events.iter().position(|p| p == started[n + 1]).unwrap();
+        assert!(
+            events[at + 1..next]
+                .iter()
+                .any(|p| p["type"] == "task_complete" && &p["turn_id"] == id),
+            "turn {id} ends before the next prompt"
+        );
+    }
 }

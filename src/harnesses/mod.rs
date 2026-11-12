@@ -163,6 +163,12 @@ pub trait Harness: Send + Sync {
         self.reader().reads_all_branches()
     }
 
+    /// The one model provider this harness talks to, which its records therefore never name
+    /// (Claude Code: `anthropic`). `None`: its records name the provider, or it talks to many.
+    fn sole_provider(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Why this harness cannot resume `info` in its own interface, or `None` when it can. A
     /// session mukade lists is not always one the harness resumes by itself.
     fn resume_refusal(&self, info: &crate::reader::SessionInfo) -> Option<String> {

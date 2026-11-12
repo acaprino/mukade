@@ -214,6 +214,37 @@ fn recovered_blocks_keep_their_intermediate_bookkeeping_ancestors() {
     assert_pairable(&session);
 }
 
+/// A row of the active chain whose `parentUuid` the file does not hold (a real 98 MB transcript
+/// has one) is read after the row before it in the file: the session reads whole, and the link it
+/// was given is counted, never silent.
+#[test]
+fn a_chain_row_whose_parent_the_file_lacks_is_read_after_the_row_before_it() {
+    let rows = vec![
+        user(Some("u1"), None, json!("first")),
+        reply("r1", "u1", "one"),
+        user(Some("u2"), Some("r1"), json!("second")),
+        call(Some("c2"), "gone", "m2", "t2"),
+        result(Some("res2"), Some("c2"), "t2"),
+        reply("done", "res2", "two"),
+    ];
+    let session = claude_code::parse(&rows, None).expect("the session reads whole");
+    let conversation = entries(&session);
+    let ids: Vec<&str> = conversation.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, ["u1", "r1", "u2", "c2", "res2", "done"]);
+    let relinked: Vec<&Entry> = session
+        .entries
+        .iter()
+        .filter(|e| matches!(e.kind, Kind::Meta { kind: MetaKind::Relinked }))
+        .collect();
+    assert_eq!(relinked.len(), 1);
+    assert_eq!(relinked[0].raw[0]["uuid"], "c2");
+    assert_eq!(relinked[0].raw[0]["missingParent"], "gone");
+    assert_eq!(relinked[0].raw[0]["readAfter"], "u2");
+
+    let planned = plan::plan(&session, HarnessId::Pi, &WriteOpts::default());
+    assert_eq!(planned.counts.relinked_parents, 1);
+}
+
 #[test]
 fn a_recovered_block_with_a_missing_parent_is_not_guessed() {
     let rows = vec![

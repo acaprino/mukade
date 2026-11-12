@@ -51,7 +51,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         await sleep(step.gap ?? 60);
       }
     }
-    if (step.until) {
+    if (step.answers) {
+      // Questions a program asks on its way (a folder to trust, hooks to review), in any order:
+      // each answer is typed once, when its question shows, until `until` shows with no question
+      // left on screen for `settle` ms.
+      const re = new RegExp(step.until ?? "$^", "i");
+      const done = new Set();
+      const end = Date.now() + (step.wait ?? 60000);
+      let calm = 0;
+      while (Date.now() < end) {
+        const s = screen();
+        const open = step.answers.findIndex((a, i) => !done.has(i) && new RegExp(a.when, "i").test(s));
+        if (open >= 0) {
+          done.add(open);
+          fs.appendFileSync(path.join(outDir, "log.txt"), `step ${n} answered /${step.answers[open].when}/\n`);
+          for (const part of encode(step.answers[open].keys).match(/\x1b\[[0-9;]*[A-Za-z~]|[\s\S]/g) ?? []) {
+            child.write(part);
+            await sleep(200);
+          }
+          calm = 0;
+          await sleep(1500);
+          continue;
+        }
+        const asking = step.answers.some((a) => new RegExp(a.when, "i").test(s));
+        calm = re.test(s) && !asking ? calm + 250 : 0;
+        if (calm >= (step.settle ?? 4000)) break;
+        await sleep(250);
+      }
+      fs.appendFileSync(path.join(outDir, "log.txt"), `step ${n} until /${step.until}/: ${re.test(screen())}\n`);
+    } else if (step.until) {
       const re = new RegExp(step.until, "i");
       const end = Date.now() + (step.wait ?? 10000);
       while (Date.now() < end && !re.test(screen())) await sleep(250);
