@@ -167,7 +167,8 @@ project, as a hop does, in the document's working directory. `esc` cancels.
 | destination | `--cwd`, `--dest-shell`, `--dest-id` / `--dest-path`, `--model` / `--model-provider` / `--project-id`, `--dest-agent`, `--metadata-file`, `--tool-map` |
 | safety | `--expect-sha256` |
 
-A TUI hop names no destination shell: its shell calls travel as text form (`next.md`, destination shell).
+A TUI hop takes the destination's shell and offered set from its own configuration, as a CLI hop
+without `--dest-shell` does ([tables §4.1](../docs/tool-conversion-tables.md#41-shell)).
 
 - **Names** come from each store (OpenCode `session_v2.title`, Claude Code the rows its `/resume`
   picker reads, Codex `session_index.jsonl`, Pi its display name or first prompt); an unnamed session shows its id.

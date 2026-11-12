@@ -44,8 +44,8 @@ folders.
 |---|---|---|
 | writer | `writer` | the writer of new sessions in its store |
 | writing rules | `protocol`, `payload_has_place`, `provider_reads_envelope`, `payload_fits`, `validate_write`, `claims_id`, `interchange_document` | the wire protocol, which reasoning payloads replay, what a write may ask, the id shape, the `document` command's output |
-| destination config | `configured_model`, `project_id` | the provider and model its own configuration names; the project it files a directory under |
-| tools | `offered`, `translate`, `accepted_keys` | its tools, one canonical call in its shape, the keys a call may use |
+| destination config | `configured_model`, `project_id`, `default_shell` | the provider and model its own configuration names; the project it files a directory under; the shell it runs |
+| tools | `offered`, `offered_in`, `translate`, `accepted_keys` | its tools, pinned and as its configuration turns them on; one canonical call in its shape; the keys a call may use |
 | plan | `failed_steps_are_replies`, `flattens_result_blocks`, `image_in_result`, `image_in_user_turn` | how the plan lays out failed steps, result blocks and images |
 
 Also in `src/harnesses/mod.rs`:
@@ -63,8 +63,8 @@ Also in `src/harnesses/mod.rs`:
 
 The public entry points keep their signatures and call the adapter: `reader::for_harness`,
 `writer::for_harness`, `StoreRoots::{root, set_root, apply_to, from_env}`,
-`tools::{offered, translate, translate_with}`, `summary::{summary_command, parse_reply}`,
-`dest::configured_model_in`, `policy::{destination_protocol, payload_fits,
+`tools::{offered, offered_in, translate, translate_with}`, `summary::{summary_command, parse_reply}`,
+`dest::{configured_model_in, shell_in}`, `policy::{destination_protocol, payload_fits,
 chat_destination_fits}`, `hop::export_path`, `writer::media::{user_block, result_block}`.
 
 Asked of a harness that is no destination, the destination ones give the nothing answer: `None`,

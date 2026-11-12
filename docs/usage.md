@@ -152,7 +152,7 @@ Always true:
 | `--without-tools` | write, hop, document | omit historical tool calls and results |
 | `--reasoning <mode>` | write, hop, document | `drop_foreign` (default), `as_text`, `drop` |
 | `--dest-protocol <p>` | write, hop, document | `anthropic-messages`, `openai-responses`, `openai-chat` |
-| `--dest-shell <s>` | write, hop, document | `bash`, `sh`, `zsh`, `powershell`, `pwsh` |
+| `--dest-shell <s>` | write, hop, document | `bash`, `sh`, `zsh`, `powershell`, `pwsh`, `none`; default: the shell the destination runs |
 | `--tool-map <path>` | write, hop, document | explicit source-to-destination tool bindings |
 
 **The destination** ([section 6](#6-host-and-automation-options), [section 7](#7-stores-and-executables))
@@ -752,13 +752,16 @@ manifest records `options.without_tools`, `tools_omitted` and the loss. `dump` a
 `hop`, `document`), by the rules of [`tool-conversion-tables.md`](tool-conversion-tables.md). One with
 no equivalent travels as text, with its arguments, and is counted (`tools_text_form`).
 
-**Shell calls** (`src/tools.rs` `shell()`):
+**Shell calls** keep their dialect: the command is never rewritten (`src/tools.rs` `other_dialect()`).
 
-- Toward Codex, OpenCode and Pi a shell call is translated only when `--dest-shell` names a shell of
-  its dialect: `bash`, `sh` or `zsh` (also `posix`) for POSIX, `powershell` or `pwsh` for PowerShell;
-  otherwise it travels as text.
-- Toward Claude Code a POSIX call becomes `Bash`; a PowerShell call stays text (Claude's `PowerShell`
-  tool is not in its offered set).
+- Toward Codex, OpenCode and Pi a shell call is translated only when the destination runs a shell of
+  its dialect: the one `--dest-shell` names (`bash`, `sh`, `zsh` or `posix` for POSIX, `powershell`
+  or `pwsh` for PowerShell), else the one the destination's own configuration or platform names for
+  the project the session is filed under ([per destination](tool-conversion-tables.md#41-shell)).
+  `--dest-shell none` names no dialect: every such call travels as text.
+- Toward Claude Code a POSIX call becomes `Bash`, a PowerShell call `PowerShell` where the
+  installation runs that tool ([how mukade tells](harnesses/claude-code.md#the-powershell-tool)),
+  else text.
 
 **Reasoning (chain of thought) is not converted**, because it cannot be: a block has visible text
 and an opaque part (a signature over the text, or a provider-encrypted payload) that only the
@@ -809,7 +812,7 @@ See the [README](../README.md#library).
 | `--dest-agent <name>` | OpenCode only: the primary agent |
 | `--metadata-file <path>` | OpenCode only: a JSON object stored as session metadata; at most 1 MiB; protect it like the session |
 | `--tool-map <path>` | explicit bindings instead of the destination catalog's defaults (below) |
-| `--dest-shell <s>` | the shell the destination is configured to use: decides whether shell calls are translated ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)), and is recorded where the destination records one |
+| `--dest-shell <s>` | the shell the destination runs, over the one mukade reads from its configuration; `none`: no dialect. Decides whether shell calls are translated ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)), and is recorded where the destination records one |
 
 - **OpenCode IDs and metadata.** When supplied, `OPENCODE_DB` must name the destination explicitly:
   mukade checks the resulting ID and metadata there after the native import. If the process fails or
@@ -953,7 +956,8 @@ What to expect:
   call in text form. On 34 real rollouts (Codex 0.167), 725 of 981 scripts were split
   ([verification](verification/2026-11-11-codex-code-mode.md), [rule](tool-conversion-tables.md#5-reading-codex-desktop-code-mode-exec)).
 - **PowerShell shell calls**: such rollouts declare PowerShell, so their shell calls translate only
-  with `--dest-shell powershell` (toward Codex, OpenCode, Pi); toward Claude Code they stay text.
+  toward a destination that runs PowerShell, Codex on Windows included
+  ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)).
 - **Reasoning** is OpenAI's: dropped toward any other provider, counted.
 - **Subagents**: their messages to the main agent are left out on purpose (encrypted, readable only by
   OpenAI); the main agent's messages to them travel as text with that content replaced by

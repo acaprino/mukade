@@ -12,7 +12,7 @@ with Codex's own model and compacts natively.
 | Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`) |
 | Write | ✅ a new rollout under `sessions/`; needs the destination's `cli_version` |
 | Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, subagent messages and threads, forks, compressed rollouts |
-| Hop as destination | ⚠️ only shell calls become `exec_command` (with a matching `--dest-shell`); the rest travels as text; no patch form |
+| Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form |
 | Resume | ✅ `codex exec resume <id>` (receipt) or `codex resume <id>`; live-verified on 0.166.0 [48] |
 | Summary by its own model | ⚠️ `--compaction summary` runs `codex exec fork … --ephemeral`; checked against a mock only **[U]** [27] |
 | Native compaction | ✅ `--compaction native` appends a `compacted` record; live-verified 2026-11-04 [19 §4.4] |
@@ -37,8 +37,8 @@ mukade dump codex <thread-id> --output 'C:\work\thread.json'
 $env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude'
 mukade hop codex <thread-id> claude_code --cwd 'C:\work\my-project'
 
-# 5. Hop into Codex. --dest-shell lets shell calls stay calls.
-mukade hop claude_code <session-id> codex --cwd 'C:\work\my-project' --dest-shell powershell
+# 5. Hop into Codex. Shell calls of the dialect Codex runs stay calls.
+mukade hop claude_code <session-id> codex --cwd 'C:\work\my-project'
 
 # 6. Resume, from the session's cwd, with CODEX_HOME still set.
 codex exec resume <new-id> "<prompt>"             # interactive: codex resume <new-id>
@@ -225,7 +225,7 @@ legacy sessions to "paginated thread history" [18]. Their on-disk form **[U]**.
 
 | tool | purpose |
 |---|---|
-| `exec_command` | runs a shell command (`cmd`, `workdir`, `justification`, `yield_time_ms`); the user's shell, `pwsh` on the test machine [21 §4.1] |
+| `exec_command` | runs a shell command (`cmd`, `workdir`, `justification`, `yield_time_ms`) [21 §4.1]: on Windows always PowerShell (`pwsh`, then `powershell`, …, `cmd` last); elsewhere the login shell when it is zsh, bash or sh, else the first of those found; no configuration key. Recorded as `<environment_context><shell>` (`zsh`, `bash`, `sh`, `powershell`, `cmd`) [52] |
 | `write_stdin` | writes to a running `exec_command` session [21 §4.1] |
 | `request_user_input` | asks the user (canonical `AskUserQuestion`) [21 §3] |
 | `view_image` | image viewing; purpose from the name only **[U]** |
@@ -384,7 +384,8 @@ Code: `src/reader/codex.rs` [22], `src/reader/codex/exec.rs`, `src/reader/codex_
    become those calls; any other (variables, `Promise.allSettled`, `ALL_TOOLS`) stays one `exec`
    call in text form ([tool conversion §5](../tool-conversion-tables.md#5-reading-codex-desktop-code-mode-exec);
    725 of 981 split [50]). A split `exec_command` keeps the rollout's declared shell; every Desktop
-   rollout seen declares PowerShell, so its shell calls translate only toward `--dest-shell powershell`.
+   rollout seen declares PowerShell, so its shell calls translate only toward a destination that runs
+   PowerShell (Codex on Windows does).
 2. **Encrypted compaction summaries (0.165)** ([Compaction](#compaction)). An empty `message` is
    never written as an empty user message: it is left out and counted
    (`dropped_unreadable_summaries`), and `--compaction portable` is refused, exit 2
@@ -484,8 +485,10 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
 
 1. **Only shell calls translate.** Offered set (`src/tools.rs` `offered()`): the [Tools](#tools)
    table less `multi_agent_v1`. A shell call becomes `exec_command {cmd, workdir, justification}`
-   only when its dialect matches `--dest-shell`; `timeout` is dropped, `yield_time_ms` not emitted, a
-   background call is text form (`src/harnesses/codex.rs` `translate()`, `other_dialect()` first;
+   only when its dialect is the one `--dest-shell` names, else the one Codex runs: PowerShell on
+   Windows, POSIX elsewhere (`src/harnesses/codex.rs` `default_shell()`). `timeout` is dropped,
+   `yield_time_ms` not emitted, a background call is text form (`src/harnesses/codex.rs`
+   `translate()`, `other_dialect()` first;
    [tool conversion §4.1](../tool-conversion-tables.md)). **Codex has no read or edit tool in the
    pinned bench**, so `Read`, `Write`, `Edit`, `Grep`, `Glob`, web search and fetch travel as text
    [21 §3]; Codex's patch form is not written (`edit()`).
@@ -515,7 +518,7 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
 |---|---|
 | file | new uuid (or `--dest-id`, a uuid); `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl`, folder and stamp from one UTC instant (`src/writer/codex.rs` `rollout_stamp()`); `--dest-path` names the file instead (absolute, inside `CODEX_HOME`, no `..`: `src/harnesses/codex.rs` `validate_write()`). Lines `{timestamp, ordinal, type, payload}`, `ordinal` from 0 |
 | `session_meta` | `base_instructions: null`, `id`, `timestamp`, `cwd`, `originator: "codex_cli_rs"`, `source: "cli"`, `cli_version`, `model_provider` (when known), `git.branch`; **no `session_id`** (the key set Codex accepts for a hand-written rollout, re-probed on 0.164.0 on 2026-10-28) |
-| environment | a user message `<environment_context>` with `<cwd>` and, from `--dest-shell`, `<shell>bash</shell>` (`bash`, `sh`, `zsh`) or `<shell>powershell</shell>` (`powershell`, `pwsh`) |
+| environment | a user message `<environment_context>` with `<cwd>` and the destination's shell (`--dest-shell`, else the platform's): `<shell>bash</shell>` (POSIX) or `<shell>powershell</shell>`; none with `--dest-shell none` |
 | each prompt | `event_msg` `task_started {turn_id:"turn-N"}`, then the user `message` (`input_text`) |
 | each step | `turn_context {turn_id:"turn-N", model, cwd}`, native `reasoning` (`summary`, `content: null`, `encrypted_content`), assistant `message` (`output_text`, `phase` `final_answer` or `commentary`), `function_call {name, arguments (JSON string), call_id}`; after a completed step `event_msg` `task_complete {turn_id, last_agent_message}` |
 | each result | `function_call_output {call_id, output}` as text; a text-form call's result is a user message in the same place |
@@ -567,9 +570,9 @@ codex exec fork <id> --ephemeral --skip-git-repo-check -c sandbox_mode="read-onl
    run against the real provider settles it [27].
 2. **A live hop of a real Desktop thread with code mode**: the census passed (every split call has
    one result) [50]; hopping one into a destination and resuming it settles it.
-3. **Destination shell**: without `--dest-shell` every shell call is text form (0 of 696 split
-   `exec_command` calls translate toward Codex; 696 with `--dest-shell powershell`) [50]. Reading the
-   shell from the destination's `config.toml` would settle it in code.
+3. **A declared `cmd`, a call's own shell path**: the reader takes `<shell>cmd</shell>` as `Bash`
+   and ignores a call's `shell` given as a path (`src/reader/codex.rs` `shell_declared()`). Reading
+   them by name settles it in code. Desktop with its agent in WSL **[U]**: which shell it declares.
 4. **Chain of pages [U]** (reader, rare shapes): a real thread redone twice settles it.
 5. **Reasoning without `encrypted_content` (R3) [U]** [19 §10]: resuming such a rollout against the
    real Responses API settles it.
@@ -639,3 +642,4 @@ files of `openai/codex` at that tag, under `codex-rs/`, at
 49. Installed `codex` binary, accessed 2026-11-04: `codex --version` (`codex-cli 0.166.0`); `codex delete --help` (permanent deletion by id or name; used with `--force` for the test threads of [48], no residue). Live refusal the same day: `The 'gpt-5.1' model is not supported when using Codex with a ChatGPT account.` (also `gpt-5.1-codex`, `gpt-5.1-codex-max`); the item-ID refusal is quoted under *How mukade writes it*.
 50. [`docs/verification/2026-11-11-codex-code-mode.md`](../verification/2026-11-11-codex-code-mode.md): read-only code-mode census of 2026-11-11 (34 rollouts of Codex 0.167.0, 0.167.0-alpha.3.2, 0.167.1; 981 `exec` calls, 725 split into 1,139 calls; per-destination counts).
 51. [`docs/verification/listing-coverage-2026-11-08.md`](../verification/listing-coverage-2026-11-08.md): listing coverage of 2026-11-08 (Codex 0.166; 8598 `threads` rows, none with an existing rollout; 1105 listed threads, 7493 subagent and guardian threads left out).
+52. Codex CLI 0.167.1 and Desktop 26.1106 code, read only, 2026-11-12: `shell_detect.rs` (the shell per platform), the `<environment_context>` and `world_state` shell names. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).

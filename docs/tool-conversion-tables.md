@@ -8,7 +8,7 @@ readers: `src/model/tool.rs` `CanonicalTool`.
 | | |
 |---|---|
 | **Last updated** | 2026-11-12 |
-| **Verified against** | Claude Code 2.1.311 · Codex CLI 0.164.0 (rollouts of Codex Desktop up to 0.164.0-alpha.11.1; code mode §5 on Codex Desktop 0.167.0 / 0.167.1 rollouts) · OpenCode 2.1.4 · Pi 1.2.0 |
+| **Verified against** | Claude Code 2.1.311 · Codex CLI 0.164.0 (rollouts of Codex Desktop up to 0.164.0-alpha.11.1; code mode §5 on Codex Desktop 0.167.0 / 0.167.1 rollouts) · OpenCode 2.1.4 · Pi 1.2.0; the destination's shell (§4.1) on Claude Code 2.1.322, Codex CLI 0.167.1, OpenCode 2.2.5, Pi 1.4.0 |
 | **Status** | draft; policy (§1) decided; tables are what mukade's writers do (spec L10–L14) |
 | **Owner document** | [`session-interchange-spec.md`](session-interchange-spec.md) §3 and §8 (requirements L10–L14) |
 | **Per-harness pages** | [Claude Code](harnesses/claude-code.md) · [Codex CLI](harnesses/codex.md) · [OpenCode](harnesses/opencode.md) · [Pi](harnesses/pi.md): each lists its own tools and links here |
@@ -124,7 +124,7 @@ for Codex, OpenCode and Pi calls; a Claude source keeps its own `Grep`, `Glob`, 
 | canonical (Claude) | Claude Code | Codex | OpenCode 2.1 | Pi |
 |---|---|---|---|---|
 | `Bash` | `Bash` | ≈ `exec_command` | ≈ `shell` | ≈ `bash` |
-| `PowerShell` | ≈ `PowerShell` (not in the 2.1.311 offered set: **T** today) | ≈ `exec_command` | ≈ `shell` | ≈ `bash` |
+| `PowerShell` | ≈ `PowerShell` (where the installation runs it, §4.1; else **T**) | ≈ `exec_command` | ≈ `shell` | ≈ `bash` |
 | `Read` | `Read` | **T** (no read tool) | `read` | `read` |
 | `Write` | `Write` | **T** (`apply_patch` `*** Add File` not written) | `write` | `write` |
 | `Edit` | `Edit` | **T** (`apply_patch` `*** Update File` not written) | ≈ `edit` | ≈ `edit` (`edits:[{oldText,newText}]`) |
@@ -136,10 +136,10 @@ for Codex, OpenCode and Pi calls; a Claude source keeps its own `Grep`, `Glob`, 
 | `WebSearch` | `WebSearch` | T (built-in `web_search` is server-side) | ≈ `websearch` (query only) | T |
 | `Agent` / `Task` / `subagent` / `spawn_agent`; `Skill` / `skill`; `AskUserQuestion` / `question` / `request_user_input`; `mcp__<server>__<tool>` and Codex MCP tools; everything else (harness-internal: `StructuredOutput`, `Monitor`, `Cron*`, `Workflow`, goals, todo, `execute`, `view_image`, `write_stdin`, `web__run`, Pi extensions) | T | T | T | T |
 
-- **Shell rows:** translated only into the same dialect; Claude has no dialect check (§4.1). Without
-  `--dest-shell`, every shell call into Codex, OpenCode or Pi is text form.
-- **"When offered":** Pi's `grep`, `find`, `ls` and Claude's `PowerShell` are outside the pinned
-  sets, so the CLI writes them as text (§6).
+- **Shell rows:** translated only into the dialect the destination runs; Claude has no dialect check
+  (§4.1).
+- **"When offered":** Pi's `grep`, `find`, `ls` are outside the pinned set, so the CLI writes them as
+  text (§6).
 - **Toward Codex** only `exec_command` is ever translated.
 - Subagents, skills, questions and MCP tools are text form on purpose (L14): a translated call would
   claim a capability the destination lacks.
@@ -175,7 +175,7 @@ excluded); not counted in the manifest.
 | background | `run_in_background` | — (sessions via `write_stdin`) | `background` | — |
 | sandbox flags | `dangerouslyDisableSandbox` (kept into Claude) | `sandbox_permissions`, `with_escalated_permissions`, `prefix_rule` | — | — |
 | description | `description` | `justification` (≈) | — | — |
-| shell binary | POSIX shell; `PowerShell` is a separate tool | `shell` (default: the user's; **pwsh** here [V]) | [U] on Windows | bash |
+| shell binary | POSIX (Git Bash on Windows); `PowerShell` is a separate tool | the call's `shell`, else PowerShell on Windows and the login shell elsewhere | config `shell`, `$SHELL`, then on Windows `pwsh`, `powershell`, Git Bash, `cmd` | `shellPath`, else Git Bash on Windows, `bash` elsewhere |
 
 **Dialect.** The command string is **never rewritten**, so a call is translated only when the
 destination runs the same dialect.
@@ -184,12 +184,25 @@ destination runs the same dialect.
   (`pwsh`, `powershell`; `bash`, `sh`, `zsh`, `posix`), else the
   `<environment_context><shell>…</shell>` declared before it [V] (`bash`, `sh`, `zsh`, `posix`,
   `git-bash`; `powershell`, `pwsh`), else `Bash` (`src/reader/codex.rs` `canonical_call()`).
-- Destination dialect: `--dest-shell bash|sh|zsh|powershell|pwsh` (library
-  `WriteDetails::dest_shell`); not stated → text form into Codex, OpenCode and Pi.
-- Into Claude: no dialect check; `Bash` → `Bash`, `PowerShell` → `PowerShell` (needs it in the
-  offered set).
-- The Codex writer records the stated shell in the new rollout's `<environment_context><shell>`
-  (`bash` or `powershell`), so a later read knows the dialect.
+- Destination dialect, first answer wins: `--dest-shell bash|sh|zsh|powershell|pwsh` (`none`: no
+  dialect, text form into Codex, OpenCode and Pi); else what the destination runs for the project
+  the session is filed under (`src/dest.rs` `shell_in()`, the adapter's `default_shell()`; library
+  `WriteDetails::dest_shell`). Where each reads it: the harness pages.
+
+  | destination | dialect without `--dest-shell` |
+  |---|---|
+  | Codex | PowerShell on Windows, POSIX elsewhere (no configuration key) |
+  | OpenCode | its configuration's `shell`, else `$SHELL`, else PowerShell on Windows, else none |
+  | Pi | its settings' `shellPath`, else POSIX |
+  | Claude Code | none needed: the call's own dialect picks the tool |
+
+  A shell is read by its base name, `.exe` and case ignored: `bash`, `sh`, `zsh`, `dash`, `ksh` are
+  POSIX; `pwsh`, `powershell` PowerShell; any other (`cmd`, `fish`, `nu`) gives no answer from that
+  source (`src/tools.rs` `shell_named()`).
+- Into Claude: no dialect check; `Bash` → `Bash`, `PowerShell` → `PowerShell` where the
+  installation runs that tool (`src/tools.rs` `offered_in()`; [Claude Code](harnesses/claude-code.md#the-powershell-tool)).
+- The Codex writer records the destination's shell in the new rollout's
+  `<environment_context><shell>` (`bash` or `powershell`), so a later read knows the dialect.
 
 **Arguments.**
 
@@ -327,25 +340,26 @@ translating (spec L11):
   [U: exact keys].
 - Codex: `codex app-server` `model/list` exposes the model's metadata [U: whether it lists tools].
 
-**Today.** Until T11 exists, the library uses the §2 lists (`src/tools.rs` `offered()`); an unlisted
-tool is text form. A library caller can pass a wider set (`WriteDetails::offered`,
-`src/tools.rs` `translate_with()`); the CLI has no flag for it.
+**Today.** Until T11 exists, the library uses the §2 lists (`src/tools.rs` `offered()`) unless the
+caller passes a set (`WriteDetails::offered`, `src/tools.rs` `translate_with()`). The CLI and the TUI
+pass `src/tools.rs` `offered_in()`: the §2 list plus what the destination's configuration turns on,
+so far Claude's `PowerShell` (§4.1). An unlisted tool is text form; the CLI has no flag for a wider
+set.
 
-**Planned:** the destination's shell from its own configuration, and `PowerShell` in Claude's
-offered set where enabled ([`next.md`](../next.md), destination shell).
+**Planned:** Pi's `powershell` tool where its settings turn it on ([`next.md`](../next.md)).
 
 ## 7. Open questions
 
 - [U] Does the Anthropic API accept a history `tool_use` whose name is not in the request's
   `tools`? Does the Responses API accept a `function_call` whose name is not offered? The mock
   accepts both; the text-form rule avoids the question.
-- [U] OpenCode `shell` on Windows: which shell runs the command.
 - [U] Pi `grep` arguments beyond `pattern`, `path`, `context`, `limit` (census shows only these).
 
 ## 8. Changelog
 
 | date | change |
 |---|---|
+| 2026-11-12 | The destination's shell (§4.1): Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` offered where the installation runs it; `--dest-shell none`. §7: OpenCode's shell on Windows settled. |
 | 2026-11-12 | Grep into Claude from another harness: `-A`, `-B`, `offset`, `multiline: true` and `-n: false` are text form, as §4.4 says (they were dropped without notice). |
 | 2026-11-11 | L10 built (§5). Tables checked against the code: shell calls need `--dest-shell` outside Claude; `PowerShell` into Claude is text form, into Codex writes no `shell` argument, into Pi is `bash`; text form not cut; Grep `output_mode`; manifest key `tool_calls`; `--tool-map`, `--without-tools`, reading table. |
 | 2026-10-28 | Claude Code column; argument policy explicit and implemented; every spelling accepted; Pi `grep`/`find`/`ls` schemas from source; OpenCode `background`/`replaceAll`, single-entry Pi edits, unanswered calls, id rewriting toward Anthropic. |

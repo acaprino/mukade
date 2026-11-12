@@ -1,12 +1,18 @@
 # Next: open points
 
-**Status on 2026-11-11.** What is done, then what is open, by what it needs (Windows, model calls,
+**Status on 2026-11-12.** What is done, then what is open, by what it needs (Windows, model calls,
 code, a key, macOS), then the known limits. Unverified facts are marked **[U]** here and in the docs.
 
 **The step-by-step for every open check:** [docs/verification/windows-checklist.md](docs/verification/windows-checklist.md).
 Its step numbers are in brackets below.
 
 ---
+
+## ✅ Done on 2026-11-12
+
+| what | before | now |
+|---|---|---|
+| Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` keeps the old behaviour ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
 
 ## ✅ Done on 2026-11-11
 
@@ -59,14 +65,13 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 ## 🔵 Needs code (next)
 
-**Destination shell (L11/L13).** A hop with no `--dest-shell` knows no destination dialect, so every
-shell call is text form, and Claude's `PowerShell` tool is not in its offered set even where it is
-enabled. TUI hops pass no `--dest-shell` at all.
+**Shell dialects, left open** ([spec](docs/superpowers/specs/2026-11-12-destination-shell-design.md)).
 
-- *Measured* on the real Desktop rollouts: of 696 split `exec_command` calls, 0 translate toward
-  Codex without the flag and 696 with `--dest-shell powershell`; toward Claude none do.
-- *To do:* take the destination's shell from its own configuration (Codex `config.toml`, Claude
-  settings and platform, Pi settings), and add `PowerShell` to Claude's offered set where enabled.
+- *Pi's `powershell` tool* as a destination tool: off unless `defaultTools` names it; today a
+  PowerShell call goes to `bash`, and only toward a `shellPath` of PowerShell.
+- *Codex reader:* `<shell>cmd</shell>` is read as `Bash`, and a call's own `shell` given as a path
+  is ignored (`src/reader/codex.rs` `shell_declared()`).
+- *Codex Desktop with its agent in WSL* [U]: which shell its rollouts declare.
 
 ## 🔴 Needs an API key
 

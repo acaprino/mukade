@@ -10,7 +10,7 @@ Anthropic's agentic coding tool: it reads a codebase, edits files, runs commands
 | Read (`list`, `dump`) | ✅ every `projects/*/*.jsonl`, plus sessions known only from `history.jsonl` or a running process (`unreadable`), with a `live` flag |
 | Write | ✅ a new `<uuid>.jsonl` that Claude Code resumes by id; no index file needed [1][5] |
 | Hop as source | ✅ the branch Claude Code resumes. ⚠️ `--all-branches` is refused (Codex only) |
-| Hop as destination | ✅ resumed live, signed and redacted thinking included (2.1.312) [43]. ⚠️ a `PowerShell` call travels as text form |
+| Hop as destination | ✅ resumed live, signed and redacted thinking included (2.1.312) [43]. ⚠️ a `PowerShell` call is text form where the installation does not run the `PowerShell` tool |
 | Resume | ✅ `claude -p --resume <id> "<prompt>"` (the receipt's `resume`, plus a prompt) or `claude --resume <id>` interactive: same id, same file [1] |
 | Summary by its own model | ✅ `--compaction summary`: `claude -p` with no tools and no transcript; the source is left as it was [27] |
 | Native compaction | ✅ read (`compact_boundary`); written by `hop --compaction native`, resumed live on 2.1.318 [42] |
@@ -212,7 +212,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 | Group | Tools |
 |---|---|
 | Files | `Read`, `Write`, `Edit`, `NotebookEdit` (Jupyter cells) |
-| Shell | `Bash`; `PowerShell` (default on native Windows without Git Bash; elsewhere opt-in with `CLAUDE_CODE_USE_POWERSHELL_TOOL=1`); `Monitor` (a background command streamed line by line) |
+| Shell | `Bash`, always POSIX (Git Bash on Windows) [44]; `PowerShell` (below); `Monitor` (a background command streamed line by line) |
 | Search | `Glob`, `Grep`; `LSP` (language-server code intelligence); `ToolSearch` (loads deferred tools) |
 | Web | `WebFetch`, `WebSearch` (below) |
 | Agents | `Agent` (subagent), `SendMessage`, `ListAgents`, `TaskStop`, `Workflow` (a script that orchestrates subagents), `Skill` |
@@ -223,6 +223,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 
 - **`Glob` and `Grep`**: on by default on Windows. On macOS, Linux and WSL the shell runs embedded `bfs` and `ugrep` and the tools are absent unless `--tools` or `--allowedTools` names them, or Bash is removed; naming either in `--allowedTools` restores both, an allow rule in a settings file does not [29].
 - **Not in the table.** `TaskOutput` was removed in v2.1.277 [12]. The SDK reference also names `ReadMcpResourceDir`, `Projects`, `RefreshMcpTools` (needs `CLAUDE_CODE_ENABLE_REFRESH_MCP_TOOLS=1`), `ShowOnboardingRolePicker`, `StructuredOutput`, and marks `REPL` removed [32]. The 2.1.316 binary also holds `ArtifactComments`, `ArtifactData`, `ArtifactCheck`, `TeamCreate`, `TeamDelete`; a name there does not show the tool is offered (a `system/init` `tools` list would) [37].
+- **`PowerShell`** [44]: on Windows with Git Bash, on for claude.ai and Console accounts (a server-side flag, cached in `~/.claude.json`) and off on Bedrock, Vertex and Foundry; on Windows without Git Bash, the only shell; off on macOS, Linux and WSL. `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` or `0` overrides, in the environment or a settings `env` block (managed, `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`). A `Bash` deny rule turns it off, unless the variable is `1` or a `PowerShell(...)` rule exists. The `defaultShell` setting concerns only `!` commands and hooks.
 - **What a run is offered** depends on version, platform, model and settings. The mukade bench (2.1.311, default settings, no plugins) was offered 23 tools, listed in [tool-conversion-tables §2](../tool-conversion-tables.md) [3] (`src/tools.rs` `offered()`).
 - **Mapping to Codex, OpenCode and Pi**: [tool-conversion-tables](../tool-conversion-tables.md).
 
@@ -386,7 +387,7 @@ Code: `src/writer/claude_code.rs` (`write_planned()`, `rows()`), `src/writer/pla
 
 **Limits, costliest first**:
 - **Resume from the session's `cwd`.** From elsewhere Claude Code appends rows with the new `cwd` [1].
-- **A `PowerShell` call travels as text form.** It is translated to Claude's `PowerShell` tool, but that tool is not in the offered set of 2.1.311 (`src/tools.rs` `offered()`), so the safety net in `src/tools.rs` `translate_with()` turns it to text, unless `--tool-map` binds it.
+- **A `PowerShell` call needs the `PowerShell` tool.** It becomes one where the installation runs that tool ([below](#the-powershell-tool)); elsewhere the safety net in `src/tools.rs` `translate_with()` turns it to text, unless `--tool-map` binds it.
 - **Signed thinking is resumed, not proven valid.** The payloads arrive byte for byte, but a plain `claude -p --resume` does not have the provider check earlier turns' thinking: a tampered copy resumes too [43].
 - **Interrupted last turn.** On resume Claude Code inserts its synthetic `No response requested.`; the manifest records `interrupted_last_turn` [1].
 - **Not exercised:** images and attachments toward Claude Code [1]. mukade does not create Claude Code's authentication or onboarding configuration [8].
@@ -405,11 +406,27 @@ Code: `src/writer/claude_code.rs` (`write_planned()`, `rows()`), `src/writer/pla
 **Content**:
 - **Reasoning.** An encrypted-only block is written `redacted_thinking` with `data`; one with a signature as `thinking` with its `signature`. Under the default `DropForeign` policy a payload is carried only from the same protocol and unmodified, else dropped or written as labelled text, as the manifest says [5][7].
 - **Tool ids** are rewritten to `^[a-zA-Z0-9_-]+$` (other characters `_`, a collision `_2`, `_3`…, an empty id `toolu_mukade`), the same for call and result; counted as `rewritten_call_ids` [5] (`src/writer/plan.rs` `CallIds`; [tool-conversion-tables](../tool-conversion-tables.md)).
-- **Tools.** Equivalent calls become Claude's own `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, `WebFetch`, `WebSearch`; the rest travel as text form [3][7] ([tool-conversion-tables](../tool-conversion-tables.md)). Non-text result blocks are dropped and counted (`dropped_result_blocks`). `--without-tools` leaves out every historical call and result.
+- **Tools.** Equivalent calls become Claude's own `Bash`, `PowerShell` ([where offered](#the-powershell-tool)), `Read`, `Write`, `Edit`, `Grep`, `Glob`, `WebFetch`, `WebSearch`; the rest travel as text form [3][7] ([tool-conversion-tables](../tool-conversion-tables.md)). Non-text result blocks are dropped and counted (`dropped_result_blocks`). `--without-tools` leaves out every historical call and result.
 
 **Compaction** ([usage §5](../usage.md#5-choose-what-travels)):
 - `--compaction portable` writes the source's own summary as a user message (`[mukade handoff v1] …`), then the tail [1][7].
 - `--compaction native` (hop only; needs `--context-window`) keeps every row and, over the budget, appends Claude's own pair before the picker rows: `system/compact_boundary` with `preservedSegment`/`preservedMessages`, then an `isCompactSummary` user row with a deterministic summary (`src/native_compaction.rs` `plan_native_items()`). Verified live on 2.1.318 (2026-11-04): resumed, answered from the summary, no second `compact_boundary` (spec §4.4) [42].
+
+### The `PowerShell` tool
+
+The offered set is the pinned list plus `PowerShell` where the installation runs it
+(`src/harnesses/claude_code.rs` `powershell_enabled()`), first answer wins:
+
+| # | mukade reads | answer |
+|---|---|---|
+| 1 | `CLAUDE_CODE_USE_POWERSHELL_TOOL` in its own environment | `1` on, `0` off; empty or another value: next |
+| 2 | the same key under `env` in `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, `<CLAUDE_CONFIG_DIR>/settings.json`, in that order | as 1 |
+| 3 | the newest transcripts directly in `<CLAUDE_CONFIG_DIR>/projects/*/` (by modification time, at most 5; the last 1 MiB of each): the last environment snapshot's `shell` | on when it starts with `PowerShell` |
+| 4 | nothing found | off |
+
+`<cwd>` is the project the session is filed under. Not read **[U]**: a `Bash` deny rule and the
+cached account flag; a snapshot reflects both. A session mukade wrote has no snapshot, yet counts
+toward the 5.
 
 ## How mukade summarizes it
 
@@ -429,9 +446,8 @@ claude -p --tools "" --resume <id> --no-session-persistence --output-format json
 
 1. **Real-life shapes** **[U]**: auto-compaction by threshold, a second compaction, a rewind or fork in a real source, subagent sessions, an image going to Claude Code. Settled by hopping one when it happens.
 2. **Signed thinking really validated** **[U]**: needs a source whose last assistant turn is a tool call with thinking; then the tampered copy must be refused [43].
-3. **`PowerShell` in Claude's offered set**: take the destination's shell and tools from its settings and platform, and add `PowerShell` where it is enabled (to do, not [U]).
-4. **macOS `live`** **[U]**: `procStart` is not compared there. Needs a macOS machine.
-5. **Listing on a cold disk with an empty cache** **[U]**: the 11 s cold figure was not reproduced.
+3. **macOS `live`** **[U]**: `procStart` is not compared there. Needs a macOS machine.
+4. **Listing on a cold disk with an empty cache** **[U]**: the 11 s cold figure was not reproduced.
 
 The rest, with the Windows checklist steps: [../../next.md](../../next.md). Every other **[U]** above names the run that would settle it.
 
@@ -487,3 +503,4 @@ Web:
 41. `docs/verification/linux-2026-11-11.md`: `live` on Linux, Claude Code 2.1.322.
 42. `docs/verification/native-compaction-live.md`: native compaction records resumed live, Claude Code 2.1.318 (2026-11-04).
 43. `docs/verification/live-hops-and-provider-reasoning.md`: live hops into Claude Code 2.1.312 with signed and redacted thinking, and the tampered-signature control (2026-10-28).
+44. Claude Code 2.1.322 code and docs, read only, 2026-11-12: the `Bash` and `PowerShell` tools, `CLAUDE_CODE_USE_POWERSHELL_TOOL`, the transcript's environment snapshot (`{"type":"attachment","attachment":{"type":"environment","snapshot":{"shell":…}}}`, values `PowerShell`, `PowerShell (primary); Bash tool also available …`, `bash`, `zsh (login shell: bash)`); 3086 snapshots on the test machine, all `PowerShell (primary)…`. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).

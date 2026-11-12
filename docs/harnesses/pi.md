@@ -10,7 +10,7 @@ mukade reads and writes its sessions: list, dump, hop in and out, resume, a summ
 | **Read** (`list`, `dump`) | ✅ every session file under `<PI_CODING_AGENT_DIR>/sessions`; the branch Pi resumes is carried, other branches are kept but not carried |
 | **Write** | ✅ a new session file: a header, then `message` rows |
 | **Hop as source** | ✅ `mukade hop pi <id> <dst> …`; `--all-branches` ❌ (Codex only) |
-| **Hop as destination** | ⚠️ works, but without `--dest-shell bash` every shell call travels as text, and without `--dest-protocol` every reasoning block is dropped |
+| **Hop as destination** | ⚠️ works; a shell call stays a call only in the dialect Pi runs (`shellPath`, else POSIX), and without `--dest-protocol` every reasoning block is dropped |
 | **Resume** | ✅ `pi -p --session <file>`, run from the session's working directory with `PI_CODING_AGENT_DIR` set |
 | **Summary by its own model** | ✅ `--compaction summary`: Pi forks the session into a scratch folder; the source file stays byte-identical [34] |
 | **Native compaction** | ✅ `--compaction native` appends Pi's own `compaction` entry; live Pi 1.4.0 resumed one and answered from the summary (2026-11-04) [53]. `Compaction::DestinationNative` ❌ |
@@ -30,9 +30,9 @@ $env:CLAUDE_CONFIG_DIR   = Join-Path $HOME '.claude'      # the other end of the
 mukade list pi
 mukade dump pi YOUR_PI_SESSION_ID --output C:\work\session.json
 
-# 3. Hop into Pi. --dest-shell keeps bash calls as calls; --dest-protocol keeps reasoning
+# 3. Hop into Pi. --dest-protocol keeps reasoning
 #    (name the protocol Pi's configured provider really uses)
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --dest-shell bash --dest-protocol anthropic-messages
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --dest-protocol anthropic-messages
 
 # 4. Hop out of Pi
 mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project'
@@ -59,7 +59,7 @@ pi --session '<the receipt location>'                    # the same, interactive
 | Android | Termux | `pkg update && pkg upgrade`, `pkg install nodejs git`, then the npm command [20b] |
 
 - Pi requires Node.js `>=22.19.0` (`engines`) [1]; the installers can install it [2]. The version mukade was built against: npm's suffix (`…/pi-coding-agent@1.2.0`); check with `pi --version` [20].
-- Native Windows: the `bash` tool needs a Bash: `shellPath` in `settings.json`, then Git Bash under `Program Files`, then `bash.exe` on `PATH` [12].
+- The `bash` tool runs `shellPath` from the settings (with `-c`) when set; else on native Windows Git Bash under `Program Files`, then `bash.exe` on `PATH`, else an error; elsewhere `/bin/bash`, then `bash`, then `sh` [12][54]. Sessions do not record the shell [54].
 
 **Where it lives** ([harness catalog](../reference/harness-catalog.md#finding-existing-installations); by hand `command -v pi` or `Get-Command pi -All`, `npm prefix -g`, `pi --version` [35])
 
@@ -319,7 +319,7 @@ Sources: [30], tool translation [28] ([tool-conversion-tables](../tool-conversio
 
 **What you may lose**
 
-- **Shell calls need `--dest-shell`.** A `bash` call is written as a call only when `--dest-shell` names a POSIX shell (`bash`, `sh`, `zsh`) and the source call is POSIX too; otherwise it travels as text, as does one with a working directory or background execution. The timeout goes back to seconds, rounded up (`src/harnesses/pi.rs` `translate()`).
+- **Shell calls take the shell Pi runs.** A call is written as `bash` only when its dialect is the one `--dest-shell` names, else the one Pi runs (`src/harnesses/pi.rs` `default_shell()`): the `shellPath` of `<cwd>/.pi/settings.json`, else of `<PI_CODING_AGENT_DIR>/settings.json` (the project's wins, as Pi merges them), read by its name, so `pwsh` is PowerShell and a shell of no known dialect is none; unset, POSIX. Otherwise it travels as text, as does one with a working directory or background execution. The timeout goes back to seconds, rounded up (`src/harnesses/pi.rs` `translate()`).
 - **Reasoning needs `--dest-protocol`.** Pi speaks whatever its provider speaks, so by default every reasoning block toward Pi is dropped [32]. With it, thinking is written with its `thinkingSignature` only when the reasoning policy carries it natively; an Anthropic encrypted payload becomes `{"type":"thinking","thinking":"[Reasoning redacted]","thinkingSignature":<data>,"redacted":true}` (`src/policy.rs` `payload_fits()`).
 - **Offered tools.** Pi's offered set is `read`, `bash`, `edit`, `write` (`src/tools.rs` `offered()`): `grep`, `find` and `ls` calls travel as text unless `--tool-map <path>` binds them. An edit with `replace_all` travels as text; several edits become one `edit` with `edits[]`.
 
@@ -348,7 +348,7 @@ Source: [34] ([usage §5](../usage.md#5-choose-what-travels)).
 
 Ranked by what they cost a user. The rest: [`../../next.md`](../../next.md).
 
-1. **Destination shell from Pi's own settings.** Until mukade reads it, every shell call into Pi is text without `--dest-shell`. The settings key is **[U]**; settled by reading Pi's `settings.json` keys and implementing the lookup (next.md, "Destination shell").
+1. **Pi's `powershell` tool as a destination.** It is off unless `defaultTools` or `--tools` names it; mukade writes a PowerShell call as `bash`, and only toward a `shellPath` of PowerShell. Reading `defaultTools` and translating to `powershell` settles it in code (next.md).
 2. **1.4.0 tool schemas [U].** Only `read`'s parameters were re-checked at 1.4.0; reading `<pkg>\dist\core\tools\*.js` of 1.4.0 settles the others.
 3. **Shell-command hooks [U].** No such setting appears in the 1.2.0 docs; reading the 1.4.0 docs (`docs/extensions.md`, `docs/configuration.md`) settles it.
 4. **Web extension events [U].** The field names `pi-web-access` and `pi-web-search` use; settled by the one JSON run under Tools, "Not established".
@@ -415,3 +415,4 @@ In sources 36 to 52, read on 2026-11-01, `<pkg>` is the same folder holding Pi 1
 51. "Codemode", `<pkg>\docs\codemode.md` lines 3-7, 24-44, accessed 2026-11-01.
 52. `<pkg>\CHANGELOG.md:441` (nested tool calls emit events with `parentToolCallId`), accessed 2026-11-01.
 53. `docs/verification/native-compaction-live.md`: the live native-compaction check of 2026-11-04 (Pi 1.4.0, scratch home, 4,001 rows, `compaction` with `firstKeptEntryId`).
+54. Pi 1.4.0 package, read only, 2026-11-12: `dist/utils/shell.js` (the shell the `bash` tool runs, `shellPath`), the `powershell` tool and `defaultTools`, the settings files and their merge. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).

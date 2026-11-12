@@ -275,7 +275,7 @@ mukade maps them: [`../tool-conversion-tables.md`](../tool-conversion-tables.md)
 
 | tool | what it does |
 |---|---|
-| `shell` | command in the user's shell (`command`, `workdir`, `timeout`, `background`) |
+| `shell` | runs a command (`command`, `workdir`, `timeout`, `background`) in the configuration's `shell` (skipped when `fish` or `nu`), else `$SHELL`, else on Windows `pwsh`, `powershell`, Git Bash, `cmd`; the dialect goes by the base name. Sessions do not record it [58] |
 | `execute` | Code Mode JavaScript that calls and combines tools; MCP tools and the `browser`/`opencode` namespaces are reached through it. *2.2.5*: it has its own `fetch` global (see Web tools) [53] |
 | `webfetch` | one URL as markdown, text or HTML. *2.2.5*: input `url`, `format` (default `markdown`), `timeout` (seconds, at most 120, default 30); textual responses only [42][50] |
 | `websearch` | search through the selected integration. *2.2.5*: one of five providers or the Console-hosted one; input `query`; with none chosen, the first call raises a consent form that a headless run cancels (see Web tools) [41][45][49][51][52] |
@@ -558,6 +558,20 @@ a `cwd` starting with `-`; a `--dest-id` other than `ses_` plus letters, digits,
   answer, else the first `x.y.z` of `<exe> --version`.
 - Only `OPENCODE_DB` is set for the import; the engine runs with the `XDG_*` configuration of mukade's shell ([How mukade finds it](#how-mukade-finds-it)) [35].
 
+**Shell** (`src/harnesses/opencode.rs` `opencode_shell()`): `--dest-shell`, else the `shell` of the
+first source below that sets one, else `$SHELL`, else PowerShell on Windows, else none (shell calls
+travel as text). A shell of no known dialect (`fish`, `nu`, `cmd`) passes to the next of these.
+
+| # | source, nearest first |
+|---|---|
+| 1 | `OPENCODE_CONFIG_CONTENT` |
+| 2 | from the project (`--cwd`, else the source's) up to its git worktree (the folder holding `.git`), in each folder: `.opencode/opencode.jsonc`, `.opencode/opencode.json`, `opencode.jsonc`, `opencode.json` |
+| 3 | `OPENCODE_CONFIG` |
+| 4 | the global folder: beside the store when a configuration is there (as for the model), else `$XDG_CONFIG_HOME/opencode/`, else `~/.config/opencode/`; `opencode.jsonc`, then `opencode.json` |
+
+JSONC comments and trailing commas are read. Not read **[U]**: the managed configuration
+(`%ProgramData%\opencode`).
+
 **Import document shape.** Each item was probed against 2.1.4: without it, `session import` answers
 `Bad Request` [32][27 §2.3].
 
@@ -708,3 +722,4 @@ All accessed 2026-10-28 unless a source says otherwise.
 55. [`docs/verification/listing-coverage-2026-11-08.md`](../verification/listing-coverage-2026-11-08.md): the listing check of 2026-11-08 on the real stores (OpenCode 2.2.5).
 56. [`docs/verification/native-compaction-live.md`](../verification/native-compaction-live.md): the live native-compaction check of 2026-11-04 (OpenCode 2.2.5).
 57. [`docs/verification/2026-11-02-opaque-reasoning.md`](../verification/2026-11-02-opaque-reasoning.md): the opaque-reasoning check of 2026-11-02 (OpenCode 2.2.3 importer).
+58. OpenCode 2.2.5 code and docs, read only, 2026-11-12: the shell lookup (configuration `shell`, `$SHELL`, the Windows order) and the dialect by base name; the configuration sources and their merge order. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).

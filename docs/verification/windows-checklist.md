@@ -99,8 +99,8 @@ checked on every rollout of this machine ([census](2026-11-11-codex-code-mode.md
 scripts split). Left: one live hop.
 
 Every Desktop rollout declares PowerShell, so its shell calls translate only toward a destination
-whose shell is PowerShell (`--dest-shell powershell`). Toward Claude Code only the patches
-translate, until the destination-shell item of `next.md` is done.
+that runs PowerShell (here `--dest-shell powershell`;
+[tables §4.1](../tool-conversion-tables.md#41-shell)).
 
 **Needs:** one Codex **Desktop** thread with a few shell commands and a file edit in it.
 
