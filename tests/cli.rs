@@ -432,7 +432,8 @@ fn a_hop_into_pi_takes_the_shell_its_settings_name() {
 }
 
 /// A Claude Code installation whose newest transcript records a PowerShell session offers its
-/// `PowerShell` tool: a PowerShell call becomes one. Without that evidence it stays text.
+/// `PowerShell` tool: a PowerShell call becomes one. Without that evidence it stays text. The
+/// sessions mukade writes there record no snapshot, so they do not hide it from the next hop.
 #[test]
 fn a_hop_into_claude_code_writes_powershell_calls_where_it_runs_the_tool() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "cli-claude-powershell");
@@ -441,27 +442,35 @@ fn a_hop_into_claude_code_writes_powershell_calls_where_it_runs_the_tool() {
     let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
     assert_eq!(shell_counts(&printed), (0, 2), "no evidence: {printed}");
 
+    // Claude Code records Node's name for the platform it runs on.
+    let platform = match std::env::consts::OS {
+        "windows" => "win32",
+        "macos" => "darwin",
+        os => os,
+    };
     let snapshot = serde_json::json!({
         "type": "attachment",
         "attachment": {
             "type": "environment",
-            "snapshot": {"platform": "win32", "shell": "PowerShell (primary); Bash tool also available for POSIX scripts"}
+            "snapshot": {"platform": platform, "shell": "PowerShell (primary); Bash tool also available for POSIX scripts"}
         }
     });
     let transcript = scratch.join("home/projects/elsewhere/session.jsonl");
     std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     std::fs::write(&transcript, format!("{snapshot}\n")).unwrap();
-    let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
-    assert_eq!(
-        shell_counts(&printed),
-        (2, 0),
-        "PowerShell offered: {printed}"
-    );
-    let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
-    assert!(
-        written.contains(r#""name":"PowerShell""#),
-        "a PowerShell call"
-    );
+    for hop in 1..=6 {
+        let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
+        assert_eq!(
+            shell_counts(&printed),
+            (2, 0),
+            "hop {hop}, PowerShell offered: {printed}"
+        );
+        let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
+        assert!(
+            written.contains(r#""name":"PowerShell""#),
+            "a PowerShell call"
+        );
+    }
 }
 
 /// A reserved file the destination cannot take is refused before anything is planned (exit 2, as

@@ -269,11 +269,42 @@ const WITH_POWERSHELL: &[&str] = claude_tools!("PowerShell");
 /// The variable that turns the `PowerShell` tool on (`1`) or off (`0`).
 const POWERSHELL_VAR: &str = "CLAUDE_CODE_USE_POWERSHELL_TOOL";
 
-/// How much of a transcript's end is read for its environment snapshot.
-const TRANSCRIPT_TAIL: u64 = 1 << 20;
+/// The bounds of the search for an environment snapshot in the newest transcripts.
+#[derive(Debug, Clone, Copy)]
+struct Search {
+    /// How many of the newest transcripts are examined.
+    files: usize,
+    /// How much of a transcript's start is read.
+    head: u64,
+    /// How much of a transcript's end is read.
+    tail: u64,
+    /// How many bytes every read of one search takes together.
+    budget: u64,
+    /// The `platform` a snapshot must name: this machine's.
+    platform: &'static str,
+}
 
-/// How many of the newest transcripts are tried for one.
-const TRANSCRIPTS_TRIED: usize = 5;
+impl Search {
+    /// 20 files, their first and last 1 MiB, 40 MiB in all, this machine's platform.
+    fn standard() -> Self {
+        Search {
+            files: 20,
+            head: 1 << 20,
+            tail: 1 << 20,
+            budget: 40 << 20,
+            platform: platform(),
+        }
+    }
+}
+
+/// The `platform` Claude Code records for this operating system (Node's name for it).
+fn platform() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "win32",
+        "macos" => "darwin",
+        os => os,
+    }
+}
 
 /// The offered set, with `var` the process's value of [`POWERSHELL_VAR`].
 fn offered_for(var: Option<&str>, roots: &StoreRoots, cwd: Option<&Path>) -> ToolSet {
@@ -302,7 +333,7 @@ fn powershell_enabled(var: Option<&str>, config: Option<&Path>, cwd: Option<&Pat
                 .flatten()
                 .find_map(|file| settings_switch(&file))
         })
-        .or_else(|| config.and_then(transcript_evidence))
+        .or_else(|| config.and_then(|config| transcript_evidence(config, &Search::standard())))
         .unwrap_or(false)
 }
 
@@ -326,18 +357,42 @@ fn settings_switch(file: &Path) -> Option<bool> {
     }
 }
 
-/// What the newest transcripts under `<config>/projects/*/` say: the last environment snapshot of
-/// the newest one that has one, on when its shell starts with `PowerShell`.
-fn transcript_evidence(config: &Path) -> Option<bool> {
-    newest_transcripts(&config.join("projects"), TRANSCRIPTS_TRIED)
-        .iter()
-        .find_map(|file| snapshot_shell(&tail(file, TRANSCRIPT_TAIL)?))
-        .map(|shell| shell.starts_with("PowerShell"))
+/// What the newest transcripts under `<config>/projects/*/` say: newest first, the first file
+/// with a snapshot of this platform answers, its tail's last one over its head's; on when its
+/// shell starts with `PowerShell`. A file without one passes to the next, within `search`.
+fn transcript_evidence(config: &Path, search: &Search) -> Option<bool> {
+    let mut left = search.budget;
+    for file in newest_transcripts(&config.join("projects"), search.files) {
+        let Ok(length) = std::fs::metadata(&file).map(|metadata| metadata.len()) else {
+            continue;
+        };
+        // A file that fits in its head and its tail is read once, whole.
+        let ranges = if length <= search.head + search.tail {
+            vec![(0, length)]
+        } else {
+            vec![(length - search.tail, search.tail), (0, search.head)]
+        };
+        for (start, size) in ranges {
+            if size > left {
+                return None;
+            }
+            left -= size;
+            let shell = read_lines(&file, start, size, length)
+                .and_then(|text| snapshot_shell(&text, search.platform));
+            if let Some(shell) = shell {
+                return Some(shell.starts_with("PowerShell"));
+            }
+        }
+    }
+    None
 }
 
-/// The `limit` newest `.jsonl` files directly inside the project folders of `projects`.
+/// The `limit` newest `.jsonl` files directly inside the project folders of `projects`, newest
+/// first, kept in a heap of `limit` while the folders are listed.
 fn newest_transcripts(projects: &Path, limit: usize) -> Vec<PathBuf> {
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(projects)
+    use std::cmp::Reverse;
+    let mut newest = std::collections::BinaryHeap::with_capacity(limit + 1);
+    let entries = std::fs::read_dir(projects)
         .into_iter()
         .flatten()
         .flatten()
@@ -347,55 +402,63 @@ fn newest_transcripts(projects: &Path, limit: usize) -> Vec<PathBuf> {
                 .flatten()
                 .flatten()
         })
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
-        .filter_map(|entry| {
-            let metadata = entry.metadata().ok().filter(|m| m.is_file())?;
-            Some((metadata.modified().ok()?, entry.path()))
-        })
-        .collect();
-    files.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-    files
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"));
+    for entry in entries {
+        let Some(modified) = entry
+            .metadata()
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .and_then(|metadata| metadata.modified().ok())
+        else {
+            continue;
+        };
+        // The heap's top is the oldest kept: it goes when one more is kept than asked.
+        newest.push(Reverse((modified, entry.path())));
+        if newest.len() > limit {
+            newest.pop();
+        }
+    }
+    newest
+        .into_sorted_vec()
         .into_iter()
-        .take(limit)
-        .map(|(_, path)| path)
+        .map(|Reverse((_, path))| path)
         .collect()
 }
 
-/// The last `limit` bytes of a file, from the first whole line in them.
-fn tail(file: &Path, limit: u64) -> Option<String> {
+/// The whole lines among the `size` bytes from `start` of a file of `length` bytes: a line cut at
+/// either end is left out.
+fn read_lines(file: &Path, start: u64, size: u64, length: u64) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut handle = std::fs::File::open(file).ok()?;
-    let length = handle.metadata().ok()?.len();
-    let start = length.saturating_sub(limit);
     handle.seek(SeekFrom::Start(start)).ok()?;
     let mut bytes = Vec::new();
-    handle.read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    Some(match start {
-        0 => text.into_owned(),
-        _ => text
+    handle.take(size).read_to_end(&mut bytes).ok()?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if start + size < length {
+        text.truncate(text.rfind('\n').map_or(0, |end| end + 1));
+    }
+    if start > 0 {
+        text = text
             .split_once('\n')
-            .map_or_else(String::new, |(_, rest)| rest.to_string()),
-    })
+            .map_or_else(String::new, |(_, rest)| rest.to_string());
+    }
+    Some(text)
 }
 
-/// The shell the last environment snapshot in `text` names: a line
-/// `{"type":"attachment","attachment":{"type":"environment","snapshot":{"shell":…}}}`.
-fn snapshot_shell(text: &str) -> Option<String> {
+/// The shell the last environment snapshot of `platform` in `text` names: a line
+/// `{"type":"attachment","attachment":{"type":"environment","snapshot":{"platform":…,"shell":…}}}`.
+fn snapshot_shell(text: &str, platform: &str) -> Option<String> {
     text.lines()
         .rev()
         .filter(|line| line.contains("\"environment\""))
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find_map(|record| {
             let attachment = record.get("attachment")?;
+            let snapshot = attachment.get("snapshot")?;
             (record.get("type")?.as_str()? == "attachment"
-                && attachment.get("type")?.as_str()? == "environment")
-                .then(|| {
-                    attachment
-                        .pointer("/snapshot/shell")?
-                        .as_str()
-                        .map(str::to_string)
-                })
+                && attachment.get("type")?.as_str()? == "environment"
+                && snapshot.get("platform")?.as_str()? == platform)
+                .then(|| snapshot.get("shell")?.as_str().map(str::to_string))
                 .flatten()
         })
 }
@@ -573,7 +636,10 @@ fn web_search(input: &Value) -> Translation {
 
 #[cfg(test)]
 mod tests {
-    use super::{PINNED, WITH_POWERSHELL, offered_for, powershell_enabled, snapshot_shell};
+    use super::{
+        PINNED, Search, WITH_POWERSHELL, offered_for, powershell_enabled, snapshot_shell,
+        transcript_evidence,
+    };
     use crate::roots::StoreRoots;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
@@ -600,19 +666,40 @@ mod tests {
         serde_json::json!({"env": {"CLAUDE_CODE_USE_POWERSHELL_TOOL": value}}).to_string()
     }
 
-    /// One transcript line as Claude Code records its environment snapshot.
-    fn snapshot(shell: &str) -> String {
+    /// The `platform` Claude Code records on the machine the tests run on.
+    fn this_platform() -> &'static str {
+        match std::env::consts::OS {
+            "windows" => "win32",
+            "macos" => "darwin",
+            os => os,
+        }
+    }
+
+    /// One transcript line as Claude Code records its environment snapshot on `platform`.
+    fn snapshot_on(platform: &str, shell: &str) -> String {
         serde_json::json!({
             "parentUuid": "p",
             "isSidechain": false,
             "attachment": {
                 "type": "environment",
-                "snapshot": {"platform": "win32", "shell": shell, "isGitRepo": false}
+                "snapshot": {"platform": platform, "shell": shell, "isGitRepo": false}
             },
             "type": "attachment",
             "uuid": "u"
         })
         .to_string()
+    }
+
+    /// [`snapshot_on`] this machine's platform.
+    fn snapshot(shell: &str) -> String {
+        snapshot_on(this_platform(), shell)
+    }
+
+    /// `n` lines of about 1 KB each, none a snapshot.
+    fn fillers(n: usize) -> Vec<String> {
+        let line = serde_json::json!({"type": "user", "message": {"content": "x".repeat(1000)}})
+            .to_string();
+        std::iter::repeat_n(line, n).collect()
     }
 
     fn user_line() -> String {
@@ -729,9 +816,11 @@ mod tests {
         assert!(enabled(), "skipped to the newest file with a snapshot");
     }
 
+    /// A file without a snapshot (one mukade wrote, one too short) is no answer: the newest files
+    /// are examined until one answers, at most 20.
     #[test]
-    fn at_most_five_transcripts_are_tried() {
-        let dir = scratch("five");
+    fn files_without_a_snapshot_pass_to_older_ones_up_to_twenty() {
+        let dir = scratch("twenty");
         let config = dir.join("config");
         transcript(
             &config,
@@ -740,38 +829,138 @@ mod tests {
             &[snapshot("PowerShell")],
             100,
         );
-        for age in 0..4 {
+        for age in 0..19 {
             let name = format!("plain-{age}.jsonl");
             transcript(&config, "p", &name, &[user_line()], 200 + age);
+            if age == 5 {
+                assert!(powershell_enabled(None, Some(&config), None), "past 6");
+            }
         }
-        assert!(powershell_enabled(None, Some(&config), None), "the fifth");
-        transcript(&config, "p", "plain-4.jsonl", &[user_line()], 300);
-        assert!(!powershell_enabled(None, Some(&config), None), "a sixth");
-    }
-
-    #[test]
-    fn only_the_last_mebibyte_of_a_transcript_is_read() {
-        let dir = scratch("tail");
-        let config = dir.join("config");
-        transcript(&config, "p", "older.jsonl", &[snapshot("bash")], 100);
-        let filler = serde_json::json!({"type": "user", "message": {"content": "x".repeat(1000)}})
-            .to_string();
-        let mut lines = vec![snapshot("PowerShell")];
-        lines.extend(std::iter::repeat_n(filler, 1100));
-        transcript(&config, "p", "long.jsonl", &lines, 200);
+        assert!(
+            powershell_enabled(None, Some(&config), None),
+            "the twentieth"
+        );
+        transcript(&config, "p", "plain-19.jsonl", &[user_line()], 300);
         assert!(
             !powershell_enabled(None, Some(&config), None),
-            "the snapshot more than 1 MiB from the end is not read; the older file decides"
+            "a twenty-first"
         );
+    }
+
+    /// A long session records its snapshot near its start: the head of the file is read too.
+    #[test]
+    fn a_snapshot_near_the_start_of_a_big_transcript_is_found() {
+        let dir = scratch("head");
+        let config = dir.join("config");
+        transcript(&config, "p", "older.jsonl", &[snapshot("bash")], 100);
+        let mut lines = vec![user_line(), snapshot(POWERSHELL_SHELL)];
+        lines.extend(fillers(3000));
+        transcript(&config, "p", "long.jsonl", &lines, 200);
+        assert!(powershell_enabled(None, Some(&config), None));
+    }
+
+    /// The last snapshot in the last 1 MiB wins over one in the first 1 MiB; one in neither is not
+    /// read.
+    #[test]
+    fn the_tail_is_preferred_and_the_middle_is_not_read() {
+        let dir = scratch("head-tail");
+        let config = dir.join("config");
+        let enabled = || powershell_enabled(None, Some(&config), None);
+        transcript(&config, "p", "older.jsonl", &[snapshot("PowerShell")], 100);
+
+        let mut head_only = vec![snapshot("bash")];
+        head_only.extend(fillers(2500));
+        transcript(&config, "p", "newer.jsonl", &head_only, 200);
+        assert!(
+            !enabled(),
+            "the head's bash answers; the older file is not asked"
+        );
+
+        let mut both = head_only.clone();
+        both.push(snapshot("PowerShell"));
+        transcript(&config, "p", "newer.jsonl", &both, 200);
+        assert!(enabled(), "the tail's PowerShell over the head's bash");
+
+        let mut middle = fillers(1200);
+        middle.push(snapshot("bash"));
+        middle.extend(fillers(1200));
+        transcript(&config, "p", "newer.jsonl", &middle, 200);
+        assert!(enabled(), "the middle is not read: the older file decides");
+    }
+
+    /// A snapshot recorded on another operating system (a configuration folder shared with WSL)
+    /// is not this installation's.
+    #[test]
+    fn a_snapshot_of_another_platform_is_ignored() {
+        let dir = scratch("platform");
+        let config = dir.join("config");
+        let enabled = || powershell_enabled(None, Some(&config), None);
+        let other = if this_platform() == "linux" {
+            "win32"
+        } else {
+            "linux"
+        };
+        transcript(&config, "p", "older.jsonl", &[snapshot("PowerShell")], 100);
+        transcript(
+            &config,
+            "p",
+            "newer.jsonl",
+            &[snapshot_on(other, "bash")],
+            200,
+        );
+        assert!(
+            enabled(),
+            "the newer file holds another platform's snapshot only"
+        );
+        let lines = [snapshot("bash"), snapshot_on(other, "PowerShell")];
+        transcript(&config, "p", "newer.jsonl", &lines, 200);
+        assert!(!enabled(), "the last snapshot of this platform");
+    }
+
+    /// Every byte read counts toward one budget for the whole search: a file that fits in its head
+    /// and tail is read once, whole; a longer one costs its tail, then its head.
+    #[test]
+    fn the_read_budget_bounds_the_search() {
+        let dir = scratch("budget");
+        let config = dir.join("config");
+        transcript(
+            &config,
+            "p",
+            "evidence.jsonl",
+            &[snapshot("PowerShell")],
+            100,
+        );
+        for age in 0..2 {
+            let name = format!("plain-{age}.jsonl");
+            transcript(&config, "p", &name, &fillers(10), 200 + age);
+        }
+        let evidence = std::fs::metadata(config.join("projects/p/evidence.jsonl"))
+            .unwrap()
+            .len();
+        let search = |budget| Search {
+            files: 20,
+            head: 1000,
+            tail: 1000,
+            budget,
+            platform: this_platform(),
+        };
+        let spent = 2 * (1000 + 1000) + evidence;
+        assert_eq!(transcript_evidence(&config, &search(spent)), Some(true));
+        assert_eq!(transcript_evidence(&config, &search(spent - 1)), None);
     }
 
     #[test]
     fn a_snapshot_names_its_shell() {
+        let here = this_platform();
         let text = [snapshot("bash"), user_line(), snapshot(POWERSHELL_SHELL)].join("\n");
-        assert_eq!(snapshot_shell(&text).as_deref(), Some(POWERSHELL_SHELL));
-        assert_eq!(snapshot_shell(&user_line()), None);
-        // A partial first line, as a tail read starts, is skipped.
-        assert_eq!(snapshot_shell("ell\":\"x\"}}}\n"), None);
+        assert_eq!(
+            snapshot_shell(&text, here).as_deref(),
+            Some(POWERSHELL_SHELL)
+        );
+        assert_eq!(snapshot_shell(&user_line(), here), None);
+        assert_eq!(snapshot_shell(&snapshot("bash"), "elsewhere"), None);
+        // A partial line, as a cut read holds, is skipped.
+        assert_eq!(snapshot_shell("ell\":\"x\"}}}\n", here), None);
     }
 
     #[test]

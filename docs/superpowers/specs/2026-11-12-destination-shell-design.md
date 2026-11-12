@@ -43,10 +43,15 @@ and goes on to `$SHELL`; mukade does the same for both).
 2. the same key under `env` in settings, nearest first: `<cwd>/.claude/settings.local.json`,
    `<cwd>/.claude/settings.json`, `<config>/settings.json`;
 3. evidence of this installation: the newest transcript under `<config>/projects/*/` (top level,
-   by modification time, at most 5 files tried) whose environment snapshot
-   (`{"type":"attachment","attachment":{"type":"environment","snapshot":{"shell":…}}}`) names a shell:
-   on when that `shell` starts with `PowerShell`. Read at most the last 1 MiB of the file, last
-   snapshot wins;
+   by modification time) whose environment snapshot
+   (`{"type":"attachment","attachment":{"type":"environment","snapshot":{"platform":…,"shell":…}}}`)
+   names this machine's `platform` (`win32`, `darwin`, `linux`): on when that `shell` starts with
+   `PowerShell`. Each file is read in its last 1 MiB and its first 1 MiB: the tail's last snapshot
+   wins, else the head's last (a long session records its snapshot near its start). A file without
+   one (a session mukade wrote, a snapshot of another platform) is no answer: the next newest is
+   examined, at most 20 files and 40 MiB read in all, the 20 picked without sorting every
+   transcript. Amended 2026-11-12 after review: the first rule (last 1 MiB, 5 files) missed the
+   snapshot of a long session and stopped after a few hops into Claude Code;
 4. no evidence → off (today's behaviour).
 Not modelled [U]: a `Bash` deny rule turning PowerShell off; the cached account flag in
 `.claude.json`. The transcript evidence reflects both.
