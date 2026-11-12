@@ -1362,9 +1362,7 @@ mod tests {
     /// to look at: it is asked once per binary, database and directory.
     #[test]
     fn the_opencode_project_of_a_directory_is_asked_once() {
-        let dir = std::env::temp_dir().join(format!("mukade-project-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("project");
         let work = dir.join("work");
         std::fs::create_dir_all(&work).unwrap();
         let (count, document) = (dir.join("count.txt"), dir.join("export.json"));
@@ -1420,6 +1418,5 @@ mod tests {
             Some("proj_work")
         );
         assert_eq!(runs(), asked, "the second answer came from the cache");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

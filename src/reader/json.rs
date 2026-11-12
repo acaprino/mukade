@@ -368,8 +368,7 @@ mod tests {
     /// changes while a hop runs cannot make the manifest describe a different session.
     #[test]
     fn a_capture_keeps_the_bytes_that_were_parsed_even_if_the_file_changes() {
-        let dir = std::env::temp_dir().join(format!("mukade-json-capture-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("json-capture");
         let path = dir.join("session.jsonl");
         let original = "{\"type\":\"user\",\"text\":\"before\"}\n";
         std::fs::write(&path, original).unwrap();
@@ -381,6 +380,5 @@ mod tests {
             crate::sha256::sha256_hex(original.as_bytes())
         );
         assert_eq!(capture.rows[0]["text"], "before");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

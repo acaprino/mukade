@@ -99,16 +99,16 @@ pub fn identity(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mukade-cache-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+    fn scratch(tag: &str) -> Scratch {
+        Scratch::new(&format!("cache-{tag}"))
     }
 
     #[test]
     fn an_answer_is_remembered_and_a_missing_one_is_not() {
-        let dir = scratch("roundtrip");
+        let root = scratch("roundtrip");
+        let dir = root.join("cache");
         assert_eq!(
             get(&dir, "k"),
             None,
@@ -120,23 +120,23 @@ mod tests {
         assert_eq!(get(&dir, "other").as_deref(), Some("v2"));
         put(&dir, "k", "v3");
         assert_eq!(get(&dir, "k").as_deref(), Some("v3"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_damaged_cache_file_is_an_empty_cache() {
-        let dir = scratch("damaged");
+        let root = scratch("damaged");
+        let dir = root.join("cache");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), "{not json").unwrap();
         assert_eq!(get(&dir, "k"), None);
         put(&dir, "k", "v");
         assert_eq!(get(&dir, "k").as_deref(), Some("v"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_changed_file_has_a_different_identity() {
-        let dir = scratch("identity");
+        let root = scratch("identity");
+        let dir = root.join("cache");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("tool");
         std::fs::write(&file, "one").unwrap();
@@ -144,6 +144,5 @@ mod tests {
         std::fs::write(&file, "one, changed").unwrap();
         assert_ne!(identity(&file).unwrap(), before);
         assert!(identity(&dir.join("missing")).is_none());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -67,15 +67,11 @@ pub fn detect_store(path: &Path) -> Vec<Detection> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::scratch::Scratch;
 
-    pub(crate) fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mukade-detect-{tag}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// A scratch folder, removed when the test ends.
+    pub(crate) fn scratch(tag: &str) -> Scratch {
+        Scratch::new(&format!("detect-{tag}"))
     }
 
     pub(crate) fn touch(path: &Path, content: &[u8]) {

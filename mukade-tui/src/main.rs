@@ -9,6 +9,8 @@
 
 mod directory;
 mod location;
+#[cfg(test)]
+mod scratch;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
@@ -2627,11 +2629,8 @@ mod tests {
         assert!(session_label(&info).chars().count() <= 48);
     }
 
-    fn scratch(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("mukade-tui-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> crate::scratch::Scratch {
+        crate::scratch::Scratch::new(tag)
     }
 
     #[test]
@@ -2691,7 +2690,6 @@ mod tests {
             session.conversation().count(),
             "the same conversation"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2705,7 +2703,6 @@ mod tests {
         let location = location::standard_locations(&StoreRoots::default()).remove(0);
         let lines = execute_import(&missing, &location, None);
         assert!(lines[0].starts_with("import failed"), "{lines:?}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

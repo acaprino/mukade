@@ -247,9 +247,7 @@ mod tests {
 
     #[test]
     fn only_a_numbered_state_file_is_the_database() {
-        let dir = std::env::temp_dir().join(format!("mukade-codex-state-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("codex-state");
         for name in [
             "state_5.sqlite",
             "state_5.sqlite-wal",
@@ -265,6 +263,5 @@ mod tests {
             Some(dir.join("state_10.sqlite").as_path()),
             "numbered by value (10 after 5), side files and other databases ignored"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

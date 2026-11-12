@@ -451,8 +451,7 @@ mod tests {
 
     #[test]
     fn an_empty_or_relative_path_entry_is_not_searched() {
-        let dir = std::env::temp_dir().join(format!("mukade-on-path-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("on-path");
         let launcher = dir.join(if cfg!(windows) {
             "fakeharness.cmd"
         } else {
@@ -460,9 +459,9 @@ mod tests {
         });
         std::fs::write(&launcher, "").unwrap();
         let path =
-            std::env::join_paths([PathBuf::new(), PathBuf::from("relative"), dir.clone()]).unwrap();
+            std::env::join_paths([PathBuf::new(), PathBuf::from("relative"), dir.to_path_buf()])
+                .unwrap();
         let found = on_path_in("fakeharness", &path);
-        let _ = std::fs::remove_dir_all(&dir);
         let found = found.expect("the absolute entry is searched");
         assert!(found.is_absolute(), "{found:?}");
         assert!(found.starts_with(&dir), "{found:?}");
@@ -530,11 +529,8 @@ mod tests {
         assert_eq!(pick(Some(""), None, None, None, "pi"), "pi");
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mukade-exe-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> crate::scratch::Scratch {
+        crate::scratch::Scratch::new(&format!("exe-{tag}"))
     }
 
     /// A launcher that counts how often it is run, and prints `faketool <version>`.
@@ -599,7 +595,6 @@ mod tests {
         // Without a cache folder it just asks.
         assert_eq!(version_of_in(&program, None).as_deref(), Some("3.4.50"));
         assert_eq!(runs(&count), 3);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An npm launcher's version is the package's own: no process is started.
@@ -625,7 +620,6 @@ mod tests {
             version_of_in(&shim.to_string_lossy(), None).as_deref(),
             Some("9.8.7")
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A `package.json` somewhere above a native binary is not that binary's package.
@@ -645,7 +639,6 @@ mod tests {
             version_of_in(&tool.to_string_lossy(), None).as_deref(),
             Some("2.0.0")
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -703,8 +696,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_timeout_stops_what_the_command_started() {
-        let dir = std::env::temp_dir().join(format!("mukade-kill-tree-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("kill-tree");
         let pidfile = dir.join("grandchild.pid");
         // The grandchild writes its pid, then both wait far past the deadline.
         let script = format!(
@@ -718,7 +710,6 @@ mod tests {
         .unwrap();
         assert!(finished.status.is_none(), "the deadline passed");
         let pid = std::fs::read_to_string(&pidfile).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         let pid: u32 = pid.trim().parse().unwrap();
         let gone = (0..40).any(|_| {
             std::thread::sleep(Duration::from_millis(50));

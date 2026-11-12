@@ -137,8 +137,7 @@ mod tests {
 
     #[test]
     fn an_opencode_folder_means_its_database() {
-        let dir = std::env::temp_dir().join(format!("mukade-roots-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("roots");
         let mut roots = StoreRoots::default();
         roots.set_root(HarnessId::OpenCode, &dir);
         assert_eq!(roots.opencode_db, Some(dir.join("opencode.db")));
