@@ -1,0 +1,69 @@
+//! A read-only census of a real Hermes Agent home.
+//!
+//! Ignored by default; it reads `HERMES_HOME` (the Windows default when unset) and never writes:
+//! `cargo test -j 4 --test hermes_live -- --ignored --nocapture`.
+
+use mukade::model::{HarnessId, Kind};
+use mukade::reader::{Reader, hermes};
+use mukade::roots::StoreRoots;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+fn home() -> Option<PathBuf> {
+    std::env::var_os("HERMES_HOME")
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("hermes").into())
+        })
+        .map(PathBuf::from)
+}
+
+#[test]
+#[ignore = "reads the real Hermes store named by HERMES_HOME"]
+fn every_session_of_the_real_store_reads() {
+    let Some(home) = home().filter(|home| home.join("state.db").is_file()) else {
+        eprintln!("no Hermes state.db: nothing to read");
+        return;
+    };
+    let roots = StoreRoots {
+        hermes_home: Some(home),
+        ..StoreRoots::default()
+    };
+    let listed = hermes::Hermes.list(&roots).expect("the store lists");
+    let all = hermes::Hermes
+        .list_all(&roots)
+        .expect("the store lists every session");
+    let (mut entries, mut by_kind, mut tools) =
+        (0, BTreeMap::<&str, usize>::new(), BTreeMap::new());
+    for info in &all {
+        let session = hermes::Hermes
+            .read(&info.id, &roots)
+            .unwrap_or_else(|error| panic!("{} must read: {error:#}", info.id));
+        assert_eq!(session.meta.harness, HarnessId::Hermes);
+        assert_eq!(session.meta.id, info.id);
+        for entry in &session.entries {
+            entries += 1;
+            *by_kind.entry(mukade_kind(&entry.kind)).or_default() += 1;
+            if let Kind::Step { calls, .. } = &entry.kind {
+                for call in calls {
+                    *tools.entry(call.source_name.clone()).or_insert(0usize) += 1;
+                }
+            }
+        }
+    }
+    let counts = hermes::store_counts(&roots.hermes_state_db().unwrap()).unwrap();
+    eprintln!(
+        "listed {} (all {}); counts {counts:?}; {entries} entries {by_kind:?}; tools {tools:?}",
+        listed.len(),
+        all.len()
+    );
+}
+
+fn mukade_kind(kind: &Kind) -> &'static str {
+    match kind {
+        Kind::User { .. } => "user",
+        Kind::Step { .. } => "step",
+        Kind::Results { .. } => "results",
+        Kind::Compaction { .. } => "compaction",
+        Kind::Meta { .. } => "meta",
+    }
+}

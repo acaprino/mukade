@@ -94,6 +94,22 @@ impl CanonicalTool {
         }
     }
 
+    /// The canonical form of a Hermes Agent tool name (0.23.1). `search_files` searches contents
+    /// unless its `target` is `files`, which the reader decides; `terminal` counts its timeout in
+    /// seconds.
+    pub fn from_hermes(name: &str) -> CanonicalTool {
+        match name {
+            "read_file" => CanonicalTool::Read,
+            "write_file" => CanonicalTool::Write,
+            "patch" => CanonicalTool::Edit,
+            "terminal" => CanonicalTool::Bash,
+            "search_files" => CanonicalTool::Grep,
+            "web_search" => CanonicalTool::WebSearch,
+            "delegate_task" => CanonicalTool::Agent,
+            other => CanonicalTool::Other(other.to_string()),
+        }
+    }
+
     /// The canonical form of a Codex tool name. A Codex Desktop `exec` script the reader could not
     /// split into its calls (spec L10) stays one opaque call, and travels in text form.
     pub fn from_codex(name: &str) -> CanonicalTool {

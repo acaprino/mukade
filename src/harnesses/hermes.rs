@@ -38,12 +38,23 @@ impl Harness for Hermes {
 
     /// Hermes records a subagent's and a branch's parent in the child's own row.
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
-        let listed = super::listed_stats(self, roots);
-        let forks = Some(match &listed.sessions {
-            Ok(_) => Err("not counted yet".to_string()),
-            Err(error) => Err(error.clone()),
-        });
-        StoreStats { forks, ..listed }
+        let counted = match roots.hermes_state_db() {
+            Some(db) => crate::reader::hermes::store_counts(&db),
+            None => Err(anyhow::anyhow!("no Hermes state.db to count")),
+        };
+        match counted {
+            Ok((sessions, forks)) => StoreStats {
+                sessions: Ok(sessions),
+                forks: Some(Ok(forks)),
+            },
+            Err(error) => {
+                let error = format!("{error:#}");
+                StoreStats {
+                    sessions: Err(error.clone()),
+                    forks: Some(Err(error)),
+                }
+            }
+        }
     }
 
     fn summary_command(

@@ -5,6 +5,8 @@
 //! the user's profile or the system's temporary folder.
 #![allow(dead_code)]
 
+pub mod hermes_db;
+
 use mukade::hop::{ImportOpts, ResumePrompt, SourceFacts, WriteDetails};
 use mukade::model::{HarnessId, Kind, Protocol, Session};
 use mukade::policy::ReasoningPolicy;
