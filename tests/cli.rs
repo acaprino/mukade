@@ -1651,7 +1651,7 @@ fn harness_inventory_uses_standard_store_roots_when_the_variables_are_unset() {
 }
 
 #[test]
-fn harness_inventory_counts_all_opencode_sessions_and_linked_forks() {
+fn harness_inventory_counts_all_opencode_sessions_and_only_forks_as_forks() {
     let scratch = support::scratch(HarnessId::OpenCode, "cli-harnesses-opencode");
     let db_path = scratch.join("home/opencode.db");
     std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1675,7 +1675,8 @@ fn harness_inventory_counts_all_opencode_sessions_and_linked_forks() {
         .nth(1)
         .expect("OpenCode section");
     assert!(section.contains("sessions: 3"), "{section}");
-    assert!(section.contains("forks:    2"), "{section}");
+    // `child-a` is a subagent (`parent_id`): `list --children` finds it; only `child-b` is a fork.
+    assert!(section.contains("forks:    1"), "{section}");
     assert!(
         section.contains("layout:   opencode.db (SQLite; session_v2, session_message)"),
         "{section}"
@@ -1766,7 +1767,7 @@ fn create_opencode_inventory_db(path: &Path, forked: bool) {
     .unwrap();
     if forked {
         db.execute(
-            "INSERT INTO session_v2 VALUES ('fork', 'Fork', 'D:/work', 2, NULL, 'root', NULL)",
+            "INSERT INTO session_v2 VALUES ('fork', 'Fork', 'D:/work', 2, NULL, NULL, 'root')",
             [],
         )
         .unwrap();

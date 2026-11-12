@@ -167,6 +167,36 @@ fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
     Ok(session)
 }
 
+/// What a `session_meta` says about the thread it was forked from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Fork {
+    thread: String,
+    /// The origin's record the copy ends before: `forked_from_ordinal_exclusive`, else the end of
+    /// the `history_base` a referenced fork continues from.
+    ordinal: Option<u64>,
+}
+
+impl Fork {
+    fn of(payload: &Value) -> Option<Fork> {
+        let thread = str_at(payload, "/forked_from_id").filter(|s| !s.is_empty())?;
+        let ordinal = payload
+            .get("forked_from_ordinal_exclusive")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .pointer("/history_base/end_ordinal_exclusive")
+                    .and_then(Value::as_u64)
+            });
+        Some(Fork { thread, ordinal })
+    }
+
+    fn kind(&self) -> ParentKind {
+        ParentKind::Fork {
+            at: self.ordinal.map(|ordinal| ordinal.to_string()),
+        }
+    }
+}
+
 /// Where a page continues its thread from (`session_meta.payload.history_base`).
 struct HistoryBase {
     thread: String,
@@ -490,6 +520,9 @@ struct MetaBuilder {
     /// The first `session_meta` names `forked_from_id`: a subagent spawned with the parent's
     /// turns (`fork_turns`), whose rollout copies them before its own.
     forked: bool,
+    /// The thread the first `session_meta` says it was forked from (`forked_from_id`), and the
+    /// ordinal of the origin's record the copy ends before.
+    forked_from: Option<Fork>,
     /// The role a spawned subagent ran as (`agent_role`), or `guardian_review` for a guardian
     /// review (`thread_source`, or `source.subagent.other: "guardian"`).
     agent: Option<String>,
@@ -508,7 +541,8 @@ impl MetaBuilder {
             if self.id.is_none() {
                 // Only the rollout's own (first) `session_meta`: a forked subagent's rollout
                 // carries its parent's next.
-                self.forked = str_at(payload, "/forked_from_id").is_some_and(|s| !s.is_empty());
+                self.forked_from = Fork::of(payload);
+                self.forked = self.forked_from.is_some();
                 // `id` is the rollout's own thread; a subagent's `session_id` names the thread
                 // that spawned it. A hand-written rollout may carry only one of the two.
                 self.id = str_at(payload, "/id")
@@ -883,11 +917,18 @@ impl Builder {
             m.session_id
                 .filter(|session| m.id.as_deref().is_some_and(|id| id != session))
         });
-        let parent_kind = parent.as_ref().map(|_| ParentKind::Spawn {
+        let spawned = parent.as_ref().map(|_| ParentKind::Spawn {
             call_id: None,
             agent: m.agent,
             inherits_context: m.forked,
         });
+        // A thread forked from another that no spawn started is a fork; a forked subagent is a
+        // spawn, the relation that matters (its inherited turns are kept either way).
+        let (parent, parent_kind) = match (parent, spawned, m.forked_from) {
+            (Some(parent), kind, _) => (Some(parent), kind),
+            (None, _, Some(fork)) => (Some(fork.thread.clone()), Some(fork.kind())),
+            (None, _, None) => (None, None),
+        };
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::Codex,
@@ -1027,10 +1068,13 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
     let mut listed: HashMap<String, SessionInfo> = latest
         .into_iter()
         .map(|(id, (file, archived))| {
+            let header = peek_header(&file);
             let info = SessionInfo {
                 id: id.clone(),
                 title: names.get(&id).cloned(),
-                cwd: peek_cwd(&file),
+                cwd: header.cwd,
+                parent: header.parent,
+                parent_kind: header.parent_kind,
                 // A rollout is only ever appended to: its last write is the thread's last activity.
                 updated: super::json::modified_rfc3339(&file),
                 archived,
@@ -1055,8 +1099,11 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
             info.updated = thread.updated.or(info.updated.take());
             // Archived when either says so: the folder the rollout sits in, or its row.
             info.archived |= thread.archived;
-            info.parent = thread.parent;
-            info.parent_kind = parent_kind;
+            // The database names a spawner; a fork is only in the rollout's own header.
+            if thread.parent.is_some() {
+                info.parent = thread.parent;
+                info.parent_kind = parent_kind;
+            }
             continue;
         }
         let on_disk = thread.rollout.as_deref().filter(|file| file.is_file());
@@ -1085,8 +1132,47 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
     Ok(out)
 }
 
-/// Read only the native header; missing or damaged metadata does not hide the rollout.
-fn peek_cwd(file: &Path) -> Option<String> {
+/// What a rollout's header says without reading the rest.
+#[derive(Default)]
+struct Header {
+    cwd: Option<String>,
+    parent: Option<String>,
+    parent_kind: Option<ParentKind>,
+}
+
+/// The header of a rollout: its folder, and the thread it was spawned or forked from. A rollout
+/// whose header is missing or damaged is still listed.
+fn peek_header(file: &Path) -> Header {
+    let Some(row) = peek_first_row(file) else {
+        return Header::default();
+    };
+    let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+    let fork = Fork::of(payload);
+    let spawner = str_at(payload, "/parent_thread_id")
+        .or_else(|| str_at(payload, "/source/subagent/thread_spawn/parent_thread_id"))
+        .filter(|s| !s.is_empty());
+    let (parent, parent_kind) = match (spawner, fork) {
+        (Some(parent), fork) => (
+            Some(parent),
+            Some(ParentKind::Spawn {
+                call_id: None,
+                agent: str_at(payload, "/agent_role")
+                    .or_else(|| str_at(payload, "/source/subagent/thread_spawn/agent_role")),
+                inherits_context: fork.is_some(),
+            }),
+        ),
+        (None, Some(fork)) => (Some(fork.thread.clone()), Some(fork.kind())),
+        (None, None) => (None, None),
+    };
+    Header {
+        cwd: str_at(payload, "/cwd"),
+        parent,
+        parent_kind,
+    }
+}
+
+/// A rollout's first record when it is a `session_meta` that is not larger than a megabyte.
+fn peek_first_row(file: &Path) -> Option<Value> {
     use std::io::{BufRead, Read};
 
     const MAX_HEADER_BYTES: usize = 1024 * 1024;
@@ -1104,7 +1190,12 @@ fn peek_cwd(file: &Path) -> Option<String> {
     if row.get("type").and_then(Value::as_str) != Some("session_meta") {
         return None;
     }
-    str_at(&row, "/payload/cwd")
+    Some(row)
+}
+
+/// Read only the native header; missing or damaged metadata does not hide the rollout.
+fn peek_cwd(file: &Path) -> Option<String> {
+    peek_header(file).cwd
 }
 
 /// Read the thread `id` (an unambiguous prefix is enough) from the store, choosing which branches

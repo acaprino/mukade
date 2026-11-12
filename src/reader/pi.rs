@@ -613,13 +613,32 @@ impl Builder {
                 git_branch: None,
                 // Pi's `parentSession` is the session this one was forked from.
                 parent_kind: m.parent.as_ref().map(|_| ParentKind::fork()),
-                parent: m.parent,
+                parent: m.parent.map(|path| parent_id(&path)),
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },
             entries: self.entries,
         })
     }
+}
+
+/// The session a header's `parentSession` names. Pi writes the origin's file path there; the
+/// session is the `id` of that file's own header, so a parent is an id in every harness. A path
+/// that is no file here (the session was moved, or made on another machine), or whose first line
+/// is no session header, stays as written.
+fn parent_id(parent: &str) -> String {
+    use std::io::BufRead;
+    let resolved = std::fs::File::open(parent).ok().and_then(|file| {
+        let mut line = String::new();
+        std::io::BufReader::new(file).read_line(&mut line).ok()?;
+        let header: Value =
+            serde_json::from_str(line.trim_start_matches('\u{feff}').trim()).ok()?;
+        if header.get("type").and_then(Value::as_str) != Some("session") {
+            return None;
+        }
+        str_at(&header, "/id").filter(|id| !id.is_empty())
+    });
+    resolved.unwrap_or_else(|| parent.to_string())
 }
 
 /// Pi stamps every record with its own id.
@@ -698,7 +717,9 @@ fn peek(file: &Path) -> SessionInfo {
                     info.cwd = str_at(&row, "/cwd");
                 }
                 if info.parent.is_none() {
-                    info.parent = str_at(&row, "/parentSession").filter(|p| !p.is_empty());
+                    info.parent = str_at(&row, "/parentSession")
+                        .filter(|p| !p.is_empty())
+                        .map(|path| parent_id(&path));
                     info.parent_kind = info.parent.as_ref().map(|_| ParentKind::fork());
                 }
             }

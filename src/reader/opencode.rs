@@ -368,13 +368,27 @@ fn lineage(session: &Value) -> Option<(String, ParentKind)> {
         return Some((parent, ParentKind::spawn()));
     }
     let bounded = |id: &str, boundary: &str| {
-        str_at(session, id)
-            .filter(|p| !p.is_empty())
-            .filter(|_| session.pointer(boundary).is_some_and(|b| !b.is_null()))
+        let source = str_at(session, id).filter(|p| !p.is_empty())?;
+        let boundary = session.pointer(boundary).filter(|b| !b.is_null())?;
+        Some((source, boundary_message(boundary)))
     };
     bounded("/fork/sessionID", "/fork/boundary")
         .or_else(|| bounded("/fork_session_id", "/fork_boundary"))
-        .map(|source| (source, ParentKind::fork()))
+        .map(|(source, at)| (source, ParentKind::Fork { at }))
+}
+
+/// The message a fork's boundary names: `{type: "before" | "through", messageID}`, as an object or
+/// as the JSON text a store row keeps.
+fn boundary_message(boundary: &Value) -> Option<String> {
+    let parsed;
+    let boundary = match boundary {
+        Value::String(text) => {
+            parsed = serde_json::from_str::<Value>(text).ok()?;
+            &parsed
+        }
+        other => other,
+    };
+    str_at(boundary, "/messageID").filter(|id| !id.is_empty())
 }
 
 fn id_of(m: &Value, index: usize) -> String {
@@ -618,10 +632,21 @@ fn session_rows(
         let spawner: Option<String> = row.get::<_, Option<String>>(5)?.filter(|p| !p.is_empty());
         let fork_source: Option<String> =
             row.get::<_, Option<String>>(6)?.filter(|p| !p.is_empty());
-        let bounded = row.get_ref(7)?.data_type() != rusqlite::types::Type::Null;
-        let (parent, parent_kind) = match (spawner, fork_source) {
-            (Some(parent), _) => (Some(parent), Some(ParentKind::spawn())),
-            (None, Some(source)) if bounded => (Some(source), Some(ParentKind::fork())),
+        let boundary: Option<String> = match row.get_ref(7)? {
+            rusqlite::types::ValueRef::Null => None,
+            rusqlite::types::ValueRef::Text(text) => {
+                Some(String::from_utf8_lossy(text).into_owned())
+            }
+            _ => Some(String::new()),
+        };
+        let (parent, parent_kind) = match (spawner, fork_source, boundary) {
+            (Some(parent), _, _) => (Some(parent), Some(ParentKind::spawn())),
+            (None, Some(source), Some(boundary)) => (
+                Some(source),
+                Some(ParentKind::Fork {
+                    at: boundary_message(&Value::String(boundary)),
+                }),
+            ),
             _ => (None, None),
         };
         Ok((
@@ -708,7 +733,7 @@ pub fn store_counts(db: &Path) -> Result<StoreCounts> {
     connection.busy_timeout(std::time::Duration::from_secs(2))?;
     let (sessions, forks): (i64, i64) = connection
         .query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN parent_id IS NOT NULL OR fork_session_id IS NOT NULL THEN 1 ELSE 0 END) \
+            "SELECT COUNT(*), SUM(CASE WHEN fork_session_id IS NOT NULL THEN 1 ELSE 0 END) \
              FROM session_v2",
             [],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),

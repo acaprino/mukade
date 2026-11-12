@@ -53,7 +53,7 @@ pub fn list_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<Sessi
         .into());
     };
     let files = session_files(&projects)?;
-    let table = crate::cache::table_name("claude-list", &projects.to_string_lossy());
+    let table = crate::cache::table_name("claude-list-2", &projects.to_string_lossy());
     let mut out = peek_files(&files, &table, cache);
     add_what_the_transcripts_do_not_say(&mut out, config);
     out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
@@ -89,7 +89,7 @@ pub fn list_all_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<S
     };
     let transcripts = subagents::transcripts(&projects)?;
     let files: Vec<PathBuf> = transcripts.iter().map(|(file, _)| file.clone()).collect();
-    let table = crate::cache::table_name("claude-subagents", &projects.to_string_lossy());
+    let table = crate::cache::table_name("claude-subagents-2", &projects.to_string_lossy());
     for (mut info, (file, session)) in peek_files(&files, &table, cache)
         .into_iter()
         .zip(&transcripts)
@@ -180,10 +180,14 @@ fn to_entry(size: u64, modified: u64, info: &SessionInfo) -> serde_json::Value {
         ("t", info.title.as_ref()),
         ("c", info.cwd.as_ref()),
         ("u", info.updated.as_ref()),
+        ("p", info.parent.as_ref()),
     ] {
         if let Some(value) = value.filter(|value| !value.is_empty()) {
             entry.insert(key.into(), value.clone().into());
         }
+    }
+    if let Some(ParentKind::Fork { at: Some(at) }) = &info.parent_kind {
+        entry.insert("a".into(), at.clone().into());
     }
     entry.into()
 }
@@ -199,11 +203,16 @@ fn from_entry(entry: &serde_json::Value, (size, modified): Stamp) -> Option<Sess
             .and_then(|value| value.as_str())
             .map(str::to_owned)
     };
+    // A fork's origin: the peek of a file that was not one has no `p`.
+    let parent = text("p");
+    let parent_kind = parent.as_ref().map(|_| ParentKind::Fork { at: text("a") });
     Some(SessionInfo {
         id: text("i").unwrap_or_default(),
         title: text("t"),
         cwd: text("c"),
         updated: text("u"),
+        parent,
+        parent_kind,
         ..Default::default()
     })
 }
@@ -269,7 +278,7 @@ pub fn read_file(path: &Path) -> Result<Session> {
         // The listing names a child by its file; reading it by path gives the same id.
         session.meta.id = subagents::qualified(&session_id, agent);
     }
-    if let Some(session_id) = session.meta.parent.clone() {
+    if transcript && let Some(session_id) = session.meta.parent.clone() {
         // A subagent's transcript: its meta.json names the call, the agent and the task.
         let meta = subagents::agent_meta(path);
         let (parent, kind) = subagents::lineage(&session_id, meta.as_ref());
@@ -578,6 +587,9 @@ struct OpenStep {
 #[derive(Default)]
 struct MetaBuilder {
     id: Option<String>,
+    /// The session a row says it was copied from (`forkedFrom`), and the origin's uuid of the last
+    /// row copied.
+    forked: Option<Forked>,
     /// `agentId`: the subagent whose transcript this is.
     agent_id: Option<String>,
     cwd: Option<String>,
@@ -648,10 +660,51 @@ impl TitleBuilder {
     }
 }
 
+/// What `/branch` writes on every row it copies: `forkedFrom: {sessionId, messageUuid}`, the origin
+/// session and the row's uuid there.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Forked {
+    session: String,
+    last: Option<String>,
+}
+
+impl Forked {
+    /// What `row` says about the fork it was copied into, when it was copied.
+    fn observe(into: &mut Option<Forked>, row: &Value) {
+        let Some(from) = row.get("forkedFrom") else {
+            return;
+        };
+        let text = |key: &str| {
+            from.get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        };
+        let Some(session) = text("sessionId") else {
+            return;
+        };
+        match into {
+            Some(known) if known.session == session => known.last = text("messageUuid"),
+            Some(_) => {}
+            None => {
+                *into = Some(Forked {
+                    session,
+                    last: text("messageUuid"),
+                })
+            }
+        }
+    }
+
+    fn lineage(self) -> (String, ParentKind) {
+        (self.session, ParentKind::Fork { at: self.last })
+    }
+}
+
 impl MetaBuilder {
     fn observe(&mut self, row: &Value) {
         let str_at = |p: &str| row.pointer(p).and_then(Value::as_str).map(str::to_owned);
         self.title.observe(row);
+        Forked::observe(&mut self.forked, row);
         if self.id.is_none() {
             self.id = str_at("/sessionId");
         }
@@ -1125,7 +1178,17 @@ impl Builder {
                 Some(session),
                 Some(ParentKind::spawn()),
             ),
-            (_, id, _) => (id, None, None),
+            // A fork's rows name the session they were copied from. A session never names itself.
+            (_, id, _) => match m
+                .forked
+                .filter(|f| id.as_deref() != Some(f.session.as_str()))
+            {
+                Some(forked) => {
+                    let (parent, kind) = forked.lineage();
+                    (id, Some(parent), Some(kind))
+                }
+                None => (id, None, None),
+            },
         };
         Ok(Session {
             meta: Meta {
@@ -1329,8 +1392,10 @@ fn peek(file: &Path) -> SessionInfo {
         sidechain: subagents::is_transcript(file),
         ..TitleBuilder::default()
     };
+    let mut forked: Option<Forked> = None;
     {
         let mut into = |row: Value| {
+            Forked::observe(&mut forked, &row);
             let str_at = |p: &str| row.pointer(p).and_then(Value::as_str).map(str::to_owned);
             if info.id.is_empty() {
                 info.id = str_at("/sessionId").unwrap_or_default();
@@ -1346,6 +1411,12 @@ fn peek(file: &Path) -> SessionInfo {
         super::json::peek_ends(file, &mut into);
     }
     info.title = titles.pick();
+    if let Some(forked) = forked.filter(|f| f.session != info.id) {
+        (info.parent, info.parent_kind) = {
+            let (parent, kind) = forked.lineage();
+            (Some(parent), Some(kind))
+        };
+    }
     info
 }
 

@@ -416,7 +416,12 @@ fn a_child_names_its_parent_in_either_form_and_a_fork_its_source() {
     doc["info"]["fork"] = serde_json::json!({"sessionID": "ses_source", "boundary": boundary});
     let fork = opencode::parse(&doc, None).unwrap().meta;
     assert_eq!(fork.parent.as_deref(), Some("ses_source"));
-    assert_eq!(fork.parent_kind, Some(ParentKind::fork()));
+    assert_eq!(
+        fork.parent_kind,
+        Some(ParentKind::Fork {
+            at: Some("msg_1".into())
+        })
+    );
 
     let mut rows: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(source("rows.json")).unwrap()).unwrap();
@@ -431,7 +436,12 @@ fn a_child_names_its_parent_in_either_form_and_a_fork_its_source() {
         serde_json::json!({"type": "through", "messageID": "msg_1"});
     let forked_row = opencode::parse(&rows, None).unwrap().meta;
     assert_eq!(forked_row.parent.as_deref(), Some("ses_source"));
-    assert_eq!(forked_row.parent_kind, Some(ParentKind::fork()));
+    assert_eq!(
+        forked_row.parent_kind,
+        Some(ParentKind::Fork {
+            at: Some("msg_1".into())
+        })
+    );
 
     let root = read_export().meta;
     assert_eq!((root.parent, root.parent_kind), (None, None));
