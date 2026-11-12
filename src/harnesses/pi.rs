@@ -150,6 +150,15 @@ impl Destination for Pi {
         None
     }
 
+    /// Pi's `bash` tool runs `shellPath` when its settings name one, else a POSIX shell (Git Bash
+    /// on Windows, `bash` or `sh` elsewhere). A `shellPath` of no known dialect names none.
+    fn default_shell(&self, roots: &StoreRoots, cwd: Option<&Path>) -> Option<Shell> {
+        match shell_path(roots.pi_agent_dir.as_deref(), cwd) {
+            Some(path) => tools::shell_named(&path),
+            None => Some(Shell::Posix),
+        }
+    }
+
     fn offered(&self) -> ToolSet {
         ToolSet {
             names: &["read", "bash", "edit", "write"],
@@ -210,6 +219,21 @@ impl Destination for Pi {
     fn image_in_result(&self, image: &Image) -> Value {
         crate::writer::pi::image_block(image)
     }
+}
+
+/// The `shellPath` Pi's settings name: `<cwd>/.pi/settings.json` over `<agent dir>/settings.json`,
+/// as Pi merges them. A file that does not parse, or has no non-empty string there, names none.
+fn shell_path(agent_dir: Option<&Path>, cwd: Option<&Path>) -> Option<String> {
+    let project = cwd.map(|cwd| cwd.join(".pi").join("settings.json"));
+    let global = agent_dir.map(|dir| dir.join("settings.json"));
+    [project, global].into_iter().flatten().find_map(|file| {
+        let settings: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+        settings
+            .get("shellPath")?
+            .as_str()
+            .filter(|path| !path.trim().is_empty())
+            .map(str::to_string)
+    })
 }
 
 // ---------------------------------------------------------------------------------------------

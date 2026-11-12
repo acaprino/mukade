@@ -189,6 +189,20 @@ pub trait Destination: Send + Sync {
     /// §2, L11).
     fn offered(&self) -> ToolSet;
 
+    /// The tools this destination offers in the installation `roots` name, for the project `cwd`:
+    /// [`Destination::offered`] plus the tools its configuration turns on.
+    fn offered_in(&self, _roots: &StoreRoots, _cwd: Option<&Path>) -> ToolSet {
+        self.offered()
+    }
+
+    /// The shell this destination runs a shell call with, in the installation `roots` name and the
+    /// project `cwd`: what its configuration names, else its platform's default. `None` is no
+    /// single dialect: a shell call is text form, unless the adapter picks its tool by the call's
+    /// own dialect.
+    fn default_shell(&self, _roots: &StoreRoots, _cwd: Option<&Path>) -> Option<Shell> {
+        None
+    }
+
     /// One canonical call in this destination's own tool shape, or its text form. `input` is the
     /// call's input (a Codex patch already read as the write or edit it makes), `source_name` the
     /// name the source harness gave it, `dest_shell` the shell this destination runs commands

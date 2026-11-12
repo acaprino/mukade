@@ -3,9 +3,12 @@
 //! Two writers need a value only the destination's own configuration knows: OpenCode refuses a
 //! model reference without a provider, and Codex stamps the provider its `config.toml` names.
 //! The CLI used to read them privately; the TUI needs the same answer without a second copy.
+//! The shell the destination runs decides which shell calls stay calls (L13): both ask it here too.
 
 use crate::model::HarnessId;
 use crate::roots::StoreRoots;
+use crate::tools::Shell;
+use std::path::Path;
 
 /// The provider and model the destination's own configuration names, when it names them, for the
 /// stores this process's variables name. See [`configured_model_in`].
@@ -29,6 +32,15 @@ pub fn configured_model_in(
     crate::harnesses::get(harness)
         .destination()
         .and_then(|destination| destination.configured_model(roots))
+}
+
+/// The shell the destination runs a shell call with, in the installation `roots` name and the
+/// project `cwd`: what its own configuration names, else its platform's default. `None` is no
+/// single dialect known, or a harness that is no destination.
+pub fn shell_in(harness: HarnessId, roots: &StoreRoots, cwd: Option<&Path>) -> Option<Shell> {
+    crate::harnesses::get(harness)
+        .destination()
+        .and_then(|destination| destination.default_shell(roots, cwd))
 }
 
 #[cfg(test)]

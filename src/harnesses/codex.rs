@@ -140,6 +140,12 @@ impl Destination for Codex {
         top_level_string(&text, "model_provider").map(|provider| (provider, None))
     }
 
+    /// Codex runs PowerShell on Windows (`pwsh`, else `powershell`) and the login shell elsewhere,
+    /// a POSIX one (`zsh`, `bash`, `sh`); no configuration key changes it.
+    fn default_shell(&self, _roots: &StoreRoots, _cwd: Option<&Path>) -> Option<Shell> {
+        Some(platform_shell(cfg!(windows)))
+    }
+
     fn offered(&self) -> ToolSet {
         ToolSet {
             names: &[
@@ -221,6 +227,15 @@ impl Destination for Codex {
     }
 }
 
+/// The shell Codex runs on Windows (`windows`) or elsewhere.
+fn platform_shell(windows: bool) -> Shell {
+    if windows {
+        Shell::PowerShell
+    } else {
+        Shell::Posix
+    }
+}
+
 /// A top-level `key = "value"` of a TOML file: before any `[table]`, the key exactly (not
 /// `model_providers.x`), with a trailing `# comment` left out.
 fn top_level_string(text: &str, key: &str) -> Option<String> {
@@ -289,7 +304,13 @@ fn edit(canonical: &CanonicalTool, input: &Value) -> Translation {
 
 #[cfg(test)]
 mod tests {
-    use super::top_level_string;
+    use super::{Shell, platform_shell, top_level_string};
+
+    #[test]
+    fn codex_runs_powershell_on_windows_only() {
+        assert_eq!(platform_shell(true), Shell::PowerShell);
+        assert_eq!(platform_shell(false), Shell::Posix);
+    }
 
     /// Codex's own provider is the top-level key: not a provider table's field, not a profile's,
     /// and not the comment after it.

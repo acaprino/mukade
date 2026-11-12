@@ -20,7 +20,9 @@ mod patch;
 
 use crate::harnesses;
 use crate::model::{CanonicalTool, HarnessId, ResultContent, ToolCall, ToolResult};
+use crate::roots::StoreRoots;
 use serde_json::{Map, Value};
+use std::path::Path;
 
 /// The shell dialect a call's command string was written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,29 @@ pub fn offered(harness: HarnessId) -> ToolSet {
     harnesses::get(harness)
         .destination()
         .map_or(ToolSet { names: &[] }, |destination| destination.offered())
+}
+
+/// What a destination offers in the installation `roots` name, for the project `cwd`: the pinned
+/// list plus the tools its configuration turns on. A harness that is no destination offers nothing.
+pub fn offered_in(harness: HarnessId, roots: &StoreRoots, cwd: Option<&Path>) -> ToolSet {
+    harnesses::get(harness)
+        .destination()
+        .map_or(ToolSet { names: &[] }, |destination| {
+            destination.offered_in(roots, cwd)
+        })
+}
+
+/// The dialect of a shell named by its program or path, as a harness's configuration names it:
+/// the base name, without `.exe`, in any case. `None` is a shell of no dialect mukade translates
+/// toward (`cmd`, `fish`, `nu`, an unknown one) or no name.
+pub fn shell_named(name: &str) -> Option<Shell> {
+    let base = name.trim().rsplit(['/', '\\']).next().unwrap_or_default();
+    let base = base.to_ascii_lowercase();
+    match base.strip_suffix(".exe").unwrap_or(&base) {
+        "bash" | "sh" | "zsh" | "dash" | "ksh" => Some(Shell::Posix),
+        "pwsh" | "powershell" => Some(Shell::PowerShell),
+        _ => None,
+    }
 }
 
 /// The outcome of translating one call.
