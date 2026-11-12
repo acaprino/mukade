@@ -80,7 +80,7 @@ impl Harness for DeepSeekHarness {
     /// opens a session. The headless profile continues one with a task.
     fn resume_refusal(&self, info: &crate::reader::SessionInfo) -> Option<String> {
         Some(format!(
-            "DeepSeek Harness has no terminal UI to open a session in; continue it with a task:              dsh --profile headless --session-id {} \"<task>\"",
+            "DeepSeek Harness has no terminal UI to open a session in; continue it with a task: dsh --profile headless --session-id {} \"<task>\"",
             info.id
         ))
     }

@@ -12,7 +12,7 @@ Evidence: `[n]` = source n in [Sources](#sources); `[S n]` = Hermes source at ta
 | **Read** (`list`, `dump`) | ✅ `<HERMES_HOME>/state.db`, opened read-only; schema 32 and later (33 verified) with the columns the reader needs. Lists every session, `oneshot` and `tool` ones included [37] |
 | **Write** | ⚠️ through `hermes sessions import --from claude`, never by writing `state.db`. Only user and assistant text arrives; every tool call is text; no model, no reasoning, no image. Takes about 70 s (the import starts the gateway) [33][35] |
 | **Hop as source** | ✅ `mukade hop hermes <id> <dst>`; `--all-branches` does not apply |
-| **Hop as destination** | ⚠️ works with the losses above; `--dest-id`, `--dest-path`, `--dest-agent`, `--metadata-file` and `--compaction native` are refused (exit 2) before anything runs |
+| **Hop as destination** | ⚠️ works with the losses above; `--dest-id`, `--dest-agent` and `--metadata-file` are refused as a command-line mistake (exit 1, as toward every destination that does not take them), `--dest-path` and `--compaction native` as unsupported (exit 2); each before anything runs |
 | **Resume** | ✅ receipt: `hermes chat -Q --resume <id> -q`; the TUI runs `hermes --resume <id>` |
 | **Summary by its own model** | ❌ `--compaction summary` from Hermes is refused, with the reason (How mukade summarizes it) |
 | **Native compaction** | ⚠️ read: a stored summary row (`_compressed_summary = 1`) is a compaction entry, so `--compaction portable` works; never written (the import has no such record) |
@@ -406,7 +406,7 @@ Code: `src/reader/hermes.rs`, adapter `src/harnesses/hermes.rs`, detector `src/d
 **What you may miss**
 
 - **The gate.** `schema_version` below 32, or a missing required column, is refused naming it. Required: `sessions` `id`, `source`, `parent_session_id`, `model_config`, `started_at`, `end_reason`; `messages` `id`, `session_id`, `role`, `content`, `tool_call_id`, `tool_calls`, `timestamp`, `active`.
-- **Read-only.** The store is opened `file:…?mode=ro`, never `immutable=1`: a gateway may be writing. One retry on a transient `SQLITE_IOERR` / `SQLITE_BUSY`.
+- **Read-only.** The store is opened with `SQLITE_OPEN_READ_ONLY` and a 2 s busy timeout, never `immutable=1`: a gateway may be writing. One retry on a transient `SQLITE_IOERR` / `SQLITE_BUSY`.
 - **One conversation.** The `active = 1` rows in `id` order are the conversation. `active = 0` rows are kept as `Meta(OffBranch)`: archived by a compaction, or rewound. A `/branch` child holds a copy of its parent's rows, so a hop of the child carries them once.
 - **A rotated chain is one session.** A legacy compaction that rotated the id (`end_reason = 'compression'`) lists only its tip; `read` follows `parent_session_id` while the parent ended that way and joins the segments, root first.
 - **Unknown cells.** NULL, BLOB and numeric `content` cells are legal and read by type; a `\x00json:` cell is a list of parts.
@@ -441,7 +441,7 @@ Code: `src/writer/hermes.rs`; live record [35]. Hermes has no way to add a sessi
 - **User and assistant rows only.** Consecutive turns of one role are merged; a user turn that opens with a context tag (`<system-reminder>`, `<environment_context>`, …) is dropped as injected context.
 - **No model, no reasoning, no image.** Hermes records no model for an import; reasoning is dropped (`--reasoning` has nothing to carry); an image is written as `[image]`.
 - **The folder.** Hermes keeps the working directory only when it exists, so a session whose folder is not one here names none (the receipt's `cwd` is null).
-- **The id and the title** are Hermes's: `YYYYMMDD_HHMMSS_<hex>`, and `Imported from Claude Code: <first line>` when Hermes titles it in time. `--dest-id`, `--dest-path`, `--dest-agent`, `--metadata-file` and `--compaction native` are refused (exit 2) before anything runs.
+- **The id and the title** are Hermes's: `YYYYMMDD_HHMMSS_<hex>`, and `Imported from Claude Code: <first line>` when Hermes titles it in time. `--dest-id`, `--dest-agent` and `--metadata-file` are refused as a command-line mistake (exit 1, as toward every destination that does not take them), `--dest-path` and `--compaction native` as unsupported (exit 2); each before anything runs.
 
 **How**
 

@@ -96,7 +96,7 @@ list missed are marked (added).
    and a helper that names the store's file or folder when there is one (`hermes_state_db`,
    `dsh_sessions`). The struct is public API, so the list is closed.
 3. The reader, `src/reader/<harness>.rs` (`impl Reader`), and its `mod` line in `src/reader/mod.rs`.
-4. For a destination: the writer, `src/writer/<harness>.rs` (`impl Writer`, `image_block`), and
+4. For a destination: the writer, `src/writer/<harness>.rs` (`impl Writer`; Claude Code, Codex, OpenCode and Pi also keep a free `image_block` function that their adapters call for an image), and
    its `mod` line in `src/writer/mod.rs`. A harness mukade only reads (a source only) has none.
 5. The detector, `src/detect/<harness>.rs` (`impl StoreLayout`), its `mod` line in
    `src/detect.rs` and its place in `detect::layout::layouts`.

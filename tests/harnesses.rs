@@ -567,11 +567,14 @@ fn only_a_claude_subagent_and_any_deepseek_session_are_refused_a_resume() {
         let adapter = get(id);
         let refusal = adapter.resume_refusal(&child);
         if id == HarnessId::DeepSeekHarness {
-            for refused in [adapter.resume_refusal(&root), refusal] {
+            for (shown, refused) in [(&root, adapter.resume_refusal(&root)), (&child, refusal)] {
                 let refused = refused.expect("dsh has no interface to open a session in");
-                assert!(
-                    refused.contains("dsh --profile headless --session-id p-1"),
-                    "{refused}"
+                assert_eq!(
+                    refused,
+                    format!(
+                        "DeepSeek Harness has no terminal UI to open a session in; continue it with a task: dsh --profile headless --session-id {} \"<task>\"",
+                        shown.id
+                    )
                 );
             }
             continue;

@@ -12,7 +12,7 @@ Labels: `[n]` = a source in [Sources](#sources). **[S]** = read in upstream sour
 | **Read** (`list`, `dump`) | ✅ `<DSH_HOME>/sessions/**/session.v4.jsonl[.zstd]`: zstd frames decoded and checksummed, a torn tail dropped and noted, the surface rebuilt from `surfaceOp`. Format version 4 only; another is refused naming it [34][38] |
 | **Write** | ✅ a v4 zstd log in the folder dsh derives from the id and the cwd; `dsh` opened, resumed and extended a written one [36] |
 | **Hop as source** | ✅ `mukade hop deepseek_harness <id> <dst>`; `--all-branches` does not apply |
-| **Hop as destination** | ⚠️ works; reasoning payloads have no place (a written assistant message has no `replayState`, so dsh reads it as another provider's); `--dest-path`, `--dest-agent`, `--metadata-file` and `--compaction native` are refused (exit 2) |
+| **Hop as destination** | ⚠️ works; reasoning payloads have no place (a written assistant message has no `replayState`, so dsh reads it as another provider's); `--dest-agent` and `--metadata-file` are refused as a command-line mistake (exit 1), `--dest-path` and `--compaction native` as unsupported (exit 2) |
 | **Resume** | ✅ receipt: `dsh --profile headless --session-id <id>` (add a task). The TUI cannot open it: dsh has no terminal UI, and says so |
 | **Summary by its own model** | ❌ `--compaction summary` from dsh is refused, with the reason (How mukade summarizes it) |
 | **Native compaction** | ⚠️ read: `compaction/summary` plus its `compact-checkpoint` message is a compaction entry, so `--compaction portable` works; never written |
@@ -335,7 +335,7 @@ Code: `src/reader/deepseek_harness.rs`, `src/reader/zstd_frames.rs`, adapter `sr
 
 **What you may miss**
 
-- **Format 4 only.** A header with another `version`, a header that lacks a required key, or an unknown non-ignorable event type refuses the session, naming it.
+- **Format 4 only.** A first line that is not a `session` header, a header with no `version` or another one, or an unknown non-ignorable event type refuses the session, naming it. The header's other keys are not checked; `id` and `cwd` are read from it when they are there.
 - **A torn tail is dropped.** A crash cuts the last frame: the reader decodes every complete frame (checksum compared), drops the rest and adds a `Meta(Unfinished)` entry that says so. A plain log drops a torn last line.
 - **The folder is not read.** `cwd`, `id` and the lineage come from the header; the folder name is lossy.
 - **Replaced nodes.** A node a `replace` op shadowed stays in the document as `Meta(OffBranch)`; only the surface is the conversation.
@@ -371,7 +371,7 @@ Code: `src/writer/deepseek_harness.rs`; live record [36]. The Claude fixture hop
 - **Reasoning.** An assistant message in the log keeps no signature or encrypted payload; the message has no `replayState`, so dsh reads it as another provider's and converts it itself. Reasoning text is written; opaque payloads are dropped.
 - **Images.** Not written: dsh's image is a reference into its attachment store.
 - **Tools.** Offered toward dsh: `read`, `write`, `edit`, `glob`, `grep`, `web_fetch` and the shell of the platform (`pwsh` on Windows, `bash` elsewhere). A shell call is translated only into that dialect and needs a description; everything else, `web_search` included, is text form. See [tool conversion](../tool-conversion-tables.md).
-- **Refused (exit 2):** `--dest-path` (dsh finds a session by id and project folder), `--dest-agent`, `--metadata-file`, `--compaction native`; `--dest-id` must be `session-<uuid>` or a UUID.
+- **Refused:** `--dest-path` (dsh finds a session by id and project folder) and `--compaction native` as unsupported (exit 2); `--dest-agent` and `--metadata-file` as a command-line mistake (exit 1); `--dest-id` must be `session-<uuid>` or a UUID (exit 1 otherwise).
 - **A relative cwd is refused.** The header's cwd must be absolute; a session without a usable folder is filed under `_no-cwd`.
 
 **The file**

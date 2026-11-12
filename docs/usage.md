@@ -1228,8 +1228,9 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --cwd 'C:\work\my-project
   lists every session, `oneshot` ones included. A store older than schema 32 is refused, naming it.
 - **Destination.** mukade runs `hermes sessions import --from claude` on a file it writes, then deletes
   the file. That keeps user and assistant text only: every tool call and result is text inside the
-  turns, no model or reasoning is recorded, and an image is `[image]`. Refused (exit 2): `--dest-id`,
-  `--dest-path`, `--dest-agent`, `--metadata-file`, `--compaction native`.
+  turns, no model or reasoning is recorded, and an image is `[image]`. Refused: `--dest-id`,
+  `--dest-agent` and `--metadata-file` (exit 1, a command-line mistake: the same as for any destination
+  that does not take them); `--dest-path` and `--compaction native` (exit 2, unsupported).
 - **Resume.** The receipt's command is `hermes chat -Q --resume <id> -q`; interactively `hermes --resume <id>`.
   `--resume-prompt` runs it with `HERMES_HOME` set to the store written to.
 - **Slow.** The import starts Hermes's gateway: about a minute per session, and per child with `--children`.
@@ -1251,8 +1252,8 @@ Details and verification: [Hermes Agent page](harnesses/hermes-agent.md).
 - **Source.** `list deepseek_harness` walks `<DSH_HOME>/sessions/**/session.v4.jsonl[.zstd]`, decoding
   the zstd frames itself (no `dsh` needed). Only format 4 is read; a torn tail is dropped and noted.
 - **Destination.** mukade writes a v4 log in the folder `dsh` derives from the id and the cwd. The id
-  is `session-<uuid>` (`--dest-id` takes that or a UUID); `--cwd` must be an absolute folder. Refused
-  (exit 2): `--dest-path`, `--dest-agent`, `--metadata-file`, `--compaction native`.
+  is `session-<uuid>` (`--dest-id` takes that or a UUID); `--cwd` must be an absolute folder. Refused:
+  `--dest-agent` and `--metadata-file` (exit 1), `--dest-path` and `--compaction native` (exit 2).
 - **Resume.** `dsh` has no terminal UI, so the receipt's command is headless and needs a task:
   `dsh --profile headless --session-id <id> "<task>"`, run from the session's cwd. The TUI says so
   instead of opening it.

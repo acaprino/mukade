@@ -531,6 +531,77 @@ fn a_dest_path_the_destination_cannot_take_is_refused() {
     );
 }
 
+/// What Hermes and DeepSeek Harness refuse of a write is refused before anything runs, with the
+/// exit codes every destination gives: a flag the destination takes no part of (`--dest-id` toward
+/// Hermes, `--dest-agent`, `--metadata-file`) is a command-line mistake (exit 1), and what it cannot
+/// do (`--dest-path`, `--compaction native`) is unsupported (exit 2).
+#[test]
+fn what_hermes_and_deepseek_refuse_of_a_write_has_the_codes_every_destination_gives() {
+    let scratch = support::scratch(HarnessId::Hermes, "cli-hermes-dsh-refusals");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let metadata = scratch.join("metadata.json");
+    std::fs::write(&metadata, "{}").unwrap();
+    let id = "5ab1c0de-0000-4000-8000-0000000000aa";
+    let outside = scratch.join("outside.jsonl");
+    let cases: [(HarnessId, Vec<&str>, i32, &str); 8] = [
+        (HarnessId::Hermes, vec!["--dest-id", id], 1, "--dest-id"),
+        (
+            HarnessId::Hermes,
+            vec!["--dest-agent", "x"],
+            1,
+            "--dest-agent",
+        ),
+        (
+            HarnessId::Hermes,
+            vec!["--metadata-file", metadata.to_str().unwrap()],
+            1,
+            "--metadata-file",
+        ),
+        (
+            HarnessId::Hermes,
+            vec!["--dest-path", outside.to_str().unwrap()],
+            2,
+            "--dest-path",
+        ),
+        (
+            HarnessId::Hermes,
+            vec!["--compaction", "native", "--context-window", "100000"],
+            2,
+            "--compaction native",
+        ),
+        (
+            HarnessId::DeepSeekHarness,
+            vec!["--dest-agent", "x"],
+            1,
+            "--dest-agent",
+        ),
+        (
+            HarnessId::DeepSeekHarness,
+            vec!["--dest-path", outside.to_str().unwrap()],
+            2,
+            "--dest-path",
+        ),
+        (
+            HarnessId::DeepSeekHarness,
+            vec!["--compaction", "native", "--context-window", "100000"],
+            2,
+            "--compaction native",
+        ),
+    ];
+    for (dest, flags, expected, named) in cases {
+        let mut args = vec!["hop", "claude_code", "c45db7bc", dest.as_str()];
+        args.extend(flags.iter().copied());
+        let (code, stdout, stderr) = cli_code(&scratch, &args);
+        assert_eq!(code, Some(expected), "{dest} {flags:?}: {stdout}{stderr}");
+        assert!(stderr.contains(named), "{dest} {flags:?}: {stderr}");
+        assert!(
+            stdout.trim().is_empty(),
+            "{dest}: nothing reported: {stdout}"
+        );
+    }
+    assert!(!outside.exists());
+}
+
 #[test]
 fn dest_root_is_refused_outside_hop() {
     let scratch = support::scratch(HarnessId::Pi, "cli-dest-root-list");
