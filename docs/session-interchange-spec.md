@@ -90,12 +90,13 @@ pub struct HopRequest {
     pub compaction: Compaction,          // §4
     pub resume: Option<ResumePrompt>,    // §5
     pub reasoning: ReasoningPolicy,      // §3.3
-    pub roots: StoreRoots,               // the stores; None is refused for Claude Code, Codex, Pi;
+    pub roots: StoreRoots,               // the stores; None is refused for Claude Code, Codex, Pi, Hermes, DeepSeek Harness;
                                          // "its configured store" for OpenCode
     pub write: WriteDetails,             // destination facts: version, protocol, shell, offered tools,
                                          // provider, model, project id, clock, executable
     pub children: bool,                  // also write the source's subagent sessions (§6.4)
 }
+// HopRequest::new(source, dest, roots): every option at its default, so a caller names only what it changes
 
 pub enum Compaction {
     None,                                // whole selected history
@@ -470,12 +471,14 @@ source records them). The dump document carries both as `meta.parent` and
 | Codex | `parent_thread_id` (top level or `source.subagent.thread_spawn`), else `session_id` ≠ `id`; listing: `thread_spawn_edges` | `Spawn { call_id: None, agent: agent_role }`; `agent: "guardian_review"` for a guardian review |
 | OpenCode | `parentID` (export) or `parent_id` (row); else a fork's `fork.sessionID` / `fork_session_id` with its boundary | `Spawn { None, None }`; a fork: `Fork` |
 | Pi | `parentSession` | `Fork` |
+| Hermes Agent | `model_config._delegate_from` (a `delegate_task` subagent, `source = subagent`), else `_branched_from` or a `parent_session_id` whose `end_reason` is `branched` | `Spawn { None, None }`; a `/branch` copy: `Fork`; a rotated compaction is the same session, no parent |
+| DeepSeek Harness | the header's `parentSession` | `Spawn { call_id: None, agent: agentPreset, inherits_context: isSeeded }` when `origin` is `subagent`, else `Fork` |
 
 ### 3.2 Why each part is there (evidence)
 
 | part | why [V] |
 |---|---|
-| `Compaction` entry | all four store a compaction record and resume from it (§2) |
+| `Compaction` entry | every harness stores a compaction record and resumes from it (§2, and the Hermes and DeepSeek Harness pages) |
 | `Step.calls: Vec` and `Results` | Claude Code and Pi reject or repair split parallel calls (§6.2); Codex and OpenCode store them as one step |
 | `Meta` entries | Claude `/compact` command rows read as conversation became an orphan `tool_result` in Pi and `function_call "{}"` in Codex; Codex `<turn_aborted>` and Claude's synthetic `No response requested.` became ordinary text |
 | `Opaque` with protocol and model | decides replay vs drop (§3.3); every native store keeps it |
