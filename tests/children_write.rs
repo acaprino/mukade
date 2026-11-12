@@ -220,7 +220,7 @@ fn a_child_that_cannot_be_written_leaves_the_parent_and_fails_the_hop() {
 
     let error = hop_children(HarnessId::ClaudeCode, &source, &opts).unwrap_err();
 
-    assert_eq!(error.exit_code(), 4, "{error}");
+    assert_eq!(error.exit_code(), 5, "{error}");
     let HopError::ChildWriteFailed { reason, receipt } = error else {
         panic!("{error:?}")
     };

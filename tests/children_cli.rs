@@ -201,10 +201,10 @@ fn hop_children_into_claude_code_links_each_to_the_written_parent() {
     assert_eq!(row["kind"], "spawn");
 }
 
-/// A child that cannot be written fails the hop with exit 4 after the parent is written: the
+/// A child that cannot be written fails the hop with exit 5 after the parent is written: the
 /// receipt is still printed and the manifest saved.
 #[test]
-fn a_child_write_failure_is_exit_4_with_the_parents_receipt() {
+fn a_child_write_failure_is_exit_5_with_the_parents_receipt() {
     let scratch = staged("cc-hop-fail");
     let work = scratch.join("work");
     let reserved = "5ab1c0de-0000-4000-8000-0000000000ff";
@@ -233,7 +233,7 @@ fn a_child_write_failure_is_exit_4_with_the_parents_receipt() {
         ],
     );
 
-    assert_eq!(code, Some(4), "{stderr}");
+    assert_eq!(code, Some(5), "{stderr}");
     assert!(stderr.contains("the session was written"), "{stderr}");
     let receipt = json(&stdout);
     assert_eq!(receipt["id"], reserved);

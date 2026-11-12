@@ -256,10 +256,11 @@ impl HopError {
             HopError::NotFound(_) | HopError::SourceChanged { .. } | HopError::Unsupported(_) => 2,
             HopError::WriteFailed(_)
             | HopError::StrictCheckFailed(_)
-            | HopError::SummaryFailed(_)
-            | HopError::ChildWriteFailed { .. } => 4,
+            | HopError::SummaryFailed(_) => 4,
+            // The session is written: recovery is the caller's, as after a failed resume.
             HopError::VerifyFailed(_)
             | HopError::ResumeFailed { .. }
+            | HopError::ChildWriteFailed { .. }
             | HopError::WriteUncertain { .. } => 5,
         }
     }
@@ -291,7 +292,7 @@ impl std::fmt::Display for HopError {
             HopError::SummaryFailed(what) => write!(f, "summary failed: {what}"),
             HopError::ChildWriteFailed { reason, receipt } => write!(
                 f,
-                "write failed: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
+                "a subagent session was not written: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
                 receipt.location
             ),
             HopError::ResumeFailed { reason, receipt } => write!(
