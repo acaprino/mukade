@@ -135,6 +135,70 @@
       },
       "resume": ["{exe}", "-p", "--session", "{file}"],
       "interactive_resume": ["{exe}", "--session", "{file}"]
+    },
+    {
+      "id": "hermes",
+      "display": "Hermes Agent",
+      "binary": {
+        "name": "hermes",
+        "flag": "--hermes-exe",
+        "env": "MUKADE_HERMES_EXE",
+        "locations": {
+          "windows": ["{local_app_data}/hermes/bin/hermes.exe", "{local_app_data}/hermes/hermes-agent/.hermes/bin/hermes.exe"],
+          "macos": ["{home}/.local/bin/hermes"],
+          "linux": ["{home}/.local/bin/hermes"]
+        },
+        "beside_store": {
+          "windows": ["bin/hermes.exe", "hermes-agent/.hermes/bin/hermes.exe"],
+          "macos": ["bin/hermes"],
+          "linux": ["bin/hermes"]
+        }
+      },
+      "store": {
+        "env": "HERMES_HOME",
+        "default": "{home}/.hermes",
+        "default_on": { "windows": "{local_app_data}/hermes" },
+        "root_is_a_file": false,
+        "layout": ["state.db (SQLite; sessions, messages)"]
+      },
+      "lineage": {
+        "recorded": true,
+        "fields": ["parent_session_id", "model_config._delegate_from", "model_config._branched_from"],
+        "note": "a subagent names its parent in _delegate_from, a /branch copy in _branched_from"
+      },
+      "resume": ["{exe}", "chat", "-Q", "--resume", "{id}", "-q"],
+      "interactive_resume": ["{exe}", "--resume", "{id}"]
+    },
+    {
+      "id": "deepseek_harness",
+      "display": "DeepSeek Harness",
+      "binary": {
+        "name": "dsh",
+        "flag": "--dsh-exe",
+        "env": "MUKADE_DSH_EXE",
+        "locations": {
+          "windows": ["{app_data}/npm/dsh.cmd"],
+          "macos": [],
+          "linux": []
+        },
+        "beside_store": {
+          "windows": ["dsh.cmd", "bin/dsh.cmd"],
+          "macos": ["dsh", "bin/dsh"],
+          "linux": ["dsh", "bin/dsh"]
+        }
+      },
+      "store": {
+        "env": "DSH_HOME",
+        "default": "{home}/.dsh",
+        "root_is_a_file": false,
+        "layout": ["sessions/--<project>--/<session-id>/session.v4.jsonl.zstd", "sessions/_no-cwd/<session-id>/session.v4.jsonl.zstd"]
+      },
+      "lineage": {
+        "recorded": true,
+        "fields": ["parentSession", "origin", "isSeeded"],
+        "note": "a subagent or fork log names its parent in its header"
+      },
+      "resume": ["{exe}", "--profile", "headless", "--session-id", "{id}"]
     }
   ]
 }

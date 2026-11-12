@@ -247,7 +247,8 @@ impl RowWriter<'_> {
     }
 }
 
-fn rows(
+/// The rows of a Claude Code session file; the Hermes writer hands them to Hermes's own import.
+pub(crate) fn rows(
     plan: &plan::Plan,
     session: &Session,
     session_id: &str,

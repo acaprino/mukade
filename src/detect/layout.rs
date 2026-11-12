@@ -1,7 +1,7 @@
 //! The contract every harness's store layout adapter fulfils, and the list of adapters.
 
 use super::folder::Folder;
-use super::{claude_code, codex, opencode, pi};
+use super::{claude_code, codex, deepseek_harness, hermes, opencode, pi};
 use crate::model::HarnessId;
 use std::path::{Path, PathBuf};
 
@@ -32,11 +32,13 @@ pub(crate) trait StoreLayout: Sync {
 }
 
 /// Every adapter, in the order detection reports harnesses.
-pub(crate) fn layouts() -> [&'static dyn StoreLayout; 4] {
+pub(crate) fn layouts() -> [&'static dyn StoreLayout; 6] {
     [
         &claude_code::ClaudeCodeLayout,
         &codex::CodexLayout,
         &opencode::OpenCodeLayout,
         &pi::PiLayout,
+        &hermes::HermesLayout,
+        &deepseek_harness::DeepSeekHarnessLayout,
     ]
 }

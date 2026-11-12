@@ -5,6 +5,8 @@
 
 mod claude_code;
 mod codex;
+mod deepseek_harness;
+mod hermes;
 mod opencode;
 mod pi;
 
@@ -338,11 +340,13 @@ pub fn get(id: HarnessId) -> &'static dyn Harness {
         HarnessId::Codex => &codex::Codex,
         HarnessId::OpenCode => &opencode::OpenCode,
         HarnessId::Pi => &pi::Pi,
+        HarnessId::Hermes => &hermes::Hermes,
+        HarnessId::DeepSeekHarness => &deepseek_harness::DeepSeekHarness,
     }
 }
 
 /// Every adapter, in [`HarnessId::ALL`] order.
-pub fn all() -> [&'static dyn Harness; 4] {
+pub fn all() -> [&'static dyn Harness; 6] {
     HarnessId::ALL.map(get)
 }
 
@@ -541,9 +545,9 @@ mod tests {
         assert!(matches!(refusal, HopError::Unsupported(_)), "{refusal}");
         assert_eq!(refusal.exit_code(), 2, "refused with a reason");
         for adapter in all() {
-            assert!(adapter.destination().is_some(), "{}", adapter.id());
-            assert!(destination(adapter.id()).is_ok(), "{}", adapter.id());
-            assert!(require_writer(adapter).is_ok(), "{}", adapter.id());
+            let writes = adapter.destination().is_some();
+            assert_eq!(destination(adapter.id()).is_ok(), writes, "{}", adapter.id());
+            assert_eq!(require_writer(adapter).is_ok(), writes, "{}", adapter.id());
         }
     }
 }

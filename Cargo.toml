@@ -27,6 +27,9 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["json", "
 toml_edit = "=0.25.19"
 subtle = "=2.6.1"
 futures-util = "=0.3.34"
+# Decodes the frames of a DeepSeek Harness session log. Without its `hash` feature: the content
+# checksum is compared by `reader::zstd_frames`, which carries its own XXH64.
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

@@ -1,6 +1,6 @@
 //! A deliberately small native terminal browser for Mukade sessions.
 //!
-//! Left: the four harnesses' standard stores, then every installation a scan found (portable and
+//! Left: every harness's standard store, then every installation a scan found (portable and
 //! custom ones included), with their session counts. Directory filters precede the session list.
 //! Right: the selected session's metadata, or its transcript after `Enter`.
 //! `R` resumes in the session's own installation; `h` hops it to another and shows the manifest;
@@ -2452,7 +2452,7 @@ mod tests {
             panic!("the hop dialog opens");
         };
         assert_eq!(hop.source.harness, HarnessId::ClaudeCode);
-        assert_eq!(hop.destinations.len(), 4);
+        assert_eq!(hop.destinations.len(), 5);
         assert!(
             hop.destinations
                 .iter()

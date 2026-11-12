@@ -29,7 +29,7 @@ const IMPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// The import document holds the conversation: it is created new and, on Unix, readable by its
 /// owner only, wherever the temporary folder is.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -41,7 +41,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
-struct ImportDocument(PathBuf);
+pub(crate) struct ImportDocument(pub(crate) PathBuf);
 
 impl Drop for ImportDocument {
     fn drop(&mut self) {

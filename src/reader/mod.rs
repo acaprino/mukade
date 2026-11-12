@@ -5,10 +5,13 @@ mod claude_history;
 mod claude_live;
 pub mod codex;
 mod codex_state;
+pub mod deepseek_harness;
+pub mod hermes;
 pub mod json;
 pub mod opencode;
 pub mod origin;
 pub mod pi;
+pub mod zstd_frames;
 
 use crate::model::{HarnessId, ParentKind, Session};
 use crate::roots::StoreRoots;

@@ -7,9 +7,9 @@
 use crate::model::HarnessId;
 use std::path::{Path, PathBuf};
 
-/// The store locations of the four harnesses. `None` is refused for Claude Code, Codex and Pi,
-/// which have no store to read or write without one; OpenCode then uses the store its own
-/// configuration names.
+/// The store locations of the harnesses. `None` is refused for Claude Code, Codex, Pi, Hermes and
+/// DeepSeek Harness, which have no store to read or write without one; OpenCode then uses the store
+/// its own configuration names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StoreRoots {
     /// Claude Code: `CLAUDE_CONFIG_DIR`; the sessions live under `projects/`.
@@ -20,6 +20,10 @@ pub struct StoreRoots {
     pub opencode_db: Option<PathBuf>,
     /// Pi: `PI_CODING_AGENT_DIR`; the sessions live under `sessions/`.
     pub pi_agent_dir: Option<PathBuf>,
+    /// Hermes Agent: `HERMES_HOME`; the sessions live in `state.db`.
+    pub hermes_home: Option<PathBuf>,
+    /// DeepSeek Harness: `DSH_HOME`; the sessions live under `sessions/`.
+    pub dsh_home: Option<PathBuf>,
 }
 
 impl StoreRoots {
@@ -58,6 +62,16 @@ impl StoreRoots {
     /// Pi's `sessions/` directory.
     pub fn pi_sessions(&self) -> Option<PathBuf> {
         self.pi_agent_dir.as_deref().map(|d| d.join("sessions"))
+    }
+
+    /// Hermes's `state.db`, the SQLite database that holds its sessions.
+    pub fn hermes_state_db(&self) -> Option<PathBuf> {
+        self.hermes_home.as_deref().map(|d| d.join("state.db"))
+    }
+
+    /// DeepSeek Harness's `sessions/` directory, the persistence root of every shipped profile.
+    pub fn dsh_sessions(&self) -> Option<PathBuf> {
+        self.dsh_home.as_deref().map(|d| d.join("sessions"))
     }
 
     /// One harness's store, as its variable names it.

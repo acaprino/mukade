@@ -62,7 +62,14 @@ fn claude_empty_raw_user_text_is_typed() {
 
 #[test]
 fn fixture_user_prompts_are_typed_for_all_four_harnesses() {
-    for harness in HarnessId::ALL {
+    // The four whose adapters say who produced a user entry; one that does not yet answers
+    // `Unknown`, and the observer then shows nothing a person typed.
+    for harness in [
+        HarnessId::ClaudeCode,
+        HarnessId::Codex,
+        HarnessId::OpenCode,
+        HarnessId::Pi,
+    ] {
         let session = support::read_source(harness);
         let prompts: Vec<_> = session
             .entries
