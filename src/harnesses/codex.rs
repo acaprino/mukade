@@ -71,31 +71,20 @@ impl Harness for Codex {
         &self,
         kit: &crate::chat::adapter::Kit,
     ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
-        let toml = |text: &str| toml_edit::Value::from(text).to_string().trim().to_string();
-        let hook = |event: &str, timeout: u64| {
-            let command = if cfg!(windows) {
-                kit.powershell_hook_command("codex", event)
-            } else {
-                kit.hook_command("codex", event)
-            };
-            format!(
-                "[{{hooks=[{{type=\"command\",command={},timeout={timeout}}}]}}]",
-                toml(&command)
-            )
-        };
         let exe = crate::exe::resolve(self.id(), None);
         let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
-        for (key, value) in [
-            ("mcp_servers.mukade.url", toml(&kit.server.endpoint)),
+        let mcp = [
+            ("mcp_servers.mukade.url".to_string(), toml_text(&kit.server.endpoint)),
             (
-                "mcp_servers.mukade.env_http_headers",
+                "mcp_servers.mukade.env_http_headers".to_string(),
                 "{Authorization=\"MUKADE_CHAT_AUTHORIZATION\",\"X-Mukade-Service-Id\"=\"MUKADE_CHAT_SERVICE_ID\"}".into(),
             ),
-            ("mcp_servers.mukade.tool_timeout_sec", "330".into()),
-            ("hooks.SessionStart", hook("session-start", 30)),
-            ("hooks.UserPromptSubmit", hook("prompt", 30)),
-            ("hooks.Stop", hook("stop", kit.stop_timeout)),
-        ] {
+            ("mcp_servers.mukade.tool_timeout_sec".to_string(), "330".into()),
+        ];
+        for (key, value) in mcp
+            .into_iter()
+            .chain(chat_hooks(kit).into_iter().map(|(k, v, _)| (k, v)))
+        {
             command.arg("-c").arg(format!("{key}={value}"));
         }
         command
@@ -105,10 +94,41 @@ impl Harness for Codex {
             )
             .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id);
         eprintln!(
-            "mukade: Codex runs mukade's three hooks only once you trust them: at the first launch, \
-             open /hooks in Codex and trust them; until then this instance does not join the room."
+            "mukade: Codex runs mukade's three hooks only once they are trusted: run \
+             `mukade chat trust codex` once (or trust them with /hooks in Codex); until then this \
+             instance does not join the room."
         );
         Ok(Some(command))
+    }
+
+    /// Trust exactly mukade's three hooks, through Codex's own app-server: `hooks/list` names
+    /// each hook with its key and content hash, and `config/value/write` records the hash under
+    /// `hooks.state` in the user's `config.toml`, as `/hooks` does. No other hook is touched.
+    /// Trust follows content, and the content holds this mukade executable's path.
+    fn chat_trust(
+        &self,
+        kit: &crate::chat::adapter::Kit,
+        dry_run: bool,
+    ) -> Result<Option<serde_json::Value>, crate::bus::ChatError> {
+        use crate::chat::adapter::{Rpc, StdioRpc};
+        use serde_json::json;
+        let hooks = chat_hooks(kit);
+        let exe = crate::exe::resolve(self.id(), None);
+        let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
+        command.arg("app-server");
+        for (key, value, _) in &hooks {
+            command.arg("-c").arg(format!("{key}={value}"));
+        }
+        let mut rpc = StdioRpc::spawn(command)?;
+        rpc.call(
+            "initialize",
+            json!({"clientInfo": {"name": "mukade", "version": env!("CARGO_PKG_VERSION")}}),
+        )?;
+        rpc.notify("initialized")?;
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut report = trust_hooks(&mut rpc, &hooks, &cwd, dry_run)?;
+        report["exe"] = json!(kit.exe);
+        Ok(Some(report))
     }
 
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
@@ -440,5 +460,258 @@ mod tests {
         assert_eq!(top_level_string(nested, "model_provider"), None);
         let dotted = "model_providers.azure.name = \"Azure\"\n";
         assert_eq!(top_level_string(dotted, "model_provider"), None);
+    }
+}
+
+/// A TOML string, quoted and escaped, for a `-c key=value` override.
+fn toml_text(text: &str) -> String {
+    toml_edit::Value::from(text).to_string().trim().to_string()
+}
+
+/// mukade's three chat hooks as Codex `-c` overrides: (key, TOML value, the command line). They
+/// are the same for every launch, so trust given once holds. Codex on Windows runs a hook with
+/// PowerShell, which needs the call operator.
+fn chat_hooks(kit: &crate::chat::adapter::Kit) -> Vec<(String, String, String)> {
+    [
+        ("hooks.SessionStart", "session-start", 30),
+        ("hooks.UserPromptSubmit", "prompt", 30),
+        ("hooks.Stop", "stop", kit.stop_timeout),
+    ]
+    .into_iter()
+    .map(|(key, event, timeout)| {
+        let line = if cfg!(windows) {
+            kit.powershell_hook_command("codex", event)
+        } else {
+            kit.hook_command("codex", event)
+        };
+        let value = format!(
+            "[{{hooks=[{{type=\"command\",command={},timeout={timeout}}}]}}]",
+            toml_text(&line)
+        );
+        (key.to_string(), value, line)
+    })
+    .collect()
+}
+
+/// Trust, through Codex's own server, the hooks of `hooks` that Codex lists as session flags.
+/// Every one of them must be listed, or nothing is written; one already trusted is left as it is;
+/// any other hook, of the user or of a plugin, is neither read nor written.
+fn trust_hooks(
+    rpc: &mut dyn crate::chat::adapter::Rpc,
+    hooks: &[(String, String, String)],
+    cwd: &std::path::Path,
+    dry_run: bool,
+) -> Result<Value, crate::bus::ChatError> {
+    use serde_json::json;
+    let ours =
+        |rpc: &mut dyn crate::chat::adapter::Rpc| -> Result<Vec<Value>, crate::bus::ChatError> {
+            let listed = rpc.call("hooks/list", json!({"cwds": [cwd]}))?;
+            Ok(listed["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|entry| entry["hooks"].as_array().cloned().unwrap_or_default())
+                .filter(|hook| {
+                    hook["source"] == "sessionFlags"
+                        && hooks
+                            .iter()
+                            .any(|(_, _, line)| hook["command"].as_str() == Some(line.as_str()))
+                })
+                .collect())
+        };
+    let before = ours(rpc)?;
+    if before.len() != hooks.len() {
+        return Err(crate::bus::ChatError {
+            code: "unsupported".into(),
+            message: format!(
+                "Codex listed {} of mukade's {} hooks; nothing was trusted",
+                before.len(),
+                hooks.len()
+            ),
+            retryable: false,
+            ack_batch_id: None,
+        });
+    }
+    let mut wrote = false;
+    for hook in &before {
+        if dry_run || hook["trustStatus"] == "trusted" {
+            continue;
+        }
+        let key = hook["key"].as_str().unwrap_or_default();
+        rpc.call(
+            "config/value/write",
+            json!({"keyPath": "hooks.state", "mergeStrategy": "upsert",
+                   "value": {key: {"trusted_hash": hook["currentHash"]}}}),
+        )?;
+        wrote = true;
+    }
+    let after = if wrote { ours(rpc)? } else { before.clone() };
+    let report: Vec<Value> = before
+        .iter()
+        .zip(&after)
+        .map(|(was, now)| {
+            json!({"event": was["eventName"], "key": was["key"],
+                   "before": was["trustStatus"], "after": now["trustStatus"]})
+        })
+        .collect();
+    let trusted =
+        after.len() == hooks.len() && after.iter().all(|hook| hook["trustStatus"] == "trusted");
+    Ok(json!({
+        "status": if dry_run { "dry_run" } else if trusted { "trusted" } else { "not_trusted" },
+        "hooks": report,
+    }))
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::trust_hooks;
+    use crate::bus::ChatError;
+    use serde_json::{Value, json};
+
+    /// Codex's server as far as trust goes: listed hooks, and the writes it was sent.
+    struct FakeCodex {
+        hooks: Vec<Value>,
+        writes: Vec<Value>,
+    }
+
+    impl crate::chat::adapter::Rpc for FakeCodex {
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, ChatError> {
+            match method {
+                "hooks/list" => Ok(json!({"data": [{"hooks": self.hooks.clone()}]})),
+                "config/value/write" => {
+                    for (key, state) in params["value"].as_object().unwrap() {
+                        for hook in &mut self.hooks {
+                            if hook["key"] == key.as_str()
+                                && hook["currentHash"] == state["trusted_hash"]
+                            {
+                                hook["trustStatus"] = json!("trusted");
+                            }
+                        }
+                    }
+                    self.writes.push(params);
+                    Ok(json!({}))
+                }
+                other => panic!("unexpected call {other}"),
+            }
+        }
+    }
+
+    fn ours() -> Vec<(String, String, String)> {
+        ["start", "prompt", "stop"]
+            .iter()
+            .map(|event| {
+                (
+                    format!("hooks.{event}"),
+                    String::new(),
+                    format!("mukade {event}"),
+                )
+            })
+            .collect()
+    }
+
+    fn listed(command: &str, source: &str, trust: &str, n: usize) -> Value {
+        json!({"key": format!("flags:{n}"), "source": source, "command": command,
+               "trustStatus": trust, "currentHash": format!("sha256:{n}"), "eventName": command})
+    }
+
+    fn codex(trust: &str) -> FakeCodex {
+        let mut hooks: Vec<Value> = ["start", "prompt", "stop"]
+            .iter()
+            .enumerate()
+            .map(|(n, event)| listed(&format!("mukade {event}"), "sessionFlags", trust, n))
+            .collect();
+        // A user's own hook, untrusted, and a plugin hook with mukade's command line.
+        hooks.push(listed("their own", "sessionFlags", "untrusted", 7));
+        hooks.push(listed("mukade stop", "plugin", "untrusted", 8));
+        FakeCodex {
+            hooks,
+            writes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn trusts_each_untrusted_hook_of_mukade_with_its_listed_hash() {
+        let mut fake = codex("untrusted");
+        let report = trust_hooks(&mut fake, &ours(), std::path::Path::new("."), false).unwrap();
+        assert_eq!(report["status"], "trusted", "{report}");
+        let keys: Vec<Value> = fake.writes.iter().map(|w| w["value"].clone()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                json!({"flags:0": {"trusted_hash": "sha256:0"}}),
+                json!({"flags:1": {"trusted_hash": "sha256:1"}}),
+                json!({"flags:2": {"trusted_hash": "sha256:2"}}),
+            ]
+        );
+        assert!(
+            fake.writes
+                .iter()
+                .all(|w| w["keyPath"] == "hooks.state" && w["mergeStrategy"] == "upsert")
+        );
+        assert_eq!(
+            fake.hooks[3]["trustStatus"], "untrusted",
+            "the user's own hook stays"
+        );
+        assert_eq!(
+            fake.hooks[4]["trustStatus"], "untrusted",
+            "a plugin's hook stays"
+        );
+        assert!(
+            report["hooks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|h| h["before"] == "untrusted" && h["after"] == "trusted")
+        );
+    }
+
+    #[test]
+    fn a_dry_run_writes_nothing() {
+        let mut fake = codex("untrusted");
+        let report = trust_hooks(&mut fake, &ours(), std::path::Path::new("."), true).unwrap();
+        assert_eq!(report["status"], "dry_run");
+        assert!(fake.writes.is_empty());
+    }
+
+    #[test]
+    fn hooks_already_trusted_are_not_written_again() {
+        let mut fake = codex("trusted");
+        let report = trust_hooks(&mut fake, &ours(), std::path::Path::new("."), false).unwrap();
+        assert_eq!(report["status"], "trusted");
+        assert!(fake.writes.is_empty());
+    }
+
+    #[test]
+    fn a_hook_that_codex_does_not_list_writes_nothing() {
+        let mut fake = codex("untrusted");
+        fake.hooks.remove(2);
+        let error = trust_hooks(&mut fake, &ours(), std::path::Path::new("."), false).unwrap_err();
+        assert_eq!(error.code, "unsupported");
+        assert!(fake.writes.is_empty());
+    }
+
+    #[test]
+    fn a_hash_codex_refuses_reports_not_trusted() {
+        let mut fake = codex("modified");
+        // Codex keeps the hook as it was: the hash written is not the one it holds.
+        for hook in &mut fake.hooks {
+            hook["currentHash"] = json!("sha256:other");
+        }
+        let mut stubborn = Stubborn(fake);
+        let report = trust_hooks(&mut stubborn, &ours(), std::path::Path::new("."), false).unwrap();
+        assert_eq!(report["status"], "not_trusted", "{report}");
+    }
+
+    /// A Codex that accepts the writes but never changes its answer.
+    struct Stubborn(FakeCodex);
+
+    impl crate::chat::adapter::Rpc for Stubborn {
+        fn call(&mut self, method: &str, params: Value) -> Result<Value, ChatError> {
+            if method == "config/value/write" {
+                self.0.writes.push(params);
+                return Ok(json!({}));
+            }
+            self.0.call(method, params)
+        }
     }
 }

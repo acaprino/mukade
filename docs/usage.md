@@ -569,8 +569,20 @@ What the launched instance gets, without any setting of yours changing:
 | harness | adapter | first launch |
 |---|---|---|
 | `claude_code` | yes | nothing to do |
-| `codex` | yes | Codex runs a hook only once you trust it: open `/hooks` in the launched Codex and trust mukade's three hooks. They are the same for every launch, so this is once. Until then the instance does not join |
+| `codex` | yes | Codex runs a hook only once it is trusted. Run `mukade chat trust codex` once (below). Until then the instance does not join |
 | `opencode`, `pi` | not yet: `launch` refuses them (exit 2) | join with `connect` and the tools |
+
+Trust Codex's hooks once:
+
+```text
+mukade chat trust codex --dry-run
+mukade chat trust codex
+```
+
+1. `--dry-run` lists mukade's three hooks as Codex sees them (`untrusted`, `trusted` or `modified`) and writes nothing.
+2. Without it, Codex's own server (`codex app-server`) records trust for exactly those three, in `~/.codex/config.toml` under `[hooks.state]`. Your other hooks and plugins' hooks are not touched.
+3. The hooks name the mukade executable by its path. After mukade moves to another path, run it again; until then Codex shows them as `modified` and skips them.
+4. `claude_code` answers `not_needed`; a harness without an adapter is refused (exit 2).
 
 Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
 

@@ -568,3 +568,108 @@ pub async fn handle(
     save(&path, &state)?;
     Ok(delivery)
 }
+
+/// One request to a harness's own server: its result, or its error as a refusal.
+pub trait Rpc {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, ChatError>;
+}
+
+/// A JSON-RPC exchange with a harness's own server over its standard streams, one JSON object per
+/// line (Codex's `app-server`). Each answer is awaited for a bounded time; the process is stopped
+/// when this is dropped.
+pub struct StdioRpc {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    lines: std::sync::mpsc::Receiver<String>,
+    next_id: u64,
+}
+
+/// How long one answer of a harness's server may take.
+const RPC_ANSWER: Duration = Duration::from_secs(30);
+
+impl StdioRpc {
+    pub fn spawn(mut command: std::process::Command) -> Result<Self, ChatError> {
+        use std::io::BufRead;
+        let failed = || {
+            refused(
+                "transport_failure",
+                "the harness server could not be started",
+            )
+        };
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| failed())?;
+        let stdin = child.stdin.take().ok_or_else(failed)?;
+        let stdout = child.stdout.take().ok_or_else(failed)?;
+        let (sender, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(StdioRpc {
+            child,
+            stdin,
+            lines,
+            next_id: 0,
+        })
+    }
+
+    fn send(&mut self, message: &Value) -> Result<(), ChatError> {
+        use std::io::Write;
+        writeln!(self.stdin, "{message}")
+            .and_then(|_| self.stdin.flush())
+            .map_err(|_| refused("transport_failure", "the harness server stopped"))
+    }
+
+    pub fn notify(&mut self, method: &str) -> Result<(), ChatError> {
+        self.send(&json!({"method": method}))
+    }
+}
+
+impl Rpc for StdioRpc {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, ChatError> {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(&json!({"method": method, "id": id, "params": params}))?;
+        let deadline = Instant::now() + RPC_ANSWER;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let line = self.lines.recv_timeout(left).map_err(|_| {
+                refused(
+                    "transport_failure",
+                    format!("the harness server did not answer {method}"),
+                )
+            })?;
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if message["id"].as_u64() != Some(id) {
+                continue;
+            }
+            if let Some(error) = message.get("error") {
+                return Err(refused(
+                    "refused",
+                    format!(
+                        "{method}: {}",
+                        error["message"].as_str().unwrap_or("refused")
+                    ),
+                ));
+            }
+            return Ok(message["result"].clone());
+        }
+    }
+}
+
+impl Drop for StdioRpc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
