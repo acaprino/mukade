@@ -44,7 +44,7 @@ folder sits in another repository needs `$env:TMP = $env:TEMP = "D:\mukade-test-
 
 **Pass if**
 
-- [ ] `cargo test` ends with **0 failed** in every suite (519 tests on Linux on 2026-11-11; 1089 on Windows on 2026-11-12).
+- [ ] `cargo test` ends with **0 failed** in every suite (519 tests on Linux on 2026-11-11; 1105 on Windows on 2026-11-12).
 - [ ] `harnesses` lists Claude Code, Codex, OpenCode and Pi with a version and a store each.
 
 **Write down:** the four versions.

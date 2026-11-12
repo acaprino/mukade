@@ -45,9 +45,9 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 **Setup and TUI**
 
-1. **Setup + whole suite on Windows** [0]: suite done on 2026-11-12 at `f3ee0e7` plus two Windows
+1. **Setup + whole suite on Windows** [0]: suite done on 2026-11-12 at `90c3d91` plus two Windows
    fixes (a launch file's path took `/`; a test fixture path took `/` that `cmd`'s `type` refuses):
-   `cargo test --workspace --no-fail-fast` **1089 passed, 0 failed**, 5 ignored (CLI, TUI, desktop
+   `cargo test --workspace --no-fail-fast` **1105 passed, 0 failed**, 5 ignored (CLI, TUI, desktop
    `mukade-ui`); `npm test` 16 / 16. Left: `build.bat` and `mukade harnesses`.
 2. **TUI export / import by hand** [1].
 3. **Windows timeout still kills the tree** [2]: unchanged code, but no automated test covers it.
