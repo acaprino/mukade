@@ -447,6 +447,19 @@ fn a_child_names_its_parent_in_either_form_and_a_fork_its_source() {
     assert_eq!((root.parent, root.parent_kind), (None, None));
 }
 
+/// `at` is the parent's last message the fork holds: a `through` boundary names it, a `before`
+/// boundary names the message after it, which is not one the fork holds.
+#[test]
+fn a_fork_before_a_message_does_not_name_that_message_as_its_last() {
+    use mukade::model::ParentKind;
+    let mut doc = export_doc();
+    let boundary = serde_json::json!({"type": "before", "messageID": "msg_1"});
+    doc["info"]["fork"] = serde_json::json!({"sessionID": "ses_source", "boundary": boundary});
+    let fork = opencode::parse(&doc, None).unwrap().meta;
+    assert_eq!(fork.parent.as_deref(), Some("ses_source"));
+    assert_eq!(fork.parent_kind, Some(ParentKind::Fork { at: None }));
+}
+
 /// A subagent's report reaches the parent as a `synthetic` message (`metadata.source:
 /// "subagent"`): the parent's model received it, so it is a user turn in place. Other synthetic
 /// messages (a shell job's) stay records.

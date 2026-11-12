@@ -267,6 +267,143 @@ fn claude_tree() -> Vec<Value> {
     ]
 }
 
+/// An abandoned turn whose response made two calls at once: Claude Code writes one row per
+/// call, chained, and each result row under its own call's row, so the tree forks inside the
+/// turn without any branch being taken there.
+fn claude_tree_with_parallel_calls() -> Vec<Value> {
+    let call = |uuid: &str, parent: &str, id: &str, at: u32| {
+        let mut row = claude_row("assistant", uuid, Some(parent), "", at);
+        row["message"]["id"] = json!("msg_parallel");
+        row["message"]["stop_reason"] = json!("tool_use");
+        row["message"]["content"] = json!([{"type": "tool_use", "id": id, "name": "Read",
+            "input": {"file_path": format!("/work/{id}")}}]);
+        row
+    };
+    let result = |uuid: &str, parent: &str, id: &str, at: u32| {
+        let mut row = claude_row("user", uuid, Some(parent), "", at);
+        row["message"]["content"] =
+            json!([{"type": "tool_result", "tool_use_id": id, "content": format!("read {id}")}]);
+        row["sourceToolAssistantUUID"] = json!(parent);
+        row
+    };
+    vec![
+        claude_row("user", "u1", None, "q1", 0),
+        claude_row("assistant", "a1", Some("u1"), "r1", 1),
+        claude_row("user", "u2b", Some("a1"), "q2b", 2),
+        call("x1", "u2b", "call_a", 3),
+        call("x2", "x1", "call_b", 4),
+        result("ra", "x1", "call_a", 5),
+        result("rb", "x2", "call_b", 6),
+        claude_row("assistant", "x3", Some("rb"), "both read", 7),
+        claude_row("user", "u2", Some("a1"), "q2", 8),
+        claude_row("assistant", "a2", Some("u2"), "r2", 9),
+    ]
+}
+
+#[test]
+fn an_abandoned_turn_with_parallel_calls_is_one_branch_with_every_result() {
+    use mukade::reader::claude_code;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-branches-parallel");
+    let file = scratch.join("home/projects/p/s-1.jsonl");
+    write_lines(&file, &claude_tree_with_parallel_calls());
+
+    let all = claude_code::read_file_all_branches(&file).unwrap();
+    assert_eq!(
+        conversation(&all.entries),
+        ["user: q1", "assistant: r1", "user: q2", "assistant: r2"]
+    );
+    assert_eq!(all.branches.len(), 1, "{:#?}", all.branches);
+    let branch = &all.branches[0];
+    assert_eq!(branch.from.as_deref(), Some(id_of_text(&all.entries, "r1")));
+    let calls: Vec<&str> = branch
+        .entries
+        .iter()
+        .flat_map(|entry| match &entry.kind {
+            Kind::Step { calls, .. } => calls.iter().map(|c| c.id.as_str()).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(calls, ["call_a", "call_b"]);
+    let answered: Vec<&str> = branch
+        .entries
+        .iter()
+        .flat_map(|entry| match &entry.kind {
+            Kind::Results { results } => results.iter().map(|r| r.call_id.as_str()).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(answered, ["call_a", "call_b"]);
+    assert_eq!(
+        conversation(&branch.entries).last().map(String::as_str),
+        Some("assistant: both read")
+    );
+}
+
+/// Claude Code chains its bookkeeping rows too: a prompt edited after an attachment row hangs
+/// under that row. The branch leaves from the answer before it, and a hop keeps it.
+#[test]
+fn a_claude_branch_under_an_attachment_row_leaves_from_the_answer_before_it() {
+    use mukade::reader::claude_code;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-branches-attachment");
+    let file = scratch.join("home/projects/p/s-1.jsonl");
+    let attachment = json!({"type": "attachment", "uuid": "att", "parentUuid": "a1",
+        "sessionId": "s-1", "cwd": "/work", "isSidechain": false,
+        "timestamp": "2026-11-12T10:00:02.000Z",
+        "attachment": {"type": "todo_reminder", "content": []}});
+    write_lines(
+        &file,
+        &[
+            claude_row("user", "u1", None, "q1", 0),
+            claude_row("assistant", "a1", Some("u1"), "r1", 1),
+            attachment,
+            claude_row("user", "u2b", Some("att"), "q2b", 3),
+            claude_row("assistant", "a2b", Some("u2b"), "r2b", 4),
+            claude_row("user", "u2", Some("att"), "q2", 5),
+            claude_row("assistant", "a2", Some("u2"), "r2", 6),
+        ],
+    );
+    let all = claude_code::read_file_all_branches(&file).unwrap();
+    assert_eq!(all.branches.len(), 1, "{:#?}", all.branches);
+    assert_eq!(
+        all.branches[0].from.as_deref(),
+        Some(id_of_text(&all.entries, "r1"))
+    );
+    let (manifest, _) = hop_with_branches(&scratch, "pi", &[]);
+    assert_eq!(manifest["counts"]["branches_kept"], 1, "{manifest}");
+    assert_eq!(manifest["counts"]["branches_dropped"], 0);
+}
+
+/// Inside an abandoned branch, a bookkeeping row with two answers below it: the second answer is a
+/// branch of that branch, and leaves from the prompt above the row, not from the row.
+#[test]
+fn a_branch_of_a_branch_under_a_bookkeeping_row_leaves_from_the_entry_above_it() {
+    use mukade::reader::claude_code;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-branches-side-attachment");
+    let file = scratch.join("home/projects/p/s-1.jsonl");
+    let attachment = json!({"type": "attachment", "uuid": "att", "parentUuid": "u2b",
+        "sessionId": "s-1", "cwd": "/work", "isSidechain": false,
+        "timestamp": "2026-11-12T10:00:03.000Z",
+        "attachment": {"type": "todo_reminder", "content": []}});
+    write_lines(
+        &file,
+        &[
+            claude_row("user", "u1", None, "q1", 0),
+            claude_row("assistant", "a1", Some("u1"), "r1", 1),
+            claude_row("user", "u2b", Some("a1"), "q2b", 2),
+            attachment,
+            claude_row("assistant", "a2b", Some("att"), "r2b", 4),
+            claude_row("assistant", "a2c", Some("att"), "r2c", 5),
+            claude_row("user", "u2", Some("a1"), "q2", 6),
+            claude_row("assistant", "a2", Some("u2"), "r2", 7),
+        ],
+    );
+    let all = claude_code::read_file_all_branches(&file).unwrap();
+    assert_eq!(all.branches.len(), 2, "{:#?}", all.branches);
+    assert_eq!(conversation(&all.branches[1].entries), ["assistant: r2c"]);
+    let q2b = id_of_text(&all.branches[0].entries, "q2b");
+    assert_eq!(all.branches[1].from.as_deref(), Some(q2b));
+}
+
 #[test]
 fn claude_code_reads_every_branch_of_its_tree_as_a_branch() {
     use mukade::reader::claude_code;
@@ -376,40 +513,59 @@ fn codex_say(ordinal: u64, role: &str, text: &str) -> Value {
 
 #[test]
 fn codex_reads_the_turns_a_rollback_dropped_as_branches() {
+    rollback_branches(true);
+}
+
+/// An older rollout's records carry no `ordinal`: its branches are found by position, the same.
+#[test]
+fn codex_places_rollback_branches_in_a_rollout_without_ordinals() {
+    rollback_branches(false);
+}
+
+fn rollback_branches(with_ordinals: bool) {
     use mukade::reader::codex::{Branches, read_with};
     const ID: &str = "01a10000-0000-7000-8000-0000000000aa";
-    let scratch = support::scratch(HarnessId::Codex, "codex-rollback-branches");
+    let scratch = support::scratch(
+        HarnessId::Codex,
+        &format!("codex-rollback-branches-{with_ordinals}"),
+    );
     let roots = support::roots(&scratch);
     let home = roots.codex_home.clone().unwrap();
+    let mut records = vec![
+        codex_record(
+            0,
+            "session_meta",
+            json!({"id": ID, "cwd": "/work", "cli_version": "0.167.0",
+                    "timestamp": "2026-11-12T10:00:00.000Z"}),
+        ),
+        codex_say(1, "user", "q1"),
+        codex_say(2, "assistant", "a1"),
+        codex_say(3, "user", "q2"),
+        codex_say(4, "assistant", "a2"),
+        codex_record(
+            5,
+            "event_msg",
+            json!({"type": "thread_rolled_back", "num_turns": 1}),
+        ),
+        codex_say(6, "user", "q3"),
+        codex_say(7, "assistant", "a3"),
+        codex_record(
+            8,
+            "event_msg",
+            json!({"type": "thread_rolled_back", "num_turns": 1}),
+        ),
+        codex_say(9, "user", "q4"),
+    ];
+    if !with_ordinals {
+        for record in &mut records {
+            record.as_object_mut().unwrap().remove("ordinal");
+        }
+    }
     write_lines(
         &home.join(format!(
             "sessions/2026/11/12/rollout-2026-11-12T10-00-00-{ID}.jsonl"
         )),
-        &[
-            codex_record(
-                0,
-                "session_meta",
-                json!({"id": ID, "cwd": "/work", "cli_version": "0.167.0",
-                    "timestamp": "2026-11-12T10:00:00.000Z"}),
-            ),
-            codex_say(1, "user", "q1"),
-            codex_say(2, "assistant", "a1"),
-            codex_say(3, "user", "q2"),
-            codex_say(4, "assistant", "a2"),
-            codex_record(
-                5,
-                "event_msg",
-                json!({"type": "thread_rolled_back", "num_turns": 1}),
-            ),
-            codex_say(6, "user", "q3"),
-            codex_say(7, "assistant", "a3"),
-            codex_record(
-                8,
-                "event_msg",
-                json!({"type": "thread_rolled_back", "num_turns": 1}),
-            ),
-            codex_say(9, "user", "q4"),
-        ],
+        &records,
     );
     let plain = read_with(ID, &roots, Branches::Active).unwrap();
     assert_eq!(
@@ -440,8 +596,8 @@ fn codex_reads_the_turns_a_rollback_dropped_as_branches() {
 // ---------------------------------------------------------------------------------------------
 // writers: branches travel where the destination keeps a tree
 
-use mukade::writer::plan::{BranchKeeping, PlannedBlock, plan};
 use mukade::writer::WriteOpts;
+use mukade::writer::plan::{BranchKeeping, PlannedBlock, plan};
 
 fn opts_for(_dest: HarnessId) -> WriteOpts {
     WriteOpts {
@@ -475,6 +631,51 @@ fn the_plan_keeps_a_branch_where_the_destination_has_a_tree_or_a_rollback() {
         mukade::writer::for_harness(HarnessId::Codex).keeps_branches(),
         BranchKeeping::Rollbacks
     );
+    assert_eq!(
+        mukade::writer::for_harness(HarnessId::Pi).keeps_branches(),
+        BranchKeeping::TreeLeafLast
+    );
+}
+
+/// Pi resumes its file's last entry. A branch that leaves after the active path's last block
+/// would be written last and resumed, so Pi leaves it out and counts it; Claude Code names its
+/// leaf and keeps it.
+#[test]
+fn a_branch_after_the_last_active_block_is_kept_only_where_the_file_names_its_leaf() {
+    let mut session = branched();
+    session.branches[0].from = Some("a2".into());
+    let pi = plan(&session, HarnessId::Pi, &opts_for(HarnessId::Pi));
+    assert_eq!(pi.counts.branches_kept, 0);
+    assert_eq!(pi.counts.branches_dropped, 1);
+    let claude = plan(
+        &session,
+        HarnessId::ClaudeCode,
+        &opts_for(HarnessId::ClaudeCode),
+    );
+    assert_eq!(claude.counts.branches_kept, 1);
+    assert_eq!(claude.branches[0].parent, Some((0, 3)));
+}
+
+/// A branch that leaves from a bookkeeping entry (an attachment row the prompt hangs under)
+/// leaves after the conversation entry before it, and is kept.
+#[test]
+fn a_branch_that_leaves_from_a_bookkeeping_entry_is_placed_before_it() {
+    let mut session = branched();
+    session.entries.insert(
+        2,
+        entry(
+            "att",
+            Kind::Meta {
+                kind: MetaKind::Internal,
+            },
+        ),
+    );
+    session.branches[0].from = Some("att".into());
+    for dest in [HarnessId::ClaudeCode, HarnessId::Pi, HarnessId::Codex] {
+        let planned = plan(&session, dest, &opts_for(dest));
+        assert_eq!(planned.counts.branches_kept, 1, "{dest}");
+        assert_eq!(planned.branches[0].parent, Some((0, 1)), "{dest}");
+    }
 }
 
 #[test]

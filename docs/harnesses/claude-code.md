@@ -406,7 +406,7 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 - **Interruptions** (L9): `[Request interrupted by user]` (and `… for tool use]`) is a marker, not a prompt; the reply it cut is `aborted`.
 - **Reasoning.** `thinking` keeps its `signature`; `redacted_thinking` keeps its `data` as the opaque payload; both are tagged `anthropic-messages` with the step's model.
 - **Step end** from `stop_reason`: `tool_use`; `end_turn`, `stop_sequence`, `max_tokens`, `length` → completed; `refusal` → error.
-- **Metadata** from the rows: `sessionId`, `cwd`, `gitBranch`, `version`, models; the title as in the listing; `parent` is the `forkedFrom.sessionId` of a fork (`parent_kind` `fork`, `at` the origin's uuid of the last row copied), else empty for a session's own file (a child's: Subagent sessions). The listing reads it from the two ends of each file it peeks, so a fork longer than the windows may show no `at`; the cache table is `claude-list-2`.
+- **Metadata** from the rows: `sessionId`, `cwd`, `gitBranch`, `version`, models; the title as in the listing; `parent` is the `forkedFrom.sessionId` of a fork's last copied row (`parent_kind` `fork`, `at` the origin's uuid of that row; a copied row without `messageUuid` leaves it as it was), else empty for a session's own file (a child's: Subagent sessions). The listing peeks the two ends of each file; for a fork longer than the two windows it reads every line that names `forkedFrom`, so it gives the `at` a read gives. The cache tables are `claude-list-3` and `claude-subagents-3`.
 
 ## How mukade writes it
 

@@ -466,7 +466,8 @@ Code: `src/model/` (`mod.rs`, `kind.rs`, `tool.rs`, `reasoning.rs`, `harness.rs`
 
 **Lineage.** `Meta.parent` (and `SessionInfo.parent` in a listing) is the session this one came
 from, an id in every harness; `parent_kind` says how, and is set whenever `parent` is: `Fork { at }` (a copy
-continued on its own; `at` is the origin entry or ordinal the copy ends at, where the source says)
+continued on its own; `at` is the origin's last entry (or ordinal) the copy holds, where the source
+says, in every harness)
 or `Spawn { call_id, agent }` (a subagent; the parent's spawning call and the agent type, where the
 source records them). The dump document carries both as `meta.parent` and
 `meta.parent_kind` (`{"kind":"fork"}` or `{"kind":"fork","at":…}`, `{"kind":"spawn","call_id":…,"agent":…}`).
@@ -475,9 +476,9 @@ fork is a self-contained copy, not linked to its origin.
 
 | harness | `parent` | `parent_kind` |
 |---|---|---|
-| Claude Code | a subagent session (`<parent-id>.<agentId>`): its meta.json `parentAgentId` as `<parent-id>.<parentAgentId>`, else the rows' `sessionId` | `Spawn { call_id: toolUseId, agent: agentType }` (meta.json); a fork: the `forkedFrom.sessionId` of its rows, `Fork { at: the origin uuid of the last row copied }`; else none |
-| Codex | `parent_thread_id` (top level or `source.subagent.thread_spawn`), else `session_id` ≠ `id`; listing: `thread_spawn_edges`; else `forked_from_id` | `Spawn { call_id: None, agent: agent_role, inherits_context: forked_from_id is set }`; `agent: "guardian_review"` for a guardian review; a fork no spawn started: `Fork { at: forked_from_ordinal_exclusive or history_base.end_ordinal_exclusive }` |
-| OpenCode | `parentID` (export) or `parent_id` (row); else a fork's `fork.sessionID` / `fork_session_id` with its boundary | `Spawn { None, None }`; a fork: `Fork { at: fork_boundary.messageID }` |
+| Claude Code | a subagent session (`<parent-id>.<agentId>`): its meta.json `parentAgentId` as `<parent-id>.<parentAgentId>`, else the rows' `sessionId` | `Spawn { call_id: toolUseId, agent: agentType }` (meta.json); a fork: the `forkedFrom.sessionId` of its last copied row (a fork of a fork may keep older rows' origin), `Fork { at: the origin uuid of the last row copied }`; else none |
+| Codex | `parent_thread_id` (top level or `source.subagent.thread_spawn`), else `session_id` ≠ `id`; listing: `thread_spawn_edges`; else `forked_from_id` | `Spawn { call_id: None, agent: agent_role, inherits_context: forked_from_id is set }`; `agent: "guardian_review"` for a guardian review; a fork no spawn started: `Fork { at: one less than forked_from_ordinal_exclusive or history_base.end_ordinal_exclusive }` (none when that is 0) |
+| OpenCode | `parentID` (export) or `parent_id` (row); else a fork's `fork.sessionID` / `fork_session_id` with its boundary | `Spawn { None, None }`; a fork: `Fork { at: fork_boundary.messageID }` for a `through` boundary; a `before` boundary names the message after the last one held, so `at` is none |
 | Pi | the `id` in the header of the file `parentSession` names (the path as written when that file is not here) | `Fork` |
 | Hermes Agent | `model_config._delegate_from` (a `delegate_task` subagent, `source = subagent`), else `_branched_from` or a `parent_session_id` whose `end_reason` is `branched` | `Spawn { None, None }`; a `/branch` copy: `Fork`; a rotated compaction is the same session, no parent |
 | DeepSeek Harness | the header's `parentSession` | `Spawn { call_id: None, agent: agentPreset, inherits_context: isSeeded }` when `origin` is `subagent`, else `Fork` |
@@ -575,21 +576,26 @@ pub struct Branch {
   Runs come parents first. The decomposition is not canonical: a writer and a reader may cut the same
   tree differently; the set of paths from the first entry to a leaf is.
 - **Claude Code and Pi** group the off-path user and assistant records by `parentUuid` / `parentId`
-  (`src/reader/branches.rs`). **Codex** has no tree: a rollback (`thread_rolled_back { num_turns }`) drops
+  (`src/reader/branches.rs`). A record that continues its parent (another block of the same Claude
+  response, the result of a call its parent row made) stays in its parent's run, so parallel calls
+  keep their results; a bookkeeping row between two records is passed through, and a branch leaves
+  from the nearest conversation entry above it. **Codex** has no tree: a rollback (`thread_rolled_back { num_turns }`) drops
   the last `num_turns` user turns of what Codex had so far, and an earlier file of a redone thread holds
-  records past the cut its page continues from; each such run is a branch from the record before it.
+  records past the cut its page continues from; each such run is a branch from the conversation record
+  before it, found by position (a rollout without `ordinal`s places its branches too).
 - **The dump document** gains `branches: [{from, messages}]` (the messages as the top level, `from`
   the id of a message, null for the start); absent when empty. `from_document` reads it.
 - **Planning** (`writer::plan::plan`): each branch is planned with the path it shares and judged as
   that whole conversation: its first blocks must equal the plan of the path alone, and the strict gate
-  (§7) must pass. A branch that fails, whose `from` is not in the session, or that hangs off a branch
-  that failed, is dropped. `Plan.branches` holds the kept ones with the block they leave from.
+  (§7) must pass. A `from` that names a bookkeeping entry leaves after the conversation entry before
+  it. A branch that fails, whose `from` is not in the session, or that hangs off a branch that failed,
+  is dropped. What a branch shares is planned once per point it leaves from. `Plan.branches` holds the kept ones with the block they leave from.
 - **Writers**, by `Writer::keeps_branches`:
 
 | destination | `BranchKeeping` | written as |
 |---|---|---|
 | Claude Code | `Tree` | one file; each row names its `parentUuid`; a branch follows the row it leaves from, the active path ends the file; `last-prompt.leafUuid` is the active leaf |
-| Pi | `Tree` | `id` / `parentId` entries, the same order; the last entry is the leaf |
+| Pi | `TreeLeafLast` | `id` / `parentId` entries, the same order; the last entry is the leaf, so a branch that would leave after the active path's last block (and so be written last) is dropped |
 | Codex | `Rollbacks` | the branch, then `event_msg thread_rolled_back { num_turns }` for the user-role messages it wrote; only a branch whose first block is a user turn |
 | OpenCode, Hermes, DeepSeek Harness | `None` | all dropped |
 

@@ -53,7 +53,7 @@ pub fn list_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<Sessi
         .into());
     };
     let files = session_files(&projects)?;
-    let table = crate::cache::table_name("claude-list-2", &projects.to_string_lossy());
+    let table = crate::cache::table_name("claude-list-3", &projects.to_string_lossy());
     let mut out = peek_files(&files, &table, cache);
     add_what_the_transcripts_do_not_say(&mut out, config);
     out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
@@ -89,7 +89,7 @@ pub fn list_all_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<S
     };
     let transcripts = subagents::transcripts(&projects)?;
     let files: Vec<PathBuf> = transcripts.iter().map(|(file, _)| file.clone()).collect();
-    let table = crate::cache::table_name("claude-subagents-2", &projects.to_string_lossy());
+    let table = crate::cache::table_name("claude-subagents-3", &projects.to_string_lossy());
     for (mut info, (file, session)) in peek_files(&files, &table, cache)
         .into_iter()
         .zip(&transcripts)
@@ -266,7 +266,7 @@ pub fn read_file_all_branches(path: &Path) -> Result<Session> {
 fn read_file_with(path: &Path, branches: bool) -> Result<Session> {
     let mut session = read_one(path)?;
     if branches {
-        super::branches::lift(&mut session, "uuid", "parentUuid", |rows| {
+        super::branches::lift(&mut session, "uuid", "parentUuid", continues, |rows| {
             let mut b = Builder::default();
             for (i, row) in rows.into_iter().enumerate() {
                 b.push(i, row, true);
@@ -275,6 +275,41 @@ fn read_file_with(path: &Path, branches: bool) -> Result<Session> {
         })?;
     }
     Ok(session)
+}
+
+/// Whether `child` belongs with its parent row rather than starting a branch: another block of the
+/// same response (one API response is one row per block, chained), or the result of a call the
+/// parent row made (a `tool_result` row's parent is its own `tool_use` row).
+fn continues(child: &Value, parent: &Value) -> bool {
+    fn kind(row: &Value) -> Option<&str> {
+        row.get("type").and_then(Value::as_str)
+    }
+    fn message(row: &Value) -> Option<&str> {
+        row.pointer("/message/id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    }
+    let blocks = |row: &Value, block: &str, field: &str| -> Vec<String> {
+        row.pointer("/message/content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some(block))
+            .filter_map(|b| b.get(field).and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    };
+    match (kind(child), kind(parent)) {
+        (Some("assistant"), Some("assistant")) => {
+            message(child).is_some() && message(child) == message(parent)
+        }
+        (Some("user"), Some("assistant")) => {
+            let calls = blocks(parent, "tool_use", "id");
+            blocks(child, "tool_result", "tool_use_id")
+                .iter()
+                .any(|id| calls.contains(id))
+        }
+        _ => false,
+    }
 }
 
 fn read_one(path: &Path) -> Result<Session> {
@@ -693,7 +728,9 @@ struct Forked {
 }
 
 impl Forked {
-    /// What `row` says about the fork it was copied into, when it was copied.
+    /// What `row` says about the fork it was copied into, when it was copied. The last copied row
+    /// decides: its origin is the session the copy was made from (a fork of a fork may keep its
+    /// older rows' `forkedFrom`), and a row that names no `messageUuid` leaves the last one known.
     fn observe(into: &mut Option<Forked>, row: &Value) {
         let Some(from) = row.get("forkedFrom") else {
             return;
@@ -707,15 +744,14 @@ impl Forked {
         let Some(session) = text("sessionId") else {
             return;
         };
+        let last = text("messageUuid");
         match into {
-            Some(known) if known.session == session => known.last = text("messageUuid"),
-            Some(_) => {}
-            None => {
-                *into = Some(Forked {
-                    session,
-                    last: text("messageUuid"),
-                })
+            Some(known) if known.session == session => {
+                if last.is_some() {
+                    known.last = last;
+                }
             }
+            _ => *into = Some(Forked { session, last }),
         }
     }
 
@@ -1456,6 +1492,17 @@ fn peek(file: &Path) -> SessionInfo {
         super::json::peek_ends(file, &mut into);
     }
     info.title = titles.pick();
+    // A fork's last copied row can sit between the two ends a peek reads: what the copy holds is
+    // read from every row that names its origin, so the listing says what a read says.
+    let peeked_whole = std::fs::metadata(file).is_ok_and(|meta| {
+        meta.len() <= super::json::PEEK_HEAD_BYTES + super::json::PEEK_TAIL_BYTES
+    });
+    if forked.is_some() && !peeked_whole {
+        forked = None;
+        super::json::scan_containing(file, "\"forkedFrom\"", &mut |row| {
+            Forked::observe(&mut forked, &row)
+        });
+    }
     if let Some(forked) = forked.filter(|f| f.session != info.id) {
         (info.parent, info.parent_kind) = {
             let (parent, kind) = forked.lineage();

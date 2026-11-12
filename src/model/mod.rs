@@ -71,9 +71,10 @@ pub enum ParentKind {
     /// A copy of the parent's conversation, continued on its own (Claude Code `/branch`, Codex
     /// `fork`, OpenCode `fork`, Pi `parentSession`).
     Fork {
-        /// The parent's entry the copy ends at, where the source says (Claude `forkedFrom`'s
-        /// `messageUuid`, Codex's fork ordinal, OpenCode's `fork_boundary`). `None` is "not
-        /// recorded", never a guess.
+        /// The parent's last entry the copy holds, where the source says: Claude `forkedFrom`'s
+        /// `messageUuid` on the last row copied, the ordinal before Codex's exclusive fork ordinal,
+        /// the `messageID` of an OpenCode `fork_boundary` of type `through`. `None` is "not
+        /// recorded" (or, for OpenCode's `before`, not named), never a guess.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<String>,
     },

@@ -33,7 +33,7 @@ impl Writer for Pi {
 
     /// A tree: every entry names its parent, and the last entry is the leaf Pi resumes.
     fn keeps_branches(&self) -> plan::BranchKeeping {
-        plan::BranchKeeping::Tree
+        plan::BranchKeeping::TreeLeafLast
     }
 
     fn write_planned(

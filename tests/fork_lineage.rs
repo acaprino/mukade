@@ -123,6 +123,112 @@ fn a_claude_fork_names_its_origin_in_the_listing_and_when_read() {
     assert_eq!((plain.parent, plain.parent_kind), (None, None));
 }
 
+/// A fork as long as the rows of `copied` from `origins` (the origin of each copied row, in order),
+/// then `own` rows of its own: user and assistant turns, each padded to `pad` bytes.
+fn claude_long_fork(origins: &[(&str, usize)], own: usize, pad: usize) -> Vec<Value> {
+    let filler = "x".repeat(pad);
+    let mut rows = Vec::new();
+    let mut parent: Option<String> = None;
+    let mut n = 0usize;
+    let mut push = |rows: &mut Vec<Value>, origin: Option<&str>| {
+        let uuid = format!("c-{n}");
+        let (kind, message) = if n.is_multiple_of(2) {
+            (
+                "user",
+                json!({"role": "user", "content": format!("question {n} {filler}")}),
+            )
+        } else {
+            (
+                "assistant",
+                json!({"id": format!("msg_{n}"), "role": "assistant",
+                "model": "claude-x", "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": format!("answer {n} {filler}")}]}),
+            )
+        };
+        let mut row = json!({"type": kind, "uuid": uuid, "parentUuid": parent,
+            "sessionId": CLAUDE_FORK, "timestamp": "2026-11-12T10:00:00.000Z", "cwd": "/work",
+            "isSidechain": false, "message": message});
+        if let Some(origin) = origin {
+            row["forkedFrom"] = json!({"sessionId": origin, "messageUuid": uuid});
+        }
+        parent = Some(uuid);
+        rows.push(row);
+        n += 1;
+    };
+    for &(origin, count) in origins {
+        for _ in 0..count {
+            push(&mut rows, Some(origin));
+        }
+    }
+    for _ in 0..own {
+        push(&mut rows, None);
+    }
+    rows
+}
+
+/// A fork longer than the two ends a listing peeks: its last copied row sits between them, and
+/// the listing names the same split point a read does.
+#[test]
+fn a_long_claude_fork_lists_the_split_point_a_read_gives() {
+    use mukade::reader::claude_code::ClaudeCode;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-fork-long");
+    let roots = support::roots(&scratch);
+    let fork = scratch.join(format!("home/projects/p/{CLAUDE_FORK}.jsonl"));
+    write_lines(&fork, &claude_long_fork(&[(CLAUDE_ORIGIN, 200)], 150, 3000));
+    assert!(std::fs::metadata(&fork).unwrap().len() > 1024 * 1024);
+    let expected = Some(ParentKind::Fork {
+        at: Some("c-199".into()),
+    });
+    let read = ClaudeCode.read(CLAUDE_FORK, &roots).unwrap().meta;
+    assert_eq!(read.parent_kind, expected);
+    let listed = ClaudeCode.list(&roots).unwrap();
+    assert_eq!(by_id(&listed, CLAUDE_FORK).parent_kind, expected);
+}
+
+/// A fork of a fork: the rows it took from its parent may keep the `forkedFrom` of the session
+/// that parent was forked from. The last copied rows name the session the copy came from.
+#[test]
+fn a_fork_of_a_fork_names_the_session_its_last_copied_rows_came_from() {
+    use mukade::reader::claude_code::ClaudeCode;
+    const MIDDLE: &str = "33333333-3333-4333-8333-333333333333";
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-fork-of-fork");
+    let roots = support::roots(&scratch);
+    let fork = scratch.join(format!("home/projects/p/{CLAUDE_FORK}.jsonl"));
+    write_lines(
+        &fork,
+        &claude_long_fork(&[(CLAUDE_ORIGIN, 2), (MIDDLE, 2)], 2, 10),
+    );
+    let read = ClaudeCode.read(CLAUDE_FORK, &roots).unwrap().meta;
+    assert_eq!(read.parent.as_deref(), Some(MIDDLE));
+    assert_eq!(
+        read.parent_kind,
+        Some(ParentKind::Fork {
+            at: Some("c-3".into())
+        })
+    );
+    let listed = ClaudeCode.list(&roots).unwrap();
+    assert_eq!(by_id(&listed, CLAUDE_FORK).parent.as_deref(), Some(MIDDLE));
+}
+
+/// A copied row that names its origin but no `messageUuid` leaves the split point where it was.
+#[test]
+fn a_copied_row_without_a_message_uuid_keeps_the_split_point() {
+    use mukade::reader::claude_code::ClaudeCode;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "claude-fork-no-uuid");
+    let roots = support::roots(&scratch);
+    let fork = scratch.join(format!("home/projects/p/{CLAUDE_FORK}.jsonl"));
+    let mut rows = claude_long_fork(&[(CLAUDE_ORIGIN, 3)], 1, 10);
+    rows[2]["forkedFrom"] = json!({"sessionId": CLAUDE_ORIGIN});
+    write_lines(&fork, &rows);
+    let read = ClaudeCode.read(CLAUDE_FORK, &roots).unwrap().meta;
+    assert_eq!(
+        read.parent_kind,
+        Some(ParentKind::Fork {
+            at: Some("c-1".into())
+        })
+    );
+}
+
 #[test]
 fn a_claude_listing_remembers_a_fork_in_its_cache() {
     use mukade::reader::claude_code::list_cached;
@@ -212,6 +318,26 @@ fn codex_store(tag: &str) -> StoreRoots {
     roots
 }
 
+/// Codex's fork ordinal is exclusive; `at` is the last record the copy holds, the one before it.
+/// A fork that copied nothing names no record.
+#[test]
+fn a_codex_fork_names_the_last_record_it_copied() {
+    use mukade::reader::codex::Codex;
+    let scratch = support::scratch(HarnessId::Codex, "codex-fork-at");
+    let roots = support::roots(&scratch);
+    let home = roots.codex_home.clone().unwrap();
+    codex_rollout(
+        &home,
+        CODEX_FORK,
+        json!({"forked_from_id": CODEX_ORIGIN, "forked_from_ordinal_exclusive": 0}),
+        vec![codex_say(1, "user", "fresh start")],
+    );
+    let listed = Codex.list_all(&roots).unwrap();
+    let fork = by_id(&listed, CODEX_FORK);
+    assert_eq!(fork.parent.as_deref(), Some(CODEX_ORIGIN));
+    assert_eq!(fork.parent_kind, Some(ParentKind::Fork { at: None }));
+}
+
 #[test]
 fn a_codex_fork_names_its_origin_and_a_forked_subagent_stays_a_spawn() {
     use mukade::reader::codex::Codex;
@@ -222,7 +348,7 @@ fn a_codex_fork_names_its_origin_and_a_forked_subagent_stays_a_spawn() {
     assert_eq!(
         fork.parent_kind,
         Some(ParentKind::Fork {
-            at: Some("3".into())
+            at: Some("2".into())
         })
     );
     let child = by_id(&listed, CODEX_SUBAGENT);
@@ -514,7 +640,7 @@ fn a_referenced_fork_reads_the_origins_prefix_and_leaves_no_branch() {
         assert_eq!(
             session.meta.parent_kind,
             Some(ParentKind::Fork {
-                at: Some("3".into())
+                at: Some("2".into())
             })
         );
     }

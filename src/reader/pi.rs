@@ -40,13 +40,20 @@ pub fn read_file_all_branches(path: &Path) -> Result<Session> {
 fn read_file_with(path: &Path, branches: bool) -> Result<Session> {
     let mut session = read_one(path)?;
     if branches {
-        super::branches::lift(&mut session, "id", "parentId", |rows| {
-            let mut b = Builder::default();
-            for (i, row) in rows.into_iter().enumerate() {
-                b.push(i, row, true);
-            }
-            Ok(b.finish(None)?.entries)
-        })?;
+        // Pi chains every message, results included, one after another: nothing attaches.
+        super::branches::lift(
+            &mut session,
+            "id",
+            "parentId",
+            |_, _| false,
+            |rows| {
+                let mut b = Builder::default();
+                for (i, row) in rows.into_iter().enumerate() {
+                    b.push(i, row, true);
+                }
+                Ok(b.finish(None)?.entries)
+            },
+        )?;
     }
     Ok(session)
 }

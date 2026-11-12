@@ -476,7 +476,7 @@ Code: `src/reader/opencode.rs` [31].
   without starting OpenCode; returns root sessions (`parent_id IS NULL`), newest `time_updated`
   first, archived included (`archived` = `time_archived` set; `--archived false` leaves them out).
   `list_all` (`list --children`, the TUI) adds the child sessions. `parent` = `parent_id` (spawn),
-  else `fork_session_id` with a `fork_boundary` (fork, `at` = the boundary's `messageID`; read only where the table has both columns). The inventory counts `fork_session_id` rows as forks; a child (`parent_id`) is a subagent and is not.
+  else `fork_session_id` with a `fork_boundary` (fork, `at` = the boundary's `messageID` when its `type` is `through`, the last message the fork holds; a `before` boundary names no message the fork holds, so `at` is none; read only where the table has both columns). The inventory counts forks as the listing reads them: a `fork_session_id` with a `fork_boundary` and no `parent_id`; a child (`parent_id`) is a subagent and is not.
 - **`read`** (`dump`, a hop source) runs `<exe> session export <id> --standalone` (stdin closed, 120 s
   `EXPORT_TIMEOUT`) and parses `{info, messages}`. Stderr containing `not found` is a not-found
   error. The SHA-256 of the printed document is the source fingerprint (`--expect-sha256`).

@@ -196,8 +196,13 @@ impl Plan {
 pub enum BranchKeeping {
     /// One conversation only: every branch is left out and counted.
     None,
-    /// A tree: each record names its parent (Claude Code `parentUuid`, Pi `parentId`).
+    /// A tree: each record names its parent, and the file names the leaf it resumes (Claude Code
+    /// `parentUuid`, `last-prompt.leafUuid`).
     Tree,
+    /// A tree whose resumed leaf is the file's last entry (Pi `parentId`): a branch is written
+    /// before the active path goes on, so a branch that would leave after the active path's last
+    /// block would end the file and be resumed instead. That one is left out and counted.
+    TreeLeafLast,
     /// A line with rollbacks: a branch is written, then rolled back (Codex
     /// `thread_rolled_back`), which can express a branch that starts a user turn.
     Rollbacks,
@@ -633,6 +638,8 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
             .collect()
     };
     let mut chains: Vec<Vec<crate::model::Entry>> = vec![conversation(&session.entries)];
+    // Every chain's own entries, Meta included: a branch can leave from a bookkeeping entry.
+    let mut whole: Vec<&[crate::model::Entry]> = vec![&session.entries];
     let mut hangs: Vec<Option<(usize, usize)>> = vec![None];
     // The chain a planned branch came from, so a branch that hangs off a dropped one is dropped.
     let mut planned_as: Vec<Option<usize>> = vec![Some(0)];
@@ -671,17 +678,31 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
         }
         path
     };
+    // The entries a branch shares with the path it leaves from, and their plan, by where it leaves.
+    #[allow(clippy::type_complexity)]
+    let mut shared: std::collections::HashMap<
+        Option<(usize, usize)>,
+        (Vec<crate::model::Entry>, Vec<PlannedBlock>),
+    > = std::collections::HashMap::new();
     for branch in &session.branches {
         let number = chains.len();
         chains.push(conversation(&branch.entries));
-        // Where it hangs: the entry it leaves from, in the active path or an earlier branch.
+        whole.push(&branch.entries);
+        // Where it hangs: the entry it leaves from, in the active path or an earlier branch. A
+        // bookkeeping entry is no block of its own: the branch leaves after the conversation entry
+        // before it, or from where its chain starts when there is none.
         let place = match &branch.from {
             None => Some(None),
             Some(from) => (0..number).find_map(|c| {
-                chains[c]
+                let at = whole[c].iter().position(|entry| &entry.id == from)?;
+                let before = whole[c][..=at]
                     .iter()
-                    .position(|entry| &entry.id == from)
-                    .map(|at| Some((c, at)))
+                    .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+                    .count();
+                Some(match before {
+                    0 => hangs[c],
+                    n => Some((c, n - 1)),
+                })
             }),
         };
         let kept = (|| {
@@ -690,16 +711,21 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
             if let Some((parent, _)) = place {
                 planned_as[parent]?;
             }
-            let prefix = match place {
-                None => Vec::new(),
-                Some((c, at)) => path_to(&chains, &hangs, c, at),
-            };
-            let before = planned_of(prefix.clone());
-            let mut entries = prefix;
+            // What the branch shares, planned once for every branch that leaves from there.
+            let (prefix, before) = shared.entry(place).or_insert_with(|| {
+                let prefix = match place {
+                    None => Vec::new(),
+                    Some((c, at)) => path_to(&chains, &hangs, c, at),
+                };
+                let before = planned_of(prefix.clone()).blocks;
+                (prefix, before)
+            });
+            let mut entries = Vec::with_capacity(prefix.len() + chains[number].len());
+            entries.extend(prefix.iter().cloned());
             entries.extend(chains[number].iter().cloned());
             let full = planned_of(entries);
-            let k = before.blocks.len();
-            if full.blocks.len() <= k || full.blocks[..k] != before.blocks[..] {
+            let k = before.len();
+            if full.blocks.len() <= k || full.blocks[..k] != before[..] {
                 return None;
             }
             if !crate::strict::check_plan(&full, protocol.as_ref()).is_empty() {
@@ -725,6 +751,16 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
                     }
                 }
             });
+            // Written after the active path's last block (results go with their step), it would
+            // be the last entry, and the leaf.
+            if keeping == BranchKeeping::TreeLeafLast
+                && let Some((0, block)) = parent
+                && plan.blocks[block + 1..]
+                    .iter()
+                    .all(|later| matches!(later, PlannedBlock::Results { .. }))
+            {
+                return None;
+            }
             Some((parent, blocks, k))
         })();
         hangs.push(place.flatten());

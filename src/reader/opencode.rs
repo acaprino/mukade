@@ -378,8 +378,9 @@ fn lineage(session: &Value) -> Option<(String, ParentKind)> {
         .map(|(source, at)| (source, ParentKind::Fork { at }))
 }
 
-/// The message a fork's boundary names: `{type: "before" | "through", messageID}`, as an object or
-/// as the JSON text a store row keeps.
+/// The parent's last message a fork holds, from its boundary `{type: "before" | "through",
+/// messageID}` (an object, or the JSON text a store row keeps). `through` holds `messageID`;
+/// `before` ends at the message before it, which the boundary does not name, so it is `None`.
 fn boundary_message(boundary: &Value) -> Option<String> {
     let parsed;
     let boundary = match boundary {
@@ -389,6 +390,9 @@ fn boundary_message(boundary: &Value) -> Option<String> {
         }
         other => other,
     };
+    if str_at(boundary, "/type").as_deref() != Some("through") {
+        return None;
+    }
     str_at(boundary, "/messageID").filter(|id| !id.is_empty())
 }
 
@@ -732,10 +736,19 @@ pub fn store_counts(db: &Path) -> Result<StoreCounts> {
     )
     .with_context(|| format!("open {} read-only", db.display()))?;
     connection.busy_timeout(std::time::Duration::from_secs(2))?;
+    // A fork as the listing reads one (`session_rows`): a source and a boundary, and no spawner.
+    // A table without the two fork columns records no fork.
+    let fork = if has_column(&connection, "session_v2", "fork_session_id")
+        && has_column(&connection, "session_v2", "fork_boundary")
+    {
+        "(parent_id IS NULL OR parent_id = '') AND fork_session_id IS NOT NULL \
+         AND fork_session_id <> '' AND fork_boundary IS NOT NULL"
+    } else {
+        "0"
+    };
     let (sessions, forks): (i64, i64) = connection
         .query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN fork_session_id IS NOT NULL THEN 1 ELSE 0 END) \
-             FROM session_v2",
+            &format!("SELECT COUNT(*), SUM(CASE WHEN {fork} THEN 1 ELSE 0 END) FROM session_v2"),
             [],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
         )

@@ -206,6 +206,31 @@ pub fn peek_ends(path: &std::path::Path, into: &mut dyn FnMut(Value)) {
     }
 }
 
+/// Feed every record of `path` whose line contains `needle` to `into`, from the first line to the
+/// last: for a fact a listing needs from the whole file, where the two ends [`peek_ends`] reads may
+/// miss it. Only the lines that name it are decoded, each at most [`MAX_RECORD_BYTES`].
+pub fn scan_containing(path: &std::path::Path, needle: &str, into: &mut dyn FnMut(Value)) {
+    use std::io::BufRead;
+    let Ok(file) = std::fs::File::open(path) else {
+        return;
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        if line.len() > MAX_RECORD_BYTES || !line.contains(needle) {
+            continue;
+        }
+        if let Ok(row) = serde_json::from_str::<Value>(line.trim_start_matches('\u{feff}').trim()) {
+            into(row);
+        }
+    }
+}
+
 /// Feed every record of at most `budget` bytes of `reader` to `into`.
 fn window<R: std::io::BufRead>(reader: &mut R, budget: u64, into: &mut dyn FnMut(Value)) {
     let mut read = 0u64;

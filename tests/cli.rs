@@ -1654,11 +1654,15 @@ fn harness_inventory_counts_all_opencode_sessions_and_only_forks_as_forks() {
     db.execute_batch(
         "CREATE TABLE session_v2 (
              id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
-             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT
+             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT, fork_boundary TEXT
          );
-         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL);
-         INSERT INTO session_v2 VALUES ('child-a', 'Fork A', 'D:/work', 2, NULL, 'root', NULL);
-         INSERT INTO session_v2 VALUES ('child-b', 'Fork B', 'D:/work', 3, NULL, NULL, 'root');",
+         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL, NULL);
+         INSERT INTO session_v2 VALUES ('child-a', 'Child A', 'D:/work', 2, NULL, 'root', NULL, NULL);
+         INSERT INTO session_v2 VALUES ('child-b', 'Fork B', 'D:/work', 3, NULL, NULL, 'root',
+             '{\"type\":\"through\",\"messageID\":\"msg_1\"}');
+         INSERT INTO session_v2 VALUES ('child-c', 'No boundary', 'D:/work', 4, NULL, NULL, 'root', NULL);
+         INSERT INTO session_v2 VALUES ('child-d', 'Spawned copy', 'D:/work', 5, NULL, 'root', 'root',
+             '{\"type\":\"through\",\"messageID\":\"msg_1\"}');",
     )
     .unwrap();
     drop(db);
@@ -1669,8 +1673,10 @@ fn harness_inventory_counts_all_opencode_sessions_and_only_forks_as_forks() {
         .split("\nopencode (")
         .nth(1)
         .expect("OpenCode section");
-    assert!(section.contains("sessions: 3"), "{section}");
-    // `child-a` is a subagent (`parent_id`): `list --children` finds it; only `child-b` is a fork.
+    assert!(section.contains("sessions: 5"), "{section}");
+    // A fork as the listing reads one: a source with a boundary and no spawner. `child-a` and
+    // `child-d` are subagents (`parent_id`); `child-c` names a source without a boundary. Only
+    // `child-b` is a fork.
     assert!(section.contains("forks:    1"), "{section}");
     assert!(
         section.contains("layout:   opencode.db (SQLite; session_v2, session_message)"),
@@ -1755,14 +1761,15 @@ fn create_opencode_inventory_db(path: &Path, forked: bool) {
     db.execute_batch(
         "CREATE TABLE session_v2 (
              id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
-             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT
+             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT, fork_boundary TEXT
          );
-         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL);",
+         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL, NULL);",
     )
     .unwrap();
     if forked {
         db.execute(
-            "INSERT INTO session_v2 VALUES ('fork', 'Fork', 'D:/work', 2, NULL, NULL, 'root')",
+            "INSERT INTO session_v2 VALUES ('fork', 'Fork', 'D:/work', 2, NULL, NULL, 'root',
+                 '{\"type\":\"through\",\"messageID\":\"msg_1\"}')",
             [],
         )
         .unwrap();

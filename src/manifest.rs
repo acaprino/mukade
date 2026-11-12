@@ -229,7 +229,7 @@ impl Manifest {
         }
         if counts.branches_dropped > 0 {
             losses.push(format!(
-                "branches of the source not written: the destination keeps one conversation, cannot place them, or would refuse them ({})",
+                "branches of the source not written: the destination keeps one conversation, cannot place them, would refuse them, or would resume them instead of the active path ({})",
                 counts.branches_dropped
             ));
         }

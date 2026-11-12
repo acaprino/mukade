@@ -205,8 +205,9 @@ fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Fork {
     thread: String,
-    /// The origin's record the copy ends before: `forked_from_ordinal_exclusive`, else the end of
-    /// the `history_base` a referenced fork continues from.
+    /// The origin's last record the copy holds: one before `forked_from_ordinal_exclusive`, else
+    /// before the end of the `history_base` a referenced fork continues from. `None` when nothing
+    /// was copied or the source does not say.
     ordinal: Option<u64>,
 }
 
@@ -220,7 +221,8 @@ impl Fork {
                 payload
                     .pointer("/history_base/end_ordinal_exclusive")
                     .and_then(Value::as_u64)
-            });
+            })
+            .and_then(|exclusive| exclusive.checked_sub(1));
         Some(Fork { thread, ordinal })
     }
 
@@ -258,9 +260,9 @@ fn history_base(rows: &[Value]) -> Option<HistoryBase> {
 struct BasePrefix {
     rows: Vec<Value>,
     bytes: Vec<u8>,
-    /// The conversation records an earlier file holds past its cut, per file, with the ordinal of
-    /// the last record before the cut: the branch they were.
-    left: Vec<(Option<u64>, Vec<Value>)>,
+    /// The conversation records an earlier file holds past its cut, per file, with the last
+    /// conversation record before the cut: the branch they were.
+    left: Vec<(Option<Value>, Vec<Value>)>,
     active_len: usize,
 }
 
@@ -377,7 +379,11 @@ fn base_prefix(
             active_len: 0,
         });
         out.active_len += head_rows.len();
-        let cut_ordinal = head_rows.last().and_then(ordinal);
+        let cut = head_rows
+            .iter()
+            .rev()
+            .find(|row| !matches!(class_of(row), Class::Meta(_)))
+            .cloned();
         out.rows.extend(head_rows);
         // A fork continues its origin's file by reference: what the origin did after the cut is
         // the origin's own, never a branch of the fork, whichever branches were asked for.
@@ -402,7 +408,7 @@ fn base_prefix(
                     .filter(|row| !matches!(class_of(row), Class::Meta(_)))
                     .collect();
                 if !tail.is_empty() {
-                    out.left.push((cut_ordinal, tail));
+                    out.left.push((cut, tail));
                 }
             }
         }
@@ -448,25 +454,36 @@ pub fn parse_owned_with(
     let rolled_back = rolled_back(&rows);
     let mut b = Builder::default();
     let mut abandoned: Vec<Vec<(usize, Value)>> = Vec::new();
-    let mut after: Vec<Option<u64>> = Vec::new();
+    let mut after: Vec<Option<Value>> = Vec::new();
     let mut group_of: HashMap<usize, usize> = HashMap::new();
-    // The conversation records of the rows, so a branch can name the record it left from.
-    let ordinals: Vec<Option<u64>> = rows.iter().map(ordinal).collect();
+    // For each rollback, the last conversation record before the turns it dropped that was still
+    // there when it came: what the branch left. Found by position, so a rollout whose records
+    // carry no `ordinal` places its branches too.
     let conversation: Vec<bool> = rows
         .iter()
         .map(|row| !matches!(class_of(row), Class::Meta(_)))
         .collect();
+    let mut left_from: HashMap<usize, Option<Value>> = HashMap::new();
+    for (i, dropped) in rolled_back.iter().enumerate() {
+        let Some(rollback) = *dropped else {
+            continue;
+        };
+        left_from.entry(rollback).or_insert_with(|| {
+            (0..i)
+                .rev()
+                .find(|&earlier| {
+                    conversation[earlier]
+                        && rolled_back[earlier].is_none_or(|later| later > rollback)
+                })
+                .map(|earlier| rows[earlier].clone())
+        });
+    }
     for (i, row) in rows.into_iter().enumerate() {
         match rolled_back[i] {
             Some(rollback) => {
                 let group = *group_of.entry(rollback).or_insert_with(|| {
                     abandoned.push(Vec::new());
-                    // The last record before the dropped turns that was still there when the
-                    // rollback came: what the branch left.
-                    after.push((0..i).rev().find_map(|earlier| {
-                        let there = rolled_back[earlier].is_none_or(|later| later > rollback);
-                        (there && conversation[earlier]).then_some(ordinals[earlier])?
-                    }));
+                    after.push(left_from.remove(&rollback).flatten());
                     abandoned.len() - 1
                 });
                 abandoned[group].push((i, row));
@@ -503,40 +520,37 @@ pub fn parse_owned_with(
     Ok(session)
 }
 
-/// A record's own ordinal in the thread.
-fn ordinal(row: &Value) -> Option<u64> {
-    row.get("ordinal").and_then(Value::as_u64)
-}
-
-/// A run of entries that left the thread after the record with ordinal `after`.
+/// A run of entries that left the thread after the record `after` (`None`: before the first).
 struct Group {
-    after: Option<u64>,
+    after: Option<Value>,
     entries: Vec<Entry>,
 }
 
-/// Hang each group off the entry that holds the record it left after, parents before the branches
-/// that hang off them (a record dropped by a later rollback is in a branch of its own).
+/// Hang each group off the conversation entry that holds the record it left after, parents before
+/// the branches that hang off them (a record dropped by a later rollback is in a branch of its own).
 fn attach(session: &mut Session, groups: Vec<Group>) {
     use crate::model::Branch;
-    let mut holder: HashMap<u64, String> = HashMap::new();
-    let note = |entries: &[Entry], holder: &mut HashMap<u64, String>| {
-        for entry in entries {
-            for row in &entry.raw {
-                if let Some(n) = ordinal(row) {
-                    holder.insert(n, entry.id.clone());
-                }
-            }
-        }
+    let holder = |entries: &[Entry], row: &Value| {
+        entries
+            .iter()
+            .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+            .find(|entry| entry.raw.iter().any(|raw| raw == row))
+            .map(|entry| entry.id.clone())
     };
-    note(&session.entries, &mut holder);
-    for group in &groups {
-        note(&group.entries, &mut holder);
-    }
+    let froms: Vec<Option<String>> = groups
+        .iter()
+        .map(|group| {
+            let row = group.after.as_ref()?;
+            holder(&session.entries, row)
+                .or_else(|| groups.iter().find_map(|other| holder(&other.entries, row)))
+        })
+        .collect();
     let mut pending: Vec<Branch> = groups
         .into_iter()
-        .filter(|group| !group.entries.is_empty())
-        .map(|group| Branch {
-            from: group.after.and_then(|n| holder.get(&n).cloned()),
+        .zip(froms)
+        .filter(|(group, _)| !group.entries.is_empty())
+        .map(|(group, from)| Branch {
+            from,
             entries: group.entries,
         })
         .collect();

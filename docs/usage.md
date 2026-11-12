@@ -882,7 +882,7 @@ What a destination does with them:
 | destination | branches |
 |---|---|
 | Claude Code | one file, every row naming its `parentUuid`; each branch is written right after the row it leaves from, and the resumed path ends the file, so `last-prompt` and "newest row" name the same leaf |
-| Pi | one file, `id` / `parentId` entries laid out the same way; the last entry is the leaf |
+| Pi | one file, `id` / `parentId` entries laid out the same way; the last entry is the leaf, so a branch that leaves after the resumed path's last message is left out (written last, it would be the one Pi resumes) |
 | Codex | the branch is written, then undone by a `thread_rolled_back` of its user turns, so Codex resumes the path. Only a branch that starts at a user turn can be undone that way; another is left out |
 | OpenCode, Hermes, DeepSeek Harness | none: one conversation, every branch left out |
 
