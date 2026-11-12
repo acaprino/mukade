@@ -268,12 +268,11 @@ fn the_hop_counts_every_call_as_text_form_and_passes_the_strict_gate() {
             .rows
             .iter()
             .filter(|r| r["type"] == "user")
-            .flat_map(|r| r["message"]["content"].as_array().cloned().unwrap_or_default())
-            .filter_map(|b| b["text"].as_str().map(str::to_string))
+            .flat_map(texts_of)
             .collect::<Vec<_>>()
             .join("\n");
         let first = support::user_texts(&source).into_iter().next().unwrap_or_default();
-        assert!(handed.contains(first.trim()), "{source_id}");
+        assert!(handed.contains(first.trim()), "{source_id}: {first:?} not in {handed:?}");
     }
 }
 

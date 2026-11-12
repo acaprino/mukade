@@ -285,7 +285,8 @@ mod tests {
             .position(|l| l.harness == HarnessId::OpenCode && l.store.is_none())
             .unwrap();
         let offered = destinations(&locations, opencode);
-        assert_eq!(offered.len(), 5);
+        // One standard location per harness and the scanned installation, less the source.
+        assert_eq!(offered.len(), HarnessId::ALL.len());
         assert!(
             !offered
                 .iter()

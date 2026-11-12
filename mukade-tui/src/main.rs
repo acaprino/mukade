@@ -2452,7 +2452,9 @@ mod tests {
             panic!("the hop dialog opens");
         };
         assert_eq!(hop.source.harness, HarnessId::ClaudeCode);
-        assert_eq!(hop.destinations.len(), 5);
+        // One standard location per harness and the scanned installation, less the source: every
+        // harness is a destination.
+        assert_eq!(hop.destinations.len(), HarnessId::ALL.len());
         assert!(
             hop.destinations
                 .iter()

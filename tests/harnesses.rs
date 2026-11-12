@@ -59,15 +59,13 @@ fn hermes_and_deepseek_harness_are_named_as_users_type_them() {
     assert!(unknown.contains("hermes, deepseek_harness"), "{unknown}");
 }
 
-/// Until its writer exists, a write toward Hermes is refused before planning, like a write toward
-/// any harness that is no destination.
+/// Every registered harness is a destination now (Hermes through its own import). A harness with
+/// no writer is refused before planning: `src/harnesses/mod.rs` tests that with a source-only one.
 #[test]
-fn a_harness_without_its_writer_is_refused_as_a_destination() {
-    let id = HarnessId::Hermes;
-    let Err(refusal) = mukade::harnesses::destination(id) else {
-        panic!("{id} has no writer yet");
-    };
-    assert_eq!(refusal.exit_code(), 2, "{id}: {refusal}");
+fn every_registered_harness_is_a_destination() {
+    for id in HarnessId::ALL {
+        assert!(mukade::harnesses::destination(id).is_ok(), "{id}");
+    }
 }
 
 /// A root for every harness, each its own.
@@ -309,6 +307,12 @@ fn each_destination_takes_its_own_id_format() {
     let uuid = "00000000-0000-4000-8000-000000000001";
     let opencode = "ses_0123abc";
     for id in destinations() {
+        if id == HarnessId::Hermes {
+            // Hermes allocates its ids: every one is refused.
+            assert!(destination(id).validate_write(&with_id(uuid)).is_err(), "{id}");
+            assert!(destination(id).validate_write(&with_id(opencode)).is_err(), "{id}");
+            continue;
+        }
         let (taken, refused) = if id == HarnessId::OpenCode {
             (opencode, uuid)
         } else {
@@ -380,13 +384,16 @@ fn only_pi_keeps_the_end_of_a_failed_step() {
 }
 
 #[test]
-fn claude_code_codex_and_deepseek_harness_flatten_result_blocks() {
+fn claude_code_codex_deepseek_harness_and_hermes_flatten_result_blocks() {
     for id in destinations() {
         assert_eq!(
             destination(id).flattens_result_blocks(),
             matches!(
                 id,
-                HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::DeepSeekHarness
+                HarnessId::ClaudeCode
+                    | HarnessId::Codex
+                    | HarnessId::DeepSeekHarness
+                    | HarnessId::Hermes
             ),
             "{id}"
         );

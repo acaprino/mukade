@@ -66,9 +66,20 @@ impl Writer for Hermes {
                     .into_owned()
             });
         let mut clock = Clock::new(opts.now.as_deref());
-        let rows = super::claude_code::rows(plan, session, &uuid::Uuid::new_v4().to_string(), &cwd, opts, &mut clock);
+        let rows = super::claude_code::rows(
+            plan,
+            session,
+            &uuid::Uuid::new_v4().to_string(),
+            &cwd,
+            opts,
+            &mut clock,
+        );
         let mut text = String::new();
-        for row in &rows {
+        // The import reads user and assistant rows only; Hermes titles the session itself.
+        for row in rows
+            .iter()
+            .filter(|row| matches!(row["type"].as_str(), Some("user" | "assistant")))
+        {
             text.push_str(&serde_json::to_string(row).context("serialize a record")?);
             text.push('\n');
         }

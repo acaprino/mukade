@@ -111,9 +111,9 @@ fn dump_then_write_produces_a_session_the_destination_reader_understands() {
         ],
     );
     let location = printed["location"].as_str().expect("a location");
-    assert!(location.contains("mukade-tests"), "{location}");
+    // Inside the test's own scratch store, wherever the scratch root is.
+    assert!(Path::new(location).starts_with(&scratch), "{location}");
     assert_eq!(printed["resume"][0], "pi");
-    let _ = scratch;
 
     let back = mukade::reader::pi::read_file(Path::new(location)).expect("read back");
     assert_eq!(back.meta.id, printed["id"].as_str().unwrap());
