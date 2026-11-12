@@ -13,7 +13,7 @@
 
 use super::media::Image;
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
-use super::{ChildOf, WriteOpts, Writer, Written, write_jsonl};
+use super::{ChildOf, WriteOpts, Writer, Written, write_jsonl, write_new_file};
 use crate::model::{HarnessId, Reasoning, Session};
 use crate::native_compaction::{NativeItem, plan_native_items};
 use crate::policy::{Clock, ReasoningPlan};
@@ -115,33 +115,40 @@ fn write_child(
         .clone()
         .or_else(|| session.meta.cwd.clone())
         .context("a working directory is required")?;
-    // The folder is the root session's own, wherever the subagent's directory points.
+    // The folder is `<root id>` beside the root session's file, whatever that file is called: the
+    // one Claude Code looks in for that session id.
     let folder = Path::new(&of.root_location)
-        .with_extension("")
+        .parent()
+        .context("the root session's file has no folder")?
+        .join(root)
         .join("subagents");
     let file = folder.join(format!("agent-{agent}.jsonl"));
     let meta_file = folder.join(format!("agent-{agent}.meta.json"));
 
     let mut clock = Clock::new(opts.now.as_deref());
     let mut rows = rows(plan, session, root, &cwd, opts, &mut clock);
+    // A subagent's file holds its sidechain rows alone: the title and last-prompt rows belong to a
+    // session's own file and carry the root's id.
+    rows.retain(|row| !matches!(row["type"].as_str(), Some("custom-title" | "last-prompt")));
     for row in &mut rows {
         if let Some(map) = row.as_object_mut() {
             map.insert("isSidechain".into(), Value::Bool(true));
             map.insert("agentId".into(), Value::String(agent.to_string()));
         }
     }
-    // The first prompt is the parent's task for the agent, not a person's.
-    if let Some(first) = rows
-        .iter_mut()
-        .find(|row| row.get("type").and_then(Value::as_str) == Some("user"))
-    {
-        first["promptSource"] = Value::String("agent".into());
-    }
 
+    let agent_type = of.agent.clone().unwrap_or_else(|| "general-purpose".into());
     let mut meta = json!({
-        "agentType": of.agent.clone().unwrap_or_else(|| "general-purpose".into()),
-        "description": of.description.clone().or_else(|| session.meta.title.clone()),
+        "agentType": agent_type,
+        "description": of
+            .description
+            .clone()
+            .or_else(|| session.meta.title.clone())
+            .unwrap_or_else(|| agent_type.clone()),
         "spawnDepth": of.depth,
+        "requestShape": "foreground",
+        "requestNonInteractive": false,
+        "isBuiltIn": false,
         "finished": true,
     });
     if let Some(call) = &of.tool_use_id {
@@ -154,14 +161,7 @@ fn write_child(
         meta["parentAgentId"] = Value::String(above.to_string());
     }
     write_jsonl(&file, &rows)?;
-    let written = std::fs::File::create_new(&meta_file)
-        .with_context(|| format!("create {}", meta_file.display()))
-        .and_then(|mut out| {
-            use std::io::Write;
-            out.write_all(serde_json::to_string(&meta)?.as_bytes())
-                .with_context(|| format!("write {}", meta_file.display()))
-        });
-    if let Err(error) = written {
+    if let Err(error) = write_new_file(&meta_file, &serde_json::to_string(&meta)?) {
         let _ = std::fs::remove_file(&file);
         return Err(error);
     }

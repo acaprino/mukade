@@ -322,3 +322,216 @@ fn a_childs_id_has_its_destinations_shape() {
     assert!(uuid::Uuid::parse_str(&id(HarnessId::Codex)).is_ok());
     assert!(uuid::Uuid::parse_str(&id(HarnessId::Pi)).is_ok());
 }
+
+/// A subagent written straight through the Claude Code writer: its parent's folder is `<root id>`
+/// beside the parent's file, whatever that file is called.
+fn write_claude_child(
+    tag: &str,
+    root_file_name: &str,
+    of: mukade::writer::ChildOf,
+    title: Option<&str>,
+) -> (std::path::PathBuf, Value) {
+    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
+    let mut session = support::read_source(HarnessId::ClaudeCode);
+    session.meta.title = title.map(str::to_string);
+    let mut opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let project = scratch.join("home/projects/some-project");
+    let root_id = "5ab1c0de-0000-4000-8000-0000000000aa";
+    opts.dest_id = Some(format!("{root_id}.a0123456789abcdef"));
+    opts.subagents = mukade::writer::Subagents {
+        of: Some(mukade::writer::ChildOf {
+            root_id: root_id.into(),
+            root_location: project.join(root_file_name).to_string_lossy().into_owned(),
+            parent_id: root_id.into(),
+            depth: 1,
+            ..of
+        }),
+        assigned_id: true,
+        ..Default::default()
+    };
+    let written = mukade::writer::for_harness(HarnessId::ClaudeCode)
+        .write(&session, &opts)
+        .unwrap();
+    let file = std::path::PathBuf::from(&written.location);
+    let meta = std::fs::read_to_string(file.with_extension("").with_extension("meta.json")).unwrap();
+    (file, serde_json::from_str(&meta).unwrap())
+}
+
+/// The file is what Claude Code writes for a subagent: user, assistant and attachment rows of the
+/// sidechain, with no title or last-prompt bookkeeping (those belong to the session's own file and
+/// carry its id) and no invented fields.
+#[test]
+fn a_claude_child_file_holds_only_the_rows_a_real_one_does() {
+    let (file, _) = write_claude_child(
+        "cw-child-rows",
+        "5ab1c0de-0000-4000-8000-0000000000aa.jsonl",
+        Default::default(),
+        Some("A title the source had"),
+    );
+
+    let text = std::fs::read_to_string(file).unwrap();
+    let rows: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(!rows.is_empty());
+    for row in &rows {
+        let kind = row["type"].as_str().unwrap();
+        assert!(
+            !matches!(kind, "custom-title" | "last-prompt"),
+            "a bookkeeping row of the session's own file: {row}"
+        );
+        assert!(row.get("promptSource").is_none(), "{row}");
+        assert_eq!(row["isSidechain"], true);
+        assert_eq!(row["agentId"], "a0123456789abcdef");
+    }
+}
+
+/// meta.json has the keys Claude Code writes, and a description that is a string.
+#[test]
+fn a_claude_childs_meta_json_has_the_keys_a_real_one_has() {
+    let (_, meta) = write_claude_child(
+        "cw-child-meta",
+        "5ab1c0de-0000-4000-8000-0000000000aa.jsonl",
+        mukade::writer::ChildOf {
+            agent: Some("Explore".into()),
+            ..Default::default()
+        },
+        None,
+    );
+
+    assert_eq!(meta["agentType"], "Explore");
+    assert_eq!(meta["description"], "Explore", "no title: the agent type, never null");
+    assert_eq!(meta["requestShape"], "foreground");
+    assert_eq!(meta["requestNonInteractive"], false);
+    assert_eq!(meta["isBuiltIn"], false);
+    assert_eq!(meta["spawnDepth"], 1);
+    assert!(meta.get("toolUseId").is_none());
+}
+
+/// A parent written to a `--dest-path` that is not `<id>.jsonl` still has its children in
+/// `<its folder>/<id>/subagents/`, the folder Claude Code looks in for that session id.
+#[test]
+fn a_claude_childs_folder_is_the_parents_id_not_its_file_name() {
+    let (file, _) = write_claude_child(
+        "cw-child-folder",
+        "renamed-parent.jsonl",
+        Default::default(),
+        Some("t"),
+    );
+
+    assert!(
+        file.ends_with("some-project/5ab1c0de-0000-4000-8000-0000000000aa/subagents/agent-a0123456789abcdef.jsonl"),
+        "{}",
+        file.display()
+    );
+}
+
+/// A child's own losses are the parent's too, prefixed with the child's id: a hop's manifest is the
+/// one place that says everything the hop left behind.
+#[test]
+fn a_childs_own_losses_are_prefixed_into_the_parents() {
+    let source = source("cw-losses-src");
+    let (_, opts) = destination(HarnessId::Pi, "cw-losses-dst");
+
+    let receipt = hop_children(HarnessId::Pi, &source, &opts).unwrap();
+
+    let losses: Vec<String> = receipt.manifest["losses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l.as_str().unwrap().to_string())
+        .collect();
+    // The background child spawns the deep one: its Agent call is text form in Pi.
+    assert!(
+        losses.iter().any(|l| l.starts_with(&format!("child {PARENT}.{BG}: tool calls written as text"))),
+        "{losses:?}"
+    );
+    assert!(
+        losses.iter().filter(|l| l.starts_with("child ")).all(|l| l.contains(": ")),
+        "{losses:?}"
+    );
+}
+
+/// A child the reader refuses is a loss line, not a failure: the other children are written.
+#[test]
+fn a_refused_child_is_a_loss_line_and_the_others_are_written() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cw-refused-src");
+    let roots = support::stage_claude_subagents(&scratch);
+    let file = scratch
+        .join("home/projects/D--work-modules")
+        .join(PARENT)
+        .join("subagents")
+        .join(format!("agent-{FG}.jsonl"));
+    std::fs::write(
+        &file,
+        format!(
+            "{{\"parentUuid\":\"no-such-row\",\"isSidechain\":true,\"agentId\":\"{FG}\",\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"x\"}},\"uuid\":\"u1\",\"timestamp\":\"2026-11-12T09:00:10.000Z\",\"sessionId\":\"{PARENT}\"}}\n"
+        ),
+    )
+    .unwrap();
+    let parent = export(&SessionRef::id(HarnessId::ClaudeCode, PARENT), &roots).unwrap();
+    let (_, opts) = destination(HarnessId::Pi, "cw-refused-dst");
+
+    let receipt = hop_children(HarnessId::Pi, &(roots, parent), &opts).unwrap();
+
+    let kids = receipt.manifest["children"].as_array().unwrap();
+    assert_eq!(kids.len(), 3, "{:#}", receipt.manifest);
+    assert!(kids.iter().all(|c| c["source_id"] != format!("{PARENT}.{FG}").as_str()));
+    let losses = receipt.manifest["losses"].to_string();
+    assert!(losses.contains(&format!("child {PARENT}.{FG}: ")), "{losses}");
+}
+
+/// What a child is written with follows the session's compaction: `native` is deterministic and
+/// applies to each child; `portable` and `summary` are the session's own history alone.
+#[test]
+fn a_childs_compaction_follows_the_sessions_only_when_it_is_native() {
+    use mukade::native_compaction::NativeBudget;
+    let source = source("cw-compaction-src");
+    for (mode, budget, expected) in [
+        ("native", Some(40_000), "native"),
+        ("summary", None, "none"),
+        ("portable", None, "none"),
+    ] {
+        let (_, opts) = destination(HarnessId::Pi, &format!("cw-compaction-{mode}"));
+        let mut import = support::import_opts(&opts, &source.1, None);
+        import.compaction = mode.into();
+        import.native_budget = budget.map(|context| NativeBudget {
+            context,
+            max_output_tokens: Some(32_000),
+            text_token_factor: None,
+        });
+
+        let receipt =
+            import_with_children(HarnessId::Pi, &source.1, &source.1, &source.0, &import).unwrap();
+
+        let kids = receipt.manifest["children"].as_array().unwrap();
+        assert_eq!(kids.len(), 4, "{mode}: {:#}", receipt.manifest);
+        assert!(
+            kids.iter().all(|c| c["compaction"] == expected),
+            "{mode}: {kids:?}"
+        );
+    }
+}
+
+/// A request built with `HopRequest::new` carries no children, and a library caller turns them on
+/// with the one field: `hop_into` writes them.
+#[test]
+fn a_request_from_new_carries_no_children_until_asked() {
+    use mukade::hop::{HopRequest, hop_into};
+    let source = source("cw-new-src");
+    let (dest_roots, opts) = destination(HarnessId::Pi, "cw-new-dst");
+    let base = HopRequest::new(
+        SessionRef::id(HarnessId::ClaudeCode, PARENT),
+        HarnessId::Pi,
+        source.0.clone(),
+    );
+    assert!(!base.children);
+    let request = HopRequest {
+        children: true,
+        cwd: opts.cwd.clone(),
+        write: support::details(&opts),
+        ..base
+    };
+
+    let receipt = hop_into(&request, &dest_roots).unwrap();
+
+    assert_eq!(receipt.manifest["children"].as_array().unwrap().len(), 4);
+}

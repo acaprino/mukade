@@ -295,6 +295,29 @@ pub fn document(
     Ok(doc)
 }
 
+/// The agent a child ran as and whether it starts from its parent's conversation. The rollout or
+/// transcript that was read says it; the listing's row is the fallback (a Codex state database
+/// knows a spawn edge, not a fork).
+fn spawn_facts(session: &Session, info: &SessionInfo) -> (Option<String>, bool) {
+    let spawn = |kind: &Option<ParentKind>| match kind {
+        Some(ParentKind::Spawn {
+            agent,
+            inherits_context,
+            ..
+        }) => Some((agent.clone(), *inherits_context)),
+        _ => None,
+    };
+    let read = spawn(&session.meta.parent_kind);
+    let listed = spawn(&info.parent_kind);
+    let agent = read
+        .as_ref()
+        .and_then(|(agent, _)| agent.clone())
+        .or_else(|| listed.as_ref().and_then(|(agent, _)| agent.clone()));
+    let inherits = read.is_some_and(|(_, inherits)| inherits)
+        || listed.is_some_and(|(_, inherits)| inherits);
+    (agent, inherits)
+}
+
 /// How a child is written: its parent's compaction when that is deterministic (`native`), else
 /// whole. A summary the source's model wrote, or one the caller supplied, belongs to the
 /// parent's history alone.
@@ -383,15 +406,13 @@ pub fn import_with_children(
                 },
             };
             let id = ids[index].clone().expect("a readable child has an id");
+            let spawn = spawn_facts(session, &child.info);
             let of = ChildOf {
                 root_id: written.id.clone(),
                 root_location: written.location.clone(),
                 parent_id,
                 depth: child.depth,
-                agent: match &child.info.parent_kind {
-                    Some(ParentKind::Spawn { agent, .. }) => agent.clone(),
-                    _ => None,
-                },
+                agent: spawn.0.clone(),
                 description: session.meta.title.clone().or(child.info.title.clone()),
                 tool_use_id: child
                     .call_id
@@ -442,13 +463,7 @@ pub fn import_with_children(
                         "depth": child.depth,
                         "compaction": compaction.name(),
                     });
-                    if matches!(
-                        child.info.parent_kind,
-                        Some(ParentKind::Spawn {
-                            inherits_context: true,
-                            ..
-                        })
-                    ) {
+                    if spawn.1 {
                         entry["inherits_context"] = json!(true);
                     }
                     done.entries.push(entry);

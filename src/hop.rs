@@ -183,6 +183,24 @@ pub struct HopRequest {
     pub children: bool,
 }
 
+impl HopRequest {
+    /// A hop of `source` into `dest` with every option at its default: the session alone, whole,
+    /// reasoning as [`ReasoningPolicy::default`], no resume prompt. Set the fields to change that.
+    pub fn new(source: SessionRef, dest: HarnessId, roots: StoreRoots) -> Self {
+        HopRequest {
+            source,
+            dest,
+            cwd: None,
+            compaction: Compaction::None,
+            resume: None,
+            reasoning: ReasoningPolicy::default(),
+            roots,
+            write: WriteDetails::default(),
+            children: false,
+        }
+    }
+}
+
 /// The second half of a hop: write a session we already hold into a destination.
 #[derive(Debug, Clone)]
 pub struct ImportOpts {

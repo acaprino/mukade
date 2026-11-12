@@ -291,6 +291,17 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
         text.push_str(&serde_json::to_string(row).context("serialize a record")?);
         text.push('\n');
     }
+    write_new_file(path, &text)
+}
+
+/// Write `text` as a file that did not exist: whole or not at all, never over another file.
+pub(crate) fn write_new_file(path: &std::path::Path, text: &str) -> Result<()> {
+    use anyhow::Context;
+    anyhow::ensure!(
+        !path.exists(),
+        "destination already exists: {}",
+        path.display()
+    );
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;

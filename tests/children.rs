@@ -107,6 +107,12 @@ fn say(ordinal: u64, role: &str, text: &str) -> String {
 /// One Codex home: a root thread that spawned two readable children, the second call first, and a
 /// third child whose rollout is gone. The root's own records link each call to its thread.
 fn codex_home(tag: &str) -> mukade::roots::StoreRoots {
+    codex_home_with(tag, None)
+}
+
+/// [`codex_home`], with the rollout of `forked` naming `forked_from_id`: that child starts from its
+/// parent's conversation.
+fn codex_home_with(tag: &str, forked: Option<&str>) -> mukade::roots::StoreRoots {
     let scratch = support::scratch(HarnessId::Codex, tag);
     let home = scratch.join("home");
     let day = home.join("sessions/2026/11/12");
@@ -145,14 +151,14 @@ fn codex_home(tag: &str) -> mukade::roots::StoreRoots {
         + &say(8, "assistant", "asked both");
     std::fs::write(file(ROOT), root).unwrap();
     let kid = |id: &str, prompt: &str| {
-        record(
-            0,
-            "session_meta",
-            serde_json::json!({"id": id, "session_id": ROOT, "parent_thread_id": ROOT,
-                "cwd": "/work", "cli_version": "0.167.0",
-                "source": {"subagent": {"thread_spawn": {"parent_thread_id": ROOT, "depth": 1,
-                    "agent_role": "explorer"}}}}),
-        ) + &say(1, "user", prompt)
+        let mut meta = serde_json::json!({"id": id, "session_id": ROOT, "parent_thread_id": ROOT,
+            "cwd": "/work", "cli_version": "0.167.0",
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": ROOT, "depth": 1,
+                "agent_role": "explorer"}}}});
+        if forked == Some(id) {
+            meta["forked_from_id"] = serde_json::json!(ROOT);
+        }
+        record(0, "session_meta", meta) + &say(1, "user", prompt)
             + &say(2, "assistant", "done")
     };
     std::fs::write(file(KID_1), kid(KID_1, "first task")).unwrap();
@@ -287,4 +293,43 @@ fn a_pi_session_has_no_children() {
     let kids = children_of(&SessionRef::id(HarnessId::Pi, &id), &roots).unwrap();
 
     assert!(kids.is_empty(), "{kids:?}");
+}
+
+/// A Codex child whose rollout says it was forked from its parent is written with what its own file
+/// holds, and the manifest says so: the state database's spawn edge does not know it, and must not
+/// overwrite what the rollout says.
+#[test]
+fn a_forked_codex_child_states_inherits_context_though_the_database_does_not() {
+    let roots = codex_home_with("children-codex-fork", Some(KID_1));
+    let parent = export(&SessionRef::id(HarnessId::Codex, ROOT), &roots).unwrap();
+    let scratch = support::scratch(HarnessId::Pi, "children-codex-fork-dst");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let import = support::import_opts(&opts, &parent, None);
+
+    let receipt =
+        mukade::children::import_with_children(HarnessId::Pi, &parent, &parent, &roots, &import)
+            .unwrap();
+
+    let kids = receipt.manifest["children"].as_array().unwrap();
+    let entry = |id: &str| kids.iter().find(|c| c["source_id"] == id).unwrap();
+    assert_eq!(entry(KID_1)["inherits_context"], true, "{kids:?}");
+    assert!(entry(KID_2).get("inherits_context").is_none(), "{kids:?}");
+}
+
+/// A child the listing knows and the store cannot read is a loss line, and the hop succeeds.
+#[test]
+fn an_unreadable_child_is_a_loss_and_the_hop_goes_on() {
+    let roots = codex_home("children-codex-gone");
+    let parent = export(&SessionRef::id(HarnessId::Codex, ROOT), &roots).unwrap();
+    let scratch = support::scratch(HarnessId::Pi, "children-codex-gone-dst");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let import = support::import_opts(&opts, &parent, None);
+
+    let receipt =
+        mukade::children::import_with_children(HarnessId::Pi, &parent, &parent, &roots, &import)
+            .unwrap();
+
+    assert_eq!(receipt.manifest["children"].as_array().unwrap().len(), 2);
+    let losses = receipt.manifest["losses"].to_string();
+    assert!(losses.contains(&format!("child {GONE}: ")), "{losses}");
 }
