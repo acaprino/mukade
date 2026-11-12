@@ -106,9 +106,10 @@ options:
   --summary-timeout <s>    summary: deadline of the summarizing run (default 300)
   --resume-prompt <text>   resume in the destination and keep its reply in the receipt
   --from-file <path>       read the source from a file instead of its store
-  --all-branches           dump, hop: carry every branch the source keeps (a Codex thread whose
-                           later turns were redone: the abandoned turns too); default: only the
-                           branch the harness resumes
+  --all-branches           dump, hop, document: carry every branch the source keeps as a branch
+                           (a Claude Code or Pi tree, a Codex thread's redone pages and rolled-back
+                           turns); a destination that keeps one conversation leaves them out and
+                           counts them; default: only the branch the harness resumes
   --archived <bool>        list: true (default) includes the sessions the harness marked archived,
                            false leaves them out; the same for every harness
   --children               list: also the subagent sessions (Claude Code, Codex, OpenCode, Hermes,

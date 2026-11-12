@@ -5,8 +5,8 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AppInfo, ChatEvent, ChatStatus, CmdError, Exported, HopArgs, HopOptions, Inventory, Member,
-  Page, Receipt, Resumed, Room, SessionRow, Transcript,
+  ChatEvent, ChatStatus, CmdError, Exported, HopArgs, HopOptions, InstallationList, Member,
+  Page, RawPage, Receipt, Resumed, Room, SessionRow, Startup, TranscriptView,
 } from './types.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
@@ -33,17 +33,18 @@ export function errorKind(error: unknown): CmdError['kind'] | null {
 }
 
 export const api = {
-  appInfo: () => invoke<AppInfo>('app_info'),
-  installations: (scan: string[]) => invoke<Inventory>('installations', { scan }),
-  scan: (dir: string) => invoke<Inventory>('scan', { dir }),
-  sessions: (installation: number) => invoke<SessionRow[]>('sessions', { installation }),
-  transcript: (installation: number, id: string, turns: number) => invoke<Transcript>('transcript', { installation, id, turns }),
-  raw: (installation: number, id: string, entryId: string) => invoke<unknown[]>('raw', { installation, id, entryId }),
-  hopOptions: (source: number, id: string) => invoke<HopOptions>('hop_options', { source, id }),
+  startup: () => invoke<Startup>('startup'),
+  /** Every standard store, then what each folder in `scan` holds: pass every folder scanned so far. */
+  installations: (scan: string[]) => invoke<InstallationList>('installations', { scan }),
+  sessions: (installation: string) => invoke<SessionRow[]>('sessions', { installation }),
+  transcript: (installation: string, id: string, turns: number) => invoke<TranscriptView>('transcript', { installation, id, turns }),
+  /** Native records of the session's entries `offset` to `offset + limit` (at most 200). */
+  raw: (installation: string, id: string, offset: number, limit: number) => invoke<RawPage>('raw', { installation, id, offset, limit }),
+  hopOptions: (source: string, id: string) => invoke<HopOptions>('hop_options', { source, id }),
   hop: (args: HopArgs) => invoke<Receipt>('hop', { args }),
-  export: (installation: number, id: string, to?: string) => invoke<Exported>('export', { installation, id, to }),
-  import: (document: string, into: number, prompt?: string) => invoke<Receipt>('import', { document, into, prompt }),
-  resume: (installation: number, id: string) => invoke<Resumed>('resume', { installation, id }),
+  export: (installation: string, id: string, to?: string) => invoke<Exported>('export', { installation, id, to }),
+  import: (document: string, into: string, prompt?: string) => invoke<Receipt>('import', { document, into, prompt }),
+  resume: (installation: string, id: string) => invoke<Resumed>('resume', { installation, id }),
   pick: (kind: 'open' | 'save' | 'folder', name?: string) => invoke<string | null>('pick', { kind, name }),
   chatStatus: () => invoke<ChatStatus>('chat_status'),
   chatRooms: (cursor?: string) => invoke<Page<Room>>('chat_rooms', { cursor }),

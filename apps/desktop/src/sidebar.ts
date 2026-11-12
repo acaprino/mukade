@@ -8,7 +8,7 @@ import { state } from './state.ts';
 import { folders } from './tree.ts';
 
 export interface SidebarActions {
-  pickInstallation(key: number): void;
+  pickInstallation(key: string): void;
   pickFolder(cwd: string | null): void;
   focus(column: 'installations' | 'folders'): void;
 }
@@ -21,7 +21,7 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
   const standard = state.installations.filter((item) => !item.scanned);
   const scanned = state.installations.filter((item) => item.scanned);
   const row = (item: (typeof state.installations)[number]): ListRow => ({
-    id: String(item.key),
+    id: item.key,
     title: item.error ? `${item.label}: ${item.error}` : item.store,
     cells: [
       h('span', { class: 'grow' }, item.label),
@@ -29,8 +29,8 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
       item.error ? h('span', { class: 'tag bad' }, 'error') : h('span', { class: 'num' }, String(item.count)),
     ].filter(Boolean) as Node[],
   });
-  const selected = state.installation === null ? null : String(state.installation);
-  const pick = (id: string) => { actions.focus('installations'); actions.pickInstallation(Number(id)); };
+  const selected = state.installation;
+  const pick = (id: string) => { actions.focus('installations'); actions.pickInstallation(id); };
   const installationsBox = h('div', { class: `pane${state.focus === 'installations' ? ' focused' : ''}`, 'data-pane': 'installations' },
     h('div', { class: 'column-head' }, h('h2', {}, 'Installations'), h('span', { class: 'spring' }), h('small', {}, String(state.installations.length))),
     h('div', { class: 'pane-body' },

@@ -33,6 +33,13 @@ try {
     await page.waitForTimeout(300);
     await page.screenshot({ path: `${out}reader-${scheme}.png` });
     await page.keyboard.press('Escape');
+    // Enter on Cancel cancels: it never starts the hop (a write).
+    await page.keyboard.press('h');
+    await page.locator('.dialog .plan').waitFor();
+    await page.getByRole('button', { name: /^Cancel/ }).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(400);
+    if (await page.locator('.dialog').count()) failures.push(`${scheme}: Enter on Cancel did not cancel the hop`);
     await page.keyboard.press('h');
     await page.locator('.dialog .plan').waitFor();
     await page.screenshot({ path: `${out}hop-${scheme}.png` });
@@ -44,6 +51,12 @@ try {
     await page.locator('.msg').first().waitFor();
     await expect(page, '#chat-members .member', 'chat');
     await page.screenshot({ path: `${out}chat-${scheme}.png` });
+    // What is being typed in the filter survives the 3 s poll.
+    await page.locator('#chat-filter').click();
+    await page.keyboard.type('sub');
+    await page.waitForTimeout(3400);
+    const typed = await page.locator('#chat-filter').inputValue();
+    if (typed !== 'sub') failures.push(`${scheme}: the chat filter lost what was typed (${JSON.stringify(typed)})`);
     await page.close();
   }
 } finally {

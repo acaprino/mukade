@@ -25,7 +25,24 @@ export class ChatView {
   private follow = true;
   focus: 'rooms' | 'messages' | 'members' = 'rooms';
 
-  constructor(private readonly root: HTMLElement, private readonly showSession: (harness: string, id: string) => boolean) {}
+  /** One filter field for the view's life: a redraw every poll moves it, never rebuilds it, so
+   *  what is being typed (and the caret) survives the poll. */
+  private readonly filterInput: HTMLInputElement;
+
+  constructor(private readonly root: HTMLElement, private readonly showSession: (harness: string, id: string) => boolean) {
+    this.filterInput = h('input', { id: 'chat-filter', type: 'search', placeholder: 'Filter messages', 'aria-label': 'Filter messages' }) as HTMLInputElement;
+    let debounce = 0;
+    this.filterInput.addEventListener('input', () => {
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => {
+        const next = this.filterInput.value.trim();
+        if (next === this.filter) return;
+        this.filter = next;
+        this.events = [];
+        void this.poll();
+      }, 300);
+    });
+  }
 
   show(): void {
     this.draw();
@@ -112,7 +129,7 @@ export class ChatView {
   }
 
   focusFilter(): void {
-    this.root.querySelector<HTMLInputElement>('#chat-filter')?.focus();
+    this.filterInput.focus();
   }
 
   private draw(): void {
@@ -144,12 +161,7 @@ export class ChatView {
       h('div', { class: 'column-body' }, this.rooms.length ? listbox('Rooms', roomRows, this.room, (id) => { this.focus = 'rooms'; this.pickRoom(id); }) : h('div', { class: 'empty' }, h('p', {}, 'No rooms yet.'))));
 
     const current = this.rooms.find((room) => room.room_id === this.room);
-    const filter = h('input', { id: 'chat-filter', type: 'search', placeholder: 'Filter messages', value: this.filter, 'aria-label': 'Filter messages' }) as HTMLInputElement;
-    let debounce = 0;
-    filter.addEventListener('input', () => {
-      window.clearTimeout(debounce);
-      debounce = window.setTimeout(() => { this.filter = filter.value.trim(); this.events = []; void this.poll(); }, 300);
-    });
+    const filter = this.filterInput;
     const list = h('div', { class: 'column-body messages-body' });
     for (const event of this.events) {
       const line = eventLine(event, names);
@@ -184,10 +196,12 @@ export class ChatView {
       h('div', { class: 'column-head' }, h('h2', {}, 'Members'), h('span', { class: 'spring' }), h('small', {}, String(this.members.length))),
       h('div', { class: 'column-body' }, h('div', { class: 'pad' }, ...memberBoxes)));
 
-    const hadFocus = document.activeElement?.id === 'chat-filter';
+    const hadFocus = document.activeElement === filter;
+    const caret = [filter.selectionStart, filter.selectionEnd] as const;
     const scroll = this.root.querySelector('.messages-body')?.scrollTop ?? 0;
     fill(this.root, bar, h('div', { class: 'chat-columns' }, rooms, messages, members));
-    if (hadFocus) { filter.focus(); filter.setSelectionRange(filter.value.length, filter.value.length); }
+    // Moving a focused field into the new tree blurs it: give the focus and the caret back.
+    if (hadFocus) { filter.focus({ preventScroll: true }); filter.setSelectionRange(caret[0], caret[1]); }
     list.scrollTop = this.follow ? list.scrollHeight : scroll;
     reveal(rooms.querySelector('.list'));
   }

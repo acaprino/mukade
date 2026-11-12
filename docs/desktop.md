@@ -28,10 +28,10 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 
 | what | command |
 |---|---|
-| Rust: commands on fixture stores (list, read, raw, export, a real hop into every writable harness), view models, chat replies, terminal env | `cargo test -p mukade-desktop` |
+| Rust: listing, transcript and raw pages on fixture stores, export, a real hop into every writable harness, the receipt, chat replies, terminal commands | `cargo test -p mukade-desktop` |
 | No harness branch outside its adapter (the desktop crate included) | `cargo test --test architecture` |
-| TypeScript: tree and collapse, search, folders, marks, keys, chat ledger, receipt commands | `npm test` |
-| Smoke: every view in dark and light on the mocked commands, screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
+| TypeScript: tree and collapse, search, folders, marks, keys, transcript rows into entries, chat ledger, receipt commands | `npm test` |
+| Smoke: every view in dark and light on the mocked commands, Enter on Cancel never hops, the chat filter survives a poll; screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
 
 ## The window
 
@@ -109,3 +109,5 @@ Keys do nothing while a text field has the focus, except `esc` and `⏎`.
 - The plan in the hop dialog is drawn from the chosen options; the library has no dry run that
   states what a write would lose, so the losses are the receipt's.
 - `folders` is computed in the window from the listing rather than by a command of its own.
+- Installations are keyed `<harness>` (standard) or `<harness>@<store>` (scanned). The window keeps
+  the folders scanned so far and passes them on every reload; each listing runs one at a time.

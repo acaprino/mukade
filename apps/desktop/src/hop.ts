@@ -11,8 +11,8 @@ export interface JobHooks {
   job(label: string | null): void;
   status(text: string, error?: boolean): void;
   /** Show a written session in the tree (its installation listed again first). */
-  showSession(key: number, id: string): void;
-  resumeIn(key: number, id: string): void;
+  showSession(key: string, id: string): void;
+  resumeIn(key: string, id: string): void;
 }
 
 const COMPACTION_HELP: Record<string, string> = {
@@ -22,6 +22,15 @@ const COMPACTION_HELP: Record<string, string> = {
 };
 const SHELLS = ['default', 'posix', 'powershell', 'bash', 'pwsh', 'none'];
 
+/** Enter runs a dialog's primary action only from a one-line text field or the dialog itself; on a
+ *  button, a choice, a list or a multi-line field it is that control's own (a hop is a write). */
+function submits(event: KeyboardEvent): boolean {
+  if (event.key !== 'Enter' || event.isComposing) return false;
+  const target = event.target as HTMLElement;
+  if (target instanceof HTMLInputElement) return target.type !== 'checkbox' && target.type !== 'radio';
+  return !target.closest('button, select, textarea, a, [role="radio"], [role="option"]');
+}
+
 function segmented<T extends string>(label: string, values: T[], current: T, onPick: (value: T) => void): HTMLElement {
   const group = h('div', { class: 'seg', role: 'group', 'aria-label': label });
   for (const value of values) {
@@ -30,7 +39,7 @@ function segmented<T extends string>(label: string, values: T[], current: T, onP
   return group;
 }
 
-export async function openHop(source: number, id: string, hooks: JobHooks): Promise<void> {
+export async function openHop(source: string, id: string, hooks: JobHooks): Promise<void> {
   const modal = openModal({ title: 'Hop', subtitle: 'reading the session…', icon: 'hop', wide: true });
   fill(modal.body, h('p', { class: 'muted' }, 'Looking at where it can go…'));
   let options: HopOptions;
@@ -116,9 +125,7 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
     button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), go);
   // The first draw starts on the primary action; a redraw keeps the control the person was on.
   if (!focused || !focused.isConnected || !modal.body.contains(focused)) go.focus({ preventScroll: true });
-  modal.root.onkeydown = (event) => {
-    if (event.key === 'Enter' && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) { event.preventDefault(); run(); }
-  };
+  modal.root.onkeydown = (event) => { if (submits(event)) { event.preventDefault(); run(); } };
 }
 
 async function runHop(modal: Modal, options: HopOptions, choice: HopArgs, hooks: JobHooks): Promise<void> {
@@ -178,17 +185,17 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
     button('Show in sessions', { onclick: () => { modal.close(); hooks.showSession(receipt.dest_key, receipt.dest_id); } }),
     receipt.refusal ? null : button(['Resume in terminal'], { onclick: () => hooks.resumeIn(receipt.dest_key, receipt.dest_id) }),
     close);
-  modal.root.onkeydown = (event) => { if (event.key === 'Enter' && event.target === close) return; if (event.key === 'Enter') { event.preventDefault(); modal.close(); } };
+  modal.root.onkeydown = (event) => { if (submits(event)) { event.preventDefault(); modal.close(); } };
   queueMicrotask(() => close.focus());
 }
 
 /** F8: a document written into an installation. */
-export function openImport(installations: Installation[], into: number | null, document: string | null, hooks: JobHooks): void {
-  const writable = installations.filter((item) => item.writable);
+export function openImport(installations: Installation[], into: string | null, document: string | null, hooks: JobHooks): void {
+  const writable = installations.filter((item) => item.destination);
   const modal = openModal({ title: 'Import', subtitle: 'a dump document into an installation', icon: 'import' });
   const path = h('input', { id: 'import-path', type: 'text', placeholder: 'C:\\…\\mukade-data\\exports\\<harness>-<id>.json', value: document ?? '' }) as HTMLInputElement;
   const dest = h('select', { id: 'import-into' }) as HTMLSelectElement;
-  for (const item of writable) dest.append(h('option', { value: String(item.key), selected: item.key === into }, item.label));
+  for (const item of writable) dest.append(h('option', { value: item.key, selected: item.key === into }, item.label));
   const prompt = h('textarea', { id: 'import-prompt', rows: '2', placeholder: 'continue' }) as HTMLTextAreaElement;
   const browse = button('Choose…', { onclick: async () => { const picked = await api.pick('open').catch(() => null); if (picked) path.value = picked; } });
   fill(modal.body, h('div', { class: 'col' },
@@ -198,12 +205,12 @@ export function openImport(installations: Installation[], into: number | null, d
     h('p', { class: 'note' }, 'The document becomes a new session of the installation, with its own id; the source is not touched.')));
   const run = async () => {
     if (!path.value.trim()) { path.focus(); return; }
-    const target = writable.find((item) => item.key === Number(dest.value));
+    const target = writable.find((item) => item.key === dest.value);
     modal.lock(true);
     fill(modal.foot, h('span', { class: 'mono' }, `Importing into ${target?.label}…`), h('span', { class: 'spring' }));
     hooks.job(`importing → ${target?.label}…`);
     try {
-      const receipt = await api.import(path.value.trim(), Number(dest.value), prompt.value.trim() || undefined);
+      const receipt = await api.import(path.value.trim(), dest.value, prompt.value.trim() || undefined);
       hooks.job(null);
       hooks.status(`import done → ${receipt.dest_label} · ${receipt.dest_id}`);
       modal.lock(false);
@@ -216,5 +223,5 @@ export function openImport(installations: Installation[], into: number | null, d
     }
   };
   fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), button(['Import ', kbd('⏎')], { class: 'primary', onclick: run }));
-  modal.root.onkeydown = (event) => { if (event.key === 'Enter' && !(event.target instanceof HTMLTextAreaElement)) { event.preventDefault(); void run(); } };
+  modal.root.onkeydown = (event) => { if (submits(event)) { event.preventDefault(); void run(); } };
 }

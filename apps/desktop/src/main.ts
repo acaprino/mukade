@@ -5,7 +5,7 @@ import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
 import { renderDetail } from './detail.ts';
-import { button, fill, h, kbd } from './dom.ts';
+import { button, commandLine, fill, h, kbd } from './dom.ts';
 import { openHop, openImport, type JobHooks } from './hop.ts';
 import { HINTS, actionFor, type Action } from './keys.ts';
 import { stepIn } from './lists.ts';
@@ -14,6 +14,7 @@ import { Reader } from './reader.ts';
 import { renderSessions, visiblePlaces } from './sessions.ts';
 import { folderKey, renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
+import { toTranscript } from './transcript.ts';
 import { ancestors, folders } from './tree.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -123,20 +124,27 @@ function setFocus(column: Column): void {
 
 let listing = 0;
 
-async function loadInventory(scan: string[], status?: string): Promise<void> {
+/** Read every store again, with every folder scanned so far (`state.scan`). */
+async function loadInventory(): Promise<void> {
   const ticket = ++listing;
-  setJob(scan.length ? `scanning ${scan.join(', ')} for installations…` : 'reading every store…');
+  setJob(state.scan.length ? `scanning ${state.scan.join(', ')} for installations…` : 'reading every store…');
   try {
-    const inventory = scan.length === 1 && status === 'scan' ? await api.scan(scan[0]) : await api.installations(scan);
+    const list = await api.installations(state.scan);
     if (ticket !== listing) return; // a newer reload replaced this one
-    state.installations = inventory.installations;
-    const sessions = inventory.installations.reduce((sum, item) => sum + item.count, 0);
-    state.counts = `${inventory.installations.length} installations · ${sessions} sessions`;
+    const before = new Set(state.installations.map((item) => item.key));
+    state.installations = list.installations;
+    const sessions = list.installations.reduce((sum, item) => sum + item.count, 0);
+    state.counts = `${list.installations.length} installations · ${sessions} sessions`;
+    const notes = list.scans.filter((scan) => scan.added || scan.stopped_early)
+      .map((scan) => `${scan.added} installation(s) in ${scan.dir}${scan.stopped_early ? ' (the scan stopped early: depth or folder budget)' : ''}`);
+    const errors = list.installations.filter((item) => item.error).length;
+    if (errors) notes.push(`${errors} store(s) could not be read`);
     setJob(null);
-    setStatus(inventory.status);
-    const keep = state.installation !== null && inventory.installations.some((item) => item.key === state.installation);
-    const first = inventory.added[0] ?? (keep ? state.installation! : inventory.installations.find((item) => item.count > 0)?.key ?? 0);
-    await pickInstallation(first, true);
+    setStatus(notes.join(' · ') || 'ready');
+    const added = list.installations.find((item) => item.scanned && !before.has(item.key) && before.size > 0);
+    const keep = list.installations.some((item) => item.key === state.installation);
+    const first = added?.key ?? (keep ? state.installation! : list.installations.find((item) => item.count > 0)?.key ?? list.installations[0]?.key);
+    if (first !== undefined) await pickInstallation(first, true);
   } catch (error) {
     if (ticket !== listing) return;
     setJob(null);
@@ -144,18 +152,21 @@ async function loadInventory(scan: string[], status?: string): Promise<void> {
   }
 }
 
-async function pickInstallation(key: number, keepSelection = false): Promise<void> {
+async function pickInstallation(key: string, keepSelection = false): Promise<void> {
   const changed = key !== state.installation;
   state.installation = key;
   if (changed) { state.folder = null; state.collapsed.clear(); }
   if (changed || !keepSelection) closeReader(false);
+  let rows: typeof state.rows;
   try {
-    state.rows = await api.sessions(key);
+    rows = await api.sessions(key);
   } catch (error) {
-    state.rows = [];
-    setStatus(errorText(error), true);
+    rows = [];
+    if (state.installation === key) setStatus(errorText(error), true);
   }
+  // A slower reply for an installation no longer selected must not replace the current rows.
   if (state.installation !== key) return;
+  state.rows = rows;
   if (!state.rows.some((row) => row.id === state.selected) || changed) state.selected = visiblePlaces()[0]?.row.id ?? null;
   drawAll();
 }
@@ -182,9 +193,9 @@ function fold(id: string): void {
 }
 
 /** Show `id` of installation `key` in the tree (after a hop, or from a chat member). */
-async function revealSession(key: number, id: string, reload: boolean): Promise<boolean> {
+async function revealSession(key: string, id: string, reload: boolean): Promise<boolean> {
   if (state.view !== 'sessions') switchView('sessions');
-  if (reload) await loadInventory([]);
+  if (reload) await loadInventory();
   await pickInstallation(key);
   if (!state.rows.some((row) => row.id === id)) { setStatus(`${id} is not listed in ${currentInstallation()?.label}`, true); return false; }
   state.folder = null;
@@ -204,25 +215,28 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
   const key = state.installation;
   if (!row || key === null) return;
   if (row.unreadable) { setStatus(`${row.id} cannot be read: ${row.unreadable}`, true); return; }
-  state.reader = { key, id: row.id, transcript: null, turns, tab: 'conversation', rawEntry: null, error: null };
+  const mine: NonNullable<typeof state.reader> = { key, id: row.id, transcript: null, turns, tab: 'conversation', rawEntry: null, error: null };
+  state.reader = mine;
   rawRecords = null;
   state.focus = 'detail';
   drawDetail();
   drawFocus();
   setJob(`reading ${row.title ?? row.id}…`);
   try {
-    const transcript = await api.transcript(key, row.id, turns);
-    if (state.reader?.id !== row.id) return;
-    state.reader.transcript = transcript;
+    const transcript = toTranscript(await api.transcript(key, row.id, turns), row.title ?? row.id);
+    // An older read (the same session at another turn limit, say) must not replace a newer one.
+    if (state.reader !== mine) return;
+    mine.transcript = transcript;
     const shown = transcript.total_turns - transcript.hidden_turns;
     setStatus(transcript.hidden_turns ? `showing the last ${shown} of ${transcript.total_turns} turns` : `${transcript.total_turns} turns`);
   } catch (error) {
-    if (state.reader?.id !== row.id) return;
-    state.reader.error = errorText(error);
+    if (state.reader !== mine) return;
+    mine.error = errorText(error);
     setStatus(`read failed: ${errorText(error)}`, true);
   } finally {
-    setJob(null);
+    if (state.reader === mine) setJob(null);
   }
+  if (state.reader !== mine) return;
   drawDetail();
   reader.focus();
 }
@@ -252,7 +266,9 @@ async function showRaw(entryId: string): Promise<void> {
   rawRecords = null;
   drawDetail();
   try {
-    rawRecords = await api.raw(r.key, r.id, entryId);
+    const index = r.transcript?.entries.find((entry) => entry.id === entryId)?.index ?? 0;
+    const page = await api.raw(r.key, r.id, index, 1);
+    rawRecords = page.items[0]?.raw ?? [];
   } catch (error) {
     rawRecords = [{ error: errorText(error) }];
   }
@@ -301,14 +317,15 @@ function importDocument(): void {
   openImport(state.installations, state.installation, state.lastExport, hooks);
 }
 
-async function resume(key: number, id: string): Promise<void> {
+async function resume(key: string, id: string): Promise<void> {
   setJob('opening a terminal…');
   try {
     const result = await api.resume(key, id);
     setJob(null);
     if (result.refusal) {
       const modal = openModal({ title: 'Resume', subtitle: 'this harness has no terminal UI', icon: 'play' });
-      const command = result.refusal.split(': ').slice(1).join(': ');
+      // The backend sends the command that continues it instead, as data.
+      const command = commandLine(result.command);
       fill(modal.body, h('div', { class: 'col' }, h('p', { class: 'note' }, result.refusal),
         command ? h('div', { class: 'cmd' }, h('pre', { class: 'code' }, command)) : null));
       const copy = button('Copy the command', { class: 'primary', onclick: async () => { await navigator.clipboard.writeText(command || result.refusal!).catch(() => {}); copy.textContent = 'Copied'; } });
@@ -325,7 +342,9 @@ async function resume(key: number, id: string): Promise<void> {
 
 async function scanFolder(): Promise<void> {
   const dir = await api.pick('folder').catch((error) => { setStatus(errorText(error), true); return null; });
-  if (dir) await loadInventory([dir], 'scan');
+  if (!dir) return;
+  if (!state.scan.includes(dir)) state.scan.push(dir);
+  await loadInventory();
 }
 
 // --- views and theme ----------------------------------------------------------------------------
@@ -396,9 +415,8 @@ function makeResizer(handle: HTMLElement, name: 'installations' | 'sessions'): v
 
 function move(step: number): void {
   if (state.focus === 'installations') {
-    const keys = state.installations.map((item) => String(item.key));
-    const next = stepIn(keys, state.installation === null ? null : String(state.installation), step);
-    if (next !== null) void pickInstallation(Number(next));
+    const next = stepIn(state.installations.map((item) => item.key), state.installation, step);
+    if (next !== null) void pickInstallation(next);
   } else if (state.focus === 'folders') {
     const list = folders(state.rows);
     const next = stepIn(list.map((f) => folderKey(f.cwd)), folderKey(state.folder), step);
@@ -438,7 +456,7 @@ function act(action: Action, event: KeyboardEvent): boolean {
   }
   if (modalOpen()) return false;
   if (action === 'chat') { switchView(state.view === 'chat' ? 'sessions' : 'chat'); return true; }
-  if (action === 'reload') { void loadInventory([]); return true; }
+  if (action === 'reload') { void loadInventory(); return true; }
   if (action === 'scan') { void scanFolder(); return true; }
   if (action === 'import') { importDocument(); return true; }
   if (state.view === 'chat') {
@@ -487,7 +505,7 @@ function pageCommand(event: KeyboardEvent): boolean {
   const ctrl = event.ctrlKey || event.metaKey;
   const key = event.key.toLowerCase();
   if (event.key === 'F5' || (ctrl && key === 'r')) {
-    if (!modalOpen()) void loadInventory([]);
+    if (!modalOpen()) void loadInventory();
     return true;
   }
   if (ctrl && (key === 'p' || key === 's' || key === 'o' || key === 'u' || key === 'j')) return true;
@@ -519,7 +537,7 @@ function wire(): void {
   for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => switchView(tab.dataset.view as 'sessions' | 'chat'));
   $('scan').addEventListener('click', () => void scanFolder());
   $('import').addEventListener('click', () => importDocument());
-  $('reload').addEventListener('click', () => void loadInventory([]));
+  $('reload').addEventListener('click', () => void loadInventory());
   $('theme').addEventListener('click', () => {
     const current = (document.documentElement.dataset.theme ?? 'auto') as (typeof THEMES)[number];
     applyTheme(THEMES[(THEMES.indexOf(current) + 1) % THEMES.length]);
@@ -558,13 +576,13 @@ function wire(): void {
   wire();
   drawAll();
   try {
-    const info = await api.appInfo();
-    $('version').textContent = info.version;
-    state.defaultTurns = info.turns;
-    state.scan = info.scan;
+    const startup = await api.startup();
+    $('version').textContent = startup.version;
+    state.defaultTurns = startup.turns;
+    state.scan = [...startup.scan];
   } catch (error) {
     setStatus(errorText(error), true);
   }
-  await loadInventory(state.scan);
+  await loadInventory();
   setFocus('sessions');
 })();

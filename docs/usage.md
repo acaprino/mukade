@@ -38,7 +38,7 @@ continues it **as one of its own sessions**.
 |---|---|
 | carry a long session in less space | [`--compaction`, `--intent`](#make-a-long-session-smaller) |
 | leave out half-done turns | [`--interrupted drop`](#a-session-with-interrupted-turns) |
-| carry a rewound Codex thread whole | [`--all-branches`](#a-session-that-was-rewound-or-branched) |
+| carry every branch of a rewound or branched session | [`--all-branches`](#a-session-that-was-rewound-or-branched) |
 | carry the subagent sessions with their parent | [`--children`](#carry-the-subagent-sessions) |
 | know exactly what a hop lost | [the receipt, `--manifest`](#4-reading-the-receipt-and-the-manifest) |
 | understand an error | [exit codes](#11-exit-codes), [troubleshooting](#12-troubleshooting) |
@@ -149,7 +149,7 @@ Always true:
 | `--keep-turns <n>`, `--summary-model <id>`, `--summary-timeout <s>` | dump, hop | with `summary` only ([summary](#summary-the-sources-own-model-writes-one)) |
 | `--context-window <n>`, `--max-output-tokens <n>`, `--text-token-factor <f>` | document, hop | with `native` only |
 | `--interrupted keep\|drop` | write, hop, document | whether the work of unfinished turns travels |
-| `--all-branches` | dump, hop, document | every branch a Codex thread keeps |
+| `--all-branches` | dump, hop, document | every branch of a Claude Code or Pi tree, a Codex thread's redone pages and rolled-back turns |
 | `--without-tools` | write, hop, document | omit historical tool calls and results |
 | `--reasoning <mode>` | write, hop, document | `drop_foreign` (default), `as_text`, `drop` |
 | `--dest-protocol <p>` | write, hop, document | `anthropic-messages`, `openai-responses`, `openai-chat` |
@@ -569,8 +569,20 @@ What the launched instance gets, without any setting of yours changing:
 | harness | adapter | first launch |
 |---|---|---|
 | `claude_code` | yes | nothing to do |
-| `codex` | yes | Codex runs a hook only once you trust it: open `/hooks` in the launched Codex and trust mukade's three hooks. They are the same for every launch, so this is once. Until then the instance does not join |
+| `codex` | yes | Codex runs a hook only once it is trusted. Run `mukade chat trust codex` once (below). Until then the instance does not join |
 | `opencode`, `pi` | not yet: `launch` refuses them (exit 2) | join with `connect` and the tools |
+
+Trust Codex's hooks once:
+
+```text
+mukade chat trust codex --dry-run
+mukade chat trust codex
+```
+
+1. `--dry-run` lists mukade's three hooks as Codex sees them (`untrusted`, `trusted` or `modified`) and writes nothing.
+2. Without it, Codex's own server (`codex app-server`) records trust for exactly those three, in `~/.codex/config.toml` under `[hooks.state]`. Your other hooks and plugins' hooks are not touched.
+3. The hooks name the mukade executable by its path. After mukade moves to another path, run it again; until then Codex shows them as `modified` and skips them.
+4. `claude_code` answers `not_needed`; a harness without an adapter is refused (exit 2).
 
 Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
 
@@ -659,7 +671,7 @@ What the `losses` lines mean:
 | `unanswered tool calls carried as text (n)` | the source never recorded a result for a call (a killed tool); a provider refuses a call without its result, so it travels as text |
 | `orphan tool results dropped (n)` · `duplicate tool results dropped, the first answer kept (n)` | a result with no call, or a second answer to one call; a provider would refuse either |
 | `tool call ids rewritten to the destination's id pattern (n)` | Anthropic accepts only `[a-zA-Z0-9_-]` IDs; the call and its result were rewritten together |
-| `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries a Codex thread whole |
+| `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries them as branches (Claude Code, Codex, Pi sources) |
 | `messages between a subagent and its parent with no readable text (encrypted by the source), not carried (n)` | Codex keeps most `agent_message` rows encrypted: no text to write. The readable ones travel as user turns |
 | `compaction summaries with no readable text (encrypted by the source's provider), not carried (n)` | Codex 0.165 keeps its compaction summary encrypted: no text to write, so it is left out rather than written as an empty message. The history before and after it travels |
 | `an unfinished last line of the source left unread (n)` | a hard kill cut the last line mid-write; the rest of the session was read |
@@ -845,9 +857,9 @@ What it does not do:
 
 ### A session that was rewound or branched
 
-*You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* Mukade reads the
-selected branch: abandoned turns do not become history in the destination, stay in the source
-untouched, and are counted (`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`,
+*You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* By default Mukade
+reads the selected branch: abandoned turns do not become history in the destination, stay in the source
+untouched, and are counted (`dropped_off_branch`); `--all-branches` carries them (below). Pi's `branch_summary`, `bashExecution`,
 `custom_message` and `context_edit` entries reach the destination the way Pi shows them to its model.
 
 **Claude Code: how the branch is chosen.** By the `last-prompt.leafUuid` checkpoint when present
@@ -861,14 +873,49 @@ rewind are still to be verified against Claude Code itself ([next.md](../next.md
 **Codex Desktop 0.165: a thread over several files.** Such a thread is an earlier file plus a page
 that continues from part of it (redone again, a further page continues from the previous one). Mukade
 reads it as Codex resumes it: each earlier file up to the point the next continues from, then the
-latest page; what the earlier files hold past those points is left behind and counted.
+latest page; what the earlier files hold past those points is left behind and counted. A
+`thread_rolled_back` event (a backtrack in the TUI) is read as Codex replays it: the last `num_turns`
+user turns, with what followed them, are an abandoned branch, left behind and counted.
 
-To carry **everything**, abandoned turns included (in file order, before the active ones), add
-`--all-branches` to `dump`, `hop` or `document`; Codex only, refused (exit 2) for another harness:
+**Carry every branch: `--all-branches`.** On `dump`, `hop` or `document`, for a Claude Code, Codex or Pi
+source (any other source is refused, exit 2). The session's `entries` stay the path the harness resumes;
+each abandoned branch travels as a **branch** that names the entry it left from. What each source calls one:
+
+| source | a branch is |
+|---|---|
+| Claude Code | rows off the resumed path of the `parentUuid` tree (a rewind, an edited prompt) |
+| Pi | entries off the resumed path of the `parentId` tree (`/tree`) |
+| Codex | the turns a rollback dropped, and what an earlier file of a redone thread holds past the cut |
+
+`dump` writes them in the document: `branches: [{from, messages}]`, `from` the id of the message the
+branch leaves from (`null`: before the first), absent when there are none; `write` reads them back.
+What a destination does with them:
+
+| destination | branches |
+|---|---|
+| Claude Code | one file, every row naming its `parentUuid`; each branch is written right after the row it leaves from, and the resumed path ends the file, so `last-prompt` and "newest row" name the same leaf |
+| Pi | one file, `id` / `parentId` entries laid out the same way; the last entry is the leaf |
+| Codex | the branch is written, then undone by a `thread_rolled_back` of its user turns, so Codex resumes the path. Only a branch that starts at a user turn can be undone that way; another is left out |
+| OpenCode, Hermes, DeepSeek Harness | none: one conversation, every branch left out |
+
+A branch is written only if, with the path it shares, it would pass the same checks as the whole
+conversation (every call answered once, no foreign reasoning). One that would not, or that leaves
+from a record the session does not hold, is left out. The manifest counts them:
+`counts.branches_kept` and `counts.branches_dropped`, with one loss line when any is dropped.
+Without `--all-branches` nothing changes: the records of an abandoned branch are
+`dropped_off_branch`. `--compaction native` and `summary` do not go with branches (native writes
+none; summary refuses the flag).
 
 ```powershell
+mukade dump claude_code YOUR_CLAUDE_SESSION_ID --all-branches --output C:\work\tree.json
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --all-branches
 mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project' --all-branches
 ```
+
+**A fork** (a session copied from another: Claude Code `/branch`, Codex fork, OpenCode fork, Pi
+`/fork`) is a session of its own: `list` shows its origin (`parent`, `kind: fork`), a hop writes a
+self-contained copy and the manifest names the origin (`source.parent`, `source.parent_kind`). The
+written fork is not linked to a written origin.
 
 ### Subagents and what they reported
 
@@ -1170,8 +1217,8 @@ Claude Code names a project's folder by its own rule (every character outside `[
 mukade takes: `mukade hop codex 01a181e2-4cd9-7c63-82b8-f75e3d6bb172 claude_code --cwd 'D:\Projects\daodan'`.
 What to expect:
 
-- **Several files**: read as Codex resumes it; `--all-branches` carries it whole
-  ([rewound or branched](#a-session-that-was-rewound-or-branched)).
+- **Several files**: read as Codex resumes it; `--all-branches` carries the earlier files' abandoned turns as
+  branches ([rewound or branched](#a-session-that-was-rewound-or-branched)).
 - **Encrypted compaction**: `--compaction portable` is refused (exit 2) and a whole-history hop leaves
   the summaries out, counted. A long thread is therefore carried whole: a 17.8 MB thread became a
   4.1 MB Claude Code session of several hundred thousand tokens, which only a model with a very large

@@ -5,7 +5,7 @@ import type { Installation, SessionRow, Transcript } from './types.ts';
 export type Column = 'installations' | 'folders' | 'sessions' | 'detail';
 
 export interface ReaderState {
-  key: number;
+  key: string;
   id: string;
   transcript: Transcript | null;
   /** 0: every turn. */
@@ -20,7 +20,7 @@ export interface State {
   view: 'sessions' | 'chat';
   focus: Column;
   installations: Installation[];
-  installation: number | null;
+  installation: string | null;
   rows: SessionRow[];
   /** The folder filter: null All, '' Unknown, else the cwd. */
   folder: string | null;

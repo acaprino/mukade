@@ -3,14 +3,16 @@
 
 export interface CmdError { kind: 'refused' | 'not_found' | 'failed' | 'unreachable'; message: string; exit_code?: number }
 
-export interface AppInfo { name: string; version: string; turns: number; scan: string[]; platform: string }
+export interface Startup { turns: number; scan: string[]; version: string }
 
+/** `key` is `<harness>` for a standard store, `<harness>@<store>` for a scanned one: stable. */
 export interface Installation {
-  key: number; harness: string; label: string; store?: string; engine?: string;
-  scanned: boolean; writable: boolean; count: number; error?: string;
+  key: string; harness: string; label: string; store?: string; engine?: string;
+  scanned: boolean; destination: boolean; count: number; error?: string;
 }
 
-export interface Inventory { installations: Installation[]; added: number[]; stopped_early: boolean; status: string }
+export interface ScanNote { dir: string; added: number; stopped_early: boolean }
+export interface InstallationList { installations: Installation[]; scans: ScanNote[] }
 
 export type ParentKind =
   | { kind: 'fork'; at?: string }
@@ -21,24 +23,39 @@ export interface SessionRow {
   unreadable?: string; path: string; parent?: string; parent_kind?: ParentKind;
 }
 
+// The transcript as the backend sends it (src-tauri/src/sessions.rs): one row per block.
+export interface ToolView { name: string; call_id: string; input: string; input_truncated: boolean }
+export interface RowView {
+  index: number; entry_id: string; role: 'user' | 'file' | 'reasoning' | 'assistant' | 'tool' | 'result' | 'compaction';
+  time?: string; text: string; truncated: boolean; text_chars: number; tool?: ToolView; error: boolean;
+}
+export interface MetaView {
+  harness: string; version: string; id: string; title?: string; cwd?: string; created?: string; updated?: string;
+  git_branch?: string; models: string[]; entries: number; branches: number;
+}
+export interface TranscriptView { meta: MetaView; rows: RowView[]; total_turns: number; hidden_turns: number }
+export interface RawItem { index: number; entry_id: string; kind: string; raw: unknown[]; truncated: boolean }
+export interface RawPage { total: number; items: RawItem[] }
+
+// The transcript as the reader draws it (transcript.ts groups the rows): one entry per native entry.
 export type BlockRole = 'user' | 'assistant' | 'reasoning' | 'tool' | 'result' | 'error' | 'attachment' | 'compaction';
 export interface Block { role: BlockRole; text: string; name?: string; cut?: boolean }
-export interface EntryView { id: string; kind: 'user' | 'step' | 'results' | 'compaction' | 'meta'; time?: string; blocks: Block[]; records: number }
-export interface Transcript { title: string; entries: EntryView[]; hidden_turns: number; total_turns: number }
+export interface EntryView { id: string; index: number; kind: 'user' | 'step' | 'results' | 'compaction'; time?: string; blocks: Block[] }
+export interface Transcript { title: string; meta: MetaView; entries: EntryView[]; hidden_turns: number; total_turns: number }
 
-export interface Destination { key: number; label: string; default_shell?: 'posix' | 'powershell' }
+export interface Destination { key: string; label: string; default_shell?: 'posix' | 'powershell' }
 export interface HopOptions {
   source_label: string; title: string; destinations: Destination[]; compactions: string[];
   subagents: string[]; forks: string[]; all_branches_supported: boolean; live?: boolean;
 }
 export interface HopArgs {
-  source: number; id: string; dest: number; compaction: string; children: boolean; all_branches: boolean;
+  source: string; id: string; dest: string; compaction: string; children: boolean; all_branches: boolean;
   reasoning: string; dest_shell: string; prompt?: string;
 }
 
 export interface ChildLine { source_id: string; dest_id: string; linked: boolean }
 export interface Receipt {
-  dest_id: string; dest_label: string; dest_key: number; location: string; headless: string[];
+  dest_id: string; dest_label: string; dest_key: string; location: string; headless: string[];
   interactive: string[]; refusal?: string; manifest_path?: string; losses: string[]; children: ChildLine[];
   reply?: string; warning?: string;
 }

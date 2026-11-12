@@ -162,7 +162,7 @@ export class Reader {
     const index = this.entries.indexOf(entry, this.first);
     const role = leadRole(entry);
     const blocks = entry.blocks.map((block, n) => this.blockNode(entry, block, n));
-    const raw = button(`raw · ${entry.records}`, { class: 'ghost raw-link', title: 'Show the native records of this entry', onclick: () => this.actions.showRaw(entry.id) });
+    const raw = button('raw', { class: 'ghost raw-link', title: 'Show the native records of this entry', onclick: () => this.actions.showRaw(entry.id) });
     return h('article', { class: `entry kind-${entry.kind} role-${role}`, 'data-index': String(index) },
       h('div', { class: 'who' }, h('span', { class: `r-${role}` }, ROLE_LABEL[role]), h('time', { datetime: entry.time ?? '' }, timeOf(entry)), raw),
       h('div', { class: 'what' }, ...blocks));
