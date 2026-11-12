@@ -48,9 +48,16 @@ fn is_adapter_file(relative: &str) -> bool {
         })
 }
 
-/// Files allowed to name a harness outside its adapter, each with its reason. Empty: every such
-/// decision has moved into an adapter.
-const ALLOWED: &[(&str, &str)] = &[];
+/// A file allowed to name a harness outside its adapter: exactly `hits` times, for `reason`.
+struct Allowed {
+    path: &'static str,
+    hits: usize,
+    reason: &'static str,
+}
+
+/// Files allowed to name a harness outside its adapter. Empty: every such decision has moved into
+/// an adapter.
+const ALLOWED: &[Allowed] = &[];
 
 #[test]
 fn no_harness_branch_outside_its_adapter() {
@@ -63,8 +70,7 @@ fn no_harness_branch_outside_its_adapter() {
     let mut checked = 0;
     let mut adapter_hits = 0;
     let mut adapter_files = Vec::new();
-    let mut sites = Vec::new();
-    let mut allowed_hits = vec![0; ALLOWED.len()];
+    let mut found = Vec::new();
     for file in &files {
         walked += 1;
         let relative = file
@@ -80,14 +86,11 @@ fn no_harness_branch_outside_its_adapter() {
             continue;
         }
         checked += 1;
-        if let Some(index) = ALLOWED.iter().position(|(path, _)| *path == relative) {
-            allowed_hits[index] += hits.len();
-            continue;
-        }
-        sites.extend(
-            hits.into_iter()
-                .map(|(line, text)| format!("{relative}:{line}: {}", text.trim())),
-        );
+        let hits = hits
+            .into_iter()
+            .map(|(line, text)| (line, text.trim().to_string()))
+            .collect();
+        found.push((relative, hits));
     }
 
     assert!(
@@ -111,15 +114,11 @@ fn no_harness_branch_outside_its_adapter() {
         missing.is_empty(),
         "adapter files that no longer exist: {missing:?}"
     );
-    let stale: Vec<&str> = ALLOWED
-        .iter()
-        .zip(&allowed_hits)
-        .filter(|(_, hits)| **hits == 0)
-        .map(|((path, _), _)| *path)
-        .collect();
+    let (sites, miscounted) = judge(&found, ALLOWED);
     assert!(
-        stale.is_empty(),
-        "allowed files that no longer name a harness: {stale:?}"
+        miscounted.is_empty(),
+        "allowed files that name a harness another number of times than declared:\n{}",
+        miscounted.join("\n")
     );
     assert!(
         sites.is_empty(),
@@ -127,6 +126,41 @@ fn no_harness_branch_outside_its_adapter() {
         sites.len(),
         sites.join("\n")
     );
+}
+
+/// The harness names `found` outside the adapters (each file with its numbered lines), held
+/// against `allowed`: the `file:line` sites no entry allows, and each entry whose file names a
+/// harness another number of times than it declares.
+fn judge(
+    found: &[(String, Vec<(usize, String)>)],
+    allowed: &[Allowed],
+) -> (Vec<String>, Vec<String>) {
+    let mut sites = Vec::new();
+    for (path, hits) in found {
+        if allowed.iter().any(|entry| entry.path == path) {
+            continue;
+        }
+        sites.extend(
+            hits.iter()
+                .map(|(line, text)| format!("{path}:{line}: {text}")),
+        );
+    }
+    let miscounted = allowed
+        .iter()
+        .filter_map(|entry| {
+            let hits = found
+                .iter()
+                .find(|(path, _)| path == entry.path)
+                .map_or(0, |(_, hits)| hits.len());
+            (hits != entry.hits || hits == 0).then(|| {
+                format!(
+                    "{}: {hits} harness names, {} declared ({})",
+                    entry.path, entry.hits, entry.reason
+                )
+            })
+        })
+        .collect();
+    (sites, miscounted)
 }
 
 /// Every `.rs` file under `folder`.
@@ -142,27 +176,31 @@ fn rust_files(folder: &Path, files: &mut Vec<std::path::PathBuf>) {
 }
 
 /// The lines of `text`, numbered from 1, that name one harness, test code left out. Test code is
-/// the item after a `#[cfg(test)]` line (see [`test_item_end`]).
+/// the item after a `#[cfg(test)]` line (see [`test_item_end`]). One lexer reads the whole file:
+/// the attribute counts only on a line that starts in code, never inside a string or a comment.
 fn arms_outside_tests(text: &str) -> Vec<(usize, &str)> {
     let lines: Vec<&str> = text.lines().collect();
+    let mut lexer = Lexer::default();
     let mut hits = Vec::new();
     let mut index = 0;
     while index < lines.len() {
         let line = lines[index];
-        if line.trim() == "#[cfg(test)]" {
-            index = test_item_end(&lines, index);
+        if lexer.state == State::Code && line.trim() == "#[cfg(test)]" {
+            index = test_item_end(&lines, index, &mut lexer);
             continue;
         }
         if HARNESS_ARMS.iter().any(|arm| line.contains(arm)) {
             hits.push((index + 1, line));
         }
+        lexer.read_line(line);
         index += 1;
     }
     hits
 }
 
 /// The index of the first line after the item that `lines[attribute]`, a `#[cfg(test)]` line,
-/// marks. Brackets are counted outside strings, characters and comments. The item ends:
+/// marks; `lexer` has read every line before it and reads the item's lines. Brackets are counted
+/// outside strings, characters and comments, from the attribute's depth. The item ends:
 ///
 /// 1. before a line, outside a string or comment, indented less than the attribute;
 /// 2. after a line that leaves no bracket open and ends with `;`, `,` or `}`;
@@ -170,16 +208,17 @@ fn arms_outside_tests(text: &str) -> Vec<(usize, &str)> {
 ///    end by opening one.
 ///
 /// Where the rules are unsure, the item ends early: code after it is read, never hidden.
-fn test_item_end(lines: &[&str], attribute: usize) -> usize {
+fn test_item_end(lines: &[&str], attribute: usize, lexer: &mut Lexer) -> usize {
     let indent = indentation(lines[attribute]);
-    let mut lexer = Lexer::default();
+    lexer.read_line(lines[attribute]);
+    let depth = lexer.depth;
     for (index, line) in lines.iter().enumerate().skip(attribute + 1) {
         let in_code = lexer.state == State::Code;
         if in_code && !line.trim().is_empty() && indentation(line) < indent {
             return index;
         }
         let last = lexer.read_line(line);
-        let balanced_end = lexer.depth <= 0 && matches!(last, Some(';' | ',' | '}'));
+        let balanced_end = lexer.depth <= depth && matches!(last, Some(';' | ',' | '}'));
         let closing_line = in_code
             && indentation(line) == indent
             && line.trim_start().starts_with(['}', ']', ')'])
@@ -538,4 +577,58 @@ const S: [&str; 1] = ["// {"];
 const Q: HarnessId = HarnessId::Codex;
 "##;
     assert_eq!(reported(text), [3, 6]);
+}
+
+/// An attribute line inside a raw string is string text: it marks no test item, and the code
+/// after the string is read.
+#[test]
+fn a_test_attribute_inside_a_raw_string_marks_nothing() {
+    let text = r###"const DOC: &str = r#"
+#[cfg(test)]
+"#;
+const P: HarnessId = HarnessId::Pi;
+"###;
+    assert_eq!(reported(text), [4]);
+}
+
+/// An attribute line inside a block comment is comment text: it marks no test item, and the code
+/// after the comment is read.
+#[test]
+fn a_test_attribute_inside_a_block_comment_marks_nothing() {
+    let text = r##"/*
+#[cfg(test)]
+*/
+const P: HarnessId = HarnessId::Pi;
+"##;
+    assert_eq!(reported(text), [4]);
+}
+
+/// An allowlisted file holds exactly the harness names it declares: one more or one fewer fails,
+/// and a file no entry names is reported line by line.
+#[test]
+fn an_allowlisted_file_holds_the_names_it_declares() {
+    let hit = |line: usize| (line, "HarnessId::Pi".to_string());
+    let found = vec![
+        ("src/exact.rs".to_string(), vec![hit(3), hit(9)]),
+        ("src/more.rs".to_string(), vec![hit(1), hit(2), hit(5)]),
+        ("src/fewer.rs".to_string(), vec![hit(7)]),
+        ("src/listed.rs".to_string(), vec![hit(4)]),
+    ];
+    let allowed = |path, hits, reason| Allowed { path, hits, reason };
+    let allowed = [
+        allowed("src/exact.rs", 2, "two by design"),
+        allowed("src/more.rs", 2, "two by design"),
+        allowed("src/fewer.rs", 2, "two by design"),
+        allowed("src/gone.rs", 1, "one by design"),
+    ];
+    let (sites, miscounted) = judge(&found, &allowed);
+    assert_eq!(sites, ["src/listed.rs:4: HarnessId::Pi"]);
+    assert_eq!(
+        miscounted,
+        [
+            "src/more.rs: 3 harness names, 2 declared (two by design)",
+            "src/fewer.rs: 1 harness names, 2 declared (two by design)",
+            "src/gone.rs: 0 harness names, 1 declared (one by design)",
+        ]
+    );
 }

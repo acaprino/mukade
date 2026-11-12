@@ -114,18 +114,23 @@ catalog entry. Nothing else branches on it.
 1. Walks every `.rs` file under `src/` and `mukade-tui/src/`.
 2. Skips the adapter files (`ADAPTER_FILES`, exact files and folders): `src/harnesses/`, the
    readers, writers and detectors of one harness, `src/model/harness.rs`.
-3. Skips test code: the item after a `#[cfg(test)]` line, brackets counted outside strings (raw,
-   byte and C ones included), character literals and comments. It ends at its own last line, or before a line indented less than the attribute;
-   where unsure it ends early, so production code is read, never hidden.
+3. Skips test code: the item after a `#[cfg(test)]` line. One lexer reads each file from its
+   first line, so the attribute counts only on a line that starts in code, never inside a string
+   or a comment. Brackets are counted outside strings (raw, byte and C ones included), character
+   literals and comments. The item ends at its own last line, or before a line indented less than
+   the attribute; where unsure it ends early, so production code is read, never hidden.
 4. Fails on any other line naming `HarnessId::ClaudeCode`, `Codex`, `OpenCode` or `Pi`, listing
    each `file:line`.
 5. Guards against passing on nothing: more than 50 files walked, more than 30 checked, hits found
    inside the adapters, and every `ADAPTER_FILES` entry still present.
 
 The scanner has its own tests in the same file: test items of every shape (a multi-line `use`, a
-field, a `const`, a match arm, a parameter, a string spanning lines, a module) and every literal
+field, a `const`, a match arm, a parameter, a string spanning lines, a module), every literal
 that holds a bracket or a quote (escaped characters, raw byte and C strings, nested comments,
-lifetimes and labels), each followed by a production line that must be reported.
+lifetimes and labels), and the attribute's text inside a raw string and inside a block comment,
+each followed by a production line that must be reported.
 
-`ALLOWED` lists files exempted, each with its reason. It is empty; an entry whose file no longer
-names a harness fails the test.
+`ALLOWED` lists files exempted, each with the number of harness names it holds and its reason. It
+is empty. A file with more or fewer names than its entry declares fails the test, so an allowed
+file cannot gain one unseen; `an_allowlisted_file_holds_the_names_it_declares` checks the rule on
+a synthetic list.
