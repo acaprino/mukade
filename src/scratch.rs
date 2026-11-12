@@ -19,7 +19,9 @@ impl Scratch {
     }
 
     fn under(parent: &Path, tag: &str) -> Self {
-        let dir = parent.join(format!("mukade-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        // Twelve hex digits keep the path short for cmd.exe while staying unique across parallel tests.
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let dir = parent.join(format!("mukade-{tag}-{}", &id[..12]));
         std::fs::create_dir_all(&dir).expect("create the scratch folder");
         Scratch(dir)
     }
