@@ -98,9 +98,14 @@ and from `writer::for_harness` a writer that refuses every write (exit 2) withou
 7. The registry arm in `harnesses::get`; the array length in the signatures of `harnesses::all`
    and `detect::layout::layouts` (both state `4`).
 8. The catalog entry in `catalog/harnesses.json`.
-9. Tests: fixtures under `fixtures/<harness>/`, reader and writer tests, the adapter's rows in
-   `tests/harnesses.rs`, and its reader, writer and detector files in `ADAPTER_FILES` of
-   `tests/architecture.rs`.
+9. The per-harness lines of `USAGE` in `src/cli.rs`: its CLI name in the `harnesses:` line, its
+   `--<harness>-exe` flag in the options, and its `MUKADE_*_EXE` variable in the executable
+   resolution (`the_usage_text_names_what_the_catalog_names` in `tests/harnesses.rs` checks the
+   flag and the variable against the catalog). In `docs/usage.md`: its row in "Stores and
+   executables" and its section in "Per-harness examples".
+10. Tests: fixtures under `fixtures/<harness>/`, reader and writer tests, the adapter's rows in
+    `tests/harnesses.rs`, and its reader, writer and detector files in `ADAPTER_FILES` of
+    `tests/architecture.rs`.
 
 ## Changing a harness
 
