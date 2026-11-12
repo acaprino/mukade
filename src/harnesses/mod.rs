@@ -92,6 +92,13 @@ pub trait Harness: Send + Sync {
         None
     }
 
+    /// Why this harness cannot resume `info` in its own interface, or `None` when it can. A
+    /// session mukade lists is not always one the harness resumes by itself.
+    fn resume_refusal(&self, info: &crate::reader::SessionInfo) -> Option<String> {
+        let _ = info;
+        None
+    }
+
     /// Whether a session is summarized from a file given on the command line. Otherwise it is
     /// summarized from this harness's own store, by id.
     fn summarizes_from_file(&self) -> bool {

@@ -31,6 +31,7 @@ fn spawn(call_id: Option<&str>, agent: &str) -> Option<ParentKind> {
     Some(ParentKind::Spawn {
         call_id: call_id.map(str::to_owned),
         agent: Some(agent.into()),
+        inherits_context: false,
     })
 }
 

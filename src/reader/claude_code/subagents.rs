@@ -80,9 +80,13 @@ pub(super) fn lineage(session: &str, meta: Option<&AgentMeta>) -> (String, Paren
         Some(agent) => qualified(session, agent),
         None => session.to_string(),
     };
+    let agent = meta.and_then(|m| m.agent_type.clone());
     let kind = ParentKind::Spawn {
         call_id: meta.and_then(|m| m.tool_use_id.clone()),
-        agent: meta.and_then(|m| m.agent_type.clone()),
+        // A `fork` agent continues the parent's conversation (its file opens with a reference to
+        // it), where any other agent starts from its own prompt.
+        inherits_context: agent.as_deref() == Some("fork"),
+        agent,
     };
     (parent, kind)
 }
@@ -167,6 +171,26 @@ mod tests {
     }
 
     #[test]
+    fn a_fork_agent_inherits_its_parents_context() {
+        let fork = AgentMeta {
+            agent_type: Some("fork".into()),
+            ..AgentMeta::default()
+        };
+        assert!(matches!(
+            lineage("s-1", Some(&fork)).1,
+            ParentKind::Spawn { inherits_context: true, .. }
+        ));
+        let explore = AgentMeta {
+            agent_type: Some("Explore".into()),
+            ..AgentMeta::default()
+        };
+        assert!(matches!(
+            lineage("s-1", Some(&explore)).1,
+            ParentKind::Spawn { inherits_context: false, .. }
+        ));
+    }
+
+    #[test]
     fn a_child_of_a_child_names_the_agent_that_spawned_it() {
         let meta = AgentMeta {
             agent_type: Some("Explore".into()),
@@ -181,6 +205,7 @@ mod tests {
                 ParentKind::Spawn {
                     call_id: Some("toolu_1".into()),
                     agent: Some("Explore".into()),
+                    inherits_context: false,
                 }
             )
         );

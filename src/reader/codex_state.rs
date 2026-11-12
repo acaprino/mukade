@@ -39,6 +39,8 @@ impl Thread {
             .map(|_| crate::model::ParentKind::Spawn {
                 call_id: None,
                 agent: self.agent.clone(),
+                // The database does not say; the rollout's own `session_meta` does.
+                inherits_context: false,
             })
     }
 }

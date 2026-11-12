@@ -1245,6 +1245,10 @@ fn resume_selected(terminal: &mut Tui, app: &mut App) -> std::io::Result<()> {
         (location.clone(), info.clone())
     };
     let harness = location.harness;
+    if let Some(refusal) = mukade::harnesses::get(harness).resume_refusal(&info) {
+        app.status = refusal;
+        return Ok(());
+    }
     let argv = resume_argv(harness, &location.engine(), &info);
     let cwd = info.cwd.clone().or_else(|| {
         mukade::export(&SessionRef::id(harness, info.id.clone()), &location.roots)

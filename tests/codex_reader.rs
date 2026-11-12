@@ -1183,7 +1183,8 @@ fn a_subagent_names_the_thread_that_spawned_it_and_its_role() {
         meta.parent_kind,
         Some(ParentKind::Spawn {
             call_id: None,
-            agent: Some("worker".into())
+            agent: Some("worker".into()),
+            inherits_context: false,
         })
     );
 
@@ -1195,6 +1196,40 @@ fn a_subagent_names_the_thread_that_spawned_it_and_its_role() {
     );
     assert_eq!(only_in_source.parent.as_deref(), Some(spawner));
     assert_eq!(only_in_source.parent_kind, Some(ParentKind::spawn()));
+}
+
+/// A subagent spawned with its parent's turns (`fork_turns`) names `forked_from_id` in its own
+/// `session_meta`: it starts from the parent's conversation. The parent's `session_meta`, copied
+/// into the rollout after the child's, does not make a plain child one.
+#[test]
+fn a_subagent_spawned_with_its_parents_turns_inherits_its_context() {
+    use mukade::model::ParentKind;
+    let spawner = "01a181df-0000-7000-8000-0000000000b2";
+    let forked = spawned(
+        "codex-spawned-forked",
+        serde_json::json!({"parent_thread_id": spawner, "forked_from_id": spawner}),
+    );
+    assert!(matches!(
+        forked.parent_kind,
+        Some(ParentKind::Spawn { inherits_context: true, .. })
+    ));
+
+    let scratch = support::scratch(HarnessId::Codex, "codex-spawned-plain-then-parent");
+    let child = serde_json::json!({
+        "id": THREAD, "parent_thread_id": spawner, "cwd": "/work", "cli_version": "0.167.0",
+    });
+    let parent = serde_json::json!({"id": spawner, "forked_from_id": "01a181df-0000-7000-8000-0000000000b3"});
+    let text = record(0, "session_meta", child)
+        + &record(1, "session_meta", parent)
+        + &say(2, "user", "go")
+        + &say(3, "assistant", "done");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-42-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    let plain = codex::read_file(&file).expect("the rollout reads").meta;
+    assert!(matches!(
+        plain.parent_kind,
+        Some(ParentKind::Spawn { inherits_context: false, .. })
+    ));
 }
 
 /// A guardian review is a thread Codex ran for another; its agent says so.
@@ -1215,7 +1250,8 @@ fn a_guardian_review_is_spawned_by_the_thread_it_reviews() {
         meta.parent_kind,
         Some(ParentKind::Spawn {
             call_id: None,
-            agent: Some("guardian_review".into())
+            agent: Some("guardian_review".into()),
+            inherits_context: false,
         })
     );
 }

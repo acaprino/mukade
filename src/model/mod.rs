@@ -62,9 +62,11 @@ pub struct Meta {
     pub source_sha256: Option<String>,
 }
 
-/// How a session came from its parent session.
+/// How a session came from its parent session. More kinds may come (a harness's own relation),
+/// so a match outside this crate needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ParentKind {
     /// A copy of the parent's conversation, continued on its own (Pi `parentSession`, OpenCode
     /// `fork`).
@@ -78,6 +80,11 @@ pub enum ParentKind {
         /// The agent type or role it ran as, where the source records it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<String>,
+        /// It started from the parent's conversation, not from a prompt of its own: a Claude Code
+        /// `fork` agent (the parent's prefix is not in the child's file) or a Codex `spawn_agent`
+        /// with `fork_turns` (the prefix is copied into the child's rollout).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        inherits_context: bool,
     },
 }
 
@@ -87,6 +94,7 @@ impl ParentKind {
         ParentKind::Spawn {
             call_id: None,
             agent: None,
+            inherits_context: false,
         }
     }
 

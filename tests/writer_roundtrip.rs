@@ -202,6 +202,7 @@ fn a_document_carries_the_parent_link_and_its_kind() {
     source.meta.parent_kind = Some(ParentKind::Spawn {
         call_id: Some("toolu_1".into()),
         agent: Some("Explore".into()),
+        inherits_context: false,
     });
     let doc = to_document(&source);
     assert_eq!(

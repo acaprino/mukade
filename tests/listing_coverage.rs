@@ -209,7 +209,8 @@ fn codex_list_all_adds_the_subagent_threads_with_their_parent() {
         sub.parent_kind,
         Some(mukade::model::ParentKind::Spawn {
             call_id: None,
-            agent: Some("explorer".into())
+            agent: Some("explorer".into()),
+            inherits_context: false,
         }),
         "a spawned thread, with the role its row records"
     );

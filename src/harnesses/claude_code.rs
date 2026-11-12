@@ -47,6 +47,13 @@ impl Harness for ClaudeCode {
         super::listed_stats(self, roots)
     }
 
+    /// `claude --resume` takes a session's own id; a subagent's is `<parent-id>.<agentId>`.
+    fn resume_refusal(&self, info: &crate::reader::SessionInfo) -> Option<String> {
+        info.parent_kind
+            .as_ref()
+            .map(|_| subagent_not_resumed(&info.id, info.parent.as_deref()))
+    }
+
     // `--tools` takes several values: before `--resume`, so it cannot swallow the prompt.
     fn summary_command(
         &self,
@@ -55,11 +62,9 @@ impl Harness for ClaudeCode {
         _scratch: &Path,
     ) -> Result<SummaryCommand, HopError> {
         if session.meta.parent_kind.is_some() {
-            // `<parent-id>.<agentId>` is mukade's id; `--resume` takes a session's own.
             return Err(HopError::Unsupported(format!(
-                "--compaction summary of Claude Code subagent session {}: Claude Code resumes \
-                 sessions, not their subagents",
-                session.meta.id
+                "--compaction summary of {}",
+                subagent_not_resumed(&session.meta.id, session.meta.parent.as_deref())
             )));
         }
         let mut args: Vec<String> = [
@@ -641,6 +646,16 @@ fn web_search(input: &Value) -> Translation {
     Translation::Call {
         name: "WebSearch",
         input: tools::obj_pairs(pairs),
+    }
+}
+
+/// The refusal for a Claude Code subagent: Claude Code resumes sessions, not their subagents.
+fn subagent_not_resumed(id: &str, parent: Option<&str>) -> String {
+    let refusal =
+        format!("Claude Code subagent session {id}: Claude Code resumes sessions, not their subagents");
+    match parent {
+        Some(parent) => format!("{refusal}; resume {parent}"),
+        None => refusal,
     }
 }
 

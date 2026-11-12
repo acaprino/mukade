@@ -487,6 +487,9 @@ struct MetaBuilder {
     /// `session_meta.parent_thread_id` (or `source.subagent.thread_spawn.parent_thread_id`): the
     /// thread that spawned this one, preferred to `session_id` (the same thread at depth 1).
     parent_thread_id: Option<String>,
+    /// The first `session_meta` names `forked_from_id`: a subagent spawned with the parent's
+    /// turns (`fork_turns`), whose rollout copies them before its own.
+    forked: bool,
     /// The role a spawned subagent ran as (`agent_role`), or `guardian_review` for a guardian
     /// review (`thread_source`, or `source.subagent.other: "guardian"`).
     agent: Option<String>,
@@ -503,6 +506,9 @@ impl MetaBuilder {
         let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         if row.get("type").and_then(Value::as_str) == Some("session_meta") {
             if self.id.is_none() {
+                // Only the rollout's own (first) `session_meta`: a forked subagent's rollout
+                // carries its parent's next.
+                self.forked = str_at(payload, "/forked_from_id").is_some_and(|s| !s.is_empty());
                 // `id` is the rollout's own thread; a subagent's `session_id` names the thread
                 // that spawned it. A hand-written rollout may carry only one of the two.
                 self.id = str_at(payload, "/id")
@@ -880,6 +886,7 @@ impl Builder {
         let parent_kind = parent.as_ref().map(|_| ParentKind::Spawn {
             call_id: None,
             agent: m.agent,
+            inherits_context: m.forked,
         });
         Ok(Session {
             meta: Meta {

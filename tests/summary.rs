@@ -312,7 +312,8 @@ fn a_claude_subagent_session_is_not_summarized_by_claude() {
     )
     .unwrap_err();
     assert!(
-        matches!(&error, HopError::Unsupported(why) if why.contains("subagent")),
+        matches!(&error, HopError::Unsupported(why) if why.contains("subagent")
+            && why.ends_with("resume c45db7bc-542c-4201-89de-b590c6fdb797")),
         "{error:?}"
     );
 }

@@ -415,3 +415,29 @@ fn every_adapter_builds_a_summary_command() {
         );
     }
 }
+
+/// Claude Code resumes a session by its own id; a subagent listed as `<parent-id>.<agentId>`
+/// is refused with the parent to resume instead. Every other listed session resumes.
+#[test]
+fn only_a_claude_subagent_is_refused_a_resume() {
+    let child = mukade::reader::SessionInfo {
+        id: "p-1.a1111111111111111".into(),
+        parent: Some("p-1".into()),
+        parent_kind: Some(mukade::model::ParentKind::spawn()),
+        ..Default::default()
+    };
+    let root = mukade::reader::SessionInfo {
+        id: "p-1".into(),
+        ..Default::default()
+    };
+    for id in HarnessId::ALL {
+        let adapter = get(id);
+        assert_eq!(adapter.resume_refusal(&root), None, "{id}");
+        let refusal = adapter.resume_refusal(&child);
+        if id.as_str() == "claude_code" {
+            assert!(refusal.as_deref().is_some_and(|r| r.ends_with("resume p-1")), "{refusal:?}");
+        } else {
+            assert_eq!(refusal, None, "{id}");
+        }
+    }
+}
