@@ -178,6 +178,55 @@ fn off_branch(entries: &[Entry]) -> usize {
         .count()
 }
 
+/// Every path of the tree, root to leaf, as the texts on it: what the session says however its
+/// branches are cut into runs.
+fn paths(session: &Session) -> std::collections::BTreeSet<Vec<String>> {
+    use std::collections::{BTreeSet, HashMap};
+    let mut chains: Vec<(&[Entry], &Option<String>)> = vec![(&session.entries, &None)];
+    chains.extend(session.branches.iter().map(|b| (&b.entries[..], &b.from)));
+    let mut at: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (c, (entries, _)) in chains.iter().enumerate() {
+        for (i, entry) in entries.iter().enumerate() {
+            at.insert(entry.id.as_str(), (c, i));
+        }
+    }
+    let texts = |entry: &Entry| match &entry.kind {
+        Kind::User { text, .. } => Some(format!("user: {text}")),
+        Kind::Step { text, .. } => Some(format!("assistant: {}", text.join(" "))),
+        _ => None,
+    };
+    // The path to the end of chain `c` (through `upto` entries of it).
+    fn path_to(
+        chains: &[(&[Entry], &Option<String>)],
+        at: &HashMap<&str, (usize, usize)>,
+        c: usize,
+        upto: usize,
+        texts: &dyn Fn(&Entry) -> Option<String>,
+    ) -> Vec<String> {
+        let mut path = match chains[c].1 {
+            Some(from) => {
+                let (pc, pi) = at[from.as_str()];
+                path_to(chains, at, pc, pi + 1, texts)
+            }
+            None => Vec::new(),
+        };
+        path.extend(chains[c].0.iter().take(upto).filter_map(texts));
+        path
+    }
+    let mut leaves = BTreeSet::new();
+    for (c, (entries, _)) in chains.iter().enumerate() {
+        // A run ends in a leaf unless something hangs off its last entry.
+        let last = entries.last().map(|e| e.id.as_str());
+        let hung = chains
+            .iter()
+            .any(|(_, from)| from.as_deref().is_some_and(|f| Some(f) == last));
+        if !hung {
+            leaves.insert(path_to(&chains, &at, c, entries.len(), &texts));
+        }
+    }
+    leaves
+}
+
 fn id_of_text<'a>(entries: &'a [Entry], text: &str) -> &'a str {
     entries
         .iter()
@@ -386,4 +435,289 @@ fn codex_reads_the_turns_a_rollback_dropped_as_branches() {
         conversation(&all.branches[1].entries),
         ["user: q3", "assistant: a3"]
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// writers: branches travel where the destination keeps a tree
+
+use mukade::writer::plan::{BranchKeeping, PlannedBlock, plan};
+use mukade::writer::{WriteOpts, Writer};
+
+fn opts_for(_dest: HarnessId) -> WriteOpts {
+    WriteOpts {
+        cwd: Some("/work".into()),
+        dest_version: Some("1.0.0".into()),
+        ..WriteOpts::default()
+    }
+}
+
+#[test]
+fn the_plan_keeps_a_branch_where_the_destination_has_a_tree_or_a_rollback() {
+    let session = branched();
+    for dest in [HarnessId::ClaudeCode, HarnessId::Pi, HarnessId::Codex] {
+        let planned = plan(&session, dest, &opts_for(dest));
+        assert_eq!(planned.branches.len(), 1, "{dest}");
+        assert_eq!(planned.counts.branches_kept, 1, "{dest}");
+        assert_eq!(planned.counts.branches_dropped, 0, "{dest}");
+        // It leaves after the first answer: block 1 of the active path.
+        assert_eq!(planned.branches[0].parent, Some((0, 1)), "{dest}");
+        assert!(matches!(
+            planned.branches[0].blocks.first(),
+            Some(PlannedBlock::User { .. })
+        ));
+        assert_eq!(planned.branches[0].blocks.len(), 2, "{dest}");
+    }
+    assert_eq!(
+        mukade::writer::for_harness(HarnessId::ClaudeCode).keeps_branches(),
+        BranchKeeping::Tree
+    );
+    assert_eq!(
+        mukade::writer::for_harness(HarnessId::Codex).keeps_branches(),
+        BranchKeeping::Rollbacks
+    );
+}
+
+#[test]
+fn a_destination_with_one_conversation_leaves_every_branch_out_and_counts_it() {
+    let session = branched();
+    for dest in [
+        HarnessId::OpenCode,
+        HarnessId::Hermes,
+        HarnessId::DeepSeekHarness,
+    ] {
+        let planned = plan(&session, dest, &opts_for(dest));
+        assert!(planned.branches.is_empty(), "{dest}");
+        assert_eq!(planned.counts.branches_kept, 0, "{dest}");
+        assert_eq!(planned.counts.branches_dropped, 1, "{dest}");
+    }
+}
+
+/// A branch that leaves in the middle of a turn, or from a record that is not there, cannot be
+/// judged with what it shares: it is left out and counted, never written half.
+#[test]
+fn a_branch_that_cannot_stand_with_what_it_shares_is_left_out() {
+    use mukade::model::{ResultContent, ToolCall, ToolResult};
+    let call = ToolCall {
+        id: "c1".into(),
+        source_name: "Bash".into(),
+        canonical: Some(mukade::model::CanonicalTool::Bash),
+        input: json!({"command": "ls", "description": "list"}),
+    };
+    let step = entry(
+        "s1",
+        Kind::Step {
+            model: None,
+            reasoning: Vec::new(),
+            text: Vec::new(),
+            calls: vec![call],
+            end: StepEnd::ToolUse,
+        },
+    );
+    let results = |id: &str| {
+        entry(
+            id,
+            Kind::Results {
+                results: vec![ToolResult {
+                    call_id: "c1".into(),
+                    content: ResultContent::Text("out".into()),
+                    is_error: false,
+                    truncated_by_source: false,
+                }],
+            },
+        )
+    };
+    let session = Session {
+        meta: meta(),
+        entries: vec![
+            user("u1", "run it"),
+            step,
+            results("r1"),
+            assistant("a1", "done"),
+        ],
+        branches: vec![
+            // Leaves between the call and its answer: the prefix has an unanswered call.
+            Branch {
+                from: Some("s1".into()),
+                entries: vec![results("r1b"), assistant("a1b", "done again")],
+            },
+            // Leaves from a record the session does not hold.
+            Branch {
+                from: Some("nowhere".into()),
+                entries: vec![user("u2b", "lost")],
+            },
+            // Leaves after the answer: fine.
+            Branch {
+                from: Some("r1".into()),
+                entries: vec![user("u2c", "and then"), assistant("a2c", "ok")],
+            },
+        ],
+    };
+    let planned = plan(
+        &session,
+        HarnessId::ClaudeCode,
+        &opts_for(HarnessId::ClaudeCode),
+    );
+    assert_eq!(planned.counts.branches_kept, 1);
+    assert_eq!(planned.counts.branches_dropped, 2);
+    assert_eq!(planned.branches.len(), 1);
+    assert!(matches!(
+        planned.branches[0].blocks.first(),
+        Some(PlannedBlock::User { .. })
+    ));
+
+    // Codex writes a branch only where a rollback can undo it: one that starts a user turn.
+    let mut midway = session.clone();
+    midway.branches = vec![Branch {
+        from: Some("r1".into()),
+        entries: vec![assistant("a1b", "an answer with no question")],
+    }];
+    let tree = plan(&midway, HarnessId::Pi, &opts_for(HarnessId::Pi));
+    assert_eq!(tree.counts.branches_kept, 1);
+    let rollback = plan(&midway, HarnessId::Codex, &opts_for(HarnessId::Codex));
+    assert_eq!(rollback.counts.branches_kept, 0);
+    assert_eq!(rollback.counts.branches_dropped, 1);
+}
+
+fn hop_with_branches(scratch: &Path, dest: &str, extra: &[&str]) -> (Value, std::path::PathBuf) {
+    let mut args = vec![
+        "hop",
+        "claude_code",
+        "s-1",
+        dest,
+        "--all-branches",
+        "--cwd",
+        "/work",
+    ];
+    args.extend_from_slice(extra);
+    let (code, stdout, stderr) = support::cli_code(scratch, &args);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    let receipt: Value = serde_json::from_str(stdout.trim().lines().last().unwrap()).unwrap();
+    let location = std::path::PathBuf::from(receipt["location"].as_str().unwrap());
+    (receipt["manifest"].clone(), location)
+}
+
+fn staged_claude_tree(tag: &str) -> std::path::PathBuf {
+    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
+    write_lines(&scratch.join("home/projects/p/s-1.jsonl"), &claude_tree());
+    scratch
+}
+
+#[test]
+fn a_claude_tree_hopped_into_claude_code_reads_back_with_the_same_branches() {
+    use mukade::reader::claude_code;
+    let scratch = staged_claude_tree("branches-claude-to-claude");
+    let (manifest, file) = hop_with_branches(&scratch, "claude_code", &[]);
+    assert_eq!(manifest["counts"]["branches_kept"], 2, "{manifest}");
+    assert_eq!(manifest["counts"]["branches_dropped"], 0);
+
+    // The resumed path is the source's, so the leaf is where it was.
+    let active = claude_code::read_file(&file).unwrap();
+    assert_eq!(
+        conversation(&active.entries),
+        ["user: q1", "assistant: r1", "user: q2", "assistant: r2"]
+    );
+    assert!(active.branches.is_empty());
+    let all = claude_code::read_file_all_branches(&file).unwrap();
+    assert_eq!(conversation(&all.entries), conversation(&active.entries));
+    // The same tree: every path from the first prompt to a leaf (how the runs are cut may differ:
+    // the reader follows the first child it meets in the file).
+    let source =
+        claude_code::read_file_all_branches(&scratch.join("home/projects/p/s-1.jsonl")).unwrap();
+    assert_eq!(paths(&all), paths(&source));
+    assert_eq!(paths(&all).len(), 3);
+    assert_eq!(all.branches.len(), 2);
+    // The active path's last row is the file's last conversation row (and `last-prompt` names it).
+    let text = std::fs::read_to_string(&file).unwrap();
+    let rows: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let leaf = rows
+        .iter()
+        .rev()
+        .find(|row| row["type"] == "assistant")
+        .unwrap();
+    assert_eq!(leaf["message"]["content"][0]["text"], "r2");
+    let last_prompt = rows.iter().rev().find(|row| row["type"] == "last-prompt");
+    if let Some(row) = last_prompt {
+        assert_eq!(row["leafUuid"], leaf["uuid"]);
+    }
+}
+
+#[test]
+fn a_claude_tree_hopped_into_pi_reads_back_with_the_same_branches() {
+    use mukade::reader::pi;
+    let scratch = staged_claude_tree("branches-claude-to-pi");
+    let (manifest, file) = hop_with_branches(&scratch, "pi", &[]);
+    assert_eq!(manifest["counts"]["branches_kept"], 2, "{manifest}");
+    let active = pi::read_file(&file).unwrap();
+    assert_eq!(
+        conversation(&active.entries),
+        ["user: q1", "assistant: r1", "user: q2", "assistant: r2"]
+    );
+    let all = pi::read_file_all_branches(&file).unwrap();
+    assert_eq!(all.branches.len(), 2);
+    let source = mukade::reader::claude_code::read_file_all_branches(
+        &scratch.join("home/projects/p/s-1.jsonl"),
+    )
+    .unwrap();
+    assert_eq!(paths(&all), paths(&source));
+}
+
+#[test]
+fn a_claude_tree_hopped_into_codex_keeps_the_branches_a_rollback_can_undo() {
+    use mukade::reader::codex::{Branches, read_file_with};
+    let scratch = staged_claude_tree("branches-claude-to-codex");
+    let (manifest, file) = hop_with_branches(&scratch, "codex", &["--dest-version", "0.167.0"]);
+    // q2b starts a turn: kept, then rolled back. r2c hangs off an assistant record: left out.
+    assert_eq!(manifest["counts"]["branches_kept"], 1, "{manifest}");
+    assert_eq!(manifest["counts"]["branches_dropped"], 1);
+    assert!(
+        manifest["losses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|loss| loss
+                .as_str()
+                .unwrap()
+                .contains("branches of the source not written")),
+        "{manifest}"
+    );
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(text.matches("thread_rolled_back").count(), 1);
+
+    // Codex replays the rollback: the thread is the active path.
+    let active = read_file_with(&file, Branches::Active).unwrap();
+    assert_eq!(
+        conversation(&active.entries),
+        ["user: q1", "assistant: r1", "user: q2", "assistant: r2"]
+    );
+    let all = read_file_with(&file, Branches::All).unwrap();
+    assert_eq!(all.branches.len(), 1);
+    assert_eq!(
+        conversation(&all.branches[0].entries),
+        ["user: q2b", "assistant: r2b"]
+    );
+    assert_eq!(
+        all.branches[0].from.as_deref(),
+        Some(id_of_text(&all.entries, "r1"))
+    );
+}
+
+#[test]
+fn a_destination_with_one_conversation_gets_the_active_path_and_a_count() {
+    let scratch = staged_claude_tree("branches-claude-to-dsh");
+    let (manifest, _) = hop_with_branches(&scratch, "deepseek_harness", &[]);
+    assert_eq!(manifest["counts"]["branches_kept"], 0, "{manifest}");
+    assert_eq!(manifest["counts"]["branches_dropped"], 2);
+    assert!(
+        manifest["losses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|loss| loss.as_str().unwrap().ends_with("(2)")
+                && loss.as_str().unwrap().contains("branches of the source")),
+        "{manifest}"
+    );
+    assert_eq!(manifest["counts"]["messages_out"], 4);
 }

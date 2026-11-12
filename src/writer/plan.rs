@@ -128,6 +128,11 @@ pub struct Counts {
     /// Messages between a subagent and its parent with no readable text (Codex's encrypted
     /// `agent_message`), not written.
     pub dropped_subagent_messages: usize,
+    /// Branches of the session written to the destination.
+    pub branches_kept: usize,
+    /// Branches of the session left out: the destination keeps one conversation, cannot say where
+    /// the branch leaves from, or the branch with what it shares would be refused.
+    pub branches_dropped: usize,
 }
 
 impl Counts {
@@ -148,8 +153,54 @@ impl Counts {
 /// A whole session, planned.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plan {
+    /// The conversation the harness resumes: the active path.
     pub blocks: Vec<PlannedBlock>,
     pub counts: Counts,
+    /// The branches the session left that the destination can keep, planned: parents before the
+    /// branches that hang off them. Empty unless the source was read with its branches.
+    pub branches: Vec<PlannedBranch>,
+}
+
+/// One branch, planned: the blocks after the point it leaves from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedBranch {
+    /// Where it leaves from: the chain (0 is [`Plan::blocks`], `n + 1` is `branches[n]`) and the
+    /// block of it that comes before the branch. `None`: before the first block.
+    pub parent: Option<(usize, usize)>,
+    pub blocks: Vec<PlannedBlock>,
+}
+
+impl Plan {
+    /// The blocks of a chain: 0 is the active path, `n + 1` is `branches[n]`.
+    pub fn chain(&self, chain: usize) -> &[PlannedBlock] {
+        match chain {
+            0 => &self.blocks,
+            n => &self.branches[n - 1].blocks,
+        }
+    }
+
+    /// The branches that leave right after block `block` of `chain` (or, with `None`, before the
+    /// first block of the session), as their numbers in [`Plan::branches`], in order.
+    pub fn branches_after(&self, at: Option<(usize, usize)>) -> Vec<usize> {
+        self.branches
+            .iter()
+            .enumerate()
+            .filter(|(_, branch)| branch.parent == at)
+            .map(|(n, _)| n)
+            .collect()
+    }
+}
+
+/// What a destination does with the branches of a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchKeeping {
+    /// One conversation only: every branch is left out and counted.
+    None,
+    /// A tree: each record names its parent (Claude Code `parentUuid`, Pi `parentId`).
+    Tree,
+    /// A line with rollbacks: a branch is written, then rolled back (Codex
+    /// `thread_rolled_back`), which can express a branch that starts a user turn.
+    Rollbacks,
 }
 
 /// Tool-call ids as the destination's protocol accepts them. Anthropic refuses an id outside
@@ -547,7 +598,150 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     move_unanswered_calls_to_text(&mut blocks, &mut counts);
     drop_empty_steps(&mut blocks, &mut counts);
     counts.messages_out = blocks.len();
-    Plan { blocks, counts }
+    let mut plan = Plan {
+        blocks,
+        counts,
+        branches: Vec::new(),
+    };
+    if !session.branches.is_empty() {
+        plan_branches(session, dest, opts, &mut plan);
+    }
+    plan
+}
+
+/// Plan the branches of a session for a destination: each with what it shares with the path it
+/// hangs from, so it is judged as the conversation a provider would receive. A branch the
+/// destination cannot hold, cannot place, or would refuse is left out and counted.
+fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mut Plan) {
+    let keeping = crate::writer::for_harness(dest).keeps_branches();
+    let total = session.branches.len();
+    if keeping == BranchKeeping::None || opts.native_budget.is_some() {
+        plan.counts.branches_dropped += total;
+        return;
+    }
+    let protocol = opts
+        .dest_protocol
+        .clone()
+        .or_else(|| crate::policy::destination_protocol(dest));
+    // The conversation entries of every chain, and for each branch the chain and place it hangs
+    // from. `chains[0]` is the active path; `chains[n + 1]` is `session.branches[n]`.
+    let conversation = |entries: &[crate::model::Entry]| -> Vec<crate::model::Entry> {
+        entries
+            .iter()
+            .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+            .cloned()
+            .collect()
+    };
+    let mut chains: Vec<Vec<crate::model::Entry>> = vec![conversation(&session.entries)];
+    let mut hangs: Vec<Option<(usize, usize)>> = vec![None];
+    // The chain a planned branch came from, so a branch that hangs off a dropped one is dropped.
+    let mut planned_as: Vec<Option<usize>> = vec![Some(0)];
+    // The blocks before each chain starts (what it shares with the chain above it).
+    let mut base: Vec<usize> = vec![0];
+    let planned_of = |entries: Vec<crate::model::Entry>| {
+        let sub = Session {
+            meta: session.meta.clone(),
+            entries,
+            branches: Vec::new(),
+        };
+        self::plan(&sub, dest, opts)
+    };
+    let path_to = |chains: &[Vec<crate::model::Entry>],
+                   hangs: &[Option<(usize, usize)>],
+                   chain: usize,
+                   upto: usize|
+     -> Vec<crate::model::Entry> {
+        // The entries from the start of the session through entry `upto` of `chain`.
+        let mut path: Vec<crate::model::Entry> = Vec::new();
+        let (mut c, mut end) = (chain, Some(upto));
+        let mut parts: Vec<(usize, Option<usize>)> = Vec::new();
+        loop {
+            parts.push((c, end));
+            match hangs[c] {
+                Some((parent, at)) => {
+                    c = parent;
+                    end = Some(at);
+                }
+                None => break,
+            }
+        }
+        for (c, end) in parts.into_iter().rev() {
+            let take = end.map_or(0, |end| end + 1);
+            path.extend(chains[c].iter().take(take).cloned());
+        }
+        path
+    };
+    for branch in &session.branches {
+        let number = chains.len();
+        chains.push(conversation(&branch.entries));
+        // Where it hangs: the entry it leaves from, in the active path or an earlier branch.
+        let place = match &branch.from {
+            None => Some(None),
+            Some(from) => (0..number).find_map(|c| {
+                chains[c]
+                    .iter()
+                    .position(|entry| &entry.id == from)
+                    .map(|at| Some((c, at)))
+            }),
+        };
+        let kept = (|| {
+            let place = place?;
+            // A branch that hangs off one that was left out is left out with it.
+            if let Some((parent, _)) = place {
+                planned_as[parent]?;
+            }
+            let prefix = match place {
+                None => Vec::new(),
+                Some((c, at)) => path_to(&chains, &hangs, c, at),
+            };
+            let before = planned_of(prefix.clone());
+            let mut entries = prefix;
+            entries.extend(chains[number].iter().cloned());
+            let full = planned_of(entries);
+            let k = before.blocks.len();
+            if full.blocks.len() <= k || full.blocks[..k] != before.blocks[..] {
+                return None;
+            }
+            if !crate::strict::check_plan(&full, protocol.as_ref()).is_empty() {
+                return None;
+            }
+            let blocks = full.blocks[k..].to_vec();
+            if keeping == BranchKeeping::Rollbacks
+                && !matches!(blocks.first(), Some(PlannedBlock::User { .. }))
+            {
+                return None;
+            }
+            // The block of the chain it hangs from that this branch follows.
+            let parent = place.and_then(|(c, _)| {
+                let mut chain = c;
+                loop {
+                    let own = base[chain];
+                    if k > own {
+                        return planned_as[chain].map(|n| (n, k - own - 1));
+                    }
+                    match hangs[chain] {
+                        Some((above, _)) => chain = above,
+                        None => return None,
+                    }
+                }
+            });
+            Some((parent, blocks, k))
+        })();
+        hangs.push(place.flatten());
+        match kept {
+            Some((parent, blocks, k)) => {
+                base.push(k);
+                plan.branches.push(PlannedBranch { parent, blocks });
+                planned_as.push(Some(plan.branches.len()));
+                plan.counts.branches_kept += 1;
+            }
+            None => {
+                base.push(0);
+                planned_as.push(None);
+                plan.counts.branches_dropped += 1;
+            }
+        }
+    }
 }
 
 /// The text form of a call that started a subagent session says which session it became.

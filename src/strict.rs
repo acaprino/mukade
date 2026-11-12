@@ -136,6 +136,7 @@ mod tests {
         Plan {
             blocks,
             counts: Counts::default(),
+            branches: Vec::new(),
         }
     }
 

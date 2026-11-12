@@ -32,6 +32,11 @@ impl Writer for Codex {
         HarnessId::Codex
     }
 
+    /// A line with rollbacks: a branch is written and then rolled back.
+    fn keeps_branches(&self) -> plan::BranchKeeping {
+        plan::BranchKeeping::Rollbacks
+    }
+
     fn write_planned(
         &self,
         session: &Session,
@@ -98,6 +103,202 @@ fn rollout_stamp(millis: i64) -> (PathBuf, String) {
     (date, dt.format("%Y-%m-%dT%H-%M-%S").to_string())
 }
 
+/// Where a rollout is, as it is written: its records, the next ordinal, the turn it is in, and how
+/// many user-role messages it has written (what a rollback counts).
+struct Lay {
+    out: Vec<Value>,
+    ordinal: u64,
+    turn: u64,
+    user_rows: u64,
+}
+
+fn push(out: &mut Vec<Value>, ordinal: &mut u64, kind: &str, payload: Value, clock: &mut Clock) {
+    let mut row = Map::new();
+    row.insert("timestamp".into(), Value::String(clock.next_iso()));
+    row.insert("ordinal".into(), Value::from(*ordinal));
+    row.insert("type".into(), Value::String(kind.to_string()));
+    row.insert("payload".into(), payload);
+    *ordinal += 1;
+    out.push(Value::Object(row));
+}
+
+/// Lay out the blocks of one chain of the plan (0 is the active path), and the branches that
+/// leave from them.
+fn lay(
+    st: &mut Lay,
+    plan: &plan::Plan,
+    session: &Session,
+    opts: &WriteOpts,
+    cwd: &str,
+    clock: &mut Clock,
+    chain: usize,
+) {
+    for (index, block) in plan.chain(chain).iter().enumerate() {
+        match block {
+            PlannedBlock::User { text, attachments } => {
+                st.turn += 1;
+                st.user_rows += 1;
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "event_msg",
+                    json!({"type":"task_started", "turn_id":format!("turn-{}", st.turn)}),
+                    clock,
+                );
+                let mut content = vec![json!({"type": "input_text", "text": text})];
+                content.extend(
+                    attachments
+                        .iter()
+                        .filter_map(|a| (!a.raw.is_null()).then_some(a.raw.clone())),
+                );
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "response_item",
+                    json!({"type": "message", "id": local_message_id(), "role": "user", "content": content}),
+                    clock,
+                );
+            }
+            PlannedBlock::Compaction { summary: text } => {
+                st.user_rows += 1;
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "response_item",
+                    user_message(text),
+                    clock,
+                );
+            }
+            PlannedBlock::Step(step) => {
+                let turn_id = format!("turn-{}", st.turn);
+                let model = plan::model_id(step, session, opts);
+                let mut context = Map::new();
+                context.insert("turn_id".into(), Value::String(turn_id.clone()));
+                if let Some(model) = model.as_ref() {
+                    context.insert("model".into(), Value::String(model.clone()));
+                }
+                context.insert("cwd".into(), Value::String(cwd.to_string()));
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "turn_context",
+                    Value::Object(context),
+                    clock,
+                );
+
+                for reasoning in &step.reasoning {
+                    if let ReasoningPlan::Native(Reasoning { text, opaque }) = reasoning {
+                        push(
+                            &mut st.out,
+                            &mut st.ordinal,
+                            "response_item",
+                            json!({
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": text}],
+                                "content": null,
+                                "encrypted_content": opaque.as_ref().and_then(|o| o.encrypted.clone()),
+                            }),
+                            clock,
+                        );
+                    }
+                }
+                if !step.text.is_empty() {
+                    let content: Vec<Value> = step
+                        .text
+                        .iter()
+                        .map(|t| json!({"type": "output_text", "text": t}))
+                        .collect();
+                    push(
+                        &mut st.out,
+                        &mut st.ordinal,
+                        "response_item",
+                        json!({"type": "message", "role": "assistant", "phase": if matches!(step.end, crate::model::StepEnd::Completed) { "final_answer" } else { "commentary" }, "content": content, "id": assistant_message_id()}),
+                        clock,
+                    );
+                }
+                for call in &step.calls {
+                    push(
+                        &mut st.out,
+                        &mut st.ordinal,
+                        "response_item",
+                        json!({
+                            "type": "function_call",
+                            "name": call.name,
+                            "arguments": serde_json::to_string(&call.input).unwrap_or_else(|_| "{}".into()),
+                            "call_id": call.id,
+                        }),
+                        clock,
+                    );
+                }
+                if matches!(step.end, crate::model::StepEnd::Completed) {
+                    push(
+                        &mut st.out,
+                        &mut st.ordinal,
+                        "event_msg",
+                        json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":step.text.join("\n")}),
+                        clock,
+                    );
+                }
+            }
+            PlannedBlock::Results { results } => {
+                for result in results {
+                    match result {
+                        PlannedResult::Native {
+                            call_id, content, ..
+                        } => push(
+                            &mut st.out,
+                            &mut st.ordinal,
+                            "response_item",
+                            json!({"type": "function_call_output", "call_id": call_id, "output": content.text()}),
+                            clock,
+                        ),
+                        // A call that travelled as text answers with text, in the same place.
+                        PlannedResult::Text(t) => {
+                            st.user_rows += 1;
+                            push(
+                                &mut st.out,
+                                &mut st.ordinal,
+                                "response_item",
+                                user_message(t),
+                                clock,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        // The branches that leave right after this block, each written from here and then rolled
+        // back, so the thread goes on from this block.
+        for n in plan.branches_after(Some((chain, index))) {
+            lay_branch(st, plan, session, opts, cwd, clock, n + 1);
+        }
+    }
+}
+
+/// Write branch `chain` from where the rollout is, then roll back its user turns: the records
+/// stay in the file, and Codex replays the thread as it was before them.
+fn lay_branch(
+    st: &mut Lay,
+    plan: &plan::Plan,
+    session: &Session,
+    opts: &WriteOpts,
+    cwd: &str,
+    clock: &mut Clock,
+    chain: usize,
+) {
+    let before = st.user_rows;
+    lay(st, plan, session, opts, cwd, clock, chain);
+    let turns = st.user_rows - before;
+    push(
+        &mut st.out,
+        &mut st.ordinal,
+        "event_msg",
+        json!({"type": "thread_rolled_back", "num_turns": turns}),
+        clock,
+    );
+    st.user_rows = before;
+}
+
 fn rows(
     plan: &plan::Plan,
     session: &Session,
@@ -109,18 +310,7 @@ fn rows(
 ) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     let mut ordinal = 0u64;
-    let mut turn = 0u64;
-
-    let push =
-        |out: &mut Vec<Value>, ordinal: &mut u64, kind: &str, payload: Value, clock: &mut Clock| {
-            let mut row = Map::new();
-            row.insert("timestamp".into(), Value::String(clock.next_iso()));
-            row.insert("ordinal".into(), Value::from(*ordinal));
-            row.insert("type".into(), Value::String(kind.to_string()));
-            row.insert("payload".into(), payload);
-            *ordinal += 1;
-            out.push(Value::Object(row));
-        };
+    let turn = 0u64;
 
     // L7: the destination's own session metadata. The key set is the one Codex itself accepts for
     // a hand-written rollout: `base_instructions` (null — we do not invent a system prompt) and
@@ -173,136 +363,18 @@ fn rows(
         clock,
     );
 
-    for block in &plan.blocks {
-        match block {
-            PlannedBlock::User { text, attachments } => {
-                turn += 1;
-                push(
-                    &mut out,
-                    &mut ordinal,
-                    "event_msg",
-                    json!({"type":"task_started", "turn_id":format!("turn-{turn}")}),
-                    clock,
-                );
-                let mut content = vec![json!({"type": "input_text", "text": text})];
-                content.extend(
-                    attachments
-                        .iter()
-                        .filter_map(|a| (!a.raw.is_null()).then_some(a.raw.clone())),
-                );
-                push(
-                    &mut out,
-                    &mut ordinal,
-                    "response_item",
-                    json!({"type": "message", "id": local_message_id(), "role": "user", "content": content}),
-                    clock,
-                );
-            }
-            PlannedBlock::Compaction { summary: text } => {
-                push(
-                    &mut out,
-                    &mut ordinal,
-                    "response_item",
-                    user_message(text),
-                    clock,
-                );
-            }
-            PlannedBlock::Step(step) => {
-                let turn_id = format!("turn-{turn}");
-                let model = plan::model_id(step, session, opts);
-                let mut context = Map::new();
-                context.insert("turn_id".into(), Value::String(turn_id.clone()));
-                if let Some(model) = model.as_ref() {
-                    context.insert("model".into(), Value::String(model.clone()));
-                }
-                context.insert("cwd".into(), Value::String(cwd.to_string()));
-                push(
-                    &mut out,
-                    &mut ordinal,
-                    "turn_context",
-                    Value::Object(context),
-                    clock,
-                );
-
-                for reasoning in &step.reasoning {
-                    if let ReasoningPlan::Native(Reasoning { text, opaque }) = reasoning {
-                        push(
-                            &mut out,
-                            &mut ordinal,
-                            "response_item",
-                            json!({
-                                "type": "reasoning",
-                                "summary": [{"type": "summary_text", "text": text}],
-                                "content": null,
-                                "encrypted_content": opaque.as_ref().and_then(|o| o.encrypted.clone()),
-                            }),
-                            clock,
-                        );
-                    }
-                }
-                if !step.text.is_empty() {
-                    let content: Vec<Value> = step
-                        .text
-                        .iter()
-                        .map(|t| json!({"type": "output_text", "text": t}))
-                        .collect();
-                    push(
-                        &mut out,
-                        &mut ordinal,
-                        "response_item",
-                        json!({"type": "message", "role": "assistant", "phase": if matches!(step.end, crate::model::StepEnd::Completed) { "final_answer" } else { "commentary" }, "content": content, "id": assistant_message_id()}),
-                        clock,
-                    );
-                }
-                for call in &step.calls {
-                    push(
-                        &mut out,
-                        &mut ordinal,
-                        "response_item",
-                        json!({
-                            "type": "function_call",
-                            "name": call.name,
-                            "arguments": serde_json::to_string(&call.input).unwrap_or_else(|_| "{}".into()),
-                            "call_id": call.id,
-                        }),
-                        clock,
-                    );
-                }
-                if matches!(step.end, crate::model::StepEnd::Completed) {
-                    push(
-                        &mut out,
-                        &mut ordinal,
-                        "event_msg",
-                        json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":step.text.join("\n")}),
-                        clock,
-                    );
-                }
-            }
-            PlannedBlock::Results { results } => {
-                for result in results {
-                    match result {
-                        PlannedResult::Native {
-                            call_id, content, ..
-                        } => push(
-                            &mut out,
-                            &mut ordinal,
-                            "response_item",
-                            json!({"type": "function_call_output", "call_id": call_id, "output": content.text()}),
-                            clock,
-                        ),
-                        // A call that travelled as text answers with text, in the same place.
-                        PlannedResult::Text(t) => push(
-                            &mut out,
-                            &mut ordinal,
-                            "response_item",
-                            user_message(t),
-                            clock,
-                        ),
-                    }
-                }
-            }
-        }
+    let mut st = Lay {
+        out,
+        ordinal,
+        turn,
+        user_rows: 0,
+    };
+    // A branch that leaves before the first block comes first.
+    for n in plan.branches_after(None) {
+        lay_branch(&mut st, plan, session, opts, cwd, clock, n + 1);
     }
+    lay(&mut st, plan, session, opts, cwd, clock, 0);
+    let (mut out, mut ordinal) = (st.out, st.ordinal);
 
     // §4.4: the rollout keeps every generated row; Codex's own `compacted` record is appended with
     // the retained response items as its replacement history.

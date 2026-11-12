@@ -42,6 +42,11 @@ impl Writer for ClaudeCode {
         true
     }
 
+    /// A tree: every row names its parent, and `last-prompt` names the leaf Claude Code resumes.
+    fn keeps_branches(&self) -> plan::BranchKeeping {
+        plan::BranchKeeping::Tree
+    }
+
     fn write_planned(
         &self,
         session: &Session,
@@ -247,26 +252,10 @@ impl RowWriter<'_> {
     }
 }
 
-/// The rows of a Claude Code session file; the Hermes writer hands them to Hermes's own import.
-pub(crate) fn rows(
-    plan: &plan::Plan,
-    session: &Session,
-    session_id: &str,
-    cwd: &str,
-    opts: &WriteOpts,
-    clock: &mut Clock,
-) -> Vec<Value> {
-    let mut w = RowWriter {
-        out: Vec::new(),
-        parent: None,
-        calls_owner: HashMap::new(),
-        session_id,
-        cwd,
-        opts,
-        clock,
-    };
-
-    for block in &plan.blocks {
+/// Lay out the blocks of one chain of the plan (0 is the active path), and the branches that
+/// leave from them.
+fn lay(w: &mut RowWriter, plan: &plan::Plan, session: &Session, opts: &WriteOpts, chain: usize) {
+    for (index, block) in plan.chain(chain).iter().enumerate() {
         match block {
             PlannedBlock::User { text, attachments } => {
                 let mut content = Vec::new();
@@ -344,7 +333,51 @@ pub(crate) fn rows(
                 }
             }
         }
+        // The branches that leave right after this block: laid out here, each from this block,
+        // and then the path goes on from where it was.
+        for n in plan.branches_after(Some((chain, index))) {
+            lay_branch(w, plan, session, opts, n + 1);
+        }
     }
+}
+
+/// Lay out branch `chain` from where the writer is, then put the writer back there.
+fn lay_branch(
+    w: &mut RowWriter,
+    plan: &plan::Plan,
+    session: &Session,
+    opts: &WriteOpts,
+    chain: usize,
+) {
+    let saved = (w.parent.clone(), w.calls_owner.clone());
+    lay(w, plan, session, opts, chain);
+    (w.parent, w.calls_owner) = saved;
+}
+
+/// The rows of a Claude Code session file; the Hermes writer hands them to Hermes's own import.
+pub(crate) fn rows(
+    plan: &plan::Plan,
+    session: &Session,
+    session_id: &str,
+    cwd: &str,
+    opts: &WriteOpts,
+    clock: &mut Clock,
+) -> Vec<Value> {
+    let mut w = RowWriter {
+        out: Vec::new(),
+        parent: None,
+        calls_owner: HashMap::new(),
+        session_id,
+        cwd,
+        opts,
+        clock,
+    };
+
+    // A branch that leaves before the first block comes first.
+    for n in plan.branches_after(None) {
+        lay_branch(&mut w, plan, session, opts, n + 1);
+    }
+    lay(&mut w, plan, session, opts, 0);
 
     // §4.4: every generated conversation row stays. Claude's native pair is appended before the
     // picker rows: a compact_boundary whose preserved segment names the retained tail, then the

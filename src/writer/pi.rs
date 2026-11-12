@@ -31,6 +31,11 @@ impl Writer for Pi {
         HarnessId::Pi
     }
 
+    /// A tree: every entry names its parent, and the last entry is the leaf Pi resumes.
+    fn keeps_branches(&self) -> plan::BranchKeeping {
+        plan::BranchKeeping::Tree
+    }
+
     fn write_planned(
         &self,
         session: &Session,
@@ -105,28 +110,22 @@ fn project_dir_name(cwd: &str) -> String {
     format!("--{name}--")
 }
 
-fn rows(
+/// Lay out the blocks of one chain of the plan (0 is the active path), and the branches that
+/// leave from them.
+fn lay(
+    out: &mut Vec<Value>,
+    parent: &mut Option<String>,
     plan: &plan::Plan,
     session: &Session,
-    id: &str,
-    cwd: &str,
     opts: &WriteOpts,
     clock: &mut Clock,
-) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
-    let mut parent: Option<String> = None;
-
-    out.push(json!({
-        "type": "session",
-        "version": 3,
-        "id": id,
-        "timestamp": clock.next_iso(),
-        "cwd": cwd,
-    }));
-
+    chain: usize,
+) {
+    let blocks = plan.chain(chain);
     let mut i = 0;
-    while i < plan.blocks.len() {
-        match &plan.blocks[i] {
+    while i < blocks.len() {
+        let first = i;
+        match &blocks[i] {
             PlannedBlock::User { text, attachments } => {
                 let mut content = Vec::new();
                 if !text.is_empty() {
@@ -149,7 +148,7 @@ fn rows(
                     "content": content,
                     "timestamp": clock.next_millis(),
                 });
-                push(&mut out, &mut parent, |row_id, parent_id| {
+                push(out, parent, |row_id, parent_id| {
                     message_row(row_id, parent_id, &clock.next_iso(), message)
                 });
             }
@@ -159,18 +158,18 @@ fn rows(
                     "content": [{"type": "text", "text": text}],
                     "timestamp": clock.next_millis(),
                 });
-                push(&mut out, &mut parent, |row_id, parent_id| {
+                push(out, parent, |row_id, parent_id| {
                     message_row(row_id, parent_id, &clock.next_iso(), message)
                 });
             }
             PlannedBlock::Step(step) => {
                 let message = assistant_message(step, session, opts, clock);
-                push(&mut out, &mut parent, |row_id, parent_id| {
+                push(out, parent, |row_id, parent_id| {
                     message_row(row_id, parent_id, &clock.next_iso(), message)
                 });
                 // L3: every call of the step lives in that one message; its results follow as one
                 // record each, in the same order.
-                if let Some(PlannedBlock::Results { results }) = plan.blocks.get(i + 1) {
+                if let Some(PlannedBlock::Results { results }) = blocks.get(i + 1) {
                     for result in results {
                         match result {
                             PlannedResult::Native {
@@ -199,7 +198,7 @@ fn rows(
                                     "isError": is_error,
                                     "timestamp": clock.next_millis(),
                                 });
-                                push(&mut out, &mut parent, |row_id, parent_id| {
+                                push(out, parent, |row_id, parent_id| {
                                     message_row(row_id, parent_id, &clock.next_iso(), message)
                                 });
                             }
@@ -210,7 +209,7 @@ fn rows(
                                     "content": [{"type": "text", "text": t}],
                                     "timestamp": clock.next_millis(),
                                 });
-                                push(&mut out, &mut parent, |row_id, parent_id| {
+                                push(out, parent, |row_id, parent_id| {
                                     message_row(row_id, parent_id, &clock.next_iso(), message)
                                 });
                             }
@@ -222,8 +221,56 @@ fn rows(
             // Results were written next to the step they answer; a stray one has no call left.
             PlannedBlock::Results { .. } => {}
         }
+        // The branches that leave right after a block this step wrote (a step and its results go
+        // together): each laid out from there, then the path goes on from where it was.
+        for at in first..=i {
+            for n in plan.branches_after(Some((chain, at))) {
+                lay_branch(out, parent, plan, session, opts, clock, n + 1);
+            }
+        }
         i += 1;
     }
+}
+
+/// Lay out branch `chain` from where the writer is, then put the writer back there.
+fn lay_branch(
+    out: &mut Vec<Value>,
+    parent: &mut Option<String>,
+    plan: &plan::Plan,
+    session: &Session,
+    opts: &WriteOpts,
+    clock: &mut Clock,
+    chain: usize,
+) {
+    let saved = parent.clone();
+    lay(out, parent, plan, session, opts, clock, chain);
+    *parent = saved;
+}
+
+fn rows(
+    plan: &plan::Plan,
+    session: &Session,
+    id: &str,
+    cwd: &str,
+    opts: &WriteOpts,
+    clock: &mut Clock,
+) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut parent: Option<String> = None;
+
+    out.push(json!({
+        "type": "session",
+        "version": 3,
+        "id": id,
+        "timestamp": clock.next_iso(),
+        "cwd": cwd,
+    }));
+
+    // A branch that leaves before the first entry comes first.
+    for n in plan.branches_after(None) {
+        lay_branch(&mut out, &mut parent, plan, session, opts, clock, n + 1);
+    }
+    lay(&mut out, &mut parent, plan, session, opts, clock, 0);
 
     // §4.4: every generated entry stays in the file; Pi's own compaction entry is appended and points
     // back at the first retained entry.

@@ -216,6 +216,12 @@ pub trait Writer {
         false
     }
 
+    /// What this destination does with the branches of a session. The default is none: one
+    /// conversation, every branch left out and counted.
+    fn keeps_branches(&self) -> plan::BranchKeeping {
+        plan::BranchKeeping::None
+    }
+
     /// Write the session as a new native session of this harness.
     fn write(&self, session: &Session, opts: &WriteOpts) -> Result<Written> {
         let plan = plan::plan(session, self.harness(), opts);

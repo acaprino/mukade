@@ -109,6 +109,11 @@ impl Manifest {
             "dropped_subagent_messages".into(),
             json!(self.counts.dropped_subagent_messages),
         );
+        counts.insert("branches_kept".into(), json!(self.counts.branches_kept));
+        counts.insert(
+            "branches_dropped".into(),
+            json!(self.counts.branches_dropped),
+        );
 
         let mut source = json!({
             "harness": self.source_harness,
@@ -222,6 +227,12 @@ impl Manifest {
                 counts.dropped_off_branch
             ));
         }
+        if counts.branches_dropped > 0 {
+            losses.push(format!(
+                "branches of the source not written: the destination keeps one conversation,                  cannot place them, or would refuse them ({})",
+                counts.branches_dropped
+            ));
+        }
         if counts.dropped_unfinished_lines > 0 {
             losses.push(format!(
                 "an unfinished last line of the source left unread ({})",
@@ -291,7 +302,7 @@ mod tests {
     #[test]
     fn every_loss_count_has_a_loss_line_and_a_key() {
         type Set = fn(&mut Counts);
-        let losses: [(&str, Set); 17] = [
+        let losses: [(&str, Set); 18] = [
             ("dropped_interrupted_steps", |c| {
                 c.dropped_interrupted_steps = 1
             }),
@@ -305,6 +316,7 @@ mod tests {
             }),
             ("rewritten_call_ids", |c| c.rewritten_call_ids = 1),
             ("dropped_off_branch", |c| c.dropped_off_branch = 1),
+            ("branches_dropped", |c| c.branches_dropped = 1),
             ("dropped_unfinished_lines", |c| {
                 c.dropped_unfinished_lines = 1
             }),

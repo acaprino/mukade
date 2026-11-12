@@ -81,6 +81,17 @@ pub trait Harness: Send + Sync {
         Ok(None)
     }
 
+    /// Record, in the harness's own trust store, that the chat hooks `kit` names may run, for a
+    /// harness that runs a hook only once it is trusted. `dry_run` reports without writing.
+    /// `Ok(None)`: this harness asks for no trust.
+    fn chat_trust(
+        &self,
+        _kit: &crate::chat::adapter::Kit,
+        _dry_run: bool,
+    ) -> Result<Option<serde_json::Value>, crate::bus::ChatError> {
+        Ok(None)
+    }
+
     /// Where this harness keeps its user-scope MCP servers, and the entry that names the
     /// local chat service there (`None`: mukade writes no such configuration for it).
     fn chat_mcp_target(
@@ -480,6 +491,10 @@ impl<W: Writer + ?Sized> Writer for &W {
 
     fn child_ids_hold_root(&self) -> bool {
         (**self).child_ids_hold_root()
+    }
+
+    fn keeps_branches(&self) -> crate::writer::plan::BranchKeeping {
+        (**self).keeps_branches()
     }
 
     fn write(&self, session: &Session, opts: &WriteOpts) -> anyhow::Result<Written> {
