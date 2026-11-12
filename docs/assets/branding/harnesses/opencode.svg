@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 30">
+  <style>
+    .dark { display: none; }
+    @media (prefers-color-scheme: dark) {
+      .light { display: none; }
+      .dark { display: inline; }
+    }
+  </style>
+  <g class="light" transform="translate(0 -6)">
+    <path d="M18 30H6V18H18V30Z" fill="#CFCECD"/>
+    <path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="#656363"/>
+  </g>
+  <g class="dark" transform="translate(0 -6)">
+    <path d="M18 30H6V18H18V30Z" fill="#4B4646"/>
+    <path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="#B7B1B1"/>
+  </g>
+</svg>
