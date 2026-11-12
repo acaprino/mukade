@@ -13,6 +13,7 @@ Its step numbers are in brackets below.
 | what | before | now |
 |---|---|---|
 | Hermes Agent and DeepSeek Harness ([design](docs/superpowers/specs/2026-11-12-hermes-deepseek-design.md), [ADR-0002](docs/adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) amended) | neither was supported | both read and written: Hermes `state.db` (schema 32+) and, as a destination, through `hermes sessions import` (tools as text) ([live](docs/verification/2026-11-12-hermes-writer-live.md)); dsh zstd logs, resumed by `dsh` 0.2.2-rc.1 ([live](docs/verification/2026-11-12-dsh-writer-live.md)); the TUI lists, hops and resumes Hermes, and says dsh has no terminal UI; `--compaction summary` from either is refused with its reason (a run on either appends to the session) |
+| Forks, part A ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)) | a Claude Code or Codex fork looked like an unrelated session; Pi's `parent` was a path; OpenCode's fork count counted subagents; a Codex `thread_rolled_back` turn travelled as live history; a referenced fork counted its origin's later turns as its own dropped branch | every reader names a fork's origin (`parent`, `parent_kind` `fork` with `at`), Pi's `parent` is an id, `harnesses` counts forks for all six, a rolled-back turn is `Meta(OffBranch)`, a referenced fork reads its origin's prefix only, the manifest states `source.parent` and `source.parent_kind` |
 | Subagent sessions, phase 1 ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)) | Claude Code children unreadable and never listed; OpenCode's `parentID` missed; `parent` meant fork for Pi, spawner for Codex and OpenCode, unsaid; what a child reported to its parent read as `Meta` and lost silently | `parent_kind` (fork / spawn with call and agent) on every parent; Claude children `<parent-id>.<agentId>` read and listed (`list --children`, the TUI); reports the parent received are user turns, an encrypted Codex one counted (`dropped_subagent_messages`) |
 | Subagent sessions, phase 2 ([plan](docs/superpowers/plans/2026-11-12-subagents-phase2.md)) | a hop left a session's subagents behind; `dump` had no way to carry them | `dump --children` nests each child's document; `hop --children` writes each child as a session of its own after the parent, linked where the destination can (OpenCode `info.parentID`, checked with the real `opencode` 2.2.5 in a scratch store; Claude Code `subagents/` folder), unlinked for Codex and Pi, and lists them in `manifest.children` |
 | Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` names no dialect, so shell calls into Codex, OpenCode and Pi stay text as before, while Claude's offered set is unchanged ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
@@ -75,6 +76,13 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
     prompt; a task that makes it read a file settles the converted tool history.
 
 ## 🔵 Needs code (next)
+
+**Forks, left open** ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)).
+
+- *A fork hopped is a copy:* the manifest names the origin, nothing links the written fork to a written origin (needs a hop registry: which destination id and uuids the origin got).
+- *Claude Code `--fork-session`* [U]: whether its rows carry `forkedFrom`; the leaf flags `explicit`, `rewound`, `cutUuid` of 2.1.322 are not read.
+- *Codex:* a thread that survives only as a database row cannot be told as a fork (no fork column); a paginated fork is read, never written.
+- *DeepSeek Harness:* a `isSeeded` fork's `at` is not set (the entry before `session/end-seed`); Hermes `/branch` has no `at` (the copy boundary is not recorded).
 
 **Subagents, left open** ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md); phases 1 and 2 are done above):
 

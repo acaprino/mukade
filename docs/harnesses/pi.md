@@ -304,7 +304,7 @@ Sources: [29], tool names [33]. The record-by-record mapping is the last column 
 **Finding sessions**
 
 - **Listing.** Every `*.jsonl` under `sessions/`, in any project folder; the id is the file name after the last `_`. `read <id>` accepts the file stem, a stem ending in `_<id>`, or a UUID prefix (several matches: refused). `--from-file <path>` reads a file outside the store.
-- **What a row shows.** Each file is read at its two ends only (128 KB, then 384 KB; a smaller file whole). The header gives `cwd` and `parentSession` (the row's `parent`, `kind: fork`; also `Meta.parent` and `parent_kind: Fork` when read). The title is the display name of the last `session_info` row (what `--name` and a rename write), else the first `user` message, folded to one line of at most 200 characters; a session with neither stays untitled, listed under its id. `updated` is the newest `timestamp` in those two ends.
+- **What a row shows.** Each file is read at its two ends only (128 KB, then 384 KB; a smaller file whole). The header gives `cwd` and `parentSession`, a file path: the row's `parent` is the `id` in that file's own header (`kind: fork`; the same in `Meta.parent` when read), or the path as written when no such file is here. The title is the display name of the last `session_info` row (what `--name` and a rename write), else the first `user` message, folded to one line of at most 200 characters; a session with neither stays untitled, listed under its id. `updated` is the newest `timestamp` in those two ends.
 
 **How records become entries**
 

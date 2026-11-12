@@ -476,7 +476,7 @@ Code: `src/reader/opencode.rs` [31].
   without starting OpenCode; returns root sessions (`parent_id IS NULL`), newest `time_updated`
   first, archived included (`archived` = `time_archived` set; `--archived false` leaves them out).
   `list_all` (`list --children`, the TUI) adds the child sessions. `parent` = `parent_id` (spawn),
-  else `fork_session_id` with a `fork_boundary` (fork; read only where the table has both columns).
+  else `fork_session_id` with a `fork_boundary` (fork, `at` = the boundary's `messageID`; read only where the table has both columns). The inventory counts `fork_session_id` rows as forks; a child (`parent_id`) is a subagent and is not.
 - **`read`** (`dump`, a hop source) runs `<exe> session export <id> --standalone` (stdin closed, 120 s
   `EXPORT_TIMEOUT`) and parses `{info, messages}`. Stderr containing `not found` is a not-found
   error. The SHA-256 of the printed document is the source fingerprint (`--expect-sha256`).
@@ -510,7 +510,7 @@ Code: `src/reader/opencode.rs` [31].
 | `compaction`, `status:"completed"` | Compaction: `kept_from` = `metadata.keepID`, trigger from `reason` (`manual`, `auto`), tokens before from `tokens.input` |
 | `synthetic` with `metadata.source: "subagent"` | User: its `text`, where the parent received it |
 | failed `compaction`, `idle`, other `synthetic`, unknown types | Meta (not conversation) |
-| `info.parentID` (export) / `parent_id` (row) | `parent`, `parent_kind` Spawn; else `info.fork.sessionID` / `fork_session_id` with its boundary: `parent`, `parent_kind` Fork |
+| `info.parentID` (export) / `parent_id` (row) | `parent`, `parent_kind` Spawn; else `info.fork.sessionID` / `fork_session_id` with its boundary: `parent`, `parent_kind` Fork `{at: boundary.messageID}` |
 
 **Reasoning kept whole** (rules: [spec §3.3](../session-interchange-spec.md#33-reasoning)): the
 whole `native.reasoningDetails` array is kept in `Opaque.chat` with the source provider id (summary-first

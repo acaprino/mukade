@@ -33,9 +33,9 @@
         "layout": ["projects/<project>/<session-id>.jsonl"]
       },
       "lineage": {
-        "recorded": false,
-        "fields": [],
-        "note": "claude --fork-session writes no lineage field, so a fork is a session with no parent"
+        "recorded": true,
+        "fields": ["forkedFrom"],
+        "note": "a fork (/branch) names its origin session and row in forkedFrom on every row it copies; a subagent's transcript names its parent in sessionId and meta.json"
       },
       "resume": ["{exe}", "-p", "--resume", "{id}"],
       "interactive_resume": ["{exe}", "--resume", "{id}"]
@@ -65,9 +65,9 @@
         "layout": ["sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl", "session_index.jsonl"]
       },
       "lineage": {
-        "recorded": false,
-        "fields": [],
-        "note": "forks are not recorded; a subagent thread names the thread that spawned it (session_meta.parent_thread_id)"
+        "recorded": true,
+        "fields": ["forked_from_id", "parent_thread_id"],
+        "note": "a fork names its origin thread in session_meta.forked_from_id; a subagent thread names the thread that spawned it (session_meta.parent_thread_id)"
       },
       "resume": ["{exe}", "exec", "resume", "{id}"],
       "interactive_resume": ["{exe}", "resume", "{id}"]

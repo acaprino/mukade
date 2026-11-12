@@ -257,7 +257,7 @@ fn names_from_the_catalog_are_the_ones_users_type() {
         "--dsh-exe",
     ];
     let binary = ["claude", "codex", "opencode", "pi", "hermes", "dsh"];
-    let lineage = [false, false, true, true, true, true];
+    let lineage = [true; 6];
     for (n, id) in HarnessId::ALL.into_iter().enumerate() {
         assert_eq!(catalog::store_env(id), store[n], "{id}");
         assert_eq!(catalog::binary_env(id), exe_env[n], "{id}");
@@ -445,12 +445,12 @@ fn store_stats_count_the_fixture_store() {
             .unwrap_or_else(|error| panic!("{id}: {error}"));
         assert!(sessions >= 1, "{id}: {sessions}");
         match id {
-            HarnessId::Pi => assert!(
+            // Every one of these records forks, and counts them.
+            _ => assert!(
                 matches!(stats.forks, Some(Ok(_))),
                 "{id}: {:?}",
                 stats.forks
             ),
-            _ => assert!(stats.forks.is_none(), "{id} does not record lineage"),
         }
     }
     let scratch = support::scratch(HarnessId::OpenCode, "adapter-stats");

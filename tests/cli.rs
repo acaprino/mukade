@@ -1534,28 +1534,20 @@ fn harnesses_lists_supported_binaries_stores_and_native_lineage_info() {
     for harness in ["claude_code", "codex", "opencode", "pi"] {
         assert!(stdout.contains(harness), "missing {harness}: {stdout}");
     }
-    assert!(
-        stdout.contains("not recorded (claude --fork-session writes no lineage field"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("recorded: forkedFrom"), "{stdout}");
     assert!(
         stdout.contains("recorded: parent_id, fork_session_id, fork_boundary"),
         "{stdout}"
     );
     assert!(stdout.contains("recorded: parentSession"), "{stdout}");
     assert!(
-        stdout.contains(
-            "not recorded (forks are not recorded; a subagent thread names the thread that \
-             spawned it (session_meta.parent_thread_id))"
-        ),
+        stdout.contains("recorded: forked_from_id, parent_thread_id"),
         "{stdout}"
     );
     assert!(stdout.contains("status:   recognized"), "{stdout}");
     assert!(stdout.contains("sessions: 1"), "{stdout}");
-    assert!(
-        stdout.contains("forks:    unknown (not recorded)"),
-        "{stdout}"
-    );
+    // Claude Code's store has no fork: a count, not "not recorded".
+    assert!(stdout.contains("forks:    0"), "{stdout}");
     assert!(
         stdout.contains("layout:   projects/<project>/<session-id>.jsonl"),
         "{stdout}"

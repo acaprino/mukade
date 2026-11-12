@@ -11,7 +11,7 @@ with Codex's own model and compacts natively.
 |---|---|
 | Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`); subagent and guardian threads with `list --children` |
 | Write | ✅ a new rollout under `sessions/`; needs the destination's `cli_version` |
-| Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), forks, compressed rollouts; subagent threads travel only with `--children` |
+| Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), compressed rollouts; a fork is hopped as a self-contained copy; subagent threads travel only with `--children` |
 | Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form; `hop --children` writes each subagent as a rollout of its own, unlinked (below) |
 | Resume | ✅ `codex exec resume <id>` (receipt) or `codex resume <id>`; live-verified on 0.166.0 [48] |
 | Summary by its own model | ⚠️ `--compaction summary` runs `codex exec fork … --ephemeral`; checked against a mock only **[U]** [27] |
@@ -179,9 +179,8 @@ legacy sessions to "paginated thread history" [18]. Their on-disk form **[U]**.
   name the spawning thread (`session_id` too, at depth 1 [26]); a guardian review:
   `source: {"subagent": {"other": "guardian"}}`, `thread_source: "guardian_review"`. Codex's state
   database links spawns in `thread_spawn_edges` (not guardian reviews) and keeps `agent_role`.
-- Fork: how a forked rollout records its parent **[U]**.
-- `mukade harnesses` prints lineage `not recorded` for Codex from `catalog/harnesses.json`
-  (`lineage.recorded: false`: forks), not from the reader, which does set a subagent's parent.
+- Fork: `session_meta.forked_from_id` = the origin thread, with `forked_from_ordinal_exclusive` (the origin's record the copy ends before) and `attached_thread` **[V]** (`openai/codex` source, `protocol.rs`; 13 forked *subagents* on this machine, no top-level fork). A thread forked by copy holds the history in its own rollout (`ForkPersistence::Copied`); a paginated one forks by reference: its `session_meta.history_base` = `{thread_id: <origin>, end_ordinal_exclusive, end_byte_offset}` names a prefix of the origin's file. A forked subagent is a spawn that also copies its parent's turns (`parent_thread_id` and `forked_from_id`, `subagent_history_start_ordinal`; line 1 of the copy is the parent's own `session_meta`). mukade reads `forked_from_id` of a thread no spawn started as `parent` with `parent_kind` `fork` (`at` = the ordinal), in the listing's header peek and when read; a forked subagent stays a spawn with `inherits_context`. The state database has no fork column, so a thread that survives only as a row cannot be told as a fork.
+- `mukade harnesses` counts forks for Codex from the listing (catalog `lineage.recorded: true`).
 
 ## Features
 
@@ -315,6 +314,7 @@ What a real run offers after these switches **[U]** (reading `tools` in the requ
 
 - **Fork.** `codex fork` and `codex exec fork <SESSION_ID>` start a new session from a previous one
   [18]; app-server `thread/fork` copies the stored history into a new thread id [7]. Parent record: see Lineage ([Session store](#session-store)).
+- **Rollback.** `thread_rolled_back {num_turns}` (TUI backtrack) is an event appended to the rollout; Codex replays it by dropping the last `num_turns` user turns of what it had so far, with what followed them. mukade does the same: those records become `Meta(OffBranch)` in file order after the conversation, counted as `dropped_off_branch` and kept verbatim. A rollback of more turns than there are drops them all.
 - Redone turns make a paginated thread (same section).
 - **Subagents** are on by default (`agents.enabled = true`), spawned on request or when an AGENTS.md
   or skill asks for delegation [14]. `/subagents` switches between agent threads in the CLI.
@@ -404,7 +404,7 @@ Code: `src/reader/codex.rs` [22], `src/reader/codex/exec.rs`, `src/reader/codex_
    (`class_of()`). The root agent's messages to subagents (`send_message`, `followup_task`,
    `spawn_agent`, `message` encrypted the same way) travel as text form with that value replaced by
    `<encrypted by the source's provider, N chars>` (tables §3; `src/tools.rs` `without_encrypted()`).
-4. **Not converted:** forks, and compressed/migrated rollouts (only `*.jsonl` files are listed)
+4. **Not converted:** compressed/migrated rollouts (only `*.jsonl` files are listed)
    **[U]** [19 §10]. A thread's subagent threads (each its own session, read by its id) travel only
    with `--children`.
 5. **`apply_patch` is read at translate time** (`src/tools/patch.rs` `view()`): one added file is a

@@ -369,16 +369,29 @@ pub fn all() -> [&'static dyn Harness; 6] {
     HarnessId::ALL.map(get)
 }
 
-/// The counts of a harness whose sessions are listed by its reader and whose store does not
-/// record lineage.
+/// The counts of a harness whose sessions are listed by its reader: how many, and how many of
+/// them name a session they were forked from (a spawned subagent is not one).
 fn listed_stats(harness: &dyn Harness, roots: &StoreRoots) -> StoreStats {
-    StoreStats {
-        sessions: harness
-            .reader()
-            .list(roots)
-            .map(|sessions| sessions.len())
-            .map_err(|error| error.to_string()),
-        forks: None,
+    match harness.reader().list(roots) {
+        Ok(sessions) => StoreStats {
+            forks: Some(Ok(sessions
+                .iter()
+                .filter(|info| {
+                    matches!(
+                        info.parent_kind,
+                        Some(crate::model::ParentKind::Fork { .. })
+                    )
+                })
+                .count())),
+            sessions: Ok(sessions.len()),
+        },
+        Err(error) => {
+            let error = error.to_string();
+            StoreStats {
+                sessions: Err(error.clone()),
+                forks: Some(Err(error)),
+            }
+        }
     }
 }
 

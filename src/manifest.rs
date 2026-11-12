@@ -14,6 +14,11 @@ pub struct Manifest {
     pub source_version: Option<String>,
     pub source_session_id: String,
     pub source_content_sha256: String,
+    /// The session the source was forked or spawned from, and how, when it says (`source.parent`,
+    /// `source.parent_kind` in the document; absent otherwise). The hop writes a self-contained copy
+    /// and does not link it.
+    pub source_parent: Option<String>,
+    pub source_parent_kind: Option<crate::model::ParentKind>,
     pub dest_harness: String,
     pub dest_version: Option<String>,
     pub dest_session_id: String,
@@ -105,13 +110,20 @@ impl Manifest {
             json!(self.counts.dropped_subagent_messages),
         );
 
+        let mut source = json!({
+            "harness": self.source_harness,
+            "version": self.source_version,
+            "session_id": self.source_session_id,
+            "content_sha256": self.source_content_sha256,
+        });
+        if let Some(parent) = &self.source_parent {
+            source["parent"] = json!(parent);
+        }
+        if let Some(kind) = &self.source_parent_kind {
+            source["parent_kind"] = serde_json::to_value(kind).unwrap_or(Value::Null);
+        }
         json!({
-            "source": {
-                "harness": self.source_harness,
-                "version": self.source_version,
-                "session_id": self.source_session_id,
-                "content_sha256": self.source_content_sha256,
-            },
+            "source": source,
             "dest": {
                 "harness": self.dest_harness,
                 "version": self.dest_version,
@@ -338,6 +350,8 @@ mod tests {
             source_version: Some("0.164.0".into()),
             source_session_id: "01a1".into(),
             source_content_sha256: "ab".repeat(32),
+            source_parent: None,
+            source_parent_kind: None,
             dest_harness: "claude_code".into(),
             dest_version: Some("2.1.312".into()),
             dest_session_id: "d863".into(),

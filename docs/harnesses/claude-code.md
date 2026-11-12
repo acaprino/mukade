@@ -15,7 +15,7 @@ Anthropic's agentic coding tool: it reads a codebase, edits files, runs commands
 | Summary by its own model | ✅ `--compaction summary`: `claude -p` with no tools and no transcript; the source is left as it was [27] |
 | Native compaction | ✅ read (`compact_boundary`); written by `hop --compaction native`, resumed live on 2.1.318 [42] |
 | Subagents | ✅ read as sessions of their own; `hop --children` carries them (below); written into the destination's `subagents/` folder **[U]** whether Claude Code shows a written one |
-| Notable gaps | a fork has no recorded parent; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
+| Notable gaps | a hop of a fork writes a self-contained copy, not a linked fork; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
 
 **Versions checked.** Page updated 2026-11-12.
 
@@ -170,7 +170,7 @@ Common fields: `uuid`, `parentUuid`, `logicalParentUuid`, `sessionId`, `cwd`, `g
 - A killed process leaves the user row; the next load adds a synthetic assistant `"No response requested."` (`model: "<synthetic>"`) [1]. An interrupted turn ends with a user row `[Request interrupted by user]` (`… for tool use]` beside a tool result).
 - A compaction restarts the chain: the boundary has `parentUuid: null` and `logicalParentUuid: <old leaf>` (see Compaction).
 
-**Lineage.** `--fork-session` gives a new id and writes **no lineage field** [1]: a fork is a session with no parent (catalog `lineage.recorded: false`).
+**Lineage.** `/branch` writes a new file of the current path's rows, relinked, with the **same uuids**, `sessionId` = the new id and, on every copied row, `forkedFrom: {sessionId: <origin>, messageUuid: <the row's uuid in the origin>}`, and a `custom-title` ending `(Branch)` **[V]** (strings of `claude.exe` 2.1.322; no fork exists in this machine's store, so no real file was read). `--resume X --fork-session` and the Agent SDK's `forkSession` also write a copy; whether `--fork-session` rows carry `forkedFrom` is **[U]**. mukade reads `forkedFrom`: a session whose rows name another session is a fork of it (catalog `lineage.recorded: true`).
 
 **Subagents** (2.1.318, the author's store, 2026-11-12 [45]):
 
@@ -290,7 +290,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 ### Branches, forks and subagents
 
 - **Checkpoints and rewind.** Each prompt that starts a turn checkpoints the files Claude edits; `/rewind` (or `Esc` twice on an empty prompt) restores code, conversation or both. Changes made only by Bash, and edits by subagents, are not tracked. Checkpoints are saved with the conversation, so `/rewind` works after a resume [19].
-- **Branching.** Rewound branches stay in the file and Claude Code resumes the last row's (see Ordering) [4]. `/branch`, or `claude --continue --fork-session`, keeps the original intact [19]; the fork records no parent [1].
+- **Branching.** Rewound branches stay in the file and Claude Code resumes the last row's (see Ordering) [4]. `/branch`, or `claude --continue --fork-session`, keeps the original intact [19]; `/branch` records the origin in `forkedFrom` on every copied row (Session store, Lineage).
 - **Subagents.** The `Agent` tool spawns a subagent with its own context, in the foreground or the background; its transcript and meta.json are in `<session>/subagents/` (Session store) [18]. Definitions: `agents/*.md` (project or global) or `--agents <json-or-file>` [9][18].
 
 ### Models and providers
@@ -406,7 +406,7 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 - **Interruptions** (L9): `[Request interrupted by user]` (and `… for tool use]`) is a marker, not a prompt; the reply it cut is `aborted`.
 - **Reasoning.** `thinking` keeps its `signature`; `redacted_thinking` keeps its `data` as the opaque payload; both are tagged `anthropic-messages` with the step's model.
 - **Step end** from `stop_reason`: `tool_use`; `end_turn`, `stop_sequence`, `max_tokens`, `length` → completed; `refusal` → error.
-- **Metadata** from the rows: `sessionId`, `cwd`, `gitBranch`, `version`, models; the title as in the listing; `parent` is empty for a session's own file, as `--fork-session` leaves no lineage (a child's: Subagent sessions).
+- **Metadata** from the rows: `sessionId`, `cwd`, `gitBranch`, `version`, models; the title as in the listing; `parent` is the `forkedFrom.sessionId` of a fork (`parent_kind` `fork`, `at` the origin's uuid of the last row copied), else empty for a session's own file (a child's: Subagent sessions). The listing reads it from the two ends of each file it peeks, so a fork longer than the windows may show no `at`; the cache table is `claude-list-2`.
 
 ## How mukade writes it
 

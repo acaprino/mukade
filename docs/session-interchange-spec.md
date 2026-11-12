@@ -217,7 +217,7 @@ receives on resume.
 | new | `claude -p "<prompt>"` | JSON result carries `session_id` |
 | resume + prompt | `claude -p --resume <id> "<prompt>"` | same id, appends to the same file (cautions: §5) |
 | compaction | `claude -p --resume <id> "/compact"` | trigger `manual`; result text `Compacted …` |
-| fork | add `--fork-session` | new id, **no lineage field** |
+| fork | add `--fork-session` | new id; `/branch` writes `forkedFrom` on each copied row, `--fork-session` [U] |
 
 **Store [V].** `<CLAUDE_CONFIG_DIR>\projects\<cwd with every non-alphanumeric char → ->\<uuid>.jsonl`
 (a folder name over 200 characters is cut and suffixed with `-` and a base-36 hash of the path:
@@ -460,17 +460,20 @@ pub struct ChatReasoning { pub provider: Option<String>, pub details: Vec<serde_
 Code: `src/model/` (`mod.rs`, `kind.rs`, `tool.rs`, `reasoning.rs`, `harness.rs`).
 
 **Lineage.** `Meta.parent` (and `SessionInfo.parent` in a listing) is the session this one came
-from; `parent_kind` says how, and is set whenever `parent` is: `Fork` (a copy continued on its own)
+from, an id in every harness; `parent_kind` says how, and is set whenever `parent` is: `Fork { at }` (a copy
+continued on its own; `at` is the origin entry or ordinal the copy ends at, where the source says)
 or `Spawn { call_id, agent }` (a subagent; the parent's spawning call and the agent type, where the
 source records them). The dump document carries both as `meta.parent` and
-`meta.parent_kind` (`{"kind":"fork"}`, `{"kind":"spawn","call_id":…,"agent":…}`).
+`meta.parent_kind` (`{"kind":"fork"}` or `{"kind":"fork","at":…}`, `{"kind":"spawn","call_id":…,"agent":…}`).
+The manifest states them as `source.parent` and `source.parent_kind` (absent when the source has none): a hop of a
+fork is a self-contained copy, not linked to its origin.
 
 | harness | `parent` | `parent_kind` |
 |---|---|---|
-| Claude Code | a subagent session (`<parent-id>.<agentId>`): its meta.json `parentAgentId` as `<parent-id>.<parentAgentId>`, else the rows' `sessionId` | `Spawn { call_id: toolUseId, agent: agentType }` (meta.json); a session's own file: none |
-| Codex | `parent_thread_id` (top level or `source.subagent.thread_spawn`), else `session_id` ≠ `id`; listing: `thread_spawn_edges` | `Spawn { call_id: None, agent: agent_role }`; `agent: "guardian_review"` for a guardian review |
-| OpenCode | `parentID` (export) or `parent_id` (row); else a fork's `fork.sessionID` / `fork_session_id` with its boundary | `Spawn { None, None }`; a fork: `Fork` |
-| Pi | `parentSession` | `Fork` |
+| Claude Code | a subagent session (`<parent-id>.<agentId>`): its meta.json `parentAgentId` as `<parent-id>.<parentAgentId>`, else the rows' `sessionId` | `Spawn { call_id: toolUseId, agent: agentType }` (meta.json); a fork: the `forkedFrom.sessionId` of its rows, `Fork { at: the origin uuid of the last row copied }`; else none |
+| Codex | `parent_thread_id` (top level or `source.subagent.thread_spawn`), else `session_id` ≠ `id`; listing: `thread_spawn_edges`; else `forked_from_id` | `Spawn { call_id: None, agent: agent_role, inherits_context: forked_from_id is set }`; `agent: "guardian_review"` for a guardian review; a fork no spawn started: `Fork { at: forked_from_ordinal_exclusive or history_base.end_ordinal_exclusive }` |
+| OpenCode | `parentID` (export) or `parent_id` (row); else a fork's `fork.sessionID` / `fork_session_id` with its boundary | `Spawn { None, None }`; a fork: `Fork { at: fork_boundary.messageID }` |
+| Pi | the `id` in the header of the file `parentSession` names (the path as written when that file is not here) | `Fork` |
 | Hermes Agent | `model_config._delegate_from` (a `delegate_task` subagent, `source = subagent`), else `_branched_from` or a `parent_session_id` whose `end_reason` is `branched` | `Spawn { None, None }`; a `/branch` copy: `Fork`; a rotated compaction is the same session, no parent |
 | DeepSeek Harness | the header's `parentSession` | `Spawn { call_id: None, agent: agentPreset, inherits_context: isSeeded }` when `origin` is `subagent`, else `Fork` |
 

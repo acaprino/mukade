@@ -146,6 +146,9 @@ pub struct SourceFacts {
     pub version: Option<String>,
     pub session_id: String,
     pub content_sha256: String,
+    /// The session the source was forked or spawned from, and how.
+    pub parent: Option<String>,
+    pub parent_kind: Option<crate::model::ParentKind>,
 }
 
 impl SourceFacts {
@@ -164,6 +167,8 @@ impl SourceFacts {
             version: Some(session.meta.harness_version.clone()).filter(|v| !v.is_empty()),
             session_id: session.meta.id.clone(),
             content_sha256,
+            parent: session.meta.parent.clone(),
+            parent_kind: session.meta.parent_kind.clone(),
         }
     }
 }
@@ -895,6 +900,8 @@ fn manifest_of(
         source_version: opts.source_facts.version.clone(),
         source_session_id: opts.source_facts.session_id.clone(),
         source_content_sha256: opts.source_facts.content_sha256.clone(),
+        source_parent: opts.source_facts.parent.clone(),
+        source_parent_kind: opts.source_facts.parent_kind.clone(),
         dest_harness: dest.as_str().to_string(),
         dest_version: dest_version.clone(),
         dest_session_id: written.id.clone(),

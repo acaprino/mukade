@@ -84,8 +84,11 @@ fn claude_rows(session: &str, forked: Option<&str>) -> Vec<Value> {
 }
 
 fn claude_store(tag: &str) -> (StoreRoots, PathBuf) {
-    let scratch = support::scratch(HarnessId::ClaudeCode, tag);
-    let roots = support::roots(&scratch);
+    claude_store_in(&support::scratch(HarnessId::ClaudeCode, tag))
+}
+
+fn claude_store_in(scratch: &Path) -> (StoreRoots, PathBuf) {
+    let roots = support::roots(scratch);
     let project = scratch.join("home/projects/p");
     write_lines(
         &project.join(format!("{CLAUDE_ORIGIN}.jsonl")),
@@ -551,4 +554,48 @@ fn a_forked_subagents_copied_parent_header_is_not_conversation() {
         ]
     );
     assert_eq!(off_branch(&session), 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Counts
+
+#[test]
+fn the_inventory_counts_forks_for_claude_code_and_codex() {
+    let (claude, _) = claude_store("claude-fork-count");
+    let stats = mukade::harnesses::get(HarnessId::ClaudeCode).store_stats(&claude);
+    assert_eq!(stats.sessions, Ok(2));
+    assert_eq!(stats.forks, Some(Ok(1)));
+    let codex = codex_store("codex-fork-count");
+    let stats = mukade::harnesses::get(HarnessId::Codex).store_stats(&codex);
+    // The origin, the fork and the subagent (this home has no database to say it is not a root).
+    assert_eq!(stats.sessions, Ok(3));
+    // A subagent that started from its parent's turns is a spawn, not a fork.
+    assert_eq!(stats.forks, Some(Ok(1)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The manifest says what the source was a fork of
+
+/// A hop of a fork is a self-contained copy; the manifest still says where the source came from.
+#[test]
+fn the_manifest_names_the_session_a_forked_source_came_from() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "manifest-fork");
+    claude_store_in(&scratch);
+    let hop = |id: &str| {
+        let (code, stdout, stderr) = support::cli_code(
+            &scratch,
+            &["hop", "claude_code", id, "pi", "--cwd", "/work"],
+        );
+        assert_eq!(code, Some(0), "{stdout}{stderr}");
+        let receipt: Value = serde_json::from_str(stdout.trim().lines().last().unwrap()).unwrap();
+        receipt["manifest"]["source"].clone()
+    };
+    let fork = hop(CLAUDE_FORK);
+    assert_eq!(fork["parent"], CLAUDE_ORIGIN);
+    assert_eq!(fork["parent_kind"], json!({"kind": "fork", "at": "a-1"}));
+    let plain = hop(CLAUDE_ORIGIN);
+    assert!(
+        plain.get("parent").is_none() && plain.get("parent_kind").is_none(),
+        "{plain}"
+    );
 }

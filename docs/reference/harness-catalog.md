@@ -68,16 +68,18 @@ These are fallbacks after `PATH`; order: [usage §7](../usage.md#7-stores-and-ex
 
 | harness | binary | store variable | default store | layout | lineage |
 |---|---|---|---|---|---|
-| Claude Code | `claude` | `CLAUDE_CONFIG_DIR` | `{home}/.claude` | `projects/<project>/<session-id>.jsonl` | not recorded (`claude --fork-session` writes no lineage field: a fork is a session with no parent) |
-| Codex CLI | `codex` | `CODEX_HOME` | `{home}/.codex` | `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl`, `session_index.jsonl` | not recorded (forks are not recorded; a subagent thread names the thread that spawned it, `session_meta.parent_thread_id`) |
+| Claude Code | `claude` | `CLAUDE_CONFIG_DIR` | `{home}/.claude` | `projects/<project>/<session-id>.jsonl` | `forkedFrom` on the rows a fork copies; a subagent's transcript names its parent in `sessionId` and meta.json |
+| Codex CLI | `codex` | `CODEX_HOME` | `{home}/.codex` | `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl`, `session_index.jsonl` | `session_meta.forked_from_id` (a fork); a subagent thread names the thread that spawned it, `session_meta.parent_thread_id`) |
 | OpenCode | `opencode` | `OPENCODE_DB` | `{xdg_data_home}/opencode/opencode.db` | `opencode.db (SQLite; session_v2, session_message)` | `parent_id`, `fork_session_id`, `fork_boundary` |
 | Pi | `pi` | `PI_CODING_AGENT_DIR` | `{home}/.pi/agent` | `sessions/--<project>--/<stamp>_<session-id>.jsonl`, `models.json` | `parentSession` in the session header |
 | Hermes Agent | `hermes` | `HERMES_HOME` | `{home}/.hermes`; Windows `{local_app_data}/hermes` | `state.db (SQLite; sessions, messages)` | `parent_session_id`, `model_config._delegate_from` (subagent), `model_config._branched_from` (`/branch`) |
 | DeepSeek Harness | `dsh` | `DSH_HOME` | `{home}/.dsh` | `sessions/--<project>--/<session-id>/session.v4.jsonl.zstd`, `sessions/_no-cwd/<session-id>/session.v4.jsonl.zstd` | `parentSession`, `origin`, `isSeeded` in the log's header |
 
-Codex lineage: the catalog's note predates the reader. A subagent's rollout names its spawning thread
-in `session_meta.session_id`, kept as `meta.parent` (`src/reader/codex.rs` `Builder::finish()`);
-forks are still not recorded.
+Lineage, per reader: a Codex subagent's rollout names its spawning thread in `session_meta.parent_thread_id`
+(else `session_id`), kept as `meta.parent` with `Spawn`; a fork names its origin in `forked_from_id`,
+kept as `meta.parent` with `Fork { at }` (`src/reader/codex.rs`). A Claude Code fork names its origin in
+`forkedFrom` on every row it copies. A Pi fork's `parentSession` is a file path; `parent` is the id in
+that file's header.
 
 **Resume commands** (`{exe}` is the resolved executable):
 
@@ -107,7 +109,7 @@ fall back to them when the store variable is unset or empty; other commands use 
      `not on PATH, no catalog location`.
    - The version comes from an npm launcher's `package.json` or a cache, else from `--version`
      (`src/exe.rs` `version_of()`).
-   - `forks` is `unknown (not recorded)` for Claude Code and Codex, a count for the others; `lineage` is
+   - `forks` is a count of the sessions that name a session they were forked from (a subagent is not a fork), `unknown` when the store cannot be read; `lineage` is
      `recorded: <fields>` or `not recorded (<note>)`.
 2. **List every command on `PATH`** and run each `--version`: one-liners in
    [usage](../usage.md#mukade-harnesses); in bash `type -a claude` lists every match.

@@ -286,7 +286,7 @@ mukade list claude_code --children                        # with the subagent se
 | `archived` | the harness marked it archived |
 | `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
 | `live` | `true` when a process of the harness runs the session now; `false` when the store records running sessions and none runs it; `null` when the store does not say |
-| `parent`, `kind` | only on a row with a parent: the session it came from, and `spawn` (a subagent) or `fork`. Without `--children` only a fork can have them (Pi, OpenCode, Hermes, DeepSeek Harness) |
+| `parent`, `kind` | only on a row with a parent: the session it came from (an id in every harness; for Pi the id in the origin file's header), and `spawn` (a subagent) or `fork` (a copy continued on its own). Without `--children` only a fork can have them: Claude Code (`forkedFrom`), Codex (`forked_from_id`), OpenCode, Pi, Hermes and DeepSeek Harness |
 
 A harness forgets transcripts long before it forgets sessions, so `list` reports both. The
 `unreadable` rows are how a caller sees every project:
