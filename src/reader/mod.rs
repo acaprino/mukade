@@ -5,6 +5,8 @@ mod claude_history;
 mod claude_live;
 pub mod codex;
 mod codex_state;
+pub mod deepseek_harness;
+pub mod hermes;
 pub mod json;
 pub mod opencode;
 pub mod pi;

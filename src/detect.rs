@@ -4,7 +4,8 @@
 //! harness's store (the test homes do), so the answer is every candidate with what was seen. An
 //! explicitly stated harness always wins over detection; inference is for a caller that has a
 //! directory and nothing else. A candidate needs concrete files — session records, Pi's
-//! `models.json`, OpenCode's `opencode.db`: an empty directory tree infers nothing.
+//! `models.json`, OpenCode's `opencode.db`, Hermes's `state.db`: an empty directory tree infers
+//! nothing.
 //!
 //! - [`detect_store`] answers for one folder (or OpenCode's database file);
 //! - [`scan_installations`] walks a tree and reports every installation in it, portable and
@@ -12,14 +13,17 @@
 //!   ([`engine_beside_store`]);
 //! - [`locate_installation`] resolves a path a command was handed to one installation.
 //!
-//! Each harness's layout is an adapter (`claude_code`, `codex`, `opencode`, `pi`) behind one
-//! contract (`layout::StoreLayout`), so detection and the scan apply the same rules. The CLI and
-//! the terminal browser use these functions and recognize nothing themselves (ADR-0001).
+//! Each harness's layout is an adapter (`claude_code`, `codex`, `opencode`, `pi`, `hermes`,
+//! `deepseek_harness`) behind one contract (`layout::StoreLayout`), so detection and the scan
+//! apply the same rules. The CLI and the terminal browser use these functions and recognize
+//! nothing themselves (ADR-0001).
 
 mod claude_code;
 mod codex;
+mod deepseek_harness;
 mod engine;
 mod folder;
+mod hermes;
 mod layout;
 mod locate;
 mod opencode;

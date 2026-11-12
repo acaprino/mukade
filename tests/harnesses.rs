@@ -7,10 +7,26 @@ use mukade::model::HarnessId;
 use mukade::roots::StoreRoots;
 use std::path::{Path, PathBuf};
 
-/// The adapter of `id` as a destination: each of the four is one.
+/// The adapter of `id` as a destination.
 fn destination(id: HarnessId) -> &'static dyn Destination {
-    mukade::harnesses::destination(id).expect("each of the four harnesses is a destination")
+    mukade::harnesses::destination(id).expect("a destination")
 }
+
+/// The harnesses mukade writes, in [`HarnessId::ALL`] order.
+fn destinations() -> Vec<HarnessId> {
+    HarnessId::ALL
+        .into_iter()
+        .filter(|id| get(*id).destination().is_some())
+        .collect()
+}
+
+/// The harnesses whose fixture session `support::source_path` names.
+const WITH_FIXTURE: [HarnessId; 4] = [
+    HarnessId::ClaudeCode,
+    HarnessId::Codex,
+    HarnessId::OpenCode,
+    HarnessId::Pi,
+];
 
 #[test]
 fn every_id_has_its_own_adapter() {
@@ -18,25 +34,65 @@ fn every_id_has_its_own_adapter() {
         let adapter = get(id);
         assert_eq!(adapter.id(), id);
         assert_eq!(adapter.reader().harness(), id);
-        assert_eq!(destination(id).writer().harness(), id);
+        if let Some(destination) = adapter.destination() {
+            assert_eq!(destination.writer().harness(), id);
+        }
+        assert_eq!(id.as_str().parse::<HarnessId>().unwrap(), id);
     }
     let order: Vec<HarnessId> = all().iter().map(|adapter| adapter.id()).collect();
     assert_eq!(order, HarnessId::ALL);
 }
 
 #[test]
-fn the_store_root_is_the_roots_field() {
-    let roots = StoreRoots {
+fn hermes_and_deepseek_harness_are_named_as_users_type_them() {
+    assert_eq!(HarnessId::ALL.len(), 6);
+    assert_eq!("hermes".parse::<HarnessId>().unwrap(), HarnessId::Hermes);
+    assert_eq!(
+        "deepseek_harness".parse::<HarnessId>().unwrap(),
+        HarnessId::DeepSeekHarness
+    );
+    assert_eq!(
+        serde_json::to_value(HarnessId::DeepSeekHarness).unwrap(),
+        "deepseek_harness"
+    );
+    let unknown = "nonesuch".parse::<HarnessId>().unwrap_err().to_string();
+    assert!(unknown.contains("hermes, deepseek_harness"), "{unknown}");
+}
+
+/// Until its writer exists, a write toward Hermes or DeepSeek Harness is refused before planning,
+/// like a write toward any harness that is no destination.
+#[test]
+fn a_harness_without_its_writer_is_refused_as_a_destination() {
+    for id in [HarnessId::Hermes, HarnessId::DeepSeekHarness] {
+        let Err(refusal) = mukade::harnesses::destination(id) else {
+            panic!("{id} has no writer yet");
+        };
+        assert_eq!(refusal.exit_code(), 2, "{id}: {refusal}");
+    }
+}
+
+/// A root for every harness, each its own.
+fn every_root() -> StoreRoots {
+    StoreRoots {
         claude_config_dir: Some(PathBuf::from("stores/claude")),
         codex_home: Some(PathBuf::from("stores/codex")),
         opencode_db: Some(PathBuf::from("stores/opencode.db")),
         pi_agent_dir: Some(PathBuf::from("stores/pi")),
-    };
+        hermes_home: Some(PathBuf::from("stores/hermes")),
+        dsh_home: Some(PathBuf::from("stores/dsh")),
+    }
+}
+
+#[test]
+fn the_store_root_is_the_roots_field() {
+    let roots = every_root();
     let field = |id| match id {
         HarnessId::ClaudeCode => roots.claude_config_dir.as_deref(),
         HarnessId::Codex => roots.codex_home.as_deref(),
         HarnessId::OpenCode => roots.opencode_db.as_deref(),
         HarnessId::Pi => roots.pi_agent_dir.as_deref(),
+        HarnessId::Hermes => roots.hermes_home.as_deref(),
+        HarnessId::DeepSeekHarness => roots.dsh_home.as_deref(),
     };
     for id in HarnessId::ALL {
         assert_eq!(get(id).store_root(&roots), field(id), "{id}");
@@ -60,7 +116,7 @@ fn an_opencode_root_folder_means_its_database() {
     opencode.set_store_root(&mut roots, &file);
     assert_eq!(opencode.store_root(&roots), Some(file.as_path()));
 
-    for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+    for id in HarnessId::ALL.into_iter().filter(|id| *id != HarnessId::OpenCode) {
         let mut roots = StoreRoots::default();
         get(id).set_store_root(&mut roots, &dir);
         assert_eq!(get(id).store_root(&roots), Some(dir.as_path()), "{id}");
@@ -101,7 +157,7 @@ fn a_store_path_is_resolved_the_way_its_harness_reads_it() {
         PathBuf::from(":memory:")
     );
     assert!(opencode.store_is_in_memory(Path::new(":memory:")));
-    for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+    for id in HarnessId::ALL.into_iter().filter(|id| *id != HarnessId::OpenCode) {
         let adapter = get(id);
         assert_eq!(
             adapter.resolve_store_path(PathBuf::from("custom"), &vars),
@@ -114,17 +170,14 @@ fn a_store_path_is_resolved_the_way_its_harness_reads_it() {
 
 #[test]
 fn the_store_env_names_the_root_or_clears_opencode() {
-    let roots = StoreRoots {
-        claude_config_dir: Some(PathBuf::from("stores/claude")),
-        codex_home: Some(PathBuf::from("stores/codex")),
-        opencode_db: Some(PathBuf::from("stores/opencode.db")),
-        pi_agent_dir: Some(PathBuf::from("stores/pi")),
-    };
+    let roots = every_root();
     let variable = |id| match id {
         HarnessId::ClaudeCode => "CLAUDE_CONFIG_DIR",
         HarnessId::Codex => "CODEX_HOME",
         HarnessId::OpenCode => "OPENCODE_DB",
         HarnessId::Pi => "PI_CODING_AGENT_DIR",
+        HarnessId::Hermes => "HERMES_HOME",
+        HarnessId::DeepSeekHarness => "DSH_HOME",
     };
     let env_of = |command: &std::process::Command, name: &str| {
         command
@@ -160,7 +213,7 @@ fn the_store_env_names_the_root_or_clears_opencode() {
 
 #[test]
 fn read_file_reads_each_fixture() {
-    for id in HarnessId::ALL {
+    for id in WITH_FIXTURE {
         let session = get(id)
             .read_file(&support::source_path(id))
             .unwrap_or_else(|error| panic!("{id}: {error:#}"));
@@ -171,15 +224,38 @@ fn read_file_reads_each_fixture() {
 #[test]
 fn names_from_the_catalog_are_the_ones_users_type() {
     use mukade::catalog;
-    let store = ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_DB", "PI_CODING_AGENT_DIR"];
-    let exe_env = ["MUKADE_CLAUDE_EXE", "MUKADE_CODEX_EXE", "MUKADE_OPENCODE_EXE", "MUKADE_PI_EXE"];
-    let flag = ["--claude-exe", "--codex-exe", "--opencode-exe", "--pi-exe"];
-    let lineage = [false, false, true, true];
+    let store = [
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "OPENCODE_DB",
+        "PI_CODING_AGENT_DIR",
+        "HERMES_HOME",
+        "DSH_HOME",
+    ];
+    let exe_env = [
+        "MUKADE_CLAUDE_EXE",
+        "MUKADE_CODEX_EXE",
+        "MUKADE_OPENCODE_EXE",
+        "MUKADE_PI_EXE",
+        "MUKADE_HERMES_EXE",
+        "MUKADE_DSH_EXE",
+    ];
+    let flag = [
+        "--claude-exe",
+        "--codex-exe",
+        "--opencode-exe",
+        "--pi-exe",
+        "--hermes-exe",
+        "--dsh-exe",
+    ];
+    let binary = ["claude", "codex", "opencode", "pi", "hermes", "dsh"];
+    let lineage = [false, false, true, true, true, true];
     for (n, id) in HarnessId::ALL.into_iter().enumerate() {
         assert_eq!(catalog::store_env(id), store[n], "{id}");
         assert_eq!(catalog::binary_env(id), exe_env[n], "{id}");
         assert_eq!(catalog::binary_flag(id), flag[n], "{id}");
         assert_eq!(catalog::lineage_recorded(id), lineage[n], "{id}");
+        assert_eq!(mukade::exe::binary_name(id), binary[n], "{id}");
         assert_eq!(mukade::exe::env_var_name(id), catalog::binary_env(id), "{id}");
     }
 }
@@ -189,7 +265,13 @@ fn the_usage_text_names_what_the_catalog_names() {
     for id in HarnessId::ALL {
         assert!(mukade::cli::USAGE.contains(mukade::catalog::binary_flag(id)), "{id}");
         assert!(mukade::cli::USAGE.contains(mukade::catalog::binary_env(id)), "{id}");
+        assert!(mukade::cli::USAGE.contains(mukade::catalog::store_env(id)), "{id}");
     }
+    let names: Vec<&str> = HarnessId::ALL.iter().map(|id| id.as_str()).collect();
+    assert!(
+        mukade::cli::USAGE.contains(&format!("harnesses: {}", names.join(" | "))),
+        "the harnesses line names every harness"
+    );
 }
 
 #[test]
@@ -205,7 +287,7 @@ fn only_opencode_takes_an_agent_or_metadata() {
             ..WriteOpts::default()
         },
     ];
-    for id in HarnessId::ALL {
+    for id in destinations() {
         for opts in &asks {
             let checked = destination(id).validate_write(opts);
             if id == HarnessId::OpenCode {
@@ -227,7 +309,7 @@ fn each_destination_takes_its_own_id_format() {
     };
     let uuid = "00000000-0000-4000-8000-000000000001";
     let opencode = "ses_0123abc";
-    for id in HarnessId::ALL {
+    for id in destinations() {
         let (taken, refused) = if id == HarnessId::OpenCode {
             (opencode, uuid)
         } else {
@@ -253,7 +335,7 @@ fn each_destination_takes_its_own_id_format() {
 
 #[test]
 fn only_opencode_exports_an_interchange_document() {
-    for id in HarnessId::ALL {
+    for id in destinations() {
         assert_eq!(
             destination(id).interchange_document().is_some(),
             id == HarnessId::OpenCode,
@@ -264,7 +346,7 @@ fn only_opencode_exports_an_interchange_document() {
 
 #[test]
 fn only_codex_reads_every_branch() {
-    for id in HarnessId::ALL {
+    for id in WITH_FIXTURE {
         let adapter = get(id);
         let by_path = adapter.read_all_branches(&support::source_path(id));
         let by_id = adapter.read_all_branches_by_id("any-id", &StoreRoots::default());
@@ -289,7 +371,7 @@ fn only_pi_summarizes_from_a_file() {
 
 #[test]
 fn only_pi_keeps_the_end_of_a_failed_step() {
-    for id in HarnessId::ALL {
+    for id in destinations() {
         assert_eq!(
             destination(id).failed_steps_are_replies(),
             id != HarnessId::Pi,
@@ -300,7 +382,7 @@ fn only_pi_keeps_the_end_of_a_failed_step() {
 
 #[test]
 fn claude_code_and_codex_flatten_result_blocks() {
-    for id in HarnessId::ALL {
+    for id in destinations() {
         assert_eq!(
             destination(id).flattens_result_blocks(),
             matches!(id, HarnessId::ClaudeCode | HarnessId::Codex),
@@ -360,7 +442,7 @@ fn a_destination_names_the_model_its_own_configuration_states() {
         opencode_db: Some(data.join("share/opencode/opencode.db")),
         ..StoreRoots::default()
     };
-    for id in HarnessId::ALL {
+    for id in destinations() {
         let expected = match id {
             HarnessId::Codex => Some(("azure".to_string(), None)),
             HarnessId::OpenCode => Some(("gateway".to_string(), Some("auto".to_string()))),
@@ -389,7 +471,7 @@ fn every_adapter_builds_a_summary_command() {
     use mukade::hop::HopError;
     use mukade::summary::SummarizeOpts;
     let scratch = support::scratch(HarnessId::Pi, "adapter-summary");
-    for id in HarnessId::ALL {
+    for id in WITH_FIXTURE {
         let mut session = support::read_source(id);
         let name = mukade::exe::binary_name(id);
         let opts = SummarizeOpts {

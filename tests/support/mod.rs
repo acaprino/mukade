@@ -35,6 +35,8 @@ pub fn source_path(harness: HarnessId) -> PathBuf {
         HarnessId::OpenCode => base.join("opencode/source/rows.json"),
         HarnessId::Pi => base
             .join("pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
+        HarnessId::Hermes => base.join("hermes/source/export.jsonl"),
+        HarnessId::DeepSeekHarness => base.join("deepseek_harness/source/session.v4.jsonl.zstd"),
     }
 }
 
@@ -45,6 +47,8 @@ pub fn source_id(harness: HarnessId) -> &'static str {
         HarnessId::Codex => "01a17e07-93f7-7a73-85c7-9f0205836600",
         HarnessId::OpenCode => "ses_e82023514ffe02y4T8OoUu99VZ",
         HarnessId::Pi => "01a17e17-9f07-743d-8072-8b3b13d65ab5",
+        HarnessId::Hermes => "20261112_120000_a1b2c3",
+        HarnessId::DeepSeekHarness => "session-0e5d1a2b-0000-4000-8000-000000000001",
     }
 }
 
@@ -111,7 +115,10 @@ pub fn roots(scratch: &Path) -> StoreRoots {
         claude_config_dir: Some(home.clone()),
         codex_home: Some(home.clone()),
         opencode_db: Some(home.join("opencode.db")),
-        pi_agent_dir: Some(home),
+        pi_agent_dir: Some(home.clone()),
+        // Their own folders: Pi and Codex already share `sessions/`.
+        hermes_home: Some(home.join("hermes")),
+        dsh_home: Some(home.join("dsh")),
     }
 }
 
@@ -137,11 +144,14 @@ pub fn stage_fixture(harness: HarnessId, scratch: &Path) -> String {
             .join("2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl"),
         // OpenCode is read from its export document, which the tests pass with `--from-file`.
         HarnessId::OpenCode => return source_id(harness).to_string(),
+        HarnessId::Hermes | HarnessId::DeepSeekHarness => {
+            panic!("{harness} has no staged fixture yet")
+        }
     };
     std::fs::create_dir_all(file.parent().expect("a store directory")).expect("create the store");
     std::fs::copy(&fixture, &file).expect("stage the fixture");
     match harness {
-        HarnessId::OpenCode => unreachable!(),
+        HarnessId::OpenCode | HarnessId::Hermes | HarnessId::DeepSeekHarness => unreachable!(),
         HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::Pi => {
             source_id(harness)[..8].to_string()
         }
@@ -356,11 +366,15 @@ pub fn cli_in(
         .env("CODEX_HOME", &home)
         .env("PI_CODING_AGENT_DIR", &home)
         .env("OPENCODE_DB", home.join("opencode.db"))
+        .env("HERMES_HOME", home.join("hermes"))
+        .env("DSH_HOME", home.join("dsh"))
         // The developer's own overrides must not leak into the assertions.
         .env_remove("MUKADE_CLAUDE_EXE")
         .env_remove("MUKADE_CODEX_EXE")
         .env_remove("MUKADE_OPENCODE_EXE")
         .env_remove("MUKADE_PI_EXE")
+        .env_remove("MUKADE_HERMES_EXE")
+        .env_remove("MUKADE_DSH_EXE")
         // Nor the shell the developer runs, which a destination's default shell reads.
         .env_remove("SHELL")
         .env_remove("OPENCODE_CONFIG_CONTENT")
@@ -419,7 +433,10 @@ pub fn opts(harness: HarnessId, scratch: &Path) -> WriteOpts {
         claude_config_dir: Some(home.clone()),
         codex_home: Some(home.clone()),
         opencode_db: Some(home.join("opencode.db")),
-        pi_agent_dir: Some(home),
+        pi_agent_dir: Some(home.clone()),
+        // Their own folders: Pi and Codex already share `sessions/`.
+        hermes_home: Some(home.join("hermes")),
+        dsh_home: Some(home.join("dsh")),
     };
     WriteOpts {
         roots,
@@ -452,6 +469,8 @@ fn version(harness: HarnessId) -> &'static str {
         HarnessId::Codex => "0.164.0",
         HarnessId::OpenCode => "2.1.4",
         HarnessId::Pi => "1.2.0",
+        HarnessId::Hermes => "0.23.1",
+        HarnessId::DeepSeekHarness => "0.2.2-rc.1",
     }
 }
 
@@ -461,6 +480,7 @@ pub fn protocol(harness: HarnessId) -> Protocol {
     match harness {
         HarnessId::ClaudeCode | HarnessId::OpenCode | HarnessId::Pi => Protocol::AnthropicMessages,
         HarnessId::Codex => Protocol::OpenaiResponses,
+        HarnessId::Hermes | HarnessId::DeepSeekHarness => Protocol::OpenaiChat,
     }
 }
 

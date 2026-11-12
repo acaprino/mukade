@@ -1116,6 +1116,8 @@ fn reconstructed_parallel_calls_round_trip_through_each_destination_format() {
         codex_home: Some(scratch.0.join("codex")),
         pi_agent_dir: Some(scratch.0.join("pi")),
         opencode_db: None,
+        hermes_home: None,
+        dsh_home: None,
     };
     for dest in [
         HarnessId::ClaudeCode,
@@ -1153,7 +1155,7 @@ fn reconstructed_parallel_calls_round_trip_through_each_destination_format() {
                 HarnessId::ClaudeCode => claude_code::read_file(path).unwrap(),
                 HarnessId::Codex => mukade::reader::codex::read_file(path).unwrap(),
                 HarnessId::Pi => pi::read_file(path).unwrap(),
-                HarnessId::OpenCode => unreachable!(),
+                HarnessId::OpenCode | HarnessId::Hermes | HarnessId::DeepSeekHarness => unreachable!(),
             }
         };
         let calls: usize = written

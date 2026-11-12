@@ -679,12 +679,7 @@ mod tests {
 
     #[test]
     fn every_harness_has_a_name_and_a_variable() {
-        for harness in [
-            HarnessId::ClaudeCode,
-            HarnessId::Codex,
-            HarnessId::OpenCode,
-            HarnessId::Pi,
-        ] {
+        for harness in HarnessId::ALL {
             assert!(!binary_name(harness).is_empty());
             assert!(env_var_name(harness).starts_with("MUKADE_"));
             assert!(env_var_name(harness).ends_with("_EXE"));

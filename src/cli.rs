@@ -10,7 +10,8 @@
 //!
 //! `dump` and `write` are a pair: what `dump` prints is what `write` takes. Store roots come from
 //! the harnesses' own variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`,
-//! `PI_CODING_AGENT_DIR`), so every run stays inside the scratch home the caller set.
+//! `PI_CODING_AGENT_DIR`, `HERMES_HOME`, `DSH_HOME`), so every run stays inside the scratch home
+//! the caller set.
 
 use crate::hop::{
     Compaction, HopError, ImportOpts, KeepFrom, Receipt, SessionRef, SourceFacts, SummarySource,
@@ -43,18 +44,20 @@ executables are asked for `--version`.
 `intents` lists the editable summary prompts (name, path, builtin/custom) as JSON, without reading a
 session or starting a harness.
 
-harnesses: claude_code | codex | opencode | pi
+harnesses: claude_code | codex | opencode | pi | hermes | deepseek_harness
 
 A `hop` reads the source and writes the destination in one process: set **both** harnesses' store
-variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`).
-An unset variable means that harness's configured store; Claude Code, Codex and Pi need an explicit root.
+variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB` with its `XDG_*`, `PI_CODING_AGENT_DIR`,
+`HERMES_HOME`, `DSH_HOME`). An unset variable means that harness's configured store; Claude Code,
+Codex, Pi, Hermes and DeepSeek Harness need an explicit root.
 
 `detect` prints which harness stores a directory holds, with the evidence: session records, Pi's
-models.json or OpenCode's opencode.db (that file can be passed directly; other SQLite files, e.g.
-Codex's state_*.sqlite, are not OpenCode). An empty directory tree infers nothing. With
-`--root <dir>` (non-empty) the harness may be omitted from `list`, `dump` and a `hop` source: it is
-inferred from the directory's own layout when exactly one harness is recognized. `--root` names the
-source store for a hop, the only store otherwise; for OpenCode a directory means its `opencode.db`.
+models.json, Hermes's state.db or OpenCode's opencode.db (that file can be passed directly; other
+SQLite files, e.g. Codex's state_*.sqlite, are not OpenCode). An empty directory tree infers
+nothing. With `--root <dir>` (non-empty) the harness may be omitted from `list`, `dump` and a `hop`
+source: it is inferred from the directory's own layout when exactly one harness is recognized.
+`--root` names the source store for a hop, the only store otherwise; for OpenCode a directory means
+its `opencode.db`.
 
 `scan` walks a directory (default 8 folder levels, `--depth <n>` to change it) and prints every
 harness installation below it as JSON, portable and custom ones included: the harness, the store as
@@ -119,10 +122,12 @@ options:
   --codex-exe <path>       the codex binary to spawn
   --opencode-exe <path>    the opencode binary to spawn
   --pi-exe <path>          the pi binary to spawn
+  --hermes-exe <path>      the hermes binary to spawn
+  --dsh-exe <path>         the dsh binary to spawn
 
 Executable resolution: --<harness>-exe â†’ MUKADE_CLAUDE_EXE / MUKADE_CODEX_EXE /
-MUKADE_OPENCODE_EXE / MUKADE_PI_EXE â†’ PATH â†’ the well-known install locations â†’ the plain
-command name. --root selects the
+MUKADE_OPENCODE_EXE / MUKADE_PI_EXE / MUKADE_HERMES_EXE / MUKADE_DSH_EXE â†’ PATH â†’ the
+well-known install locations â†’ the plain command name. --root selects the
 source store of a hop; a portable destination needs its store variable set in the environment
 and its --<harness>-exe. A source OpenCode read spawns the binary its own resolution finds
 (MUKADE_OPENCODE_EXE wins).

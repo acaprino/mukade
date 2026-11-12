@@ -35,7 +35,7 @@ impl Location {
     }
 }
 
-/// The four harnesses' standard stores, in the catalog's order.
+/// Every harness's standard store, in the catalog's order.
 pub fn standard_locations(roots: &StoreRoots) -> Vec<Location> {
     HarnessId::ALL
         .into_iter()
@@ -159,6 +159,8 @@ mod tests {
             codex_home: Some(PathBuf::from("home/.codex")),
             opencode_db: Some(PathBuf::from("home/share/opencode/opencode.db")),
             pi_agent_dir: Some(PathBuf::from("home/.pi/agent")),
+            hermes_home: Some(PathBuf::from("home/.hermes")),
+            dsh_home: Some(PathBuf::from("home/.dsh")),
         }
     }
 
@@ -227,7 +229,7 @@ mod tests {
             ),
             1
         );
-        assert_eq!(locations.len(), 5);
+        assert_eq!(locations.len(), HarnessId::ALL.len() + 1);
     }
 
     /// ADR-0001 INV-002: for the same folder the explorer lists exactly the installations the

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The four harnesses the library reads and writes.
+/// The harnesses the library reads, and writes where it can.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessId {
@@ -11,10 +11,22 @@ pub enum HarnessId {
     #[serde(rename = "opencode")]
     OpenCode,
     Pi,
+    /// Hermes Agent (Nous Research).
+    Hermes,
+    /// DeepSeek Harness, launched as `dsh`.
+    #[serde(rename = "deepseek_harness")]
+    DeepSeekHarness,
 }
 
 impl HarnessId {
-    pub const ALL: [HarnessId; 4] = [Self::ClaudeCode, Self::Codex, Self::OpenCode, Self::Pi];
+    pub const ALL: [HarnessId; 6] = [
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::OpenCode,
+        Self::Pi,
+        Self::Hermes,
+        Self::DeepSeekHarness,
+    ];
 
     /// The name used on the command line, in the manifest and in paths.
     pub fn as_str(self) -> &'static str {
@@ -23,6 +35,8 @@ impl HarnessId {
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
+            Self::Hermes => "hermes",
+            Self::DeepSeekHarness => "deepseek_harness",
         }
     }
 }
@@ -41,7 +55,8 @@ impl std::str::FromStr for HarnessId {
             .into_iter()
             .find(|h| h.as_str() == s)
             .ok_or_else(|| {
-                anyhow::anyhow!("unknown harness {s:?} (claude_code, codex, opencode, pi)")
+                let names: Vec<&str> = Self::ALL.iter().map(|h| h.as_str()).collect();
+                anyhow::anyhow!("unknown harness {s:?} ({})", names.join(", "))
             })
     }
 }

@@ -4,11 +4,13 @@
 use std::path::Path;
 
 /// The names a branch on one harness is written with.
-const HARNESS_ARMS: [&str; 4] = [
+const HARNESS_ARMS: [&str; 6] = [
     "HarnessId::ClaudeCode",
     "HarnessId::Codex",
     "HarnessId::OpenCode",
     "HarnessId::Pi",
+    "HarnessId::Hermes",
+    "HarnessId::DeepSeekHarness",
 ];
 
 /// The folders searched, from the repository root.
@@ -27,6 +29,8 @@ const ADAPTER_FILES: &[&str] = &[
     "src/reader/codex_state.rs",
     "src/reader/opencode.rs",
     "src/reader/pi.rs",
+    "src/reader/hermes.rs",
+    "src/reader/deepseek_harness.rs",
     "src/writer/claude_code.rs",
     "src/writer/codex.rs",
     "src/writer/opencode.rs",
@@ -35,6 +39,8 @@ const ADAPTER_FILES: &[&str] = &[
     "src/detect/codex.rs",
     "src/detect/opencode.rs",
     "src/detect/pi.rs",
+    "src/detect/hermes.rs",
+    "src/detect/deepseek_harness.rs",
     "src/model/harness.rs",
 ];
 

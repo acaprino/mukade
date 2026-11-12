@@ -67,9 +67,23 @@ pub struct Locations {
 pub struct Store {
     pub env: String,
     pub default: String,
+    /// The default on a platform whose convention differs from [`Store::default`].
+    #[serde(default)]
+    pub default_on: PlatformDefault,
     /// OpenCode's store is the SQLite database itself, not a directory.
     pub root_is_a_file: bool,
     pub layout: Vec<String>,
+}
+
+/// A store default per platform key; `None` keeps [`Store::default`].
+#[derive(Debug, Default, Deserialize)]
+pub struct PlatformDefault {
+    #[serde(default)]
+    pub windows: Option<String>,
+    #[serde(default)]
+    pub macos: Option<String>,
+    #[serde(default)]
+    pub linux: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,7 +148,7 @@ pub fn entry(harness: HarnessId) -> &'static Entry {
         .harnesses
         .iter()
         .find(|entry| entry.id == harness)
-        .expect("the catalog covers the four supported harnesses")
+        .expect("the catalog covers every supported harness")
 }
 
 /// The well-known binary locations of a platform, expanded. An entry that needs an unset variable
@@ -174,7 +188,18 @@ pub fn store_default(harness: HarnessId) -> Option<PathBuf> {
 
 /// [`store_default`] with the variables stated.
 pub fn store_default_with(harness: HarnessId, vars: &Vars) -> Option<PathBuf> {
-    expand(&entry(harness).store.default, vars)
+    store_default_on(harness, platform(), vars)
+}
+
+/// [`store_default`] on a platform, with the variables stated.
+pub fn store_default_on(harness: HarnessId, platform: &str, vars: &Vars) -> Option<PathBuf> {
+    let store = &entry(harness).store;
+    let own = match platform {
+        "windows" => &store.default_on.windows,
+        "macos" => &store.default_on.macos,
+        _ => &store.default_on.linux,
+    };
+    expand(own.as_deref().unwrap_or(&store.default), vars)
 }
 
 /// The variable that points a harness at its store.
@@ -351,6 +376,23 @@ mod tests {
         );
         assert!(store_is_file(HarnessId::OpenCode));
         assert!(!store_is_file(HarnessId::ClaudeCode));
+    }
+
+    /// Hermes keeps its home in the local data directory on Windows and in `~/.hermes` elsewhere.
+    #[test]
+    fn a_platform_may_name_its_own_store_default() {
+        assert_eq!(
+            store_default_on(HarnessId::Hermes, "windows", &vars()),
+            Some(PathBuf::from("/local-app-data/hermes"))
+        );
+        assert_eq!(
+            store_default_on(HarnessId::Hermes, "linux", &vars()),
+            Some(PathBuf::from("/home/user/.hermes"))
+        );
+        assert_eq!(
+            store_default_on(HarnessId::DeepSeekHarness, "windows", &vars()),
+            Some(PathBuf::from("/home/user/.dsh"))
+        );
     }
 
     #[test]
