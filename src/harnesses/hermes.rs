@@ -30,6 +30,18 @@ impl Harness for Hermes {
         crate::reader::hermes::read_file(path)
     }
 
+    /// A listing names the store's `state.db`, which holds every session: read the bound one by id.
+    fn read_bound(&self, path: &Path, id: &str) -> anyhow::Result<Session> {
+        crate::reader::hermes::read_bound(path, id)
+    }
+
+    /// A `user` row Hermes did not mark as its own scaffolding is what the person typed.
+    fn user_origin(&self, raw: Option<&Value>) -> crate::reader::origin::Origin {
+        raw.map_or(crate::reader::origin::Origin::Unknown, |row| {
+            crate::reader::hermes::user_origin(row)
+        })
+    }
+
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
         roots.hermes_home.as_deref()
     }

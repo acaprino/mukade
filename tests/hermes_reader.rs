@@ -202,6 +202,23 @@ fn the_store_reads_the_same_session_as_its_export() {
     assert_eq!(from_store.meta.harness_version, "schema 33");
 }
 
+/// A chat member bound to a Hermes session is read from the place its listing names: the store's
+/// `state.db`, which holds every session, by its id.
+#[test]
+fn a_bound_session_reads_from_the_database_its_listing_names() {
+    let (roots, db) = store("bound");
+    db.load_export(&export());
+    let listed = hermes::Hermes.list(&roots).unwrap();
+    let info = listed
+        .iter()
+        .find(|info| info.id == "20261112_120000_a1b2c3")
+        .expect("listed");
+    let bound = harnesses::get(HarnessId::Hermes)
+        .read_bound(std::path::Path::new(&info.path), &info.id)
+        .expect("the bound session reads");
+    assert_eq!(bound, read(&roots, &info.id).unwrap());
+}
+
 #[test]
 fn an_id_prefix_names_a_session_when_it_names_one() {
     let (roots, db) = store("prefix");

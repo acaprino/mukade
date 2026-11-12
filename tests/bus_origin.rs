@@ -61,15 +61,10 @@ fn claude_empty_raw_user_text_is_typed() {
 }
 
 #[test]
-fn fixture_user_prompts_are_typed_for_all_four_harnesses() {
-    // The four whose adapters say who produced a user entry; one that does not yet answers
-    // `Unknown`, and the observer then shows nothing a person typed.
-    for harness in [
-        HarnessId::ClaudeCode,
-        HarnessId::Codex,
-        HarnessId::OpenCode,
-        HarnessId::Pi,
-    ] {
+fn fixture_user_prompts_are_typed_for_every_harness() {
+    // Every adapter says who produced a user entry; one that did not would answer `Unknown`, and
+    // the observer would then show nothing a person typed.
+    for harness in HarnessId::ALL {
         let session = support::read_source(harness);
         let prompts: Vec<_> = session
             .entries
@@ -86,6 +81,36 @@ fn fixture_user_prompts_are_typed_for_all_four_harnesses() {
             );
         }
     }
+}
+
+#[test]
+fn hermes_scaffolding_is_injected_and_a_plain_user_row_is_typed() {
+    let typed = json!({"role": "user", "content": "fix the test"});
+    assert_eq!(origin_of(HarnessId::Hermes, &user(vec![typed])), Origin::Typed);
+    let scaffolding = json!({"role": "user", "content": "done", "display_kind": "process_complete"});
+    assert_eq!(
+        origin_of(HarnessId::Hermes, &user(vec![scaffolding])),
+        Origin::Injected("hermes_scaffolding")
+    );
+}
+
+#[test]
+fn deepseek_harness_names_typed_prompts_and_other_agents_messages() {
+    let message = |kind: &str| {
+        json!({"type": "user/message", "seq": 1, "data": {"source": {"kind": kind}, "content": []}})
+    };
+    assert_eq!(
+        origin_of(HarnessId::DeepSeekHarness, &user(vec![message("user")])),
+        Origin::Typed
+    );
+    assert_eq!(
+        origin_of(HarnessId::DeepSeekHarness, &user(vec![message("subagent-settled")])),
+        Origin::Injected("dsh_agent_message")
+    );
+    assert_eq!(
+        origin_of(HarnessId::DeepSeekHarness, &user(vec![message("tmux")])),
+        Origin::Injected("dsh_injected_context")
+    );
 }
 
 #[test]

@@ -972,3 +972,21 @@ impl Reader for DeepSeekHarness {
         }
     }
 }
+
+/// Who produced a user entry's event: a `user/message` whose `source.kind` is `user` is what a
+/// person typed; another agent's message (`agent-message`, `subagent-settled`, `team-message`) or
+/// injected context is not; anything else is not known.
+pub(crate) fn user_origin(event: &Value) -> crate::reader::origin::Origin {
+    use crate::reader::origin::Origin;
+    if str_at(event, "/type").as_deref() != Some("user/message") {
+        return Origin::Unknown;
+    }
+    match str_at(event, "/data/source/kind").as_deref() {
+        Some("user") => Origin::Typed,
+        Some("agent-message" | "subagent-settled" | "team-message") => {
+            Origin::Injected("dsh_agent_message")
+        }
+        Some(_) => Origin::Injected("dsh_injected_context"),
+        None => Origin::Unknown,
+    }
+}

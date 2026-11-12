@@ -276,6 +276,19 @@ struct Builder {
     results_raw: Vec<Value>,
 }
 
+/// Who produced a user entry's row: a `user` row with no scaffolding `display_kind` is what a
+/// person typed; a scaffolding one Hermes injected; anything else is not known.
+pub(crate) fn user_origin(row: &Value) -> crate::reader::origin::Origin {
+    use crate::reader::origin::Origin;
+    if str_at(row, "/role").as_deref() != Some("user") {
+        return Origin::Unknown;
+    }
+    match scaffolding(&str_at(row, "/display_kind").unwrap_or_default()) {
+        None => Origin::Typed,
+        Some(_) => Origin::Injected("hermes_scaffolding"),
+    }
+}
+
 /// What a user-role row of this `display_kind` is when it is not something the user typed.
 fn scaffolding(display_kind: &str) -> Option<MetaKind> {
     match display_kind {
@@ -759,6 +772,11 @@ fn resolve(db: &Connection, typed: &str) -> Result<String> {
         ))
         .into()),
     }
+}
+
+/// Read session `id` from the `state.db` at `path`, the place a listing names.
+pub(crate) fn read_bound(path: &Path, id: &str) -> Result<Session> {
+    with_retry(|| read_session(path, id))
 }
 
 fn read_session(path: &Path, typed: &str) -> Result<Session> {

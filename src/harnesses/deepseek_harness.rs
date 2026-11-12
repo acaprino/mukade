@@ -30,6 +30,13 @@ impl Harness for DeepSeekHarness {
         crate::reader::deepseek_harness::read_file(path)
     }
 
+    /// A `user/message` whose `source.kind` is `user` is what the person typed.
+    fn user_origin(&self, raw: Option<&Value>) -> crate::reader::origin::Origin {
+        raw.map_or(crate::reader::origin::Origin::Unknown, |event| {
+            crate::reader::deepseek_harness::user_origin(event)
+        })
+    }
+
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
         roots.dsh_home.as_deref()
     }
