@@ -1,35 +1,48 @@
-/* Mukade skin: Shinatama's, so the two apps look alike. Midnight navy, cobalt and ice lines, one
-   warm accent (pink). Warning, error and danger are states, not accents. No glow, no rounded
-   corners. Every chrome colour lives here; dark is the default, light follows the system (or the
+/* Mukade skin: Shinatama's structure (spacing, type, square corners), Mukade's own colours, taken
+   from the character: black and violet-graphite armour, the hot red glow as the one accent, the
+   electric violet-blue of the lightning for lines. Warning, error and danger are states, not
+   accents. No glow, no rounded corners. Every chrome colour lives here; dark is the default, light follows the system (or the
    Theme button: Auto, Light, Dark). */
 :root {
   color-scheme: dark;
-  --stage: #04070f;
-  --chrome: #070c18;
-  --chrome-2: #0a1120;
-  --surface: #0e1729;
-  --surface-2: #13203a;
-  --pane: #050912;
-  --line: #1c3563;
-  --line-strong: #4a78e6;
-  --ice: #a9c8ff;
-  --text: #e6f0ff;
-  --text-2: #b4c8e8;
-  --muted: #8fa6c9;
-  --accent: #f48fb8;
-  --accent-soft: #ffb3d0;
-  --accent-ink: #1c0811;
-  --live: #6fe3d2;
-  --warning: #e8bb72;
-  --error: #ff8495;
+  --stage: #060507;
+  --chrome: #111016;
+  --chrome-2: #16151c;
+  --surface: #1c1a23;
+  --surface-2: #26232f;
+  --pane: #0b0a0e;
+  --line: #2c2a44;
+  --line-strong: #6c6cf0;
+  --ice: #b3b5ff;
+  --text: #ecebf2;
+  --text-2: #c2bfcf;
+  --muted: #9a96aa;
+  --accent: #ff4a2e;
+  --accent-soft: #ff7a5c;
+  --accent-ink: #1a0503;
+  --live: #6fd6b0;
+  --warning: #e6c36a;
+  --error: #ff8a7a;
   --danger: #a0294e;
   --danger-line: #e35f87;
   --on-danger: #ffffff;
-  --selection: #2a4a8f;
-  --scrim: #02050bcc;
+  --selection: #2a2a66;
+  --scrim: #040305cc;
   --shadow: #000000aa;
-  --spawn: #7fb2ff;
-  --fork: #e8bb72;
+  --spawn: #9fa8ff;
+  --fork: #e6c36a;
+  /* Glass, as Shinatama's: every value derives from the skin tokens, so each theme gets its own. */
+  --glass: color-mix(in srgb, var(--chrome-2) 74%, transparent);
+  --glass-strong: color-mix(in srgb, var(--chrome-2) 90%, transparent);
+  --glass-bar: color-mix(in srgb, var(--chrome) 64%, transparent);
+  --glass-pane: color-mix(in srgb, var(--pane) 86%, transparent);
+  --glass-blur: blur(18px) saturate(150%);
+  --ambient-a: color-mix(in srgb, var(--line-strong) 26%, transparent);
+  --ambient-b: color-mix(in srgb, var(--accent) 12%, transparent);
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --fast: 120ms;
+  --base: 180ms;
+  --slow: 320ms;
   --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
   --display: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
   font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
@@ -38,22 +51,22 @@
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
-/* Light: paper-white panes on a cool grey stage, the same cobalt lines, a deeper pink. */
+/* Light: paper-white panes on a cool grey stage, the same violet-blue lines, a deeper red. */
 :root[data-theme='light'] {
-  --stage: #e9eef8; --chrome: #f5f8fd; --chrome-2: #edf1fa; --surface: #ffffff; --surface-2: #e3eaf8;
-  --pane: #fbfcff; --line: #c3d0ea; --line-strong: #3a62c4; --ice: #2b4fa6; --text: #0d1630;
-  --text-2: #2d3f66; --muted: #5b6f96; --accent: #c42a6b; --accent-soft: #a81e58; --accent-ink: #ffffff;
-  --live: #0e7a69; --warning: #8a5a00; --error: #b3223a; --danger: #a0294e; --danger-line: #7d1c3c;
-  --selection: #cddbf6; --scrim: #0d163066; --shadow: #0d163044; --spawn: #2b5fc4; --fork: #8a5a00;
+  --stage: #e9e8ee; --chrome: #f6f5f9; --chrome-2: #eeedf3; --surface: #ffffff; --surface-2: #e4e2ec;
+  --pane: #fcfbfe; --line: #cfccda; --line-strong: #4a4ad0; --ice: #3a3ab8; --text: #100f15;
+  --text-2: #3a3747; --muted: #6a6679; --accent: #c2260e; --accent-soft: #9e1c08; --accent-ink: #ffffff;
+  --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
+  --selection: #dedcf7; --scrim: #100f1566; --shadow: #100f1544; --spawn: #3a3ab8; --fork: #7a5600;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
     color-scheme: light;
-    --stage: #e9eef8; --chrome: #f5f8fd; --chrome-2: #edf1fa; --surface: #ffffff; --surface-2: #e3eaf8;
-    --pane: #fbfcff; --line: #c3d0ea; --line-strong: #3a62c4; --ice: #2b4fa6; --text: #0d1630;
-    --text-2: #2d3f66; --muted: #5b6f96; --accent: #c42a6b; --accent-soft: #a81e58; --accent-ink: #ffffff;
-    --live: #0e7a69; --warning: #8a5a00; --error: #b3223a; --danger: #a0294e; --danger-line: #7d1c3c;
-    --selection: #cddbf6; --scrim: #0d163066; --shadow: #0d163044; --spawn: #2b5fc4; --fork: #8a5a00;
+    --stage: #e9e8ee; --chrome: #f6f5f9; --chrome-2: #eeedf3; --surface: #ffffff; --surface-2: #e4e2ec;
+    --pane: #fcfbfe; --line: #cfccda; --line-strong: #4a4ad0; --ice: #3a3ab8; --text: #100f15;
+    --text-2: #3a3747; --muted: #6a6679; --accent: #c2260e; --accent-soft: #9e1c08; --accent-ink: #ffffff;
+    --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
+    --selection: #dedcf7; --scrim: #100f1566; --shadow: #100f1544; --spawn: #3a3ab8; --fork: #7a5600;
   }
 }
 
@@ -104,12 +117,55 @@ input::placeholder { color: var(--muted); }
 .views { display: flex; gap: 0; }
 .views button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
 .views button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
-.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 8px; }
+.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 0; position: relative; }
+#view-chat { gap: 8px; }
 .column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-top-width: 2px; background: var(--pane); overflow: hidden; }
 .column.focused { border-top-color: var(--accent); }
-#installations { flex: 0 0 248px; }
-#sessions { flex: 0 0 clamp(340px, 34%, 520px); }
-#detail { flex: 1; }
+#installations { flex: 0 0 var(--w-installations, 248px); }
+#sessions { flex: 0 0 var(--w-sessions, clamp(340px, 34%, 520px)); }
+#detail { flex: 1 1 0; }
+/* The reader takes the room the installations had. */
+#view-sessions.reading #installations, #view-sessions.reading #resize-installations { display: none; }
+.resizer { flex: 0 0 8px; cursor: col-resize; position: relative; touch-action: none; }
+.resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background-color 120ms; }
+.resizer:hover::after, .resizer:active::after { background: var(--line-strong); }
+.back-column { display: none; }
+#search { flex: 0 1 300px; min-width: 140px; }
+#search:disabled { opacity: .5; }
+.hints { display: flex; gap: 12px; overflow: hidden; }
+.hints b { font-weight: 400; color: var(--ice); }
+.note.err { border-left-color: var(--error); color: var(--error); }
+.warn-text { color: var(--warning); }
+.row-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+.row-fields > * { flex: 1 1 180px; }
+.hint { font-size: 12px; }
+.plan.losses li::before { content: '· '; color: var(--warning); }
+dl.kv.keys { grid-template-columns: 140px minmax(0, 1fr); }
+button.ghost { border-color: transparent; color: var(--muted); }
+button.ghost:hover { color: var(--text); }
+.tabs { display: flex; }
+.tabs button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
+.tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
+
+/* Below 1000 px the detail column is a drawer over the sessions; below 700 px one column at a
+   time, with a back button (spec §2). */
+@media (max-width: 999px) {
+  #view-sessions #detail { position: absolute; top: 8px; right: 8px; bottom: 8px; width: min(560px, calc(100% - 40px)); z-index: 5; box-shadow: -18px 0 40px var(--shadow); transform: translateX(calc(100% + 16px)); transition: transform 160ms ease-out; }
+  #view-sessions[data-focus='detail'] #detail, #view-sessions.reading #detail { transform: none; }
+  #sessions { flex: 1 1 auto; }
+  #resize-sessions { display: none; }
+}
+@media (max-width: 699px) {
+  #view-sessions > .column, #view-sessions > .resizer { display: none !important; }
+  #view-sessions[data-focus='installations'] #installations,
+  #view-sessions[data-focus='sessions'] #sessions,
+  #view-sessions[data-focus='detail'] #detail { display: flex !important; flex: 1 1 auto; position: static; width: auto; transform: none; box-shadow: none; }
+  #view-sessions:not([data-focus='installations']) .back-column { display: inline-flex; position: absolute; left: 12px; bottom: 12px; z-index: 6; background: var(--chrome); }
+  .titlebar { flex-wrap: wrap; height: auto; padding: 6px 10px; }
+  #app { grid-template-rows: auto minmax(0, 1fr) 28px; }
+  .hints { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { #view-sessions #detail { transition: none; } }
 .column-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
 .column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .09em; text-transform: uppercase; color: var(--text-2); }
 .column-head small { font: 12px var(--mono); color: var(--muted); }
@@ -129,3 +185,32 @@ input::placeholder { color: var(--muted); }
 .note { margin: 0; padding: 8px 10px; border-left: 2px solid var(--line-strong); background: var(--surface); color: var(--text-2); font-size: 12px; }
 .note.warn { border-left-color: var(--warning); color: var(--warning); }
 .note.err { border-left-color: var(--error); color: var(--error); }
+
+/* Glass and motion (Shinatama's): chrome is translucent over a still ambient field; whatever
+   floats over content blurs what is under it. Corners stay square and nothing glows: depth comes
+   from blur, a dark drop shadow and one drawn top edge. */
+body { background: radial-gradient(1100px 640px at 6% -14%, var(--ambient-a), transparent 64%), radial-gradient(900px 620px at 106% 112%, var(--ambient-b), transparent 62%), var(--stage); }
+.titlebar, .statusbar { background: var(--glass-bar); backdrop-filter: var(--glass-blur); }
+.view { background: transparent; }
+.column { background: var(--glass-pane); transition: border-color var(--base) var(--ease-out); }
+.column-head { background: color-mix(in srgb, var(--chrome-2) 82%, transparent); }
+button { transition: background-color var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), color var(--fast) var(--ease-out), scale var(--fast) var(--ease-out); }
+.titlebar button:active:not(:disabled), .dialog button:active:not(:disabled), .actions button:active:not(:disabled) { scale: .96; }
+/* The one cut corner pair marks the primary action. The focus ring moves inside the cut. */
+button.primary { clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
+button.primary:focus-visible { outline-color: var(--accent-ink); outline-offset: -4px; }
+#view-sessions #detail { transition: transform var(--base) var(--ease-out), border-color var(--base) var(--ease-out); }
+@media (max-width: 999px) { #view-sessions #detail { background: var(--glass); backdrop-filter: var(--glass-blur); } }
+
+/* Desktop, not a page (tauri-native-desktop skill): no rubber-band on the window, scrolling stays
+   inside each pane, the chrome is not selectable text, controls keep the arrow cursor. Text in
+   the reader, the detail, fields and code stays selectable. */
+html, body { overscroll-behavior: none; }
+.column-body, .pane-body, .reader-scroll, .dialog-body, .messages-body { overscroll-behavior: contain; }
+.titlebar, .statusbar, .column-head, .tabs, .dialog-head, .dialog-foot, button, .row, .label { -webkit-user-select: none; user-select: none; }
+button { cursor: default; }
+.entry .what, dl.kv dd, .code, .msg .body, .note, input, textarea { -webkit-user-select: text; user-select: text; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

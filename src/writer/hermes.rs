@@ -136,6 +136,7 @@ impl Writer for Hermes {
             )));
         };
         Ok(Written {
+            records: Vec::new(),
             id: id.clone(),
             location: state_db,
             resume: crate::catalog::resume(HarnessId::Hermes, &exe, &id, None),

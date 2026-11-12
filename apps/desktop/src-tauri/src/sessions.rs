@@ -52,10 +52,18 @@ impl From<SessionInfo> for SessionRow {
 
 /// Every session a location's store holds, children and forks included, through the harness's own
 /// reader.
+#[cfg(test)]
 pub fn list(location: &Location) -> CmdResult<Vec<SessionRow>> {
+    Ok(list_info(location)?
+        .into_iter()
+        .map(SessionRow::from)
+        .collect())
+}
+
+/// What the reader lists, as it lists it: children and forks included.
+pub fn list_info(location: &Location) -> CmdResult<Vec<SessionInfo>> {
     let reader = reader::for_harness(location.harness)?;
-    let listed = reader.list_all(&location.roots)?;
-    Ok(listed.into_iter().map(SessionRow::from).collect())
+    Ok(reader.list_all(&location.roots)?)
 }
 
 /// One session, read by its native id from the location's store.
@@ -152,12 +160,23 @@ fn row(index: usize, entry: &Entry, role: &'static str, text: &str) -> RowView {
 
 /// The instant the source stamped on the entry, when its first record carries one in the field the
 /// common formats share. Read from the verbatim record, never guessed.
+/// When the entry's first native record says it was made: an RFC 3339 string, or epoch
+/// milliseconds (OpenCode's `time.created`), as the common field names carry them.
 fn entry_time(entry: &Entry) -> Option<String> {
     let record = entry.raw.first()?;
+    let text = |value: &Value| match value {
+        Value::String(text) if !text.is_empty() => Some(text.clone()),
+        Value::Number(number) => number.as_i64().and_then(|millis| {
+            chrono::DateTime::from_timestamp_millis(millis).map(|time| time.to_rfc3339())
+        }),
+        _ => None,
+    };
     ["timestamp", "time", "created_at", "createdAt"]
         .iter()
-        .find_map(|key| record.get(*key).and_then(Value::as_str))
-        .map(str::to_string)
+        .find_map(|key| match record.get(*key)? {
+            Value::Object(times) => times.get("created").and_then(text),
+            other => text(other),
+        })
 }
 
 /// The conversation as lines, in the source's order, markers left out. With `turns` above zero only
@@ -176,7 +195,10 @@ pub fn transcript(session: &Session, turns: usize) -> TranscriptView {
         .map(|(position, _)| position)
         .collect();
     let (start, hidden) = if turns > 0 && user_turns.len() > turns {
-        (user_turns[user_turns.len() - turns], user_turns.len() - turns)
+        (
+            user_turns[user_turns.len() - turns],
+            user_turns.len() - turns,
+        )
     } else {
         (0, 0)
     };
@@ -187,7 +209,12 @@ pub fn transcript(session: &Session, turns: usize) -> TranscriptView {
                 rows.push(row(index, entry, "user", text));
                 for attachment in attachments {
                     let path = attachment.path.as_deref().unwrap_or("");
-                    rows.push(row(index, entry, "file", &format!("{} {path}", attachment.kind)));
+                    rows.push(row(
+                        index,
+                        entry,
+                        "file",
+                        &format!("{} {path}", attachment.kind),
+                    ));
                 }
             }
             Kind::Step {
@@ -331,11 +358,38 @@ mod tests {
     use mukade::roots::StoreRoots;
 
     #[test]
+    fn a_record_time_in_epoch_milliseconds_reads_as_rfc3339() {
+        let entry = |raw: Value| Entry {
+            id: "e".into(),
+            kind: Kind::User {
+                text: String::new(),
+                attachments: Vec::new(),
+            },
+            raw: vec![raw],
+        };
+        let time = entry_time(&entry(
+            serde_json::json!({"time": {"created": 1_700_000_000_000_i64}}),
+        ));
+        assert_eq!(time.as_deref(), Some("2023-11-14T22:13:20+00:00"));
+        assert_eq!(
+            entry_time(&entry(
+                serde_json::json!({"timestamp": "2026-11-12T12:00:00Z"})
+            ))
+            .as_deref(),
+            Some("2026-11-12T12:00:00Z")
+        );
+        assert_eq!(entry_time(&entry(serde_json::json!({"other": 1}))), None);
+    }
+
+    #[test]
     fn a_listing_names_the_fixture_session_with_its_path() {
         let scratch = Scratch::new("listing");
         let roots = claude_store(&scratch);
         let rows = list(&claude(&roots)).expect("the store lists");
-        let row = rows.iter().find(|row| row.id == CLAUDE_FIXTURE).expect("listed");
+        let row = rows
+            .iter()
+            .find(|row| row.id == CLAUDE_FIXTURE)
+            .expect("listed");
         assert!(row.path.ends_with(".jsonl"), "{}", row.path);
         assert!(!row.archived);
         assert!(row.parent.is_none());
@@ -368,7 +422,11 @@ mod tests {
         let conversation: usize = session.conversation().count();
         assert!(!view.rows.is_empty() && view.rows.len() >= conversation / 2);
         // Row indexes follow the entries and never decrease.
-        assert!(view.rows.windows(2).all(|pair| pair[0].index <= pair[1].index));
+        assert!(
+            view.rows
+                .windows(2)
+                .all(|pair| pair[0].index <= pair[1].index)
+        );
         assert_eq!(view.meta.id, session.meta.id);
         assert_eq!(view.meta.harness, "claude_code");
     }
@@ -443,6 +501,6 @@ mod tests {
         assert!(past.items.is_empty());
         let all = raw_page(&session, 0, total);
         let kinds: Vec<&str> = all.items.iter().map(|i| i.kind.as_str()).collect();
-        assert!(kinds.iter().any(|kind| *kind == "user"));
+        assert!(kinds.contains(&"user"));
     }
 }

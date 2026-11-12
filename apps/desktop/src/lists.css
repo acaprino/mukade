@@ -1,0 +1,20 @@
+.list { margin: 0; padding: 0; list-style: none; }
+.row { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 10px; font: 12.5px var(--mono); color: var(--text-2); cursor: default; user-select: none; }
+.row:hover { background: var(--surface); }
+.row[aria-selected='true'] { background: var(--selection); color: var(--text); }
+.column:not(.focused) .row[aria-selected='true'] { background: var(--surface-2); }
+.row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .num, .row .time { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.row[aria-selected='true'] .num, .row[aria-selected='true'] .time { color: var(--text-2); }
+.row .caret { width: 12px; flex: none; color: var(--muted); text-align: center; cursor: pointer; }
+.row .spawn { color: var(--spawn); white-space: nowrap; }
+.row .fork { color: var(--fork); white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
+.row .fork .icon { width: 13px; height: 13px; }
+.row .other { color: var(--muted); }
+.row.untitled .grow { color: var(--muted); }
+.row mark { background: none; color: var(--accent); }
+.tag { padding: 0 5px; border: 1px solid currentColor; font: 11px/16px var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+.tag.live { color: var(--live); }
+.tag.bad { color: var(--error); }
+.tag.warn { color: var(--warning); }
+.label { margin: 0; padding: 10px 10px 4px; font: 500 11px var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }

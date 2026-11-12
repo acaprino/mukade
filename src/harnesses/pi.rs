@@ -55,6 +55,43 @@ impl Harness for Pi {
         })
     }
 
+    /// The extension hands the answer over itself (a message with the turn, or a continuation),
+    /// so it reads mukade's own plugin format.
+    fn chat_hook_output(
+        &self,
+        event: crate::chat::adapter::Event,
+        delivery: &crate::chat::adapter::Delivery,
+    ) -> Option<String> {
+        crate::chat::adapter::plugin_json(event, delivery)
+    }
+
+    /// An extension for one run (`pi -e`): it registers the MCP entry for this session and runs
+    /// the hooks at session start, at each prompt and before a run settles. Nothing of the
+    /// user's is written; the credential stays in the environment.
+    fn chat_launch(
+        &self,
+        kit: &crate::chat::adapter::Kit,
+    ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
+        let source = kit.plugin_source(
+            "pi",
+            serde_json::json!({"endpoint": kit.server.endpoint}),
+            include_str!("../chat/kits/pi.js"),
+        );
+        let extension = kit.write("pi-extension/mukade-chat.ts", source.as_bytes())?;
+        let exe = crate::exe::resolve(self.id(), None);
+        let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
+        command
+            .arg("-e")
+            .arg(plain(&extension))
+            .args(&kit.args)
+            .env(
+                "MUKADE_CHAT_AUTHORIZATION",
+                format!("Bearer {}", kit.server.token),
+            )
+            .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id);
+        Ok(Some(command))
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {
@@ -210,9 +247,17 @@ impl Destination for Pi {
     }
 
     fn offered(&self) -> ToolSet {
-        ToolSet {
-            names: &["read", "bash", "edit", "write"],
-        }
+        ToolSet { names: PINNED }
+    }
+
+    /// The pinned list, plus `powershell` where the settings' `defaultTools` turn it on.
+    fn offered_in(&self, roots: &StoreRoots, cwd: Option<&Path>) -> ToolSet {
+        let names = if powershell_tool(roots.pi_agent_dir.as_deref(), cwd) {
+            WITH_POWERSHELL
+        } else {
+            PINNED
+        };
+        ToolSet { names }
     }
 
     /// Pi offers `grep`, `find` and `ls` only when it is told to; a caller that knows it widens the
@@ -225,6 +270,11 @@ impl Destination for Pi {
         dest_shell: Option<Shell>,
     ) -> Translation {
         match canonical {
+            // `bash` runs a `shellPath` of PowerShell; otherwise a PowerShell call needs Pi's own
+            // `powershell` tool, which the offered set has only where it is turned on.
+            CanonicalTool::PowerShell if dest_shell != Some(Shell::PowerShell) => {
+                shell_call("powershell", input)
+            }
             CanonicalTool::Bash | CanonicalTool::PowerShell => shell(canonical, input, dest_shell),
             CanonicalTool::Read => tools::read_by_path(input),
             CanonicalTool::Write => tools::write_by_path(input),
@@ -266,9 +316,44 @@ impl Destination for Pi {
         false
     }
 
+    /// A fork's header names its origin's file (`parentSession`), as Pi's `/fork` writes it.
+    fn links_forks(&self) -> bool {
+        true
+    }
+
     fn image_in_result(&self, image: &Image) -> Value {
         crate::writer::pi::image_block(image)
     }
+}
+
+const PINNED: &[&str] = &["read", "bash", "edit", "write"];
+const WITH_POWERSHELL: &[&str] = &["read", "bash", "powershell", "edit", "write"];
+
+/// Whether the `defaultTools` Pi's settings name turn on its `powershell` tool: `powershell` or
+/// `+powershell` turns it on, `-powershell` off, the last one winning; the project's settings over
+/// the agent directory's, as for `shellPath`. Without the setting it is off, as in Pi.
+fn powershell_tool(agent_dir: Option<&Path>, cwd: Option<&Path>) -> bool {
+    let project = super::project_dir(cwd).map(|cwd| cwd.join(".pi").join("settings.json"));
+    let global = agent_dir.map(|dir| dir.join("settings.json"));
+    [project, global]
+        .into_iter()
+        .flatten()
+        .find_map(|file| {
+            let text = std::fs::read_to_string(file).ok()?;
+            let settings: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+            let tools = settings.get("defaultTools")?.as_array()?.clone();
+            Some(
+                tools
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .fold(false, |on, name| match name.trim() {
+                        "powershell" | "+powershell" => true,
+                        "-powershell" => false,
+                        _ => on,
+                    }),
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// The `shellPath` Pi's settings name: `<cwd>/.pi/settings.json` (`cwd` an existing absolute
@@ -291,11 +376,17 @@ fn shell_path(agent_dir: Option<&Path>, cwd: Option<&Path>) -> Option<String> {
 // ---------------------------------------------------------------------------------------------
 // tools toward Pi
 
-/// L12: Pi measures the timeout in **seconds**, the canonical form in milliseconds.
+/// A shell call toward `bash`, which runs the dialect `dest_shell` names (L13).
 fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) -> Translation {
     if let Some(text) = tools::other_dialect(canonical, dest_shell) {
         return text;
     }
+    shell_call("bash", input)
+}
+
+/// L12: Pi measures the timeout in **seconds**, the canonical form in milliseconds. `bash` and
+/// `powershell` take the same input.
+fn shell_call(name: &'static str, input: &Value) -> Translation {
     let Some(command) = tools::command_of(input) else {
         return Translation::Text { why: "no command" };
     };
@@ -307,7 +398,7 @@ fn shell(canonical: &CanonicalTool, input: &Value, dest_shell: Option<Shell>) ->
         pairs.push(("timeout", Value::from(ms.div_ceil(1000))));
     }
     Translation::Call {
-        name: "bash",
+        name,
         input: tools::obj_pairs(pairs),
     }
 }
@@ -408,6 +499,15 @@ fn ls(input: &Value) -> Translation {
     }
 }
 
+/// A path without Windows's `\\?\` prefix, which Pi's extension loader would not take.
+fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::shell_path;
@@ -441,5 +541,42 @@ mod tests {
             "\u{feff}{\"shellPath\":\"pwsh\"}",
         );
         assert_eq!(shell_path(Some(&agent), None).as_deref(), Some("pwsh"));
+    }
+
+    /// Pi's `powershell` tool is offered where `defaultTools` turns it on, the last entry
+    /// winning; a PowerShell call goes to it there, and to `bash` toward a `shellPath` of
+    /// PowerShell.
+    #[test]
+    fn a_powershell_call_takes_the_powershell_tool_where_it_is_turned_on() {
+        use crate::model::{CanonicalTool, HarnessId};
+        use crate::tools::{Shell, Translation};
+        for (setting, on) in [
+            (
+                r#"{"defaultTools":["read","powershell","edit","write"]}"#,
+                true,
+            ),
+            (r#"{"defaultTools":["+powershell"]}"#, true),
+            (r#"{"defaultTools":["+powershell","-powershell"]}"#, false),
+            (r#"{"defaultTools":["+codemode"]}"#, false),
+            ("{}", false),
+        ] {
+            let agent = Scratch::new("pi-powershell");
+            put(&agent.join("settings.json"), setting);
+            assert_eq!(super::powershell_tool(Some(&agent), None), on, "{setting}");
+        }
+        let pi = crate::harnesses::get(HarnessId::Pi).destination().unwrap();
+        let input = serde_json::json!({"command": "Get-ChildItem", "timeout": 1500});
+        let call =
+            |shell| match pi.translate(&CanonicalTool::PowerShell, "PowerShell", &input, shell) {
+                Translation::Call { name, input } => (name, input["timeout"].clone()),
+                other => panic!("{other:?}"),
+            };
+        assert_eq!(
+            call(Some(Shell::Posix)),
+            ("powershell", serde_json::json!(2))
+        );
+        assert_eq!(call(None).0, "powershell");
+        assert_eq!(call(Some(Shell::PowerShell)).0, "bash");
+        assert!(!pi.offered().contains("powershell"));
     }
 }

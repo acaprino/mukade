@@ -14,7 +14,10 @@ impl Scratch {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
-        let dir = root.join(format!("mukade-desktop-{tag}-{}-{next}", std::process::id()));
+        let dir = root.join(format!(
+            "mukade-desktop-{tag}-{}-{next}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the scratch folder");
         Scratch(dir)

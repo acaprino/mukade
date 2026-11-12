@@ -261,7 +261,7 @@ fn launch_takes_the_room_and_passes_the_rest_to_the_harness() {
 fn launching_a_harness_without_an_adapter_starts_nothing() {
     let root = scratch().join("data");
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_mukade"))
-        .args(["chat", "launch", "pi", "--room", "r"])
+        .args(["chat", "launch", "hermes", "--room", "r"])
         .env("MUKADE_DATA_DIR", &root)
         .output()
         .unwrap();
@@ -275,8 +275,8 @@ fn launching_a_harness_without_an_adapter_starts_nothing() {
     assert!(!root.join("bus").join("instance.json").exists());
 }
 
-/// `chat trust` touches only a harness that needs it: Claude Code runs its plugin hooks as they
-/// are, a harness without an adapter is refused, and neither starts a service.
+/// `chat trust` touches only a harness that needs it: Claude Code, OpenCode and Pi run their kit
+/// as it is, a harness without an adapter is refused, and none of them starts a service.
 #[test]
 fn trust_is_answered_without_a_service_for_a_harness_that_needs_none() {
     let root = scratch().join("data");
@@ -297,7 +297,19 @@ fn trust_is_answered_without_a_service_for_a_harness_that_needs_none() {
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["status"], "not_needed", "{report}");
 
-    let out = run(&["chat", "trust", "pi"]);
+    for harness in ["opencode", "pi"] {
+        let out = run(&["chat", "trust", harness]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(report["status"], "not_needed", "{report}");
+    }
+
+    let out = run(&["chat", "trust", "hermes"]);
     assert_eq!(
         out.status.code(),
         Some(2),

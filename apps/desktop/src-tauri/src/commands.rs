@@ -1,13 +1,19 @@
 //! The commands the interface calls. Each is a thin wrapper: the work is a plain function in a
-//! module of its own, run off the UI thread, so the unit tests need no window.
+//! module of its own (`sessions`, `actions`, `chat`), run off the UI thread, so the unit tests
+//! need no window.
 
+use crate::actions::{self, Exported, HopArgs, HopOptions, Resumed};
+use crate::chat;
 use crate::error::{CmdError, CmdResult};
 use crate::locations::{self, InstallationView, ScanNote};
 use crate::sessions::{self, RawPage, SessionRow, TranscriptView};
 use crate::state::AppState;
+use crate::view::ReceiptView;
 use serde::Serialize;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use tauri::State;
+use tauri_plugin_dialog::DialogExt;
 
 /// Run a blocking library call off the UI thread.
 pub async fn blocking<T, F>(work: F) -> CmdResult<T>
@@ -72,12 +78,31 @@ pub struct InstallationList {
     pub scans: Vec<ScanNote>,
 }
 
-/// The standard store of each harness, then every installation the folders in `scan` hold.
+/// The standard store of each harness, then every installation the folders in `scan` hold, each
+/// listed once (its count, or why its store could not be read). One listing at a time: a reload
+/// during a scan waits for it instead of interleaving.
 pub fn installations_for(state: &AppState, scan: &[String]) -> InstallationList {
+    let _one_at_a_time = state.begin_inventory();
     let mut found = locations::standard_locations(state.standard());
     let folders: Vec<PathBuf> = scan.iter().map(PathBuf::from).collect();
     let scans = locations::scan_folders(&mut found, &folders, state.standard());
-    let installations = found.iter().map(InstallationView::from).collect();
+    let installations = found
+        .iter()
+        .map(|location| {
+            let mut view = InstallationView::from(location);
+            match sessions::list_info(location) {
+                Ok(listed) => {
+                    view.count = listed.len();
+                    state.set_listed(&location.key(), listed);
+                }
+                Err(error) => {
+                    view.error = Some(error.message);
+                    state.set_listed(&location.key(), Vec::new());
+                }
+            }
+            view
+        })
+        .collect();
     state.set_locations(found);
     InstallationList {
         installations,
@@ -100,7 +125,20 @@ pub async fn sessions(
     installation: String,
 ) -> CmdResult<Vec<SessionRow>> {
     let location = state.location(&installation)?;
-    blocking(move || sessions::list(&location)).await
+    let state = state.inner().clone();
+    blocking(move || {
+        // The listing `installations` read, else the store's (and kept for the actions).
+        let listed = match state.listed(&installation) {
+            Some(listed) => listed,
+            None => {
+                let listed = sessions::list_info(&location)?;
+                state.set_listed(&installation, listed.clone());
+                listed
+            }
+        };
+        Ok(listed.into_iter().map(SessionRow::from).collect())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -113,8 +151,11 @@ pub async fn transcript(
     let location = state.location(&installation)?;
     let state = state.inner().clone();
     blocking(move || {
-        let session = sessions::read(&location, &id)?;
-        let session = state.cache_session(&installation, &id, session);
+        // A change of turn limit draws the open session again without reading it again.
+        let session = match state.cached_session(&installation, &id) {
+            Some(session) => session,
+            None => state.cache_session(&installation, &id, sessions::read(&location, &id)?),
+        };
         Ok(sessions::transcript(&session, turns))
     })
     .await
@@ -143,6 +184,132 @@ pub async fn raw(
     .await
 }
 
+#[tauri::command]
+pub async fn hop_options(
+    state: State<'_, AppState>,
+    source: String,
+    id: String,
+) -> CmdResult<HopOptions> {
+    let state = state.inner().clone();
+    blocking(move || actions::hop_options(&state, &source, &id)).await
+}
+
+#[tauri::command]
+pub async fn hop(state: State<'_, AppState>, args: HopArgs) -> CmdResult<ReceiptView> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let _write = state.begin_write();
+        actions::hop(&state, &args)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn export(
+    state: State<'_, AppState>,
+    installation: String,
+    id: String,
+    to: Option<String>,
+) -> CmdResult<Exported> {
+    let state = state.inner().clone();
+    blocking(move || actions::export(&state, &installation, &id, to.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn import(
+    state: State<'_, AppState>,
+    document: String,
+    into: String,
+    prompt: Option<String>,
+) -> CmdResult<ReceiptView> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let _write = state.begin_write();
+        actions::import(&state, &document, &into, prompt.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn resume(
+    state: State<'_, AppState>,
+    installation: String,
+    id: String,
+) -> CmdResult<Resumed> {
+    let state = state.inner().clone();
+    blocking(move || actions::resume(&state, &installation, &id)).await
+}
+
+/// A native dialog: `open` a JSON document, `save` one (with `name` proposed), or a `folder`.
+/// `None` when the person cancels.
+#[tauri::command]
+pub async fn pick(
+    app: tauri::AppHandle,
+    kind: String,
+    name: Option<String>,
+) -> CmdResult<Option<String>> {
+    blocking(move || {
+        let dialog = app.dialog().file();
+        let picked = match kind.as_str() {
+            "open" => dialog
+                .add_filter("Mukade document", &["json"])
+                .blocking_pick_file(),
+            "save" => dialog
+                .add_filter("Mukade document", &["json"])
+                .set_file_name(name.unwrap_or_else(|| "session.json".to_string()))
+                .blocking_save_file(),
+            "folder" => dialog.blocking_pick_folder(),
+            other => return Err(CmdError::refused(format!("unknown dialog {other}"))),
+        };
+        Ok(picked
+            .and_then(|path| path.into_path().ok())
+            .map(|path| path.display().to_string()))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn chat_status() -> chat::ChatStatus {
+    chat::status().await
+}
+
+#[tauri::command]
+pub async fn chat_rooms(cursor: Option<String>) -> CmdResult<Value> {
+    chat::call("rooms", chat::page_args(json!({}), &[("cursor", cursor)])).await
+}
+
+#[tauri::command]
+pub async fn chat_members(room_id: String) -> CmdResult<Value> {
+    chat::call(
+        "members",
+        chat::page_args(json!({ "room_id": room_id }), &[]),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn chat_ledger(
+    room_id: String,
+    cursor: Option<String>,
+    since: Option<String>,
+    text: Option<String>,
+) -> CmdResult<Value> {
+    chat::call(
+        "ledger",
+        chat::page_args(
+            json!({ "room_id": room_id }),
+            &[("cursor", cursor), ("since", since), ("text", text)],
+        ),
+    )
+    .await
+}
+
+/// The window asked to close while a hop or import ran, and the person confirmed.
+#[tauri::command]
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,7 +324,12 @@ mod tests {
     fn the_command_line_sets_the_turn_limit_and_the_folders_to_scan() {
         assert_eq!(parse_args(&args(&["mukade"])).turns, DEFAULT_TURNS);
         let startup = parse_args(&args(&[
-            "mukade", "--turns", "0", "--scan", "D:\\apps", "--scan=E:\\more",
+            "mukade",
+            "--turns",
+            "0",
+            "--scan",
+            "D:\\apps",
+            "--scan=E:\\more",
         ]));
         assert_eq!(startup.turns, 0, "0 means every turn");
         assert_eq!(startup.scan, vec!["D:\\apps", "E:\\more"]);
@@ -174,7 +346,10 @@ mod tests {
         let scratch = Scratch::new("installations");
         let state = AppState::new(claude_store(&scratch));
         let none = installations_for(&state, &[]);
-        assert_eq!(none.installations.len(), mukade::model::HarnessId::ALL.len());
+        assert_eq!(
+            none.installations.len(),
+            mukade::model::HarnessId::ALL.len()
+        );
         assert!(none.installations.iter().all(|i| !i.scanned));
         assert!(none.scans.is_empty());
         // An empty folder holds no installation: one note, nothing added.
@@ -185,8 +360,16 @@ mod tests {
         assert_eq!(scanned.scans.len(), 1);
         assert_eq!(scanned.scans[0].added, 0);
         assert!(!scanned.scans[0].stopped_early);
-        // The state now answers by key.
+        // The state now answers by key, and knows what each store listed.
         assert!(state.location("claude_code").is_ok());
+        let claude = none
+            .installations
+            .iter()
+            .find(|i| i.key == "claude_code")
+            .unwrap();
+        assert_eq!(claude.count, 1);
+        assert!(claude.error.is_none());
+        assert!(state.listed_session("claude_code", CLAUDE_FIXTURE).is_ok());
     }
 
     #[test]
@@ -227,6 +410,10 @@ mod tests {
         let cached = state.cache_session("claude_code", CLAUDE_FIXTURE, session);
         let page = sessions::raw_page(&cached, 0, 5);
         assert!(page.total >= page.items.len());
-        assert!(state.cached_session("claude_code", CLAUDE_FIXTURE).is_some());
+        assert!(
+            state
+                .cached_session("claude_code", CLAUDE_FIXTURE)
+                .is_some()
+        );
     }
 }

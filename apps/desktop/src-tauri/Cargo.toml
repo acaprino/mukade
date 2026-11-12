@@ -6,6 +6,10 @@ description = "Desktop app for the harness sessions manager: browse, hop, export
 license = "MIT"
 publish = false
 
+[[bin]]
+name = "mukade-ui"
+path = "src/main.rs"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
@@ -19,3 +23,5 @@ tauri-plugin-dialog = "=2.8.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+tokio = { version = "=1.54.1", features = ["time"] }

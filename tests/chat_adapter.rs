@@ -484,14 +484,6 @@ fn claude_code_reads_the_hook_answers_in_its_own_format() {
         stop,
         "Codex reads the same"
     );
-    for other in [mukade::HarnessId::OpenCode, mukade::HarnessId::Pi] {
-        assert!(
-            mukade::harnesses::get(other)
-                .chat_hook_output(Event::Stop, &Delivery::Continue("x".into()))
-                .is_none(),
-            "{other} has no adapter yet"
-        );
-    }
 }
 
 #[test]
@@ -506,6 +498,7 @@ fn the_claude_code_kit_is_a_plugin_whose_hooks_call_mukade() {
             service_id: "svc".into(),
         },
         stop_timeout: 330,
+        args: vec!["-p".into(), "hi".into()],
     };
     let command = mukade::harnesses::get(mukade::HarnessId::ClaudeCode)
         .chat_launch(&kit)
@@ -519,7 +512,9 @@ fn the_claude_code_kit_is_a_plugin_whose_hooks_call_mukade() {
         args,
         [
             "--plugin-dir".to_string(),
-            folder.to_string_lossy().into_owned()
+            folder.to_string_lossy().into_owned(),
+            "-p".into(),
+            "hi".into()
         ]
     );
     let read = |p: &str| -> Value {
@@ -619,6 +614,7 @@ fn the_codex_launch_is_configuration_overrides_and_keeps_the_credential_off_the_
             service_id: "svc".into(),
         },
         stop_timeout: adapter::STOP_HOOK_TIMEOUT,
+        args: vec![],
     };
     let command = mukade::harnesses::get(mukade::HarnessId::Codex)
         .chat_launch(&kit)

@@ -985,7 +985,7 @@ Each item is **[U]** unless stated otherwise; step-by-step checks: `next.md`.
 |---|---|
 | Codex 0.165: a chain of pages (a page whose base is itself a page) | [U]: read by following each `history_base` back to the first file, latest version winning; tested on hand-made files only (one page in 982 rollouts, its base a plain file) |
 | L10 limits, by design | Code mode is read without evaluating it: a script with variables, `Promise.allSettled`, `ALL_TOOLS`, `image(...)`, or an output not matching its statements stays one opaque text-form call |
-| L10 shell dialect | A split `exec_command` keeps the source's dialect and translates only toward a destination that runs it (tables §4.1). Open: `<shell>cmd</shell>` is read as `Bash`, and a call's own shell given as a path is ignored (`next.md`) |
+| L10 shell dialect | A split `exec_command` keeps the source's dialect and translates only toward a destination that runs it (tables §4.1). A call's own shell is read by name or path; `<shell>cmd</shell>` (or another shell of no translated dialect) leaves the call as `exec_command`, text form |
 | L10 on a real Desktop thread | The read-only census passed; a live hop is not done yet (`next.md`) |
 
 **Process control (§5)**

@@ -358,9 +358,107 @@ pub fn import_with_children(
     source_roots: &StoreRoots,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
+    let read = read_children(source, source_roots)?;
+    import_children(dest, selected, read, Vec::new(), source_roots, opts)
+}
+
+/// The children a dump document holds (`children`, nested as they hang), as [`read_children`]
+/// gives a store's: parent before child, each with its depth, the child it hangs from and the
+/// call that started it. A child document that cannot be read is in the list with the reason, and
+/// so is each child below it.
+pub fn children_of_document(doc: &Value) -> Vec<ChildRead> {
+    fn walk(
+        docs: &[Value],
+        parent: Option<usize>,
+        lost: Option<&str>,
+        depth: usize,
+        out: &mut Vec<ChildRead>,
+    ) {
+        for doc in docs {
+            let session = match lost {
+                Some(reason) => Err(reason.to_string()),
+                None => crate::wire::from_document(doc).map_err(|error| format!("{error:#}")),
+            };
+            let meta = &doc["meta"];
+            let text = |key: &str| meta[key].as_str().map(str::to_owned);
+            let parent_kind: Option<ParentKind> =
+                serde_json::from_value(meta["parent_kind"].clone()).ok();
+            let call_id = match &parent_kind {
+                Some(ParentKind::Spawn { call_id, .. }) => call_id.clone(),
+                _ => None,
+            };
+            let info = SessionInfo {
+                id: text("id").unwrap_or_default(),
+                title: text("title"),
+                cwd: text("cwd"),
+                updated: text("updated"),
+                parent: text("parent"),
+                parent_kind,
+                ..SessionInfo::default()
+            };
+            let below = session.as_ref().err().map(|why| {
+                format!(
+                    "its parent subagent {} was not read: {why}",
+                    if info.id.is_empty() { "?" } else { &info.id }
+                )
+            });
+            let index = out.len();
+            out.push(ChildRead {
+                info,
+                depth,
+                parent,
+                call_id,
+                session,
+            });
+            let kids = doc["children"].as_array().cloned().unwrap_or_default();
+            walk(&kids, Some(index), below.as_deref(), depth + 1, out);
+        }
+    }
+    let mut out = Vec::new();
+    let docs = doc["children"].as_array().cloned().unwrap_or_default();
+    walk(&docs, None, None, 1, &mut out);
+    out
+}
+
+/// Write a dump document's session into `dest` and, after it, the children it holds, as
+/// [`import_with_children`] writes a store's ([`crate::hop::import_document`] for the session).
+/// The children `dump` could not read (`children_lost`) are losses of this write too.
+pub fn import_document_with_children(
+    dest: HarnessId,
+    doc: &Value,
+    session: &Session,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
+    let opts = hop::document_opts(doc, opts);
+    let lost: Vec<String> = doc["children_lost"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|line| format!("child {line}"))
+        .collect();
+    import_children(
+        dest,
+        session,
+        children_of_document(doc),
+        lost,
+        &StoreRoots::default(),
+        &opts,
+    )
+}
+
+/// [`import_with_children`] for children already read: `read` as [`read_children`] gives them,
+/// `lost` the losses known before (children the source could not hand over).
+fn import_children(
+    dest: HarnessId,
+    selected: &Session,
+    read: Vec<ChildRead>,
+    lost: Vec<String>,
+    source_roots: &StoreRoots,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
     let destination = crate::harnesses::destination(dest)?;
     let writer = destination.writer();
-    let read = read_children(source, source_roots)?;
     let compaction = child_compaction(opts);
 
     // Every id is chosen before the parent is written: its text names its children, and a Claude
@@ -392,7 +490,10 @@ pub fn import_with_children(
     }
 
     let mut step = |written: &Written, calls: &HashMap<String, String>| -> ChildrenDone {
-        let mut done = ChildrenDone::default();
+        let mut done = ChildrenDone {
+            losses: lost.clone(),
+            ..ChildrenDone::default()
+        };
         // Per child: its destination session and the destination call each of its own spawn
         // calls became.
         let mut landed: Vec<Option<(String, HashMap<String, String>)>> = vec![None; read.len()];

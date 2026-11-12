@@ -36,7 +36,7 @@ folders.
 | identity | `id`, `reader`, `destination` | the harness, its reader, itself as a destination (`None`: a source only) |
 | store | `store_root`, `store_root_mut`, `set_store_root`, `resolve_store_path`, `store_is_in_memory`, `store_folder`, `store_holds`, `apply_store_env`, `store_stats` | where the store is in `StoreRoots`, how a path or variable names it, the folder that holds it, whether a listed location belongs to it, how a process is pointed at it, what it holds |
 | reading | `read_file`, `read_bound`, `read_all_branches`, `read_all_branches_by_id` | one session from a file; the session a chat member bound, from the place its listing named (a database holds every session: Hermes, OpenCode); every branch (`None`: one branch kept) |
-| chat | `user_origin`, `chat_hook_output`, `chat_launch`, `chat_mcp_target` | who produced a user entry (`Typed`, `Injected`, `Unknown`); what a chat hook prints in the harness's own hook format; the command that starts the harness as a member of a chat room (`None`: no chat adapter for it); where the harness keeps its user-scope MCP servers (`None`: mukade writes none for it) |
+| chat | `user_origin`, `chat_hook_output`, `chat_launch`, `chat_mcp_target` | who produced a user entry (`Typed`, `Injected`, `Unknown`); what a chat hook prints in the harness's own hook format (OpenCode and Pi: mukade's plugin format, which their launch plugin hands over); the command that starts the harness as a member of a chat room, after writing its launch kit (`None`: no chat adapter for it); where the harness keeps its user-scope MCP servers (`None`: mukade writes none for it) |
 | resume | `resume_refusal` | why a listed session cannot be opened in the harness's own interface (`None`: it can): a Claude subagent, any DeepSeek Harness session |
 | summary | `summary_command`, `parse_summary_reply`, `after_summary`, `summarizes_from_file` | the command that asks its binary for a summary, the reply, the cleanup. A harness with no run that leaves the session untouched refuses with its reason (Hermes, DeepSeek Harness) |
 
@@ -45,7 +45,7 @@ folders.
 | group | methods | answers |
 |---|---|---|
 | writer | `writer` | the writer of new sessions in its store; its `Writer` methods `new_id`, `child_id`, `child_ids_hold_root` choose ids before the session is written |
-| writing rules | `protocol`, `payload_has_place`, `provider_reads_envelope`, `payload_fits`, `validate_write`, `links_children`, `claims_id`, `interchange_document` | the wire protocol, which reasoning payloads replay, what a write may ask (each option the harness cannot take is refused, not ignored), whether a child session is linked to its parent natively, the id shape, the `document` command's output |
+| writing rules | `protocol`, `payload_has_place`, `provider_reads_envelope`, `payload_fits`, `validate_write`, `links_children`, `links_forks`, `claims_id`, `interchange_document` | the wire protocol, which reasoning payloads replay, what a write may ask (each option the harness cannot take is refused, not ignored), whether a child session is linked to its parent natively, whether a fork can name its origin's copy, the id shape, the `document` command's output |
 | destination config | `configured_model`, `project_id`, `default_shell` | the provider and model its own configuration names; the project it files a directory under; the shell it runs |
 | tools | `offered`, `offered_in`, `translate`, `accepted_keys` | its tools, pinned and as its configuration turns them on; one canonical call in its shape; the keys a call may use |
 | plan | `failed_steps_are_replies`, `flattens_result_blocks`, `image_in_result`, `image_in_user_turn` | how the plan lays out failed steps, result blocks and images |
@@ -80,7 +80,8 @@ and from `writer::for_harness` a writer that refuses every write (exit 2) withou
 | `src/tools.rs` | the canonical dispatch (`translate_with`), the accepted-keys check, the L11 offered-set safety net, the text form, the shared argument readers (`edit_call`, `grep_call`, …) and shared reasons |
 | `src/summary.rs` | running and timing the summary command, trimming and refusing an empty reply |
 | `src/hop.rs` | the pipeline: read, compact, plan, write, resume |
-| `src/children.rs` | a session's subagent sessions: finding and reading them through the reader, `dump --children`, `hop --children` (`Destination::links_children`, `Writer::child_id` say what a destination does with one) |
+| `src/registry.rs` | the hop registry in `mukade-data/registry`: what each hop and write wrote where, block fingerprints and record ids, read back to link a fork to its origin's copy and to name an earlier copy |
+| `src/children.rs` | a session's subagent sessions: finding and reading them through the reader, `dump --children`, `hop --children`, `write --children` (`Destination::links_children`, `Writer::child_id` say what a destination does with one) |
 | `src/writer/plan.rs` | the rendering plan; it asks the adapter for its flags and image shapes |
 | `src/native_compaction.rs` | native compaction records, harness-neutral |
 | `src/catalog.rs` | reading `catalog/harnesses.json` |

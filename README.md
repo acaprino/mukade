@@ -58,8 +58,8 @@ All six adapters can list and export sessions, and can act as both the source an
 | --- | --- | --- | --- |
 | <img src="docs/assets/branding/harnesses/claude-code.svg" width="24" alt=""> **[Claude Code](docs/harnesses/claude-code.md)** | `claude_code` | Read and write · detects running sessions · carries every branch of its tree | CLI · MCP live-tested |
 | <img src="docs/assets/branding/harnesses/codex.svg" width="24" alt=""> **[Codex CLI](docs/harnesses/codex.md)** | `codex` | Read and write · carries every branch of a thread (redone pages, rollbacks) | CLI · MCP live-tested |
-| <img src="docs/assets/branding/harnesses/opencode.svg" width="24" alt=""> **[OpenCode](docs/harnesses/opencode.md)** | `opencode` | Read and write · imports via OpenCode | CLI · MCP setup available |
-| <img src="docs/assets/branding/harnesses/pi.svg" width="24" alt=""> **[Pi](docs/harnesses/pi.md)** | `pi` | Read and write · carries every branch of its tree | CLI · MCP setup available |
+| <img src="docs/assets/branding/harnesses/opencode.svg" width="24" alt=""> **[OpenCode](docs/harnesses/opencode.md)** | `opencode` | Read and write · imports via OpenCode | CLI · MCP setup · launch plugin |
+| <img src="docs/assets/branding/harnesses/pi.svg" width="24" alt=""> **[Pi](docs/harnesses/pi.md)** | `pi` | Read and write · carries every branch of its tree | CLI · MCP setup · launch extension |
 | <img src="docs/assets/branding/harnesses/hermes.png" width="24" alt=""> **[Hermes Agent](docs/harnesses/hermes-agent.md)** | `hermes` | Read and write · imported tool history travels as text | CLI |
 | <img src="docs/assets/branding/harnesses/deepseek.svg" width="24" alt=""> **[DeepSeek Harness](docs/harnesses/deepseek-harness.md)** | `deepseek_harness` | Read and write · native `dsh` session logs | CLI |
 
@@ -91,7 +91,7 @@ mukade chat open --name design
 mukade chat tools
 ```
 
-Use `mukade chat connect <harness> --dry-run` to preview MCP setup for Claude Code, Codex, OpenCode, or Pi. Claude Code and Codex have exchanged messages through the server in live tests. [Connection instructions](docs/usage.md#local-chat-between-harness-instances) · [Live test record](docs/verification/2026-11-12-chat-live.md)
+Use `mukade chat launch <harness> --room <name>` to start Claude Code, Codex, OpenCode, or Pi already in a room, or `mukade chat connect <harness> --dry-run` to preview a permanent MCP setup. Claude Code and Codex have exchanged messages through the server in live tests; the OpenCode and Pi launch kits are tested against the server, not yet with a real instance. [Connection instructions](docs/usage.md#local-chat-between-harness-instances) · [Live test record](docs/verification/2026-11-12-chat-live.md)
 
 ## Rust library
 

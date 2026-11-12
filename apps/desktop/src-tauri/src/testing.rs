@@ -2,7 +2,6 @@
 
 use crate::locations::{Location, standard_locations};
 use crate::scratch::Scratch;
-use mukade::model::HarnessId;
 use mukade::roots::StoreRoots;
 use std::path::Path;
 
@@ -29,13 +28,14 @@ pub(crate) fn claude_store(scratch: &Scratch) -> StoreRoots {
     }
 }
 
-pub(crate) fn location(roots: &StoreRoots, harness: HarnessId) -> Location {
+/// The standard location of the harness named `name` (`HarnessId::as_str`).
+pub(crate) fn location(roots: &StoreRoots, name: &str) -> Location {
     standard_locations(roots)
         .into_iter()
-        .find(|location| location.harness == harness)
+        .find(|location| location.harness.as_str() == name)
         .unwrap()
 }
 
 pub(crate) fn claude(roots: &StoreRoots) -> Location {
-    location(roots, HarnessId::ClaudeCode)
+    location(roots, "claude_code")
 }

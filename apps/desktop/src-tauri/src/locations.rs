@@ -47,11 +47,6 @@ impl Location {
     pub fn is_destination(&self) -> bool {
         mukade::harnesses::get(self.harness).destination().is_some()
     }
-
-    /// Whether a session here can be read, and hopped, with every branch it keeps.
-    pub fn reads_all_branches(&self) -> bool {
-        mukade::hop::reads_all_branches(self.harness)
-    }
 }
 
 /// How an installation reaches the interface.
@@ -68,9 +63,11 @@ pub struct InstallationView {
     pub scanned: bool,
     /// Whether mukade writes this harness: a hop or an import can land here.
     pub destination: bool,
-    /// Whether a session here can be hopped with every branch it keeps (the hop's all-branches
-    /// option, `HopRequest::all_branches`), as the library answers.
-    pub all_branches: bool,
+    /// How many sessions its reader listed, when the list was read with the installations.
+    pub count: usize,
+    /// Why its store could not be listed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl From<&Location> for InstallationView {
@@ -83,13 +80,16 @@ impl From<&Location> for InstallationView {
                 .store
                 .as_ref()
                 .map(|store| store.display().to_string()),
-            engine: location
-                .store
-                .as_ref()
-                .map(|_| location.exe.clone().unwrap_or_else(|| "(standard resolution)".into())),
+            engine: location.store.as_ref().map(|_| {
+                location
+                    .exe
+                    .clone()
+                    .unwrap_or_else(|| "(standard resolution)".into())
+            }),
             scanned: location.store.is_some(),
             destination: location.is_destination(),
-            all_branches: location.reads_all_branches(),
+            count: 0,
+            error: None,
         }
     }
 }
@@ -247,35 +247,30 @@ mod tests {
         let locations = standard_locations(&standard());
         let harnesses: Vec<HarnessId> = locations.iter().map(|l| l.harness).collect();
         assert_eq!(harnesses, HarnessId::ALL.to_vec());
-        assert!(locations.iter().all(|l| l.store.is_none() && l.exe.is_none()));
+        assert!(
+            locations
+                .iter()
+                .all(|l| l.store.is_none() && l.exe.is_none())
+        );
         assert_eq!(locations[0].key(), HarnessId::ALL[0].as_str());
         let keys: std::collections::HashSet<String> = locations.iter().map(Location::key).collect();
         assert_eq!(keys.len(), locations.len(), "keys are unique");
     }
 
     #[test]
-    fn an_installation_says_whether_its_sessions_hop_with_every_branch() {
-        for location in standard_locations(&standard()) {
-            let view = InstallationView::from(&location);
-            assert_eq!(view.all_branches, mukade::hop::reads_all_branches(location.harness), "{}", view.key);
-        }
-        let view = |harness: HarnessId| {
-            let locations = standard_locations(&standard());
-            let found = locations.iter().find(|l| l.harness == harness).unwrap();
-            InstallationView::from(found).all_branches
-        };
-        assert!(view(HarnessId::ClaudeCode));
-        assert!(!view(HarnessId::OpenCode));
-    }
-
-    #[test]
     fn a_scanned_installation_keeps_its_own_store_and_engine_and_the_standard_other_stores() {
         let roots = standard();
         let mut locations = standard_locations(&roots);
-        assert_eq!(add_installations(&mut locations, &[januracode()], &roots), 1);
+        assert_eq!(
+            add_installations(&mut locations, &[januracode()], &roots),
+            1
+        );
         let found = locations.last().unwrap();
         assert_eq!(found.harness, HarnessId::OpenCode);
-        assert_eq!(found.roots.root(HarnessId::OpenCode), Some(januracode().store.as_path()));
+        assert_eq!(
+            found.roots.root(HarnessId::OpenCode),
+            Some(januracode().store.as_path())
+        );
         assert_eq!(found.roots.root(HarnessId::Pi), roots.root(HarnessId::Pi));
         assert!(found.label.contains("JanuraCode"), "{}", found.label);
         assert!(found.key().contains('@'), "{}", found.key());
@@ -296,7 +291,11 @@ mod tests {
             evidence: Vec::new(),
         };
         assert_eq!(
-            add_installations(&mut locations, &[same_as_standard, januracode(), januracode()], &roots),
+            add_installations(
+                &mut locations,
+                &[same_as_standard, januracode(), januracode()],
+                &roots
+            ),
             1
         );
         assert_eq!(locations.len(), HarnessId::ALL.len() + 1);
@@ -313,9 +312,20 @@ mod tests {
         assert!(found.iter().all(|l| l.is_destination()));
         // The same harness elsewhere is a destination: a hop from the standard OpenCode into the
         // portable one.
-        let standard_opencode = locations.iter().find(|l| l.harness == HarnessId::OpenCode && l.store.is_none()).unwrap();
-        assert!(destinations(&locations, standard_opencode).iter().any(|l| l.store.is_some()));
+        let standard_opencode = locations
+            .iter()
+            .find(|l| l.harness == HarnessId::OpenCode && l.store.is_none())
+            .unwrap();
+        assert!(
+            destinations(&locations, standard_opencode)
+                .iter()
+                .any(|l| l.store.is_some())
+        );
         // A source-only harness is never offered.
-        assert!(found.iter().all(|l| mukade::harnesses::get(l.harness).destination().is_some()));
+        assert!(
+            found
+                .iter()
+                .all(|l| mukade::harnesses::get(l.harness).destination().is_some())
+        );
     }
 }

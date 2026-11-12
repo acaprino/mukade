@@ -3,8 +3,11 @@ use super::{Health, server::error};
 use crate::bus::ChatError;
 use rmcp::{
     RoleClient, ServiceExt,
-    model::{CallToolRequestParams, ClientInfo},
-    service::RunningService,
+    model::{
+        CallToolRequest, CallToolRequestParams, CancelledNotificationParam, ClientInfo,
+        ClientRequest, RequestId, ServerResult,
+    },
+    service::{PeerRequestOptions, RunningService},
     transport::streamable_http_client::{
         StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
     },
@@ -23,6 +26,8 @@ pub struct ClientConfig {
 pub struct ChatClient {
     running: RunningService<RoleClient, ClientInfo>,
     service_id: String,
+    /// Requests sent and not answered yet; [`ChatClient::close`] cancels them.
+    in_flight: std::sync::Mutex<Vec<RequestId>>,
 }
 impl ClientConfig {
     fn http(&self) -> Result<reqwest::Client, ChatError> {
@@ -142,6 +147,7 @@ impl ChatClient {
         Self {
             running,
             service_id,
+            in_flight: std::sync::Mutex::new(Vec::new()),
         }
     }
     pub fn running(&self) -> &RunningService<RoleClient, ClientInfo> {
@@ -157,11 +163,25 @@ impl ChatClient {
         } else {
             format!("chat_{operation}")
         };
-        let result = self
+        let failed = || error("transport_failure", "Chat tool request failed");
+        let handle = self
             .running
-            .call_tool(CallToolRequestParams::new(name).with_arguments(args))
+            .send_cancellable_request(
+                ClientRequest::CallToolRequest(CallToolRequest::new(
+                    CallToolRequestParams::new(name).with_arguments(args),
+                )),
+                PeerRequestOptions::no_options(),
+            )
             .await
-            .map_err(|_| error("transport_failure", "Chat tool request failed"))?;
+            .map_err(|_| failed())?;
+        let id = handle.id.clone();
+        self.in_flight.lock().unwrap().push(id.clone());
+        let response = handle.await_response().await;
+        self.in_flight.lock().unwrap().retain(|other| *other != id);
+        let result = match response {
+            Ok(ServerResult::CallToolResult(result)) => result,
+            _ => return Err(failed()),
+        };
         let value = result
             .structured_content
             .ok_or_else(|| error("protocol_failure", "Missing structured tool response"))?;
@@ -177,7 +197,19 @@ impl ChatClient {
         }
         Ok(value)
     }
+    /// Close the session. A request still running (a `wait` whose caller was stopped) is
+    /// cancelled first: closing alone leaves the service to finish it, holding the member's
+    /// stream until then.
     pub async fn close(self) {
+        let pending = std::mem::take(&mut *self.in_flight.lock().unwrap());
+        for id in pending {
+            let cancelled = CancelledNotificationParam::new(Some(id), Some("closed".into()));
+            let _ = tokio::time::timeout(
+                Duration::from_secs(2),
+                self.running.notify_cancelled(cancelled),
+            )
+            .await;
+        }
         let _ = self.running.cancel().await;
     }
 }

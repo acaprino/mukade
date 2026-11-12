@@ -80,21 +80,17 @@ fn dump_children_of_a_subagent_lists_what_hangs_below_it() {
     assert_eq!(doc["children"].as_array().unwrap().len(), 1, "{doc:#}");
 }
 
-/// `--children` is a `list`, `dump` and `hop` option, and needs the store: not a file.
+/// `--children` is a `list`, `dump`, `hop` and `write` option; `dump` and `hop` need the store.
 #[test]
 fn children_is_refused_where_it_means_nothing() {
     let scratch = staged("cc-refuse");
-    for args in [
-        &["write", "pi", "x.json", "--children"][..],
-        &["document", "claude_code", "opencode", "x", "--children"][..],
-    ] {
-        let (code, _, stderr) = cli_code(&scratch, args);
-        assert_eq!(code, Some(1), "{args:?}: {stderr}");
-        assert!(
-            stderr.contains("--children is supported only by list, dump and hop"),
-            "{stderr}"
-        );
-    }
+    let args = ["document", "claude_code", "opencode", "x", "--children"];
+    let (code, _, stderr) = cli_code(&scratch, &args);
+    assert_eq!(code, Some(1), "{args:?}: {stderr}");
+    assert!(
+        stderr.contains("--children is supported only by list, dump, hop and write"),
+        "{stderr}"
+    );
     let (code, _, stderr) = cli_code(
         &scratch,
         &[
@@ -289,6 +285,138 @@ fn write_says_it_leaves_a_documents_children() {
     );
 
     assert_eq!(code, Some(0), "{stderr}");
-    assert!(stderr.contains("subagent session(s)"), "{stderr}");
+    assert!(
+        stderr.contains("subagent session(s)") && stderr.contains("write --children"),
+        "{stderr}"
+    );
     assert!(json(&stdout)["manifest"].get("children").is_none());
+}
+
+fn dumped_with_children(scratch: &Path) -> std::path::PathBuf {
+    let file = scratch.join("session.json");
+    let (code, _, stderr) = cli_code(
+        scratch,
+        &[
+            "dump",
+            "claude_code",
+            PARENT,
+            "--children",
+            "--output",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    file
+}
+
+/// `write --children` writes a document's subagent sessions as `hop --children` writes a store's:
+/// each after the session, the same manifest entries.
+#[test]
+fn write_children_writes_a_documents_subagents_as_hop_does() {
+    let scratch = staged("cc-write-children-pi");
+    let file = dumped_with_children(&scratch);
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            file.to_str().unwrap(),
+            "--children",
+            "--dest-version",
+            "1.2.0",
+            "--cwd",
+            scratch.join("work").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        !stderr.contains("write imports the session alone"),
+        "{stderr}"
+    );
+    let receipt = json(&stdout);
+    let manifest = &receipt["manifest"];
+    let kids = manifest["children"].as_array().unwrap();
+    assert_eq!(kids.len(), 4, "{manifest:#}");
+    let deep = child(manifest, &format!("{PARENT}.{DEEP}"));
+    assert_eq!(deep["depth"], 2);
+    assert!(Path::new(deep["dest_path"].as_str().unwrap()).is_file());
+    let bg = child(manifest, &format!("{PARENT}.{BG}"));
+    assert_ne!(bg["dest_id"], receipt["id"]);
+}
+
+/// Into Claude Code the written children are the written session's own subagents, as from a hop.
+#[test]
+fn write_children_into_claude_code_links_each_to_the_written_session() {
+    let scratch = staged("cc-write-children-cc");
+    let file = dumped_with_children(&scratch);
+    let work = scratch.join("work");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "claude_code",
+            file.to_str().unwrap(),
+            "--children",
+            "--dest-version",
+            "2.1.312",
+            "--cwd",
+            work.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let receipt = json(&stdout);
+    let dest = receipt["id"].as_str().unwrap();
+    let fg = child(&receipt["manifest"], &format!("{PARENT}.{FG}"));
+    assert_eq!(fg["link"], "native");
+    assert!(
+        fg["dest_id"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{dest}.a"))
+    );
+}
+
+/// A child the dump could not read (`children_lost`), or whose document is broken, is a loss of
+/// the write, and what hangs below a broken one is named too; the rest is written.
+#[test]
+fn write_children_counts_what_the_document_could_not_carry() {
+    let scratch = staged("cc-write-children-lost");
+    let file = dumped_with_children(&scratch);
+    let mut doc = json(&std::fs::read_to_string(&file).unwrap());
+    doc["children_lost"] = serde_json::json!(["gone-1: its transcript was deleted"]);
+    let kids = doc["children"].as_array_mut().unwrap();
+    let broken = kids
+        .iter_mut()
+        .find(|k| k["children"].as_array().is_some_and(|c| !c.is_empty()))
+        .expect("a child with a child of its own");
+    broken["messages"] = serde_json::json!("not a list");
+    std::fs::write(&file, doc.to_string()).unwrap();
+
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            file.to_str().unwrap(),
+            "--children",
+            "--dest-version",
+            "1.2.0",
+            "--cwd",
+            scratch.join("work").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let manifest = &json(&stdout)["manifest"];
+    let losses = manifest["losses"].to_string();
+    assert!(
+        losses.contains("child gone-1: its transcript was deleted"),
+        "{losses}"
+    );
+    assert!(losses.contains(&format!("child {PARENT}.{BG}")), "{losses}");
+    assert!(losses.contains("its parent subagent"), "{losses}");
+    assert_eq!(
+        manifest["children"].as_array().unwrap().len(),
+        2,
+        "{manifest:#}"
+    );
 }

@@ -488,7 +488,7 @@ empty catalogue, and the rollouts are listed as before.
 | `function_call`, `custom_tool_call` | name + arguments (the JSON string parsed) | `step_with()`, `arguments_of()` |
 | `local_shell_call`, `web_search_call` | **read from `action`**: named `local_shell` / `web_search`, input = `action`; a web search's id is its `id` (no `call_id`) | `action_of()` |
 | code-mode `exec` | split per the rule in tool conversion §5 (id of the n-th call `<id>_<n>`; `raw` untouched); otherwise one `exec` call | `src/reader/codex/exec.rs` `split_code_mode()`, `parse_script()`, `output_of()` |
-| shell dialect | `exec_command`/`local_shell` → `Bash` or `PowerShell` from the call's `shell`, else the `<shell>` of `<environment_context>` (for `exec`, the one declared before the call), else `Bash` | `canonical_call()`, `shell_declared()` |
+| shell dialect | `exec_command`/`local_shell` → `Bash` or `PowerShell` from the call's `shell` (a name or a path), else the `<shell>` of `<environment_context>` (for `exec`, the one declared before the call), else `Bash`; `cmd` or another shell of no translated dialect leaves the call as `exec_command` (text form in a hop) | `canonical_call()`, `shell_declared()`, `shell_tool()` |
 | `function_call_output`, `custom_tool_call_output` | string → text; **array (images, MCP content) → structured blocks kept** (`input_text`/`output_text` → `{"type":"text"}`, others as recorded); `is_error` always `false` (except a failed one-call `exec`) | `results_with()`, `output_item()` |
 | `agent_message` | `Meta`, not carried (limit 3) | `class_of()` |
 
@@ -586,9 +586,8 @@ codex exec fork <id> --ephemeral --skip-git-repo-check -c sandbox_mode="read-onl
    run against the real provider settles it [27].
 2. **A live hop of a real Desktop thread with code mode**: the census passed (every split call has
    one result) [50]; hopping one into a destination and resuming it settles it.
-3. **A declared `cmd`, a call's own shell path**: the reader takes `<shell>cmd</shell>` as `Bash`
-   and ignores a call's `shell` given as a path (`src/reader/codex.rs` `shell_declared()`). Reading
-   them by name settles it in code. Desktop with its agent in WSL **[U]**: which shell it declares.
+3. **Desktop with its agent in WSL [U]**: which shell it declares. (A declared `cmd` and a call's
+   shell given as a path are read since 2026-11-12, `src/reader/codex.rs` `shell_tool()`.)
 4. **Chain of pages [U]** (reader, rare shapes): a real thread redone twice settles it.
 5. **Reasoning without `encrypted_content` (R3) [U]** [19 §10]: resuming such a rollout against the
    real Responses API settles it.

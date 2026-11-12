@@ -386,7 +386,7 @@ pub(crate) fn import_inner(
 ) -> Result<Imported, HopError> {
     let destination = crate::harnesses::destination(dest)?;
     let dest_writer = destination.writer();
-    let write_opts = WriteOpts {
+    let mut write_opts = WriteOpts {
         roots: opts.roots.clone(),
         cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
         dest_version: opts.write.dest_version.clone(),
@@ -409,6 +409,7 @@ pub(crate) fn import_inner(
         exe: opts.write.exe.clone(),
         native_budget: opts.native_budget.clone(),
         subagents: subagents.clone(),
+        fork_of: None,
     };
     // What the destination does not take is refused before anything is planned.
     destination
@@ -445,6 +446,11 @@ pub(crate) fn import_inner(
         return Err(HopError::StrictCheckFailed(violations));
     }
 
+    // What the registry knows: the copy of this fork's origin here, and an earlier copy of this
+    // very session (docs/superpowers/specs/2026-11-12-hop-registry-design.md).
+    let registry = Registered::look_up(dest, session, opts, subagents, &plan);
+    write_opts.fork_of = registry.fork_of.clone();
+
     let write_span = crate::timing::span("write files");
     let written: Written = dest_writer
         .write_planned(session, &plan, &write_opts)
@@ -459,6 +465,7 @@ pub(crate) fn import_inner(
             },
         )?;
     drop(write_span);
+    let registry_error = registry.remember(&written);
     let spawn_calls = native_spawn_calls(session, &plan, subagents);
 
     let mut receipt = Receipt {
@@ -480,6 +487,7 @@ pub(crate) fn import_inner(
                 .iter()
                 .any(|block| matches!(block, crate::writer::plan::PlannedBlock::Compaction { .. })),
     );
+    losses.extend(registry.fork_loss.clone());
     // The children are written before the destination is asked to resume, so it finds them.
     let children_done = children.map(|step| step(&written, &spawn_calls));
     let manifest = |losses: Vec<String>| {
@@ -487,6 +495,7 @@ pub(crate) fn import_inner(
         if let Some(done) = &children_done {
             attach_children(&mut json, done);
         }
+        registry.attach(&mut json, registry_error.as_deref());
         json
     };
     if let Some(reason) = children_done.as_ref().and_then(|done| done.failure.clone()) {
@@ -519,6 +528,149 @@ pub(crate) fn import_inner(
         written,
         spawn_calls,
     })
+}
+
+/// What the hop registry says about one write, and the record it adds after it.
+struct Registered {
+    dir: Option<std::path::PathBuf>,
+    record: Option<crate::registry::Record>,
+    /// The copy of the fork's origin in this destination, when the fork is linked to it.
+    fork_of: Option<crate::writer::ForkOf>,
+    /// Why a fork is not linked, as a loss line.
+    fork_loss: Option<String>,
+    /// An earlier copy of this same, unchanged session in this destination.
+    earlier: Option<crate::registry::Record>,
+}
+
+impl Registered {
+    fn look_up(
+        dest: HarnessId,
+        session: &Session,
+        opts: &ImportOpts,
+        subagents: &Subagents,
+        plan: &plan::Plan,
+    ) -> Registered {
+        let mut out = Registered {
+            dir: crate::registry::enabled()
+                .then(crate::registry::dir)
+                .flatten(),
+            record: None,
+            fork_of: None,
+            fork_loss: None,
+            earlier: None,
+        };
+        let Some(dir) = out.dir.clone() else {
+            return out;
+        };
+        let store = crate::harnesses::get(dest)
+            .store_root(&opts.roots)
+            .map(|root| root.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let hashes = crate::registry::block_hashes(plan);
+        let written_as = if subagents.of.is_some() {
+            "child"
+        } else {
+            "session"
+        };
+        let source = session.meta.harness;
+        let links_forks = crate::harnesses::destination(dest)
+            .map(|destination| destination.links_forks())
+            .unwrap_or(false);
+        if let (Some(origin), Some(crate::model::ParentKind::Fork { .. }), true) = (
+            session.meta.parent.as_deref(),
+            &session.meta.parent_kind,
+            links_forks,
+        ) {
+            let copy = crate::registry::written_to(&dir, source, origin, dest, &store)
+                .into_iter()
+                .find(|record| record.written_as == "session");
+            match copy {
+                None => {
+                    out.fork_loss = Some(format!(
+                        "fork of {origin}: its origin was not written to this destination (or not since it was moved), so the fork is not linked to it"
+                    ));
+                }
+                Some(copy) => {
+                    let shared = crate::registry::shared_prefix(&hashes, &copy.blocks);
+                    if shared == 0 {
+                        out.fork_loss = Some(format!(
+                            "fork of {origin}: it shares no block with its origin's copy {}, so it is not linked to it",
+                            copy.dest.id
+                        ));
+                    } else {
+                        out.fork_of = Some(crate::writer::ForkOf {
+                            id: copy.dest.id.clone(),
+                            location: copy.dest.location.clone(),
+                            records: copy.blocks[..shared]
+                                .iter()
+                                .map(|block| block.records.clone())
+                                .collect(),
+                        });
+                    }
+                }
+            }
+        }
+        if written_as == "session" {
+            out.earlier = crate::registry::written_to(&dir, source, &session.meta.id, dest, &store)
+                .into_iter()
+                .find(|record| {
+                    record.written_as == "session"
+                        && record.source.sha256 == opts.source_facts.content_sha256
+                });
+        }
+        out.record = Some(crate::registry::Record {
+            time: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            source: crate::registry::Source {
+                harness: source.as_str().to_string(),
+                id: session.meta.id.clone(),
+                sha256: opts.source_facts.content_sha256.clone(),
+            },
+            dest: crate::registry::Dest {
+                harness: dest.as_str().to_string(),
+                store,
+                id: String::new(),
+                location: String::new(),
+            },
+            written_as: written_as.to_string(),
+            blocks: hashes
+                .into_iter()
+                .map(|hash| crate::registry::Block {
+                    hash,
+                    records: Vec::new(),
+                })
+                .collect(),
+        });
+        out
+    }
+
+    /// Add the record of what was just written. The error says why it could not be.
+    fn remember(&self, written: &Written) -> Option<String> {
+        let (dir, mut record) = (self.dir.as_ref()?, self.record.clone()?);
+        record.dest.id = written.id.clone();
+        record.dest.location = written.location.clone();
+        for (block, records) in record.blocks.iter_mut().zip(&written.records) {
+            block.records = records.clone();
+        }
+        crate::registry::add(dir, record).err()
+    }
+
+    /// The manifest's `dest.parent` (the origin's copy a fork was linked to), `earlier` (the
+    /// earlier copy of the same session here), and `registry.error` when it could not be written.
+    fn attach(&self, manifest: &mut Value, error: Option<&str>) {
+        if let Some(fork) = &self.fork_of {
+            manifest["dest"]["parent"] = Value::String(fork.id.clone());
+        }
+        if let Some(earlier) = &self.earlier {
+            manifest["earlier"] = serde_json::json!({
+                "dest_id": earlier.dest.id,
+                "location": earlier.dest.location,
+                "time": earlier.time,
+            });
+        }
+        if let Some(error) = error {
+            manifest["registry"] = serde_json::json!({"error": error});
+        }
+    }
 }
 
 /// The manifest's `children`, and the losses the children carry.
@@ -648,6 +800,11 @@ pub fn import_document(
     session: &Session,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
+    import(dest, session, &document_opts(doc, opts))
+}
+
+/// `opts` with what only a document knows: who wrote its summary, and its fingerprint.
+pub(crate) fn document_opts(doc: &Value, opts: &ImportOpts) -> ImportOpts {
     let mut opts = opts.clone();
     if let Some(facts) = doc
         .get("summary")
@@ -663,7 +820,7 @@ pub fn import_document(
             .into_iter()
             .flatten(),
     );
-    import(dest, session, &opts)
+    opts
 }
 
 /// Apply compaction to a session already read from a file, then finish the normal import path.
