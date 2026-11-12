@@ -150,7 +150,10 @@ impl Builder {
             }),
             "assistant" => self.assistant(index, m, raw),
             // A subagent's report, which the parent's model received as a message of its own.
-            "synthetic" if str_at(m, "/metadata/source").as_deref() == Some("subagent") => {
+            "synthetic"
+                if str_at(m, "/metadata/source").as_deref() == Some("subagent")
+                    && str_at(m, "/text").is_some_and(|text| !text.is_empty()) =>
+            {
                 self.entries.push(Entry {
                     id: id_of(m, index),
                     kind: Kind::User {

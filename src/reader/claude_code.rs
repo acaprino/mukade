@@ -247,9 +247,28 @@ fn peek_many(files: &[PathBuf], indexes: &[usize]) -> Vec<(usize, SessionInfo)> 
 pub fn read_file(path: &Path) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
     let _span = crate::timing::span("build entries");
-    let mut session = parse_owned(file.rows, Some(path))?;
+    let transcript = subagents::is_transcript(path);
+    let mut session = parse_owned(file.rows, Some(path)).map_err(|error| {
+        if transcript {
+            // A resumed agent's transcript points at rows in another agent's file.
+            error.context(
+                "this subagent's transcript continues another agent's (a resumed agent); mukade \
+                 does not read it yet",
+            )
+        } else {
+            error
+        }
+    })?;
     session.meta.source_sha256 = Some(file.sha256.wait());
     super::json::keep_unfinished(&mut session, file.unfinished);
+    if let (true, Some(session_id), Some(agent)) = (
+        transcript,
+        session.meta.parent.clone(),
+        subagents::agent_id_of(path),
+    ) {
+        // The listing names a child by its file; reading it by path gives the same id.
+        session.meta.id = subagents::qualified(&session_id, agent);
+    }
     if let Some(session_id) = session.meta.parent.clone() {
         // A subagent's transcript: its meta.json names the call, the agent and the task.
         let meta = subagents::agent_meta(path);

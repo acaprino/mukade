@@ -764,7 +764,8 @@ mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project'
 
 *The agent started subagents (Claude Code `Agent`, Codex `spawn_agent`, OpenCode `subagent`).* A hop
 carries the session itself: its spawn calls travel as text, and each report the parent's model
-received travels where it was received, as a user turn:
+received travels where it was received — a call's result stays its result, a report that arrived
+on its own is a user turn:
 
 | harness | the report in the parent |
 |---|---|
@@ -772,8 +773,11 @@ received travels where it was received, as a user turn:
 | Codex | an `agent_message` with readable text; an encrypted one is counted (`dropped_subagent_messages`) |
 | OpenCode | the `synthetic` message with `metadata.source: "subagent"` |
 
-A subagent's own transcript is a session of its own: `list --children` finds it, `dump` and `hop`
-take it by its id ([Subagent sessions](#subagent-sessions)).
+A report on an abandoned branch (a rewind) is left behind with that branch and counted in
+`dropped_off_branch`. A subagent's own transcript is a session of its own: `list --children` finds
+it, `dump` and `hop` take it by its id ([Subagent sessions](#subagent-sessions)). The TUI does not
+resume a Claude Code subagent (`R`): Claude Code resumes sessions, not their subagents; it names the
+parent to resume instead.
 
 ### Leave out tool calls
 

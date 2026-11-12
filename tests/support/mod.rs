@@ -542,6 +542,15 @@ pub fn assert_hops_keeping(source: &Session, text: &str, tag: &str) {
         let receipt = mukade::hop::import(dest, source, &import_opts(&write_opts, source, None))
             .unwrap_or_else(|error| panic!("{dest:?}: {error:?}"));
         assert_eq!(receipt.manifest["strict"]["checked"], true, "{dest:?}");
+        // Strict passing is not enough: the plan repairs a broken pairing quietly, so nothing
+        // may have been repaired either.
+        for repair in ["dropped_orphan_results", "dropped_duplicate_results", "unanswered_calls"] {
+            assert_eq!(
+                receipt.manifest["counts"][repair], 0,
+                "{dest:?}: {repair} in {:#}",
+                receipt.manifest["counts"]
+            );
+        }
         let written = read_destination(dest, &receipt.location);
         assert!(
             user_texts(&written).iter().any(|turn| turn.contains(text)),

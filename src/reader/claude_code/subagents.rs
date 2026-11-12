@@ -30,8 +30,10 @@ pub(super) fn qualified(parent: &str, agent: &str) -> String {
 
 /// A qualified id's parent session id and agent id. A session id has no `.`; an agent id may.
 pub(super) fn split(id: &str) -> Option<(&str, &str)> {
+    // Each part becomes a path segment: a separator or a `..` would leave the store.
+    let segment = |part: &str| !part.is_empty() && !part.contains(['/', '\\']) && part != "..";
     id.split_once('.')
-        .filter(|(parent, agent)| !parent.is_empty() && !agent.is_empty())
+        .filter(|(parent, agent)| segment(parent) && segment(agent))
 }
 
 /// The agent id a transcript's file name gives: `agent-<agentId>.jsonl`.
@@ -149,6 +151,15 @@ pub(super) fn find(projects: &Path, parent: &str, agent: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_qualified_id_never_names_a_path() {
+        assert_eq!(split("s-1./x"), None);
+        assert_eq!(split(r"s-1.a\x"), None);
+        assert_eq!(split("s-1..."), None);
+        assert_eq!(split("..a1"), None);
+        assert_eq!(split("s-1.a1.b"), Some(("s-1", "a1.b")));
+    }
 
     #[test]
     fn a_qualified_id_splits_at_its_first_dot() {

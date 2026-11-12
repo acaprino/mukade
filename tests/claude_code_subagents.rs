@@ -217,6 +217,37 @@ fn a_child_transcript_reads_as_the_child_from_its_file() {
     );
 }
 
+/// A file named by the listing reads back under that same id, whatever its rows' `agentId`
+/// says; a resumed agent's transcript, whose rows point into another agent's file, is refused
+/// saying so.
+#[test]
+fn a_child_file_reads_under_its_listed_id_and_a_resumed_one_says_why_it_is_refused() {
+    let roots = staged("sub-path-id");
+    let folder = roots
+        .claude_projects()
+        .unwrap()
+        .join("D--work-modules")
+        .join(PARENT)
+        .join("subagents");
+    let original = std::fs::read_to_string(folder.join(format!("agent-{FG}.jsonl"))).unwrap();
+
+    let renamed = folder.join("agent-a9999999999999999.jsonl");
+    std::fs::write(&renamed, &original).unwrap();
+    let read = claude_code::read_file(&renamed).unwrap();
+    assert_eq!(read.meta.id, child("a9999999999999999"));
+
+    let resumed = folder.join("agent-a8888888888888888.jsonl");
+    let continued = original.replacen(
+        "\"parentUuid\":null",
+        "\"parentUuid\":\"row-in-another-agents-file\"",
+        1,
+    );
+    assert_ne!(continued, original);
+    std::fs::write(&resumed, continued).unwrap();
+    let error = format!("{:#}", claude_code::read_file(&resumed).unwrap_err());
+    assert!(error.contains("continues another agent's"), "{error}");
+}
+
 /// The parent reads as before: no parent of its own, and its children stay in their own files.
 #[test]
 fn the_parent_reads_as_a_root() {

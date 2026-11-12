@@ -78,8 +78,13 @@ Left open by phase 1:
   store); `forked-skill` files and `workflows/` are not listed.
 - *Codex:* the encrypted prompts a parent sends its children stay encrypted; threads whose rollout
   is gone are listed by `--children` as before.
-- *TUI:* children are flat rows; `R` on a Claude Code child runs `claude --resume <parent>.<agent>`,
-  which Claude Code cannot resume.
+- *TUI:* children are flat rows (nesting comes with the TUI work); `R` on a Claude Code child names
+  the parent to resume instead.
+- *Claude Code `queued_command` attachments* (prompts the user typed mid-turn, `commandMode:
+  prompt`) still read as `Meta(Attachment)` and are dropped uncounted: 1110 on the author's store,
+  25 also as a plain row. Same fix as the reports: a user turn in place.
+- *`list --children` cost:* every child's `meta.json` is read on each call (~150 ms for 840 children
+  on the author's store); keep its fields in the listing cache.
 
 **Shell dialects, left open** ([spec](docs/superpowers/specs/2026-11-12-destination-shell-design.md)).
 
