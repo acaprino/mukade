@@ -223,7 +223,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 
 - **`Glob` and `Grep`**: on by default on Windows. On macOS, Linux and WSL the shell runs embedded `bfs` and `ugrep` and the tools are absent unless `--tools` or `--allowedTools` names them, or Bash is removed; naming either in `--allowedTools` restores both, an allow rule in a settings file does not [29].
 - **Not in the table.** `TaskOutput` was removed in v2.1.277 [12]. The SDK reference also names `ReadMcpResourceDir`, `Projects`, `RefreshMcpTools` (needs `CLAUDE_CODE_ENABLE_REFRESH_MCP_TOOLS=1`), `ShowOnboardingRolePicker`, `StructuredOutput`, and marks `REPL` removed [32]. The 2.1.316 binary also holds `ArtifactComments`, `ArtifactData`, `ArtifactCheck`, `TeamCreate`, `TeamDelete`; a name there does not show the tool is offered (a `system/init` `tools` list would) [37].
-- **`PowerShell`** [44]: on Windows with Git Bash, on for claude.ai and Console accounts (a server-side flag, cached in `~/.claude.json`) and off on Bedrock, Vertex and Foundry; on Windows without Git Bash, the only shell; off on macOS, Linux and WSL. `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` or `0` overrides, in the environment or a settings `env` block (managed, `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`). A `Bash` deny rule turns it off, unless the variable is `1` or a `PowerShell(...)` rule exists. The `defaultShell` setting concerns only `!` commands and hooks.
+- **`PowerShell`** [44]: on Windows with Git Bash, on for claude.ai and Console accounts (a server-side flag, cached in `~/.claude.json`) and off on Bedrock, Vertex and Foundry; on Windows without Git Bash, the only shell; off on macOS, Linux and WSL. `CLAUDE_CODE_USE_POWERSHELL_TOOL=1` or `0` overrides, in the environment or a settings `env` block (which of the two wins: **[U]**) (managed, `~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`). A `Bash` deny rule turns it off, unless the variable is `1` or a `PowerShell(...)` rule exists. The `defaultShell` setting concerns only `!` commands and hooks.
 - **What a run is offered** depends on version, platform, model and settings. The mukade bench (2.1.311, default settings, no plugins) was offered 23 tools, listed in [tool-conversion-tables §2](../tool-conversion-tables.md) [3] (`src/tools.rs` `offered()`).
 - **Mapping to Codex, OpenCode and Pi**: [tool-conversion-tables](../tool-conversion-tables.md).
 
@@ -415,18 +415,25 @@ Code: `src/writer/claude_code.rs` (`write_planned()`, `rows()`), `src/writer/pla
 ### The `PowerShell` tool
 
 The offered set is the pinned list plus `PowerShell` where the installation runs it
-(`src/harnesses/claude_code.rs` `powershell_enabled()`), first answer wins:
+(`src/harnesses/claude_code.rs` `powershell_enabled()`). `--dest-shell` does not change it. First
+answer wins:
 
 | # | mukade reads | answer |
 |---|---|---|
-| 1 | `CLAUDE_CODE_USE_POWERSHELL_TOOL` in its own environment | `1` on, `0` off; empty or another value: next |
+| 1 | `CLAUDE_CODE_USE_POWERSHELL_TOOL` in mukade's environment | `1` on, `0` off; empty or another value: next |
 | 2 | the same key under `env` in `<cwd>/.claude/settings.local.json`, `<cwd>/.claude/settings.json`, `<CLAUDE_CONFIG_DIR>/settings.json`, in that order | as 1 |
-| 3 | the newest transcripts directly in `<CLAUDE_CONFIG_DIR>/projects/*/` (by modification time, at most 5; the last 1 MiB of each): the last environment snapshot's `shell` | on when it starts with `PowerShell` |
+| 3 | the newest transcripts directly in `<CLAUDE_CONFIG_DIR>/projects/*/`, by modification time: the first with an environment snapshot of this machine's `platform` (`win32`, `darwin`, `linux`) | on when its `shell` starts with `PowerShell` |
 | 4 | nothing found | off |
 
-`<cwd>` is the project the session is filed under. Not read **[U]**: a `Bash` deny rule and the
-cached account flag; a snapshot reflects both. A session mukade wrote has no snapshot, yet counts
-toward the 5.
+- **Order of 1 and 2 [U]:** whether Claude Code itself lets its environment win over a settings
+  `env` block is not established; mukade reads its own environment first.
+- **`<cwd>`** is the project the session is filed under, read only when it is an absolute path to a
+  folder that exists.
+- **Transcripts (3):** each file is read in its last and its first 1 MiB; the tail's last snapshot
+  wins, else the head's last (a long session records its snapshot near its start). A file without
+  one (a session mukade wrote, one of another platform, as in a configuration folder shared with
+  WSL) passes to the next: at most 20 files and 40 MiB read in all.
+- **Not read [U]:** a `Bash` deny rule and the cached account flag; a snapshot reflects both.
 
 ## How mukade summarizes it
 

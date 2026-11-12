@@ -561,11 +561,13 @@ a `cwd` starting with `-`; a `--dest-id` other than `ses_` plus letters, digits,
 **Shell** (`src/harnesses/opencode.rs` `opencode_shell()`): `--dest-shell`, else the `shell` of the
 first source below that sets one, else `$SHELL`, else PowerShell on Windows, else none (shell calls
 travel as text). A shell of no known dialect (`fish`, `nu`, `cmd`) passes to the next of these.
+`$SHELL` and the variables below are read from mukade's environment: run the hop from the terminal
+OpenCode will run in. From Git Bash on Windows, `$SHELL` names bash, so the answer is POSIX.
 
 | # | source, nearest first |
 |---|---|
 | 1 | `OPENCODE_CONFIG_CONTENT` |
-| 2 | from the project (`--cwd`, else the source's) up to its git worktree (the folder holding `.git`), in each folder: `.opencode/opencode.jsonc`, `.opencode/opencode.json`, `opencode.jsonc`, `opencode.json` |
+| 2 | from the project (`--cwd`, else the source's; an absolute path to a folder that exists, else skipped) up to its git worktree (the folder holding `.git`), in each folder: `.opencode/opencode.jsonc`, `.opencode/opencode.json`, `opencode.jsonc`, `opencode.json` |
 | 3 | `OPENCODE_CONFIG` |
 | 4 | the global folder: beside the store when a configuration is there (as for the model), else `$XDG_CONFIG_HOME/opencode/`, else `~/.config/opencode/`; `opencode.jsonc`, then `opencode.json` |
 

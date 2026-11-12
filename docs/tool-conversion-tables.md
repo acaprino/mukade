@@ -194,7 +194,7 @@ destination runs the same dialect.
   | Codex | PowerShell on Windows, POSIX elsewhere (no configuration key) |
   | OpenCode | its configuration's `shell`, else `$SHELL`, else PowerShell on Windows, else none |
   | Pi | its settings' `shellPath`, else POSIX |
-  | Claude Code | none needed: the call's own dialect picks the tool |
+  | Claude Code | none needed: the call's own dialect picks the tool (its `PowerShell` tool is the offered set's, below) |
 
   A shell is read by its base name, `.exe` and case ignored: `bash`, `sh`, `zsh`, `dash`, `ksh` are
   POSIX; `pwsh`, `powershell` PowerShell; any other (`cmd`, `fish`, `nu`) gives no answer from that

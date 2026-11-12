@@ -99,29 +99,41 @@ checked on every rollout of this machine ([census](2026-11-11-codex-code-mode.md
 scripts split). Left: one live hop.
 
 Every Desktop rollout declares PowerShell, so its shell calls translate only toward a destination
-that runs PowerShell (here `--dest-shell powershell`;
-[tables §4.1](../tool-conversion-tables.md#41-shell)).
+that runs PowerShell ([tables §4.1](../tool-conversion-tables.md#41-shell)): Codex on Windows does,
+with no flag; Pi does only with a `shellPath` naming pwsh (without one it runs Git Bash).
 
 **Needs:** one Codex **Desktop** thread with a few shell commands and a file edit in it.
 
 **Do**
 
 ```powershell
+mukade hop codex YOUR_DESKTOP_THREAD_ID codex --cwd 'C:\work\scratch'
+codex resume <the id the receipt names>
+```
+
+Pi as well, with its shell set to pwsh in a scratch agent folder:
+
+```powershell
 $env:PI_CODING_AGENT_DIR = "$env:TEMP\pi-scratch"
-mukade hop codex YOUR_DESKTOP_THREAD_ID pi --dest-shell powershell --cwd 'C:\work\scratch'
+New-Item -ItemType Directory -Force $env:PI_CODING_AGENT_DIR | Out-Null
+'{"shellPath":"pwsh"}' | Set-Content -Encoding ascii "$env:PI_CODING_AGENT_DIR\settings.json"
+mukade hop codex YOUR_DESKTOP_THREAD_ID pi --cwd 'C:\work\scratch'
 pi --session <the file the receipt names>
 ```
 
 **Pass if**
 
-- [ ] The manifest's losses name far fewer text-form calls than the thread has `exec` calls.
+- [ ] Both manifests' losses name far fewer text-form calls than the thread has `exec` calls.
+- [ ] Codex shows the shell commands as `exec_command` calls with their output (the edits stay
+  text: Codex's patch form is not written).
 - [ ] Pi shows the shell commands as `bash` calls with their output, and the edits as `edit` calls.
 
-**Write down:** the manifest's `tools_text_form` and the thread's `exec` count.
+**Write down:** each manifest's `tools_text_form` and the thread's `exec` count.
 
 **Clean up:**
 
 ```powershell
+codex delete --force <the id the Codex receipt names>
 Remove-Item -Recurse "$env:TEMP\pi-scratch"
 $env:PI_CODING_AGENT_DIR = "$env:USERPROFILE\.pi\agent"
 ```
