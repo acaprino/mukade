@@ -1,6 +1,7 @@
 # Hop registry, fork links and `write --children` — design
 
-Status: **proposed** 2026-11-12, not decided. Two choices are the user's (§5). Everything below
+Status: **decided** 2026-11-12: the design below, with the user's two choices in §5 (a new copy
+with a notice; the registry on by default). Everything below
 marked [V] was read in this repository's code on 2026-11-12; [U] is not verified against a harness.
 
 ## 1. Problem
@@ -100,7 +101,9 @@ same destination store, the fork is written with the destination's own link:
 ### 4.4 Repeated hops
 
 The registry also tells when the same source content (`content_sha256`) was already written to
-the same destination store and is still there. What to do then is §5, question 1. A child is never
+the same destination store and is still there. Then mukade writes a new copy, as
+today, and prints a notice naming the earlier one (`mukade: <source id> was already written to
+<dest> as <id> on <time>; this is a new copy`); the receipt carries it as `earlier`. A child is never
 reused on its own: in Claude Code and OpenCode a child belongs to the parent it was written under,
 so a new parent copy takes new child copies.
 
@@ -117,7 +120,7 @@ so a new parent copy takes new child copies.
 
 Size: medium. Order: §4.1–4.2, then 4.3 per destination (Pi, Claude Code, Codex, OpenCode), then 4.4.
 
-## 5. Choices for the user
+## 5. Choices (decided by the user on 2026-11-12: 1a, 2 on by default)
 
 1. **The same unchanged session hopped again into the same destination**, still there:
    - (a) write a new copy, as today, and print a notice naming the earlier one — *recommended*:
