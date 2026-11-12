@@ -1,42 +1,46 @@
 # Hermes Agent
 
-Hermes Agent is Nous Research's MIT-licensed Python agent, with a terminal front end, a background gateway
-per profile and an ACP mode [1][R 23]. mukade does not support it yet: no reader, no writer; ADR-0002
-(Proposed) plans read-first support with Hermes as a source only [27].
+Hermes Agent is Nous Research's MIT-licensed Python agent, with a terminal front end, a background gateway per profile and an ACP mode [1][R 23].
+mukade reads its sessions from `state.db` and writes them through Hermes's own `sessions import`: list, dump, hop in and out, resume. Verified on v0.23.1 on this machine.
 
-Evidence: `[n]` = source n in [Sources](#sources); `[S n]` = Hermes source at tag `v0.22.5`; `[R n]` =
-Shinatama research, nothing run; **[V]** = observed on this machine; **[U]** = not established (the text
-says what would settle it).
+Evidence: `[n]` = source n in [Sources](#sources); `[S n]` = Hermes source at tag `v0.22.5`; `[R n]` = Shinatama research, nothing run; **[V]** = observed on this machine; **[U]** = not established (the text says what would settle it).
 
 ## Status in mukade
 
 | | |
 |---|---|
-| Read (`list`, `dump`) | ❌ No reader [V][30]; ADR-0002 plans `state.db` read-only, schema 31 only [27] |
-| Write | ❌ No writer; ADR-0002 plans none: source-only [27] |
-| Hop as source | ❌ Planned: `mukade hop hermes <session-id> claude_code` (EX-001) [27] |
-| Hop as destination | ❌ Planned to stay refused: exit code 2 before any plan or write (EX-002, INV-002) [27] |
-| Resume | ❌ No resume command in a receipt: mukade would never write a Hermes session [27] |
-| Summary by its own model | ❌ The design draft refuses `--compaction summary` in its first phase [32] |
-| Native compaction | ❌ Never a destination, so none written; as a source the draft refuses `--compaction portable` (no stored summary row [U]) [27][32] |
-| Notable gaps | ❌ No `HarnessId`, catalog entry, fixture, test or tool-table row [V][30]; Hermes not installed here, never run [V][29][31] |
+| **Read** (`list`, `dump`) | ✅ `<HERMES_HOME>/state.db`, opened read-only; schema 32 and later (33 verified) with the columns the reader needs. Lists every session, `oneshot` and `tool` ones included [37] |
+| **Write** | ⚠️ through `hermes sessions import --from claude`, never by writing `state.db`. Only user and assistant text arrives; every tool call is text; no model, no reasoning, no image. Takes about 70 s (the import starts the gateway) [33][35] |
+| **Hop as source** | ✅ `mukade hop hermes <id> <dst>`; `--all-branches` does not apply |
+| **Hop as destination** | ⚠️ works with the losses above; `--dest-id`, `--dest-path`, `--dest-agent`, `--metadata-file` and `--compaction native` are refused (exit 2) before anything runs |
+| **Resume** | ✅ receipt: `hermes chat -Q --resume <id> -q`; the TUI runs `hermes --resume <id>` |
+| **Summary by its own model** | ❌ `--compaction summary` from Hermes is refused, with the reason (How mukade summarizes it) |
+| **Native compaction** | ⚠️ read: a stored summary row (`_compressed_summary = 1`) is a compaction entry, so `--compaction portable` works; never written (the import has no such record) |
+| **Subagents** | ⚠️ read: `delegate_task` sessions are children (`list --children`, `dump --children`); a `/branch` copy is a fork. Written: `hop --children` imports each child as a session of its own, unlinked |
+| **Notable gaps** | ⚠️ a written session has no model and no tool result of its own; its folder is kept only when it exists here; Hermes may leave the session untitled |
+| **Not supported** | ❌ a named profile is another installation: pass its folder as `--root` / `HERMES_HOME` |
+| **mukade name** | `hermes` (`mukade list hermes`, `mukade hop <src> <id> hermes`) [33] |
+| **Versions** | v0.23.1 (schema 33) read and written live on 2026-11-12 [35][36]; v0.22.5 (schema 32) by source only [34] |
 
 ## Quick start
 
-mukade cannot read Hermes today. `mukade list hermes` stops with `unknown harness "hermes" (claude_code, codex, opencode, pi)` (`src/model/harness.rs` `HarnessId`, `FromStr`) [V][30].
+```powershell
+# 1. Point mukade at the store
+$env:HERMES_HOME = "$env:LOCALAPPDATA\hermes"      # macOS/Linux: export HERMES_HOME=~/.hermes
 
-Inspect the store by hand (none of this was run: Hermes is not installed here [V][31]):
+# 2. Find and inspect a session
+mukade list hermes
+mukade dump hermes YOUR_HERMES_SESSION_ID --output C:\work\session.json
 
-```sh
-hermes status                                   # install status; prints no secrets
-hermes sessions list                            # a text table, no JSON
-hermes sessions export - --session-id <id> --format jsonl   # or md | html | trace (Claude Code JSONL)
-hermes chat --resume <id|title|latest>          # resume it in Hermes
+# 3. Hop out of Hermes
+mukade hop hermes YOUR_HERMES_SESSION_ID claude_code --cwd 'C:\work\my-project'
+
+# 4. Hop into Hermes (the import takes about a minute), then continue it
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID hermes
+hermes --resume NEW_SESSION_ID
 ```
 
-To read `state.db` itself, open it read-only, for example `sqlite3 -readonly "<home>/state.db"`, then `SELECT * FROM schema_version;` (not run either); this settles Open points 1. Even a read-only open of a WAL database can create `-wal` and `-shm` sidecars [32].
-
-Planned mukade commands, not implemented: [ADR-0002 EX-001 to EX-003](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#verified-interview-examples) (`mukade list hermes`, `mukade hop hermes <session-id> claude_code`, `mukade hop claude_code <session-id> hermes`) [27].
+Inspect the store by hand: `hermes sessions list` (a text table), `hermes sessions export - --session-id <id> --format jsonl`, `sqlite3 -readonly "<home>/state.db" "SELECT * FROM schema_version"`. A read-only open of a WAL database can create `-wal` and `-shm` sidecars [32].
 
 ## Install and locate
 
@@ -45,102 +49,96 @@ Planned mukade commands, not implemented: [ADR-0002 EX-001 to EX-003](../adr/ADR
 | Vendor | Nous Research; repository `NousResearch/hermes-agent` [1][2] |
 | Licence, source | MIT; <https://github.com/NousResearch/hermes-agent> [1] |
 | Docs | <https://hermes-agent.nousresearch.com/docs/> [1] |
-| Version described | v0.22.5: tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`, published 2026-10-23T05:28:45Z by the GitHub releases API [2]. Shinatama's design and the design draft give 2026-10-22 [R 23][32]; the persistence reference: release notes 2026-10-22, GitHub 2026-10-23 [28]. Described from documentation and source only [V][29][31] |
-| Page updated | Hermes facts as read on 2026-11-01; mukade facts re-checked on 2026-11-11 [V][30] |
+| Version described | v0.23.1 (commit `3b421578588243f920886e6fe79a6faa87ea026e`, released 2026-11-10), installed and exercised here on 2026-11-12 [34][36]. The tool tables below come from tag `v0.22.5` (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`) and the docs site [2] |
+| `hermes --version` | `Hermes Agent v0.23.1 (2026.9.24) · stable · …`: mukade parses `^Hermes Agent v(\S+)`; the date in parentheses is a stale constant [34] |
 | Runtime | Python 3.11 to 3.14; installed by its own script with a bundled uv [1][R 23] |
-| Agent loop | `hermes chat` finds or starts the profile's background gateway, creates or resumes the session there and attaches over a local WebSocket. Closing the terminal only detaches and the turn keeps running; Ctrl+C stops it. Launch flags are fixed at session creation; a resume cannot change them [6][R 23] |
-| Front ends | classic CLI (prompt_toolkit, the default, writes to normal scrollback); `hermes chat --tui`, an alternate-screen Node TUI with mouse tracking on by default; the ACP server `hermes-acp`; toolsets for messaging platforms (Discord, Feishu/Lark, Yuanbao) and a desktop app (`desktop_ui`, `project`, `onboarding`, `catalog`) [R 23][S 11] |
-| Windows | native: a UTF-8 console shim; the gateway runs detached through `pythonw` [R 23][32] |
-| mukade name | none yet. ADR-0002's examples write `hermes`; the design draft proposes that id as the author's own call [27][32] |
+| Agent loop | `hermes chat` finds or starts the profile's background gateway, creates or resumes the session there and attaches over a local WebSocket. Closing the terminal only detaches; Ctrl+C stops the turn. Launch flags are fixed at session creation [6][R 23] |
+| Front ends | classic CLI (the default); `hermes chat --tui`, an alternate-screen Node TUI; the ACP server `hermes-acp`; messaging-platform toolsets and a desktop app [R 23][S 11] |
+| Windows | native: a UTF-8 console shim, the gateway detached through `pythonw`. mukade sets `PYTHONIOENCODING=utf-8` for the import, whose confirmation line has a check mark [R 23][35] |
 
-**Docs against the tag.** The docs site shows current documentation, which differs from the tag: its `browser` toolset lists 4 tools [5], the tag 14 [S 11]. The tag wins [29]: this page takes behaviour from the docs and tool names from the tag. Read only in part: the hooks page (first 100000 of 149287 characters; the shell-hook section was not reached) [8] and the configuration page (first 100000 of 284048) [10].
+**Docs against the tag.** The docs site shows current documentation, which differs from the tag: its `browser` toolset lists 4 tools [5], the tag 14 [S 11]. The tag wins [29]: this page takes behaviour from the docs and tool names from the tag.
 
-**Install.** Hermes's own script, which bundles uv (macOS, Linux, Windows) [R 23]. **[U]**: the script's URL and command, on every OS including Windows, are not in the sources read (the README [1] and the docs site [6] would settle it); update, uninstall and side-by-side installs **[U]**.
+**Install.** Hermes's own script, which bundles uv [R 23]. **[U]**: the script's URL and command on every OS, update and side-by-side installs.
 
 **Locations**
 
 | what | Windows | macOS / Linux |
 |---|---|---|
-| Launcher | `%LOCALAPPDATA%\hermes\bin\hermes`; native executable or shim **[U]**, planned check HM1 [R 23][26] | **[U]** |
-| Hermes home (default) | `%LOCALAPPDATA%\hermes` [R 24][32] | `~/.hermes` [R 24][32] |
-| Move the home | `HERMES_HOME` [R 24] | `HERMES_HOME` [R 24] |
-| Session database | `<home>\state.db` [R 24][32] | `<home>/state.db` [R 24][32] |
-| Named profile | `<root>\profiles\<name>\`, own `state.db` [32] | `<root>/profiles/<name>/`, own `state.db` [32] |
-| Secrets and login | `<home>\.env`, `<home>\auth.json` [R 23] | `<home>/.env`, `<home>/auth.json` [R 23] |
-| Skills, plugins | `<home>\skills\`, `<home>\plugins\` [R 23] | `<home>/skills/`, `<home>/plugins/` [R 23] |
-| Settings, hook approvals | the profile's `config.yaml` and `shell-hooks-allowlist.json`; exact paths **[U]** [R 23] | the same **[U]** |
+| Launcher | `%LOCALAPPDATA%\hermes\bin\hermes.exe` **[V]**; the tree's own `%LOCALAPPDATA%\hermes\hermes-agent\.hermes\bin\hermes.exe` [34]; not on `PATH` in a fresh shell | `~/.local/bin/hermes` **[U]** |
+| Hermes home (default) | `%LOCALAPPDATA%\hermes` **[V]** | `~/.hermes` [34] |
+| Move the home | `HERMES_HOME` | `HERMES_HOME` |
+| Session database | `<home>\state.db` **[V]** | `<home>/state.db` |
+| Named profile | `<root>\profiles\<name>\`, its own `state.db`; `<root>/active_profile` names the sticky one [34] | the same |
+| Secrets and login | `<home>\.env`, `<home>\auth.json` | the same |
 
-- **One lever.** `HERMES_HOME` and the profile (`-p`) are the only levers; they move settings, hooks and the session store together, with no per-launch switch for hooks or MCP [R 23]. Whether `HERMES_HOME` alone keeps everything inside it is planned check HM9 [26].
-- **Find an install.** `Get-Command hermes -All` (PowerShell) or `command -v hermes` (macOS/Linux), then `hermes status`. `hermes --version` and `--help` were never run: output **[U]**. `Get-Command hermes` found nothing here on 2026-11-01 [V][31], and the earlier research found nothing with `where hermes` [29].
-- **mukade discovery.** `mukade harnesses` does not list Hermes (no `catalog/harnesses.json` entry); the detectors under `src/detect/` cover only the four supported harnesses, so `detect`, `scan` and `--root` do not recognize a Hermes home [V][30]. The shared per-OS procedure is in the [harness catalog](../reference/harness-catalog.md#finding-existing-installations).
-- **Paid parts.** The Nous Tool Gateway (search through Perplexity, page extraction through Firecrawl) needs a paid Nous subscription [9][S 12]. The licence of the desktop app that `desktop_ui` implies was not checked **[U]**.
+- **One lever.** `HERMES_HOME` and the profile (`-p`) move settings, hooks and the session store together [R 23].
+- **Find an install.** `mukade harnesses` (binary, version, store, session count), or `Get-Command hermes -All`, then `hermes --version`.
+- **mukade discovery.** Catalog entry `hermes`; flag `--hermes-exe`, variable `MUKADE_HERMES_EXE`; store variable `HERMES_HOME` (default `%LOCALAPPDATA%\hermes` on Windows, else `~/.hermes`); `detect`, `scan` and `--root` recognize a home by its `state.db`. The shared procedure is in the [harness catalog](../reference/harness-catalog.md#finding-existing-installations).
+- **Paid parts.** The Nous Tool Gateway needs a paid Nous subscription [9][S 12].
 
 ## Session store
 
-Nothing here was observed: no `state.db` was opened [V][31]. It rests on Shinatama's research of 2026-10-31 on the v0.22.5 source [R 24] and on the design draft's reading of Hermes's session-storage documentation [32].
+Read on this machine (schema 33) and in the v0.23.1 source [34][36].
 
 | path | holds |
 |---|---|
-| `<home>/state.db` | every session of the profile: SQLite with FTS5 and WAL [R 24][32] |
-| `<root>/profiles/<name>/state.db` | a named profile's own sessions [R 24][32] |
-| `<home>/sessions/` | a JSONL copy, written only as a fallback [R 24] |
-| `state.db-wal`, `state.db-shm` | WAL sidecars; a read-only open can create them [32] |
+| `<home>/state.db` | every session of the profile: SQLite, FTS5, WAL |
+| `<root>/profiles/<name>/state.db` | a named profile's own sessions |
+| `<home>/sessions/` | a JSONL fallback copy [R 24] |
+| `state.db-wal`, `state.db-shm` | WAL sidecars |
 | `cache/delegation/live/` | sub-agent logs, pruned after 7 days [R 23] |
-| `sessions.json`, `kanban.db`, `response_store.db` | named by a secondary report: gateway session mappings (rewritten atomically), kanban, responses; none opened **[U]** [28] |
 
-**Schema version [U].** 32 in Shinatama's reading of the v0.22.5 source [R 24]; 31 in ADR-0002 and the design draft, from Hermes's session-storage documentation, in a `schema_version` table [27][32] (Open points 1).
+**Schema version.** `schema_version` holds one row: 32 at v0.22.5, 33 at v0.23.1 (data-only: re-tags delegate rows that lost `_delegate_from`). The number is not a shape contract: columns are added under the same number, and Hermes never refuses a newer schema. mukade accepts 32 and later and checks the columns it needs (`PRAGMA table_info`), refusing a store that lacks one by naming it [34].
 
-**Tables.** Shinatama's `sessions` list is cut with "…" [R 24]; the draft's extra columns come from an abridged documentation page; the full set in `SCHEMA_SQL` is **[U]** [32].
+**Tables** (`SCHEMA_SQL`, identical at both tags)
 
-| table | columns named by Shinatama's research [R 24] | further columns named by the design draft [32] |
-|---|---|---|
-| `sessions` | `id`, `source`, `profile_name`, `cwd`, `git_branch`, `git_repo_root`, `title`, `parent_session_id`, `model`, `model_config`, `started_at`, `ended_at`, `end_reason`, `last_activity_at`, `message_count`, `archived`, `hidden`, `pinned`, … | `system_prompt`, token and cost counters |
-| `messages` | `id`, `session_id`, `timestamp`, `role`, `content`, `reasoning`, `tool_calls`, `tool_call_id`, `tool_name`, `active`, `compacted` | `reasoning_content`, `reasoning_details`, `codex_reasoning_items`, `codex_message_items`, `message_uid`, `tool_call_uids`, `api_content` |
+| table | columns mukade uses |
+|---|---|
+| `sessions` | `id`, `source`, `created_source`, `title`, `cwd`, `git_branch`, `model`, `model_config` (JSON), `parent_session_id`, `started_at`, `ended_at`, `end_reason`, `last_activity_at`, `archived`, `auto_archived` |
+| `messages` | `id`, `session_id`, `timestamp`, `role`, `content`, `reasoning`, `reasoning_content`, `reasoning_details`, `codex_reasoning_items`, `tool_calls`, `tool_call_id`, `tool_name`, `active`, `compacted`, `_compressed_summary`, `display_kind` |
 
-**Values and order**
-- Session ids look like `YYYYMMDD_HHMMSS_<hex>` [R 24]; the caller cannot choose one (Ephemeral runs).
-- `messages.id` is an autoincrement integer giving the order within a session; `timestamp` is an epoch float; `tool_calls` is a JSON string [32]. Role names and the JSON shape of `content` and `tool_calls`: **[U]** [R 24].
-- `active=1` rows are the conversation; `active=0` rows are a generation a compaction replaced [R 24][32].
-- `sessions.source`: `cli`, `telegram` and other gateway sources; `oneshot`, `tool`, `kanban` for runs Hermes's pickers hide [32]. That a one-shot run leaves a row is read from documentation only **[U]**.
-- Retention: no pruning by default; `sessions.auto_prune` prunes at 90 days when on [R 24].
+**Row contents**
+
+| item | shape |
+|---|---|
+| order | `messages.id`, never the timestamp (an epoch float) |
+| `content` | a string as is; a list of parts as `\x00json:` + JSON; NULL, BLOB and numbers are legal, so mukade reads cells by type |
+| roles | `user`, `assistant`, `tool`; the system prompt is `sessions.system_prompt`, not a row |
+| `tool_calls` | JSON array of `{id, type:"function", function:{name, arguments: <JSON string>}}` |
+| tool result | `role='tool'`, `tool_call_id`, `tool_name`; results of web and MCP tools are wrapped in `<untrusted_tool_result>` |
+| reasoning | `reasoning` and `reasoning_content` plain text (the latter may be a single space); `reasoning_details` and `codex_reasoning_items` opaque provider payloads, only on assistant rows |
+| `active` / `compacted` | `1/0` live conversation; `0/1` archived by an in-place compaction; `0/0` rewound or superseded |
+
+**Ids and sources**
+- Ids: `YYYYMMDD_HHMMSS_<6 hex>` (CLI, TUI, branch), 12 hex for an import, `local-<64 hex>` (gateway creation, cron, kanban), `cron_…`, `bg_…`, `room_…`, `api_…`, a uuid4 (ACP). The caller cannot choose one [34].
+- `sessions.source`: `cli`, `tui`, `acp`, `tool`, `oneshot`, `subagent`, `cron`, `kanban`, gateway platforms, and `local` with the creator in `created_source` (every creation label except `tool` and `oneshot` is stored as `local`). Hermes's pickers hide `kanban`, `tool` and `oneshot` [34].
+- Retention: nothing is pruned unless `sessions.auto_prune` is on (90 days) [R 24].
 
 **Lineage**
-- `sessions.parent_session_id` links a session to its parent [R 24].
-- A sub-agent run is its own row with `parent_session_id` and a `_delegate_from` marker in `model_config`, hidden from pickers [R 24].
-- Compaction: the draft says it can split a child linked the same way [32]; Shinatama says the id is kept [R 24] **[U]** (Compaction). A fork (`/branch`): recording **[U]** (Branches, forks and subagents).
 
-**Writer.** The profile's gateway is documented as the only writer of canonical sessions; out-of-process writers go through it. No command imports a session (upstream issue #8650) [27][32]; Shinatama's research reports `hermes sessions import --from claude|codex` (Open points 4) [R 23]. Hermes may be running while mukade reads; a read-only open beside the gateway is planned check HM3 [26].
-
-**Reading routes** (disagreement: Open points 2)
-- `hermes sessions list`: a text table, no JSON [R 23].
-- `hermes sessions export <out|-> --session-id <id> --format jsonl|md|html|trace`: `trace` is Claude Code JSONL [R 23]; the shape of a `jsonl` row is **[U]**. A secondary report mentions a filtered user-prompts view [28].
-- Shinatama takes the export as primary and `state.db` as a read-only fallback for listing and search, because the schema is versioned and moves [R 24]; the design draft reads `state.db` and uses the export as a cross-check [32].
-
-**Shinatama's intended mapping** to its own canonical transcript, not to mukade's entries [R 24]:
-
-| Hermes rows | Shinatama canonical |
+| kind | recorded as |
 |---|---|
-| `user` and `assistant` rows | `user_text`, `assistant_text` |
-| `reasoning` | `reasoning` |
-| `tool_calls` | `tool_call` |
-| rows with a `tool_call_id` | `tool_result` |
-| rows with `active=0, compacted=1` | not followed; the summary is marked as `compaction` |
-| a sub-agent session | one tool pair |
+| subagent (`delegate_task`) | its own row, `source='subagent'`, `parent_session_id`, `model_config._delegate_from = <parent>` (`__orphaned__` when the parent is gone) |
+| `/branch` (`/fork`) | a new row with `parent_session_id` and `model_config._branched_from`; the parent's active rows up to a boundary are **copied** into the child |
+| legacy rotating compaction | the old session has `end_reason='compression'` and a child continues it (only with `compression.in_place: false`) |
+| reset continuation | `model_config._reset_from`, or the parent's `end_reason` is `session_reset`, `idle`, `daily`, … |
 
-How a summary row is told apart in `messages` is **[U]**: the draft says upstream documents no stored summary row [32].
+**Writer.** The profile's gateway is the only writer of `state.db`. The one supported way in is `hermes sessions import --from claude|codex <file>` (How mukade writes it). Hermes may be running while mukade reads: the reader retries once on a transient `SQLITE_IOERR` or `SQLITE_BUSY`, as Hermes's own readers do [34].
+
+**Reading routes.** `hermes sessions export <out|-> --session-id <id> --format jsonl|md|html|trace` writes one line per session: the `sessions` row plus its `messages`, `content` decoded, JSON columns parsed. mukade reads `state.db` directly, and reads such an export with `--from-file` [34].
 
 ## Features
 
 ### Compaction
 
-- **Trigger.** Automatic at 50% of the context window by default [R 23]. The threshold setting, any manual command and a way to compact headless are **[U]**. The `post_compaction` hook event exists (Hooks) [R 23].
-- **On disk.** In place: the session keeps its id and the replaced rows stay in `messages` with `active=0, compacted=1` [R 24]. The draft describes the same pattern (old rows `active=0`, retained context inserted as `active=1`, a protected message can appear in both generations) and adds that compression can split a session into a child linked by `parent_session_id` [32]. Which happens in v0.22.5, or both, is **[U]** (Open points 3).
-- **Summary.** Shinatama plans to mark it as a compaction [R 24]; the draft says upstream documents no stored summary row, so a Hermes session yields no compaction entry [32]. Where the summary text lives is **[U]**.
+- **Trigger.** Automatic at 50% of the context window by default (`compression.threshold: 0.50`, floored at 0.75 for windows under 512K) [34]. A manual command and a way to compact headless are **[U]**. The `post_compaction` hook event exists (Hooks).
+- **On disk.** In place by default (`compression.in_place: true`): the session keeps its id; in one transaction the active rows become `active = 0, compacted = 1` and the compacted list (head, summary, verbatim tail) is inserted as fresh active rows with new ids, keeping each carried row's `message_uid`. The legacy path (`in_place: false`) rotates the id: the old session ends with `end_reason = 'compression'` and a child continues it [34].
+- **Summary.** Stored: a row with `_compressed_summary = 1`, role `user` or `assistant`, content = a prefix (`[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted …`), the text, and an end marker. When merged into the tail, the summary sits inside the first tail row's content between `[PRIOR CONTEXT …]` delimiters. mukade reads the row as a compaction entry and strips the framing (How mukade reads it) [34].
 - **Not a deletion.** Hermes's documentation warns that compression shortens the active context but is not a privacy deletion [28].
 
 ### Ephemeral runs
 
-Nothing here was run [V][31].
+`-q` runs on v0.23.1 with the free OpenRouter model were made on 2026-11-12 [36]; the rest is from the docs and source.
 
 | goal | command | notes |
 |---|---|---|
@@ -150,8 +148,8 @@ Nothing here was run [V][31].
 | prompt from a file | `hermes chat --query-file <path>` (`-` for stdin) | never shell-interpreted [6][R 23] |
 | one turn in a resumed session | `hermes chat --resume <id> --oneshot -q "…"` | [32]; launch flags stay frozen on resume [6] |
 
-- **Session id.** Not chosen by the caller: in `system/init` (`session_id`), in `result.session_id` of `--format stream-json`, and on stderr as `session_id: ...` [S 14][S 15][R 23].
-- **Does a one-shot leave a session?** **[U]**. `sessions.source` has a `oneshot` value that pickers hide [32], which suggests it does; no flag prevents it. A one-shot turn in a scratch `HERMES_HOME`, with `state.db` listed before and after, would settle it.
+- **Session id.** Not chosen by the caller: in `system/init` (`session_id`), in `result.session_id` of `--format stream-json`, and as a `session_id: …` line after the answer with `-Q --pass-session-id` **[V]** [S 14][S 15][R 23].
+- **Does a one-shot leave a session?** Yes **[V]**: `-q` / `-z` runs left `source = oneshot` sessions in this machine's store, and no flag prevents it [36]. A resumed question appends to the session it resumes (How mukade summarizes it).
 - **Isolation flags.** `--ignore-user-config` (needs `--model` and `--provider`), `--ignore-rules`, `--safe-mode` [6]; for a scratch store, `HERMES_HOME` or the profile (Install and locate).
 - **Approvals and tools.** No `--yolo` (or `HERMES_YOLO_MODE=1`) for a read-only run [R 23]; one-shot approval defaults and `--toolsets` limits: Tools, Approvals and read-only switches.
 
@@ -334,18 +332,12 @@ Columns: `class` = the research report's grouping (web, read, write, shell, agen
 
 ### Branches, forks and subagents
 
-- **Fork.** `/branch` (alias `/fork`) inside a session [R 23]. How a fork is recorded in `state.db` (for
-  instance through `parent_session_id`) is **[U]**: a fork in a scratch `HERMES_HOME`, then a look at
-  `sessions`, would settle it.
+- **Fork.** `/branch` (alias `/fork`) inside a session: a new row with `parent_session_id` and `model_config._branched_from`, and the parent's active rows up to a boundary copied into it [34]. mukade lists it as a session of its own, `kind: fork`.
 - **Resume.** `hermes chat --resume <id|title|latest>`, `--continue [title]`; the design draft also writes
   `hermes --resume <id|title|latest>` and `hermes -c [name]` [32]. A resume moves back to the session's
   recorded directory unless `--no-restore-cwd` [6][R 23]. One session resumed in two terminals is planned
   check HM6 [26]. What `hermes -c` does with a compression chain is **[U]** [32].
-- **Sub-agents.** The `delegate_task` tool (Tools) [S 22]. Each run is its own session row with
-  `parent_session_id` and a `_delegate_from` marker in `model_config`, hidden from pickers [R 24]. Logs under
-  `cache/delegation/live/` are pruned after 7 days; Ctrl+T opens a full-screen sub-agent roster in the
-  classic CLI [R 23]. The delegation backends are pluggable, so a sub-agent's work must not be assumed
-  inlined as text [28]. Whether its calls appear in the parent's `stream-json` is **[U]**.
+- **Sub-agents.** The `delegate_task` tool (Tools) [S 22]. Each run is its own session row: `source = 'subagent'`, `parent_session_id`, and `model_config._delegate_from = <parent>`; hidden from Hermes's pickers [34]. mukade lists them with `--children` and carries them with `hop --children` (`kind: spawn`). Logs under `cache/delegation/live/` are pruned after 7 days; Ctrl+T opens a roster in the classic CLI [R 23]. The delegation backends are pluggable, so a sub-agent's work must not be assumed inlined as text [28]. Whether its calls appear in the parent's `stream-json` is **[U]**.
 - **Kanban.** The 15 `kanban_*` tools are off by default and belong to dispatcher workers and an
   orchestrator [S 22].
 
@@ -405,58 +397,83 @@ the cheap probes; neither was run [29].
   session store [R 23].
 - **Plugin hooks.** A plugin's `post_tool_call` payload carries `result` [8]; whether a shell hook's does is
   **[U]**.
-- **mukade** neither reads nor writes hook configuration, and ADR-0002 does not propose it: it concerns
-  sessions only [27].
+- **mukade** neither reads nor writes hook configuration: it concerns sessions only.
 
 ## How mukade reads it
 
-**Today: not at all.** Checked on 2026-11-11 [V][30]:
-- Nothing under `src/`, `catalog/`, `tests/` or `fixtures/` mentions Hermes, nor does `Cargo.toml`.
-- `src/model/harness.rs` `HarnessId` has four variants (`ClaudeCode`, `Codex`, `OpenCode`, `Pi`), `HarnessId::ALL` four entries, and the `FromStr` error lists the same four.
-- No `HERMES_HOME` handling, `catalog/harnesses.json` entry, `--hermes-exe` flag or `MUKADE_HERMES_EXE` variable; no Hermes names in [`../tool-conversion-tables.md`](../tool-conversion-tables.md).
-- Documents that mention Hermes: `README.md`, `docs/README.md`, the ADR index, ADR-0002, the design draft, the persistence reference, the DeepSeek Harness page and this page.
+Code: `src/reader/hermes.rs`, adapter `src/harnesses/hermes.rs`, detector `src/detect/hermes.rs`; tests `tests/hermes_reader.rs` over a `state.db` the test builds from the v0.23.1 schema subset (`tests/support/hermes_db.rs`), and the ignored census `tests/hermes_live.rs` over the real store [37].
 
-**Proposed, not implemented:** [ADR-0002](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) (status **Proposed**: version 1, 2026-10-31, `accepted_on` empty) [27] and the [design draft](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md) (status "design draft, awaiting approval"; choices marked as the author's own) [32].
-- **Reader.** `state.db` read-only through `rusqlite` with `bundled`, already a dependency (`Cargo.toml`: `rusqlite = { version = "=0.40.2", features = ["bundled"] }`) [27][V]; only `schema_version == 31`, any other refused naming the version ([ADR Decision](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#decision) 4, INV-003, EX-003). The sources disagree on the number **[U]** [R 24]: if v0.22.5 writes 32, every real store is refused until the pin is checked.
-- **Rows.** `messages.id` order; `active=1` is the conversation, `active=0` becomes `Kind::Meta` with `MetaKind::OffBranch` (`src/model/kind.rs`); each row kept in `Entry::raw` (`src/model/mod.rs`) ([draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers)).
-- **Compaction, reasoning.** No compaction entry, so `--compaction portable` from Hermes is refused (no stored summary row **[U]**). `reasoning` and `reasoning_content` become reasoning text; `reasoning_details` and `codex_reasoning_items` stay in `raw` as a reported loss (signed or encrypted payloads **[U]**). Default `--reasoning drop_foreign` (`src/policy.rs` `ReasoningPolicy::DropForeign`) drops a payload-less block as `NoPayload`; `--reasoning as_text` keeps it as labelled text ([draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers), [§5.4](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#54-reasoning-and-protocol)).
-- **Which sessions `list` shows.** Source `cli`; `oneshot`, `tool`, `kanban` and gateway sources behind a flag. The tip of a compression chain (`parent_session_id`) is the listed session, as with a Pi fork; a hop from a mid-chain session says in the manifest that later segments exist ([draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers)).
-- **Safeguards and plumbing.** Never open for writing (INV-001, byte-identity test: [ADR Confirmation](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#confirmation)); detection (a named profile is a separate installation that `scan` finds, so `src/detect/locate.rs` `locate_installation`'s "exactly one" rule needs no change), `--hermes-exe`, `MUKADE_HERMES_EXE`, no runtime use of `hermes sessions export`, tool rows once collected ([draft §5.2, §5.3, §5.5](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#52-catalog-and-discovery)); `HarnessId` grows to six (`ALL`, `as_str`, `FromStr` and the error list change) with a source/destination capability ([ADR Consequences](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#consequences)); WAL sidecars and a read-only directory: [draft §6](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#6-constraints), Open points 5. The tool names are **[U]**. Phasing, effort and fixtures: [draft §7](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#7-phasing-and-verification); live fixtures need Hermes installed and a provider key.
+**What you may miss**
 
-**What Shinatama expects.** Shinatama has hosted Hermes since 2026-10-31, but until a reviewed pin carries a Hermes reader its adapter declares `list_sessions`, `read_transcript` and `export` unsupported: Hermes resumes natively within itself and receives seeds, nothing more [R 25]. The reader must be read-only, take no lock, ignore a torn last record and count unknown records; fixtures come first (planned check HM3) [R 25][26].
+- **The gate.** `schema_version` below 32, or a missing required column, is refused naming it. Required: `sessions` `id`, `source`, `parent_session_id`, `model_config`, `started_at`, `end_reason`; `messages` `id`, `session_id`, `role`, `content`, `tool_call_id`, `tool_calls`, `timestamp`, `active`.
+- **Read-only.** The store is opened `file:…?mode=ro`, never `immutable=1`: a gateway may be writing. One retry on a transient `SQLITE_IOERR` / `SQLITE_BUSY`.
+- **One conversation.** The `active = 1` rows in `id` order are the conversation. `active = 0` rows are kept as `Meta(OffBranch)`: archived by a compaction, or rewound. A `/branch` child holds a copy of its parent's rows, so a hop of the child carries them once.
+- **A rotated chain is one session.** A legacy compaction that rotated the id (`end_reason = 'compression'`) lists only its tip; `read` follows `parent_session_id` while the parent ended that way and joins the segments, root first.
+- **Unknown cells.** NULL, BLOB and numeric `content` cells are legal and read by type; a `\x00json:` cell is a list of parts.
+
+**Finding sessions**
+
+- **Listing.** Every session of the store, newest first by `last_activity_at`, else `ended_at`, else `started_at`: `id`, title (the stored one, else the first user text), `cwd`, update time, `archived` (`archived` or `auto_archived`). `source` is not a filter: a `oneshot` or `tool` session is listed too. `list` leaves out subagent sessions and the superseded half of a rotated chain; `--children` adds the subagents. A `/branch` copy is a session of its own with `kind: fork`.
+- **Ids.** `read` takes an exact id or the only id it is the start of.
+- **`--from-file`.** Reads one session from a `hermes sessions export --format jsonl` file.
+
+**How rows become entries**
+
+| row | becomes |
+|---|---|
+| `user` | a user entry; typed by the person unless its `display_kind` marks Hermes scaffolding (`hidden`, `internal_notification`, `async_delegation_complete`, `process_complete`, `auto_continue`, `model_switch`, `personality_switch`: a marker, not a prompt) |
+| `assistant` | a step: text, reasoning, and its `tool_calls` |
+| `tool` rows after a step | one results entry, paired by `tool_call_id` |
+| `_compressed_summary = 1` | a compaction entry; the summary text without Hermes's reference-only prefix, merge delimiters and end marker |
+| `active = 0` | `Meta(OffBranch)` |
+| `reasoning`, `reasoning_content` | reasoning text; `reasoning_details` and `codex_reasoning_items` stay in the entry's raw record, kept as an opaque payload when their format names one protocol |
+
+- **Tool names.** `CanonicalTool::from_hermes` (`src/model/tool.rs`): `read_file` → `Read`, `write_file` → `Write`, `patch` → `Edit`, `terminal` → `Bash`, `search_files` → `Grep` (a `target` of `files` is a find), `web_search` → `WebSearch`, `delegate_task` → `Agent`. Any other name stays itself and travels as text. See [tool conversion](../tool-conversion-tables.md).
+- **Chat origin.** A user row with no scaffolding `display_kind` is `Typed`; the `mukade chat` observer shows only those.
 
 ## How mukade writes it
 
-**Today: no writer. Proposed: never.** Hermes stays source-only until upstream offers a supported way to add a session without writing `state.db` behind the owning gateway ([ADR Decision](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#decision) 1) [27].
-- **Refusal first.** A hop or `write` toward Hermes exits 2 with the reason, before any plan or write, nothing written (EX-002, INV-002: [ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#enforceable-invariants); one shared check, TUI offers no Hermes destination: [draft §5.1, §5.6](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#51-capability-on-the-harness-definition)).
-- **Rejected:** RA-001 (direct `state.db` write), RA-002 (backup zip plus `hermes import`), RA-005 (bypass flag) ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#rejected-alternatives)).
-- **No resume command** in a receipt: mukade would never write a Hermes session [27].
-- **Shinatama's view.** Its handover notes a possible writer after the first version, built on Hermes's own `sessions import --from claude|codex` [R 25]; ADR-0002, if accepted, keeps Hermes source-only [27].
+Code: `src/writer/hermes.rs`; live record [35]. Hermes has no way to add a session except its own import, so mukade never opens `state.db` for writing.
+
+**What you may lose**
+
+- **Tools are text.** The import keeps a tool call as `[ran tool: <name>]` and drops the result [33][35]. So the session is planned with no tool offered: every call, its arguments and its result are written as text inside the turns. `tool_calls` is 0 in the manifest and `tools_text_form` counts them.
+- **User and assistant rows only.** Consecutive turns of one role are merged; a user turn that opens with a context tag (`<system-reminder>`, `<environment_context>`, …) is dropped as injected context.
+- **No model, no reasoning, no image.** Hermes records no model for an import; reasoning is dropped (`--reasoning` has nothing to carry); an image is written as `[image]`.
+- **The folder.** Hermes keeps the working directory only when it exists, so a session whose folder is not one here names none (the receipt's `cwd` is null).
+- **The id and the title** are Hermes's: `YYYYMMDD_HHMMSS_<hex>`, and `Imported from Claude Code: <first line>` when Hermes titles it in time. `--dest-id`, `--dest-path`, `--dest-agent`, `--metadata-file` and `--compaction native` are refused (exit 2) before anything runs.
+
+**How**
+
+1. mukade writes the session as a Claude Code JSONL (user and assistant rows) in its own temporary folder, planned with no tool offered.
+2. It runs `hermes sessions import --from claude <file>` with `HERMES_HOME` set to the destination and `PYTHONIOENCODING=utf-8`, under a 180 s deadline.
+3. It parses `Imported Claude Code session as <id>` from the output, deletes its file (whatever came of the import) and returns the id. An import that failed or did not confirm may still have written: the error is the uncertain-outcome kind (exit 5) and names `state.db`.
+4. Resume: `hermes chat -Q --resume <id> -q` (the receipt's command), interactive `hermes --resume <id>`.
+
+**Verified** on v0.23.1: a Claude Code fixture hopped into the real store read back with mukade's reader, its user and assistant texts intact [35].
 
 ## How mukade summarizes it
 
-Not implemented. `--compaction summary` asks the source's own model for a summary through a non-interactive run that saves nothing.
-- **Planned refusal** in the first phase ([draft §5.6](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#56-cli-tui-docs)); ADR-0002 does not address it [27].
-- **Candidate run.** Shinatama's answer-only candidate is `hermes chat --oneshot -q <prompt> --format stream-json --ignore-user-config --ignore-rules` [R 23]. No toolset that removes the tools and the write access is established, and whether a one-shot leaves a session is **[U]** (Ephemeral runs).
+**Refused.** `--compaction summary` from a Hermes session exits 2 with the reason. The run every other harness uses puts the session in front of its model and saves nothing; Hermes has no such run.
+
+- `hermes chat --resume <id> -q <prompt> -Q` is the only way to show the model the session, and it **appends** the question and its answer to that session. Checked on 2026-11-12: a session of 2 messages had 4 after one resumed question [38].
+- Without `--resume` the model cannot see the session. No flag turns persistence off, a `-z` / `--oneshot` run stores a session (`source = oneshot`), and the rows a run adds cannot be removed (`hermes sessions` has no message delete).
+- Use `--compaction portable` (the stored summary row travels, when the session compacted) or `native`; or ask Hermes yourself and hop with the text.
 
 ## Open points
 
-No source read settles these. Ranked by how much they block a reader:
+Ranked by what they cost a user. The rest: [`../../next.md`](../../next.md).
 
-| # | question | what the sources say | what would settle it |
-|---|---|---|---|
-| 1 | store schema version **[U]** | 31 [27][32]; 32 [R 24] | the version in a `state.db` made by v0.22.5, or `SCHEMA_SQL` at the tag |
-| 2 | read route **[U]** | `state.db` directly [27][32]; Hermes's export first, `state.db` as fallback [R 24]; the handover calls the export route cheaper [R 25]. Build against a hand-made schema-31 database or wait for a real session: waiting on the user [32] | a fixture run, planned check HM3 [26] |
-| 3 | compaction shape and summary **[U]** | rows kept with `active=0, compacted=1` under the same id, summary marked as a compaction [R 24]; old rows archived, a possible child session, no stored summary row [32] | a v0.22.5 `state.db` after a compaction |
-| 4 | does a session import command exist **[U]** | `hermes sessions import --from claude\|codex [path]`, and `hermes --resume @claude` imports and resumes in one step, condensing tool activity [R 23]; no command imports a session, and `hermes import-agent` imports setups (config, skills), not transcripts [27][32] | `hermes sessions import --help` on v0.22.5 |
-| 5 | reading beside a live gateway **[U]** | the gateway writes while mukade reads; `mode=ro` against `immutable=1`, and what each risks [32] | planned check HM3 [26] |
-
-Other **[U]** items stay in their sections; planned checks HM1 to HM14 are in the Shinatama verification
-register [26]; the project backlog is [`next.md`](../../next.md).
+1. **Reasoning payloads [U].** `reasoning_details` and `codex_reasoning_items` are read as opaque payloads; whether a destination accepts them is untested (the Hermes writer drops reasoning).
+2. **Resuming a written session with a model [U].** The import and the read-back are verified; `hermes --resume <id>` with a provider has not been run on a mukade-written session. A free OpenRouter model settles it.
+3. **Untitled imports.** One import was left without a title; the earlier one had `Imported from Claude Code: …`. Why is not established (a race with Hermes's title worker is a guess).
+4. **A cwd that exists.** The import keeps the folder only when it exists; verified by tests with a stand-in, not live (the live fixture's folder is not on this machine).
+5. **v0.22.5 (schema 32) [U].** Read by source and by the schema, never on a store that version wrote.
+6. **Profiles [U].** A named profile is read by pointing `HERMES_HOME` at its folder; whether `HERMES_HOME` alone keeps every Hermes process inside it is untested.
 
 ## Sources
 
-All web pages and raw files accessed 2026-11-01 unless a source says otherwise. Sources 1 to 10: the Hermes README, the GitHub release record and the Hermes docs site (`<docs>` = `https://hermes-agent.nousresearch.com/docs`). Sources 11 to 22: Hermes files at tag `v0.22.5` (`<raw>` = `https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5`), each read through a web fetch tool's page extraction, which gives function names but no line numbers and may drop lines: re-read in a clone before relying on it. Sources 23 to 25 and 29: documents of the Shinatama repository (`D:\Projects\shinatama`), written by research tasks that ran nothing; `[R n]` is Shinatama's own label for a fact from its research of 2026-10-31, kept wherever a fact rests on it alone. Repository paths are relative to `D:\Projects\mukade` unless a source says otherwise.
+All web pages and raw files accessed 2026-11-01 unless a source says otherwise. Sources 1 to 10: the Hermes README, the GitHub release record and the Hermes docs site (`<docs>` = `https://hermes-agent.nousresearch.com/docs`). Sources 11 to 22: Hermes files at tag `v0.22.5` (`<raw>` = `https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5`), each read through a web fetch tool's page extraction, which gives function names but no line numbers and may drop lines. Sources 23 to 26, 29: documents of the Shinatama repository, a separate project; their facts are research, labelled R, and no longer the basis of anything mukade does. Sources 33 to 38: this repository and this machine, 2026-11-12.
 
 1. Nous Research, *hermes-agent* README, <https://github.com/NousResearch/hermes-agent>.
 2. GitHub releases API for `NousResearch/hermes-agent`, <https://api.github.com/repos/NousResearch/hermes-agent/releases?per_page=5> (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`, `published_at` 2026-10-23T05:28:45Z).
@@ -484,9 +501,15 @@ All web pages and raw files accessed 2026-11-01 unless a source says otherwise. 
 24. Shinatama technical design §5.3, research task: `D:\Projects\shinatama\docs\technical-design.md` lines 487-505, the Hermes store entry: "R: v0.22.5 source, 2026-10-31; not observed here, Hermes is not installed on this machine".
 25. Shinatama mukade handover §9, "Hermes Agent and DeepSeek Harness (requested 2026-10-31)": `D:\Projects\shinatama\docs\mukade-handover.md` lines 272-294.
 26. Shinatama verification register, rows HM1 to HM14: `D:\Projects\shinatama\docs\verification-register.md` lines 218-231. They are checks still to be run, not results.
-27. mukade, [`adr/ADR-0002-hermes-and-deepseek-harness-read-first.md`](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md): status **Proposed**, version 1, proposed 2026-10-31, `accepted_on` empty.
+27. mukade, [`adr/ADR-0002-hermes-and-deepseek-harness-read-first.md`](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md): amended 2026-11-12: Accepted with changes (Hermes is a destination through its import; schemas 32 and 33).
 28. mukade, [`reference/harness-session-persistence-reference.md`](../reference/harness-session-persistence-reference.md), entry "Hermes Agent — `v0.22.5`". A secondary research report pasted by the user on 2026-10-27; its own header says its claims were not re-run here.
 29. Shinatama research report "Hermes Agent" of the web-tools run, 2026-11-01: `D:\Projects\shinatama\.daodan\runs\init-467ba8d96c1b4104b3ac1edb707caffa\web-tools\hermes-agent.md` (the 86-row tool list, web search and page reading, headless and ACP events, toolset switches, verdict). Its `[S]` and `[D]` references are sources 11 to 22 and 3 to 10 above.
-30. Search of the mukade tree, 2026-11-01, repeated on 2026-11-11: `grep -rli hermes docs src catalog tests fixtures README.md Cargo.toml` and `find . -iname "*hermes*"`; reading of `src/model/harness.rs` (`HarnessId`, `HarnessId::ALL`, `FromStr`), `src/detect/` and `Cargo.toml` (`rusqlite`). [V]
-31. `Get-Command hermes -All` in PowerShell on this machine (Windows 11), 2026-11-01: not recognised as a command. [V]
-32. mukade, [`superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md`](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md) §4.1, §5.2, §5.3, §5.4, §5.5, §5.6, §6, §7, §8: a design draft awaiting approval, which reads Hermes's session-storage and sessions documentation; what it marks **[U]** was not exercised against a live install.
+30. Search of the mukade tree, 2026-11-01 (no Hermes code then): superseded by the implementation, source 37.
+31. `Get-Command hermes -All`, 2026-11-01: not installed then; installed 2026-11-12, source 36.
+32. mukade, [`superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md`](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md) §4.1, §5.2, §5.3, §5.4, §5.5, §5.6, §6, §7, §8: the first design draft (superseded by source 33), which reads Hermes's session-storage and sessions documentation; what it marks **[U]** was not exercised against a live install.
+33. mukade, [`superpowers/specs/2026-11-12-hermes-deepseek-design.md`](../superpowers/specs/2026-11-12-hermes-deepseek-design.md): the decisions for the reader, the writer and the harness id; it supersedes ADR-0002's source-only, schema-31 plan.
+34. Research of 2026-11-12 on Hermes v0.23.1 (installed copy, byte-identical to the tag for the state modules) and v0.22.5: `hermes_state_common.py`, `hermes_state_schema.py`, `hermes_state_messages.py`, `hermes_state_ids.py`, `context_compressor.py`, `sessions_cmd.py` at file:line, `hermes --version`, `hermes sessions export --help`. The report is kept in the run's scratchpad, not in the repository. [V]
+35. mukade, [`verification/2026-11-12-hermes-writer-live.md`](../verification/2026-11-12-hermes-writer-live.md): a Claude Code fixture hopped into the real store and read back. [V]
+36. This machine, 2026-11-12: Hermes v0.23.1 under `%LOCALAPPDATA%\hermes`; `hermes chat --help`, `hermes sessions list`, runs with the free OpenRouter model `cohere/north-mini-code:free`, and the store read read-only. [V]
+37. mukade code and tests: `src/reader/hermes.rs`, `src/writer/hermes.rs`, `src/harnesses/hermes.rs`, `src/detect/hermes.rs`, `tests/hermes_reader.rs`, `tests/writer_hermes.rs`, `tests/hermes_live.rs`. [V]
+38. This machine, 2026-11-12: `hermes chat --resume <id> -q "Write a one-sentence summary of this session" -Q` on a session of 2 messages (`mukade dump hermes <id>`): 4 messages after. [V]

@@ -1,7 +1,7 @@
 # DeepSeek Harness
 
-DeepSeek's open-source agent harness: a TypeScript monorepo run as `dsh` (npm `@deepseek-ai/dsh`), with a browser UI, headless, ACP and SDK modes, and no terminal UI [1][24][29][31].
-mukade does not support it yet: no reader, no writer. [ADR-0002](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) (Proposed) plans read-first support [28].
+DeepSeek's open-source agent harness: a TypeScript monorepo run as `dsh` (npm `@deepseek-ai/dsh`), with a browser UI, headless, ACP and SDK profiles, and no terminal UI [1][24][29][31].
+mukade reads and writes its session logs (format 4): list, dump, hop in and out, and `dsh` itself resumed a written session. Verified on 0.2.2-rc.1 on this machine.
 
 Labels: `[n]` = a source in [Sources](#sources). **[S]** = read in upstream source or config, never run here. **[R]** = recorded only by Shinatama's research of 2026-10-31 [24]. **[V]** = observed on this machine. **[U]** = not established; the text says what settles it.
 
@@ -9,149 +9,149 @@ Labels: `[n]` = a source in [Sources](#sources). **[S]** = read in upstream sour
 
 | | |
 |---|---|
-| Read (`list`, `dump`) | ❌ Not implemented. ADR-0002 plans the reader first, accepting session format version 4 only [28] |
-| Write | ❌ Not implemented. ADR-0002: a later phase, enabled only after a live `dsh` resumes a mukade-written session [28] |
-| Hop as source | ❌ Not implemented. Arrives with the reader [28] |
-| Hop as destination | ❌ Not implemented. ADR-0002: refused with exit code 2 until the writer is enabled [28] |
-| Resume | ❌ mukade has never written a session to resume. Resume natively (Quick start, step 5) |
-| Summary by its own model | ❌ Design draft: `--compaction summary` from this source is refused in phase 1 [29] |
-| Native compaction | ❌ Design draft: `compaction/*` events would become compaction entries [29] |
-| Notable gaps | ❌ Not in `HarnessId`, the catalog, `fixtures/`, `tests/` or the tool tables; no Zstandard decoder [30] |
+| **Read** (`list`, `dump`) | ✅ `<DSH_HOME>/sessions/**/session.v4.jsonl[.zstd]`: zstd frames decoded and checksummed, a torn tail dropped and noted, the surface rebuilt from `surfaceOp`. Format version 4 only; another is refused naming it [34][38] |
+| **Write** | ✅ a v4 zstd log in the folder dsh derives from the id and the cwd; `dsh` opened, resumed and extended a written one [36] |
+| **Hop as source** | ✅ `mukade hop deepseek_harness <id> <dst>`; `--all-branches` does not apply |
+| **Hop as destination** | ⚠️ works; reasoning payloads have no place (a written assistant message has no `replayState`, so dsh reads it as another provider's); `--dest-path`, `--dest-agent`, `--metadata-file` and `--compaction native` are refused (exit 2) |
+| **Resume** | ✅ receipt: `dsh --profile headless --session-id <id>` (add a task). The TUI cannot open it: dsh has no terminal UI, and says so |
+| **Summary by its own model** | ❌ `--compaction summary` from dsh is refused, with the reason (How mukade summarizes it) |
+| **Native compaction** | ⚠️ read: `compaction/summary` plus its `compact-checkpoint` message is a compaction entry, so `--compaction portable` works; never written |
+| **Subagents** | ⚠️ read: a log whose header has `parentSession` and `origin: "subagent"` is a child (`--children`), `isSeeded` marks one that inherits context, a fork is `kind: fork`. Written: `hop --children` writes each child as a session of its own, unlinked |
+| **Notable gaps** | ⚠️ no image is written (dsh keeps an attachment-store reference); no `web_search` call is translated; a resume that makes a tool call is not exercised live |
+| **mukade name** | `deepseek_harness` (`mukade list deepseek_harness`, `mukade hop <src> <id> deepseek_harness`); binary `dsh` [34] |
+| **Versions** | 0.2.2-rc.1 (npm) read, written and resumed live on 2026-11-12 [36]; the format facts come from `dsh-v0.2.2-rc.2` source [35] |
 
 ## Quick start
 
-mukade cannot read this store yet. To inspect it by hand:
+```powershell
+# 1. Point mukade at the store
+$env:DSH_HOME = "$HOME\.dsh"                       # macOS/Linux: export DSH_HOME=~/.dsh
 
-1. Find the install: `command -v dsh` (macOS/Linux) or `Get-Command dsh -All` (PowerShell); the npm prefix with `npm prefix -g`; the version with `npm ls -g @deepseek-ai/dsh`.
-2. List sessions: walk `DSH_HOME/sessions/--*--/*/session.v4.jsonl.zstd` (and `_no-cwd/`; `DSH_HOME` defaults to `~/.dsh`), or call ACP `session/list` (paged, newest first, `cwd` filter) [24].
+# 2. Find and inspect a session
+mukade list deepseek_harness
+mukade dump deepseek_harness YOUR_DSH_SESSION_ID --output C:\work\session.json
 
-   ```sh
-   find ~/.dsh/sessions -name 'session.v4.jsonl*'
-   ```
-   ```powershell
-   Get-ChildItem "$env:USERPROFILE\.dsh\sessions" -Recurse -Filter 'session.v4.jsonl*'
-   ```
-3. Read a header (first record) with the standard Zstandard CLI: `zstd -dc <dir>/session.v4.jsonl.zstd | head -n 1`.
-4. See which root a profile persists to, without a turn: `dsh --profile <p> --dump-config`.
-5. Resume natively, in the session's own cwd: `dsh --profile headless --json --session-id <id> "<task>"`.
+# 3. Hop out of dsh
+mukade hop deepseek_harness YOUR_DSH_SESSION_ID claude_code --cwd 'C:\work\my-project'
 
-None of these was run here: `dsh` is not installed on this machine (Install and locate). `mukade harnesses`, `list`, `dump`, `hop` and the TUI do not know the harness [30].
+# 4. Hop into dsh, then continue it from the session's own folder
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID deepseek_harness --cwd 'C:\work\my-project'
+cd 'C:\work\my-project'
+dsh --profile headless --session-id NEW_SESSION_ID "continue"
+```
+
+Inspect by hand: `Get-ChildItem "$env:USERPROFILE\.dsh\sessions" -Recurse -Filter 'session.v4.jsonl*'` (or `find ~/.dsh/sessions -name 'session.v4.jsonl*'`); the header with `zstd -dc <dir>/session.v4.jsonl.zstd | head -n 1`; the root a profile persists to with `dsh --profile <p> --dump-config`.
 
 ## Install and locate
 
 | | |
 |---|---|
-| Version described | 0.2.1-rc.5, tag `dsh-v0.2.1-rc.5`, dated 2026-10-29 [22]. npm `latest` and `next` on 2026-11-01; `alpha` = 0.2.2-alpha.2, not described here [31] |
-| Facts gathered | 2026-11-01, from documents and source only; `dsh` is not on `PATH` and no `@deepseek-ai` package is installed globally [32] **[V]**, so nothing here observes the tool's behaviour |
 | Vendor | DeepSeek, GitHub organisation `deepseek-ai` [1] |
 | Licence | MIT, in the repository and in the npm package metadata [1][31] |
-| Site and docs | <https://github.com/deepseek-ai/deepseek-harness>. Its `docs/` holds `tool-catalog.md`, `subsystems/*`, `cli-help.md` and `config-catalog`; online mirror at deepseek-harness.github.io/deepseek-harness [1][20]. Tags: <https://github.com/deepseek-ai/deepseek-harness/tags> [22] |
+| Site and docs | <https://github.com/deepseek-ai/deepseek-harness>; its `docs/` holds `tool-catalog.md`, `subsystems/*`, `cli-help.md`, `config-catalog` and `session-format-status.md` [1][20][35] |
 | Maturity | A developer preview: compatibility-breaking changes are to be expected [1][24] |
-| Not to confuse with | No DeepSeek product is called "DeepSeek Code". DeepSeek-TUI, deepcode-cli (Deep Code, `lessweb/deepcode-cli`) and the PyPI package `deepseek-harness-cli` are other agents [24][28] |
-| mukade id | None. ADR-0002 and the design draft propose the id `deepseek_harness` and the binary `dsh` [28][29] |
+| Version described | npm `@deepseek-ai/dsh` **0.2.2-rc.1**, installed globally and run here on 2026-11-12 [V][36]. Format facts: tag `dsh-v0.2.2-rc.2` (commit `ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c`), checked against the installed package. The earlier page described 0.2.1-rc.5 (`dsh-v0.2.1-rc.5`, 2026-10-29) from source only [22] |
+| `dsh --version` | prints the bare version, `0.2.2-rc.1` [V] |
+| Not to confuse with | No DeepSeek product is called "DeepSeek Code". DeepSeek-TUI, deepcode-cli (`lessweb/deepcode-cli`) and the PyPI package `deepseek-harness-cli` are other agents [24][28] |
+| mukade id | `deepseek_harness`, binary `dsh` [34] |
 
 **Install**
 
 | OS | command | notes |
 |---|---|---|
-| any, Node.js `^22.19.0 \|\| >=24` [24] | `npm install -g @deepseek-ai/dsh@0.2.1-rc.5` | Package `@deepseek-ai/dsh`, binary `dsh` (`bin.dsh` = `lib/bin.js`) [31]. npm's standard form, not copied from the project's own instructions, which were not captured **[U]** (the README's install section settles it) |
-| any, isolated | `npm --prefix <dir>` install of the exact version, with a scratch `DSH_HOME` | Planned by Shinatama's check DS1; not run [27] |
+| any, Node.js `^22.19.0 \|\| >=24` [24] | `npm install -g @deepseek-ai/dsh` | Package `@deepseek-ai/dsh`, binary `dsh` (`bin.dsh` = `lib/bin.js`) [31]. Here: Node 24.14.1, `%APPDATA%\npm\dsh.cmd` [V] |
 
-- **Node.** The rc.5 registry manifest declares no `engines` field, so the Node requirement rests on the research alone [24][31].
-- **Platforms.** Windows code paths exist (a PowerShell sandbox, Windows locking). The SDK lists Linux x64 and arm64, macOS 14+ arm64 and Windows x64; the CLI has no platform matrix [24].
-- **Sign-in.** No login and no status command. A DeepSeek key comes from `DEEPSEEK_API_KEY` or the web UI's Models page; account sign-in is web only [24].
-- **Updates.** How an install is updated (npm `latest` against `alpha`, any self-update) was not checked **[U]**; Shinatama's check DS10 settles it [27].
+- **Platforms.** Windows code paths exist (a PowerShell sandbox, Windows locking). The SDK lists Linux x64 and arm64, macOS 14+ arm64 and Windows x64 [24].
+- **Sign-in.** No login and no status command. A DeepSeek key comes from `DEEPSEEK_API_KEY` or the web UI's Models page [24]. Other providers go through pi-ai: [dsh-openrouter.patch.yml](../superpowers/specs/2026-11-12-dsh-openrouter.patch.yml) routes a profile to OpenRouter's free models, which is how the live checks ran [36].
+- **Updates.** Not checked **[U]**.
 
-**Run modes**
+**Run modes** (profiles shipped at 0.2.2-rc.1: `headless`, `web`, `acp`, `sdk` [V]; `dsh --profile tui` fails: the profile does not exist)
 
 | mode | command | notes |
 |---|---|---|
-| browser UI | `dsh web` (`--port`, `--no-open`) | Page on `127.0.0.1:3080` behind a browser-trust check; the API behind it is internal and undocumented. The only place a session can be forked (`atSeq`) or exported (a zip) [24] |
-| headless, one turn | `dsh --profile headless [--patch <file>]... --json [--session-id <id>] "<task>"` | Task from stdin when omitted. At the tag the help lists only `--json`, `--session-id` and `-h`; no `--permission-mode`: permissions come from `DSH_PERMISSION_MODE` [12] |
-| headless, plain output | `dsh headless "<task>"` | Final answer on stdout, reasoning on stderr, exit 0 when the turn completed [24] |
-| headless resume | `--session-id <id>` | Adopts the stored session in the same cwd; refuses forks and sub-agent sessions; an unknown id is an error; the default id is `session-<uuid>` [10][24] |
-| ACP | `dsh --profile acp` | ACP v1 over stdio: `session/new`, `session/prompt`, `session/resume`, `session/list` (paged, newest first, `cwd` filter), `session/cancel`, and the agent's `session/request_permission`; no `session/load` [5][17][24] |
-| SDK | `dsh --profile sdk` | JSON-RPC over stdio; `session/prompt` with an unknown `sessionId` creates the session lazily under that caller-chosen id [24] |
-| configuration dump | `dsh --dump-config` | Prints the composed configuration tree without a turn [24]; `--patch <file>` may be repeated [12][24] |
-| plugins | `dsh plugin --profile <p> add <pkg>` | Installs a bundle or plugin into a profile [24] |
-| desktop | reserved | An Electron app, not available [24] |
-
-Profiles: `web`, `headless`, `acp`, `sdk`; `desktop` is reserved. Each lives in `DSH_HOME/profiles/<name>/` [24].
+| headless, one turn | `dsh --profile headless [--patch <file>]... [--json] [--session-id <id>] [--permission-mode <preset>] [--approval-policy ask\|never] [--add-dir <path>] "<task>"` | Task from stdin when it is `-`; with none it stops: `a task is required` [V]. `--json` writes NDJSON events instead of the final message |
+| headless resume | `--session-id <id>` | adopts the stored session **in the same cwd**; an unknown id is an error; refuses forks and sub-agent sessions [10][24]. It appends to that session's log [36] |
+| browser UI | `dsh --profile web` (`--port`, `--no-open`, `--host`, TLS options) | page on `127.0.0.1:3080` behind a browser-trust check; the only place a session can be forked (`atSeq`) or exported (a zip) [24][V] |
+| ACP | `dsh --profile acp` | ACP v1 over stdio: `session/new`, `session/prompt`, `session/resume`, `session/list`, `session/cancel`; no `session/load` [5][17][24] |
+| SDK | `dsh --profile sdk` | JSON-RPC over stdio; `session/prompt` with an unknown `sessionId` creates it lazily [24] |
+| configuration dump | `dsh --profile <p> --dump-config` | prints the composed tree without a turn; `--patch <file>` may be repeated [12][24] |
+| plugins | `dsh plugin --profile <p> add <pkg>` | installs a bundle or plugin into a profile [24] |
 
 **Locations**
 
 | what | Windows | macOS / Linux |
 |---|---|---|
-| Launcher (npm global install) | `<npm prefix -g>\dsh.cmd` | `$(npm prefix -g)/bin/dsh` |
-| Home, `DSH_HOME` | `%USERPROFILE%\.dsh` | `~/.dsh` |
-| Sessions | `%USERPROFILE%\.dsh\sessions\--<normalized cwd>--\<encoded id>\session.v4.jsonl.zstd` | `~/.dsh/sessions/--<normalized cwd>--/<encoded id>/session.v4.jsonl.zstd` |
-| Profiles | `%USERPROFILE%\.dsh\profiles\<name>` | `~/.dsh/profiles/<name>/` |
-| Home patch | `%USERPROFILE%\.dsh\cordis.patch.yml` | `~/.dsh/cordis.patch.yml` |
-| Credentials | `%USERPROFILE%\.dsh\.credentials.yaml` | `~/.dsh/.credentials.yaml` |
-
-Everything under `DSH_HOME` is from the research record: `DSH_HOME` defaults to `~/.dsh` [24]. The Windows spelling `%USERPROFILE%\.dsh` and the launcher paths are what those rules and npm give on each OS; none was observed for this package **[U]**.
+| Launcher (npm global) | `%APPDATA%\npm\dsh.cmd` **[V]** | `$(npm prefix -g)/bin/dsh` |
+| Home, `DSH_HOME` | `%USERPROFILE%\.dsh` **[V]** | `~/.dsh` |
+| Sessions | `<home>\sessions\--<project key>--\<encoded id>\session.v4.jsonl.zstd` **[V]** | `<home>/sessions/--<project key>--/<encoded id>/session.v4.jsonl.zstd` |
+| Profiles | `<home>\profiles\<name>` **[V]** | `<home>/profiles/<name>/` |
+| Home patch, credentials | `<home>\cordis.patch.yml`, `<home>\.credentials.yaml` | the same |
 
 **Environment variables**
 
 | variable | effect |
 |---|---|
-| `DSH_HOME` | The home root, default `~/.dsh` [24] |
-| `DSH_AGENTS_HOME` | A second root variable; what it holds is **[U]** (Shinatama's isolation plan sets both [27]) |
-| `DSH_PERMISSION_MODE` | `read-only`, `workspace-write` (default) or `danger-full-access`, read at process start [8] (Tools, Read-only switches) |
-| `DEEPSEEK_API_KEY` | The DeepSeek key [24] |
-| `DSH_TOOLS_MODE` | Temporary opt-in for `run_code` [10] |
+| `DSH_HOME` | the home root, default `~/.dsh` [35] |
+| `DSH_AGENTS_HOME` | a second root variable; what it holds is **[U]** |
+| `DSH_PERMISSION_MODE` | `read-only`, `workspace-write` (default) or `danger-full-access`, read at process start [8] |
+| `DEEPSEEK_API_KEY` | the DeepSeek key [24] |
+| `DSH_TOOLS_MODE` | temporary opt-in for `run_code` [10] |
 
-**Persistence root, open.** Shinatama's research gives `DSH_HOME/sessions` [24]; mukade's ADR and design draft say the persistence root is required, set by the booted profile, with no default [28][29]. Whether every shipped profile persists to `DSH_HOME/sessions` is **[U]**: read the persistence row of `dsh --profile <p> --dump-config` (no turn) for each profile in use.
+**Persistence root.** All four shipped profiles dump `root: dshHomePath('sessions')` with compression on (`dsh --profile <p> --dump-config` at 0.2.2-rc.1 [V][35]). `sdk-minimal` is the bundle that writes plain `.jsonl`; a root holds one encoding only.
 
-**How mukade finds it.** It does not: `mukade harnesses` does not report DeepSeek Harness, because it is not implemented [30]. The proposed discovery is in [How mukade reads it](#how-mukade-reads-it). The shared per-OS procedure for supported harnesses is in the [harness catalog](../reference/harness-catalog.md#finding-existing-installations).
+**mukade discovery.** Catalog entry `deepseek_harness`; flag `--dsh-exe`, variable `MUKADE_DSH_EXE` (Windows default `%APPDATA%\npm\dsh.cmd`); store variable `DSH_HOME` (default `~/.dsh`); `detect`, `scan` and `--root` recognize a home by its `sessions/` tree. The shared procedure is in the [harness catalog](../reference/harness-catalog.md#finding-existing-installations).
 
 ## Session store
 
-From documents and source only: no DeepSeek Harness session has been read or written on this machine **[V]** [32].
+Read on this machine and in the `dsh-v0.2.2-rc.2` source [35][36].
 
 | path under `DSH_HOME` | holds |
 |---|---|
-| `sessions/--<normalized cwd>--/<encoded id>/session.v4.jsonl.zstd` | One session log [24]. The rules that normalize the cwd and encode the id are not recorded **[U]**; a listing of a real `sessions/` tree settles them |
-| `sessions/_no-cwd/` | The cwd folder used when no directory was recorded [24] |
-| `profiles/<name>/` | A profile: `package.json` plus `cordis.patch.yml` [24] |
-| `cordis.patch.yml` | The home patch [24] |
-| `.credentials.yaml`, `.env` | Credentials (read order in Models and providers) [24] |
+| `sessions/--<project key>--/<encoded id>/session.v4.jsonl.zstd` | one session log |
+| `sessions/_no-cwd/…` | the folder used when no cwd was recorded |
+| `profiles/<name>/` | a profile: `package.json` plus `cordis.patch.yml` |
+| `.credentials.yaml`, `.env` | credentials (read order in Models and providers) |
 
-- **Encoding.** One JSON record per line, stored by default as checksummed Zstandard frames. `compression: 'none'` writes plain `.jsonl` instead, and only for a fresh root. A reader decompresses frame by frame and ignores a torn last frame, as it ignores a torn last line [24].
-- **Header.** The first record carries `version` (4), `id`, `createdAt`, `cwd`, `parentSession`, `isSeeded` (a fork), `origin: 'subagent'`, `delegationDepth` and `agentPreset` [24].
-- **Records.** Each later record is `{type, seq, time, data}`; `seq` is the cursor. The shapes inside `data` are not established **[U]** [24].
-- **No session commands.** Nothing lists, exports or imports a session: listing is a walk of `DSH_HOME/sessions` or ACP `session/list`; export exists only as the web UI's zip; import does not exist [24].
+**Folder names**
+- `projectKey(cwd)`: each run of `/`, `\`, `:` becomes one `-`; `[A-Za-z0-9._-]` is kept; any other UTF-16 unit (a space, `~`, non-ASCII) becomes `~` + 4 uppercase hex; leading `-` stripped; empty gives `root`; cut at 251 characters; wrapped `--…--`. Lossy: read `cwd` from the header, never from the folder. `D:\Projects\foo bar` is `--D-Projects-foo~0020bar--`.
+- `encodeSegment(id)`: `[A-Za-z0-9._-]` kept, every other unit `~` + 4 hex, `.` is `~002E`.
+- A folder that is not the one the header's id and cwd name is a "corrupt session log": dsh refuses it. mukade ports both functions (`src/reader/deepseek_harness.rs`, tested against dsh's own examples) [35][36].
 
-| record `type` | what it is | source |
-|---|---|---|
-| `user/message`, `assistant/message` | the conversation | [24] |
-| `tool/call`, `tool/result` | a tool call and its result | [24] |
-| `system/message` | a system message | [24] |
-| `turn/start`, `turn/end` | turn boundaries | [24] |
-| `session/title` | the session title | [24] |
-| `model/selection` | the model chosen for the session | [24] |
-| `compaction/*` | compaction events (Features, Compaction) | [24] |
-| `subagent/*` | sub-agent events (Features, Branches, forks and subagents) | [24] |
+**The file**
+- Zstandard, concatenated independent frames with the content checksum on; frame 1 is exactly the header line; then one frame per durable batch of lines. A crash leaves a torn last frame, which dsh repairs by truncating. `session.v4.jsonl` (plain) is the same text, for a root configured without compression [35].
+- The first line is the header: `{type:"session", version:4, id, createdAt, isSeeded, delegationDepth, cwd?, parentSession?, origin?:"subagent", agentPreset?}`. Every later line is `{type, seq, time, data, ignorable?, surfaceOp?, sourceEventSeqs?}` with a 0-based contiguous `seq` [35].
+- Ids: `session-<uuid>` (headless), a bare uuid (sub-agent children), `session-schedule-<sha256>`; `--session-id` may be caller-chosen. Treat them as opaque.
+- No session command exists: listing is a walk of `sessions/` or ACP `session/list`; export is the web UI's zip; import does not exist [24].
+- One writer per session, guarded by `session.lock` (a named semaphore on Windows). mukade's reader takes no lock [35].
+- Nothing deletes session files.
 
-**From the design draft, not re-established for 0.2.1-rc.5 [U] [29].** The draft was read against an earlier tag, so none of it is fact here; `docs/session-format-status.md` and the published JSON Schemas at the tag settle it. It adds ([draft §4.2](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#42-deepseek-harness-dsh)): per event `surfaceOp` (`"append"` or `{op:"replace", startSeq, endSeq}`) and `sourceEventSeqs`; families `step/*`, `request/*`, `permission/*`, `session/*` and `developer/message`; message `content` as parts (`reasoning` plain text without signature, `text`, `tool-call` with `arguments` as a JSON string), `usage`, provider and model (`deepseek-official`, `deepseek-v4-flash`); upstream's rule that a change may keep `version` 4 by adding an optional property, an ordinary event type or a higher `data.version`, so the header catches a bump, not additive drift; unknown event types are `ignorable: true` or required, and a reader must refuse a session holding an unknown required one.
+**What the model sees: the surface.** Five event types carry a `surfaceOp` and are the surface: `system/message`, `developer/message`, `user/message`, `assistant/message`, `tool/result`. `append` adds a node; `replace {startSeq, endSeq}` puts the event in place of those nodes (a compaction checkpoint, a pruned tool result). Reading in append order shows both the original and the replacement; mukade applies the ops and keeps replaced nodes as `Meta(OffBranch)` [35].
 
-**Beside the transcript**
-- **Lineage.** A fork has `isSeeded`; a sub-agent session has `origin: 'subagent'` and `delegationDepth`; each is its own session [24]. Whether `parentSession` is filled for forks and sub-agents is **[U]**.
-- **Concurrency.** One writer per session, guarded by `session.lock` (a named semaphore on Windows). Shinatama's reader design does not take it [24][25].
-- **Retention.** Nothing deletes session files. SQLite serves only an opt-in search index [24].
-- **Fixtures.** The design draft says upstream keeps real v4 logs under `snapshots/**/session.v4.jsonl`, with placeholders for ids and cwd [29]; their location at the tag is **[U]**.
+| event | meaning |
+|---|---|
+| `user/message` | `data.source.kind == "user"` is a typed prompt; about 40 other kinds are context dsh injected (`runtime-context`, `time-context`, `hooks-*`, `skill-invocation`, `compact-checkpoint`, …); `agent-message`, `subagent-settled` and `team-message` carry another agent's text |
+| `assistant/message` | `message.content` parts: `text`, `reasoning` (plain text, **no signature**), `tool-call {id, name, arguments: <JSON string>}`, `image`, `file`; `source {provider, model, replayState?}` |
+| `tool/call` | repeats the assistant's `tool-call` part (it is how dsh knows the call started); mukade emits the call once |
+| `tool/result` | the result, citing the call in `sourceEventSeqs` |
+| `compaction/summary` | `{compactionId, summary: Part[], shadowedRange, …}`, followed by a `compact-checkpoint` user message that replaces the shadowed span |
+| `turn/start`, `step/start`, `step/end`, `turn/end` | boundaries; `turn/end.reason` is the outcome |
+| `session/title`, `model/selection`, `permission/preset`, `sandbox/mode`, `approval/policy`, `session/end-seed` | settings and markers; kept as meta |
+
+An event type the reader does not know is skipped only when it says `ignorable: true`; otherwise the session is refused. 62 types are known at 0.2.2-rc.1 (63 at rc.2, adding `team/mode`) [35].
+
+**Lineage.** A sub-agent or fork log's header names its parent: `parentSession` and `origin: "subagent"` for a sub-agent, `isSeeded` for a log that starts from its parent's history (the part before its `session/end-seed` marker is inherited) [35][V]. The parent's log holds `subagent/*` records.
 
 ## Features
 
 ### Compaction
 
 - **Trigger.** Near the context limit, and on `/compact` [24]. The threshold and the setting that moves it are **[U]**; `docs/config-catalog` at the tag settles it.
-- **Record.** `compaction/*` events in the session log [24]. How a summary and the span it replaces are stored at rc.5 is **[U]** (the earlier-tag draft uses `surfaceOp: replace`) [29]. A sample log with a compaction settles it; Shinatama's check DS3 plans synthetic sessions with compaction records [27].
+- **Record.** A `compaction/summary` event (`{compactionId, summary, shadowedRange, shadowedSeqs, provider, model, …}`), then a user message of `source.kind: "compact-checkpoint"` with `surfaceOp: {op: "replace", startSeq, endSeq}` that stands in for the shadowed span; its text starts "This is an automatically generated checkpoint condensing an earlier span…" and holds a `<compacted-summary>` block [35]. mukade reads the pair as one compaction entry.
 - **Headless.** Not established **[U]**. A possible route is sending `/compact` as an ACP `session/prompt`; Shinatama's check DS15 plans to show whether a prompt starting with `/` is executed [27].
 
 ### Ephemeral runs
 
-- **No switch found.** The research found no flag that keeps a run from being stored [33]. A headless run gets the id `session-<uuid>` unless `--session-id` names one [10]. That it writes a session under `DSH_HOME/sessions` is expected and **[U]** until one run in a scratch `DSH_HOME` is listed (Shinatama's check DS9 plans a scratch home with both `DSH_HOME` and `DSH_AGENTS_HOME` [27]).
+- **No switch.** No flag keeps a run from being stored. A headless run writes a session under `DSH_HOME/sessions` **[V]**, with the id `session-<uuid>` unless `--session-id` names one [10]; `--session-id` adopts an existing session and appends to its log [36]. All four shipped profiles persist to `sessions/` [35].
 - **Headless `--json` output.** One NDJSON event per line, each with a `type` **[S]** [11][10]:
 
 | `type` | fields | notes |
@@ -283,9 +283,9 @@ MCP tools are named `mcp__<server>__<tool>`; plugin tools keep their own names [
 
 ### Branches, forks and subagents
 
-- **Fork.** Only in the web UI, at a chosen event (`atSeq`); a forked session has `isSeeded` in its header [24]. Headless resume refuses a fork [10][24]. ACP has `session/resume` but no `session/load` [24]. How a fork records its parent is **[U]** (Session store, Lineage).
+- **Fork.** Only in the web UI, at a chosen event (`atSeq`); a forked session has `isSeeded` in its header [24]. Headless resume refuses a fork [10][24]. ACP has `session/resume` but no `session/load` [24]. A fork's header has `isSeeded` and `parentSession` (Session store, Lineage).
 - **Branches inside one session.** No branch tree is documented in the sources read **[U]**.
-- **Sub-agents.** `subagent` delegates and returns a child id at once; `subagent_fork` starts the child from the parent's context; `list_agents`, `send_message`, `interrupt_agent` and `workflow` steer or orchestrate them [21]. A sub-agent is its own session, with `origin: 'subagent'`, `delegationDepth` and `agentPreset` in its header; the parent's log holds `subagent/*` records [24]. Child providers include Codex and Claude Code, each run once [24]. Headless resume refuses a sub-agent session [10]. How the child's log and the parent's `subagent/*` records point at each other is **[U]**; a real session with a delegation settles it.
+- **Sub-agents.** `subagent` delegates and returns a child id at once; `subagent_fork` starts the child from the parent's context; `list_agents`, `send_message`, `interrupt_agent` and `workflow` steer or orchestrate them [21]. A sub-agent is its own session, with `origin: 'subagent'`, `parentSession`, `delegationDepth` and `agentPreset` in its header; the parent's log holds `subagent/*` records [24][35]. mukade lists them with `--children`, `kind: spawn`. Child providers include Codex and Claude Code, each run once [24]. Headless resume refuses a sub-agent session [10]. How the child's log and the parent's `subagent/*` records point at each other is **[U]**; a real session with a delegation settles it.
 - **Agent teams.** `spawn_teammate`, `team_task_*` and `wait_agent` belong to an agent-team package that the shipped base disables [21].
 
 ### Models and providers
@@ -331,48 +331,84 @@ mukade neither reads nor writes hook configuration; it moves sessions only.
 
 ## How mukade reads it
 
-**Today: nothing.** No reader, writer, detector, executable lookup, tool translation or summary [30]:
-- `src/model/harness.rs` `HarnessId` has four variants and `HarnessId::ALL` four entries; `catalog/harnesses.json` describes four harnesses (`claude_code`, `codex`, `opencode`, `pi`); `src/reader/` and `src/writer/` hold modules for those four only; `tests/` has no DeepSeek Harness test; `fixtures/` holds the four existing harnesses only [30].
-- A search of `src/`, `catalog/`, `tests/` and `Cargo.toml` on 2026-11-01 found no `deepseek` and no `zstd`, so there is no Zstandard decoder either **[V]** [30].
-- Before this page was added, only ADR-0002, its ADR-index entry and the design draft mentioned DeepSeek Harness [28][29][30].
-- So `mukade harnesses`, `list`, `dump`, `hop` and the TUI do not know it; no session has been read, written or resumed by mukade.
+Code: `src/reader/deepseek_harness.rs`, `src/reader/zstd_frames.rs`, adapter `src/harnesses/deepseek_harness.rs`, detector `src/detect/deepseek_harness.rs`; tests `tests/deepseek_reader.rs` over synthetic logs (plain and zstd, multi-frame, torn tail, a `replace` op, a sub-agent) and the ignored census `tests/deepseek_live.rs` over the real store [38]. The one new dependency is `ruzstd` (pure Rust, pinned exactly).
 
-**Proposed, not in force:** [ADR-0002](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) (status **Proposed**, version 1, 2026-10-31, `accepted_on: null`) [28] and the [design draft](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md) (status "design draft, awaiting approval"; its "my call" decisions are the author's, none implemented) [29].
-- **Reader first, one format version.** The reader ships first; only version 4 is accepted, any other refused naming the version (EX-005: a header saying `"version":5`) ([ADR Decision](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#decision) 2 and 4, INV-003; steps in [draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers)).
-- **Decoding and drift.** Pure-Rust `ruzstd` decoder; a torn tail is read up to the last complete frame, reported, never repaired; drift inside version 4 is kept in `raw`, reported or refused by upstream's own rules ([draft §5.3](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#53-readers), [ADR Consequences](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#consequences)).
-- **Name, discovery, library.** Id `deepseek_harness`, binary `dsh`, `--root <dir>` or `scan`, `mukade harnesses` showing the store as "not configured"; `HarnessId` grows to six with a source/destination capability ([draft §5.1, §5.2](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#51-capability-on-the-harness-definition), [ADR Consequences](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#consequences)). RA-004 rejects Deep Code as the harness ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#rejected-alternatives)).
-- **What a read shows.** Sessions with `isSeeded` or `delegationDepth > 0` are listed with those facts and no parent link is invented, because the draft's header names none; the research reports a `parentSession` header field [24], and reconciling the two is **[U]** until a real header is read. Reasoning is plain text with no payload, so default `drop_foreign` drops it and `--reasoning as_text` keeps it as labelled text; tool names go into `docs/tool-conversion-tables.md` once collected, none yet ([draft §5.3, §5.4, §5.5](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#54-reasoning-and-protocol)) [29][30].
-- **Fixtures and baseline.** Upstream's real v4 logs, taken at a recorded commit; the draft names the earlier tag `dsh-v0.2.0-rc.2`, so the baseline for 0.2.1-rc.5 is **[U]** (Open points 4). Live fixtures need `dsh` and a provider key ([draft §7](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#7-phasing-and-verification)). ADR-0002 describes the store at `dsh-v0.2.0-rc.2`; this page describes 0.2.1-rc.5 only, so the ADR's format statements are not relied on here beyond the pinned `version` 4, which the research also reports in the header [24][28].
+**What you may miss**
 
-**Shinatama today.** Until a reviewed mukade pin carries a DeepSeek Harness reader, Shinatama's adapter declares `list_sessions`, `read_transcript` and `export` unsupported: the agent resumes natively and receives seeds, nothing more [25].
-- Shinatama runs `dsh --profile acp` as an ACP client in a native pane [26]; a seed is delivered by ACP `session/new`, then `session/prompt` [24].
-- Its requirements for a mukade reader: read-only access, no lock taken (`session.lock` included), a torn last frame ignored, unknown records counted. Its check DS3 is planned and has not run [25][27].
+- **Format 4 only.** A header with another `version`, a header that lacks a required key, or an unknown non-ignorable event type refuses the session, naming it.
+- **A torn tail is dropped.** A crash cuts the last frame: the reader decodes every complete frame (checksum compared), drops the rest and adds a `Meta(Unfinished)` entry that says so. A plain log drops a torn last line.
+- **The folder is not read.** `cwd`, `id` and the lineage come from the header; the folder name is lossy.
+- **Replaced nodes.** A node a `replace` op shadowed stays in the document as `Meta(OffBranch)`; only the surface is the conversation.
+- **Other generations.** `session.v3.jsonl` and older sit beside a migrated log and are not read.
+
+**Finding sessions**
+
+- **Listing.** Every `session.v4.jsonl[.zstd]` under `sessions/`, newest first: id, title (the last `session/title`, else the first typed prompt), `cwd`, update time. `list` leaves out sub-agent logs; `--children` adds them; a fork is a session of its own, `kind: fork`.
+- **`--from-file`.** Reads one log by path.
+
+**How events become entries**
+
+| event | becomes |
+|---|---|
+| `user/message`, `source.kind == "user"` | a user entry, typed by the person |
+| `user/message`, `agent-message` / `subagent-settled` / `team-message` | a user entry with text (another agent's message), not typed |
+| `user/message`, any other kind | a marker (injected context) |
+| `assistant/message` | a step: `text`, `reasoning` (plain text, no payload), `tool-call` parts with their results |
+| `tool/result` | a result, paired to its call by id |
+| `compaction/summary` + `compact-checkpoint` | a compaction entry |
+| `model/selection`, `turn/end`, `command/*`, the rest | meta |
+
+- **Tool names.** `CanonicalTool::from_dsh` (`src/model/tool.rs`): `read` → `Read`, `write` → `Write`, `edit` and `apply_patch` → `Edit`, `bash` → `Bash`, `pwsh` → `PowerShell`, `grep` → `Grep`, `glob` → `Glob`, `web_fetch` → `WebFetch`, `web_search` → `WebSearch`, `subagent` → `Agent`, `skill` → `Skill`, `ask_user_question` → `AskUserQuestion`. Other names stay themselves and travel as text. See [tool conversion](../tool-conversion-tables.md).
+- **Reasoning.** Plain text with no signature, so `--reasoning drop_foreign` (the default) drops it and `as_text` keeps it labelled.
+- **Chat origin.** Only `source.kind == "user"` is `Typed`; the other kinds are `Injected("dsh_agent_message")` or unknown.
 
 ## How mukade writes it
 
-- **Today: nothing** [30]. DeepSeek Harness has no import of any kind, so a mukade writer would be the only route in, and it would have to respect the store's single-writer lock [25].
-- **Gate** (INV-004, proposed): enabled only after a mukade-written session is resumed by a live `dsh` and the run is recorded under `docs/verification/`; phase 3 in the draft, validated by the published v4 JSON Schemas ([ADR Decision](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#decision) 2, [draft §7](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#7-phasing-and-verification)) [28][29].
-- **Refusal until then** (INV-002; EX-004: `mukade hop claude_code <session-id> deepseek_harness`): exit code 2 before any plan or write, nothing written ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#enforceable-invariants)) [28]. RA-003 (reader and writer together) was rejected ([ADR](../adr/ADR-0002-hermes-and-deepseek-harness-read-first.md#rejected-alternatives)).
-- **Open.** Whether `ruzstd`'s encoder emits frame checksums, which the writer phase needs **[U]** ([draft §8](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#8-open-points)) [29].
+Code: `src/writer/deepseek_harness.rs`; live record [36]. The Claude fixture hopped into a real `~/.dsh` and `dsh` itself resumed it and answered.
+
+**What you may lose**
+
+- **Reasoning.** An assistant message in the log keeps no signature or encrypted payload; the message has no `replayState`, so dsh reads it as another provider's and converts it itself. Reasoning text is written; opaque payloads are dropped.
+- **Images.** Not written: dsh's image is a reference into its attachment store.
+- **Tools.** Offered toward dsh: `read`, `write`, `edit`, `glob`, `grep`, `web_fetch` and the shell of the platform (`pwsh` on Windows, `bash` elsewhere). A shell call is translated only into that dialect and needs a description; everything else, `web_search` included, is text form. See [tool conversion](../tool-conversion-tables.md).
+- **Refused (exit 2):** `--dest-path` (dsh finds a session by id and project folder), `--dest-agent`, `--metadata-file`, `--compaction native`; `--dest-id` must be `session-<uuid>` or a UUID.
+- **A relative cwd is refused.** The header's cwd must be absolute; a session without a usable folder is filed under `_no-cwd`.
+
+**The file**
+
+1. Folder: `sessions/--<projectKey(cwd)>--/<encodeSegment(id)>/` under `DSH_HOME`; id `session-<uuid>`. A root that holds plain `.jsonl` logs is written plain (dsh opens a root in one encoding).
+2. Frame 1: the header alone. Then the events in frames of at most 256, each frame with the checksum flag. `ruzstd` has no checksum, so the encoder sets the descriptor bit and appends the XXH64 low 32 bits (`reader::zstd_frames::encode_frame`); libzstd decodes both frames and verifies them [36].
+3. Events: `seq` from 0; each turn is `turn/start`, steps holding the messages, `turn/end`; every call is also a `tool/call` event, and its result cites it in `sourceEventSeqs`. Node 0 of the surface is an empty `system/message`: dsh replaces it with its own system prompt on the next step.
+4. The file appears whole or not at all (temporary file, then a link; never over another file).
+
+**What dsh did with it.** It found the log by id and folder, read it without a format or checksum error, rebuilt five turns and two tool calls with results, appended `session/end-seed`, its settings and a new turn, and answered [36].
+
+**Resume.** `dsh --profile headless --session-id <id> "<task>"`, run from the session's own cwd; with the free route `--patch docs/superpowers/specs/2026-11-12-dsh-openrouter.patch.yml`.
 
 ## How mukade summarizes it
 
-- **Not implemented.** The design draft refuses `--compaction summary` from a DeepSeek Harness source, with a reason, in the first phase ([draft §5.6](../superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md#56-cli-tui-docs)) [29].
-- **Why no summary run is designed.** The research's headless candidate (`DSH_PERMISSION_MODE=read-only`) is not established as answer-only, and a headless run may store a session (Features, Ephemeral runs) **[U]**.
+**Refused.** `--compaction summary` from a dsh session exits 2 with the reason. The run every other harness uses puts the session in front of its model and saves nothing; dsh has no such run.
+
+- `--session-id <id>` is the only way to show the model the session, and it **adopts** the session: the question and its answer are appended to its log (seen in the live record: `session/end-seed`, a new turn, the answer) [36].
+- Without `--session-id` the model cannot see the session. The four shipped profiles all persist their runs to `sessions/`, and `dsh` has no flag that turns the log off or the tools away; `--permission-mode read-only` limits writes, it is not an answer-only run **[U]**.
+- Use `--compaction portable` (a stored compaction travels) or `native`; or ask dsh yourself and hop with the text.
 
 ## Open points
 
-1. **Which root each profile persists to** **[U]**. Settled by the persistence row of `dsh --profile <p> --dump-config` for each profile in use (Install and locate).
-2. **The session format at rc.5** **[U]**: `data` shapes, `surfaceOp`, the extra event families, how compaction is stored. Settled by `docs/session-format-status.md` and the JSON Schemas at the tag, plus a sample log with a compaction (Shinatama's DS3).
-3. **Path rules and lineage** **[U]**: cwd normalization, id encoding, `parentSession`, links between a child log and the parent's `subagent/*` records. Settled by a listing of a real `sessions/` tree and a real session with a delegation.
-4. **The fixture baseline for 0.2.1-rc.5** **[U]**. Settled by choosing the upstream commit to take `snapshots/**/session.v4.jsonl` from (the draft names `dsh-v0.2.0-rc.2`).
-5. **An answer-only headless run** **[U]**, needed before any summary run. Settled by the `--dump-config` and canary probe (Tools, Read-only switches; Shinatama's DS7).
+Ranked by what they cost a user. The rest: [`../../next.md`](../../next.md).
 
-Everything else is marked **[U]** in its section; the project-wide list is in [next.md](../../next.md).
+1. **A resume that makes a tool call [U].** The live resume answered a plain prompt; a resume where the model calls a tool on the converted history was not run.
+2. **A root without compression [U].** The plain `.jsonl` writer is covered by tests, not live.
+3. **A hop from a dsh session [U].** Covered by tests over a real log read; not hopped into each destination live.
+4. **Format drift inside version 4.** New event types and optional fields land without a version bump (16 schema files at rc.5, 24 at rc.2). mukade refuses only unknown non-ignorable types and keeps unknown fields in the raw record; a new non-ignorable type refuses sessions until the list in `src/reader/deepseek_harness.rs` grows.
+5. **`DSH_AGENTS_HOME` [U].** What it holds, and whether a scratch `DSH_HOME` alone isolates a run.
+6. **Platform paths [U].** macOS and Linux launcher paths and `~/.dsh` were not observed.
 
 ## Sources
 
-**Labels.** `[n]` cites the list below. **[S]** read in upstream source or configuration files, never run here. **[R]** a fact recorded only by the research task of 2026-10-31 in Shinatama's technical design, which read the release's source and documentation and ran nothing [24]; facts cited to [24] alone carry the **[R]** label even where it is not repeated. Shinatama is the multi-agent terminal workspace that hosts the agents and consumes mukade. **[V]** observed on this machine on 2026-11-01. **[U]** not established; the text says what would settle it.
+Sources 1 to 32 are as on 2026-11-01 unless they say otherwise; 24 to 27 are Shinatama documents (research, labelled R) and no longer the basis of anything mukade does. Sources 33 to 38: this repository and this machine, 2026-11-12.
+
+1. **[U]** not established; the text says what would settle it.
 
 **How upstream was read.** Through a summarising fetch, not a local clone, so identifiers are as the fetch returned them. `@rc.5` is the tag `dsh-v0.2.1-rc.5`; `@master` is the default branch at the time of reading, not re-read at the tag, so it may differ from 0.2.1-rc.5; where one disagrees with the tag, the text says so. Shinatama paths are relative to the Shinatama repository (`D:\Projects\shinatama`); mukade paths are relative to `D:\Projects\mukade`. All accessed 2026-11-01. Sources 1 to 23 were read for Shinatama's research report [33]; this page cites them as that report recorded them.
 
@@ -415,10 +451,9 @@ Everything else is marked **[U]** in its section; the project-wide list is in [n
 
 **mukade**
 
-28. mukade, `docs/adr/ADR-0002-hermes-and-deepseek-harness-read-first.md` (status Proposed, version 1,
-    2026-10-31).
+28. mukade, `docs/adr/ADR-0002-hermes-and-deepseek-harness-read-first.md` (amended 2026-11-12: Accepted with changes).
 29. mukade, `docs/superpowers/specs/2026-10-31-hermes-deepseek-harness-support-design.md` §4.2, §5, §7, §8
-    (design draft awaiting approval, 2026-10-31).
+    (the first design draft, superseded by source 34).
 30. mukade repository inspection of 2026-11-01: `src/model/harness.rs` (`HarnessId`, `HarnessId::ALL`),
     `catalog/harnesses.json`, the listings of `src/reader/`, `src/writer/`, `tests/` and `fixtures/`, a search of
     `src/`, `catalog/`, `tests/` and `Cargo.toml` for `deepseek` and `zstd` (no match), and a search of the
@@ -435,3 +470,11 @@ Everything else is marked **[U]** in its section; the project-wide list is in [n
     turn, complete tool list, verdict rows C1 to C5), written 2026-11-01:
     `.daodan/runs/init-467ba8d96c1b4104b3ac1edb707caffa/web-tools/deepseek-harness.md`. It states that
     `dsh --version` was not run and that the CLI is not installed.
+
+**This repository and this machine, 2026-11-12**
+
+34. mukade, [`superpowers/specs/2026-11-12-hermes-deepseek-design.md`](../superpowers/specs/2026-11-12-hermes-deepseek-design.md): the decisions for the reader, the writer and the harness id; it supersedes ADR-0002's read-first plan for dsh.
+35. Research of 2026-11-12 on dsh `dsh-v0.2.2-rc.2` (source, file:line) checked against the installed 0.2.2-rc.1 package: format version, framing, header, event types, `surfaceOp`, `projectKey`, `encodeSegment`, `--dump-config` of the four profiles, `dsh --version`. The report is kept in the run's scratchpad, not in the repository. [V]
+36. mukade, [`verification/2026-11-12-dsh-writer-live.md`](../verification/2026-11-12-dsh-writer-live.md): a Claude fixture hopped into a real `~/.dsh` and resumed by `dsh` 0.2.2-rc.1. [V]
+37. This machine, 2026-11-12: `dsh --help`, `dsh --profile headless --help`, `dsh --profile web --help`, `dsh --profile tui --help` (no such profile), `dsh --profile headless --session-id nope` (`a task is required`). [V]
+38. mukade code and tests: `src/reader/deepseek_harness.rs`, `src/reader/zstd_frames.rs`, `src/writer/deepseek_harness.rs`, `src/harnesses/deepseek_harness.rs`, `src/detect/deepseek_harness.rs`, `tests/deepseek_reader.rs`, `tests/writer_dsh.rs`, `tests/deepseek_live.rs`. [V]

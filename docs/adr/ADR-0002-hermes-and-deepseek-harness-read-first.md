@@ -2,7 +2,7 @@
 adr_id: ADR-0002
 version: 1
 title: Hermes and DeepSeek Harness enter read-first; Hermes stays source-only
-status: Proposed
+status: Accepted
 author: Alfio Caprino
 scope:
   paths:
@@ -25,21 +25,44 @@ depends_on:
 created_from_task: brainstorm-hermes-deepseek-harness
 proposed_on: 2026-10-31
 proposed_at_sha: d2fb033fd90bdc654efe2b64081be64161fdeb19
-accepted_on: null
-accepted_at_sha: null
+accepted_on: 2026-11-12
+accepted_at_sha: 879368a78a440c417fb047dbe17913bd1605a4ad
 last_verified_sha: null
 retired_on: null
 retired_reason: null
 supersedes:
 superseded_by: null
 changes:
+  - 2026-11-12: accepted with changes (see Amendment): Hermes is a destination through its own import; schema gate 32 and later; the DeepSeek Harness writer exists and was verified live.
 ---
 
 # ADR-0002: Hermes and DeepSeek Harness enter read-first; Hermes stays source-only
 
 <!-- adr-header:start -->
-Version 1 · Proposed 2026-10-31 by Alfio Caprino
+Version 1 · Proposed 2026-10-31 by Alfio Caprino · Accepted with changes 2026-11-12 (Amendment)
 <!-- adr-header:end -->
+
+## Amendment 2026-11-12: accepted with changes
+
+Both harnesses were implemented, installed and exercised on a real machine (Hermes v0.23.1,
+`dsh` 0.2.2-rc.1). What that showed replaces parts of the Decision below; the text of the original
+decision stays as the record of what was proposed.
+
+| original | now | why |
+|---|---|---|
+| Decision 1: Hermes is source-only | **Hermes is a destination, through its own `hermes sessions import --from claude`**; mukade still never opens `state.db` for writing (INV-001 holds) | the import is the supported way in that RA-001 and RA-002 lacked: the gateway stores the rows. It keeps only user and assistant text, so tools travel as text ([verification](../verification/2026-11-12-hermes-writer-live.md)) |
+| Decision 2: the DeepSeek writer comes later, after a live resume | **The writer exists and the live resume is recorded** (INV-004 satisfied): `dsh` opened, resumed and extended a mukade-written log ([verification](../verification/2026-11-12-dsh-writer-live.md)) | the format facts were established from source and a real store |
+| Decision 4 and INV-003: Hermes schema 31 only | **Schema 32 and later, gated by the columns the reader needs** (32 at v0.22.5, 33 at v0.23.1); DeepSeek format 4 only, as proposed | Hermes never refuses a newer schema and adds columns without a bump; 31 refused every real store |
+| Decision 3 and INV-002: a source-only harness is refused as a destination | **Kept as the mechanism** (`Harness::destination()` is `None`), but no harness is source-only now: all six are destinations | |
+| Consequences: a decoder for DeepSeek | `ruzstd` (pure Rust) decodes; its encoder writes the frames and mukade sets the checksum | `ruzstd` has no checksum without a hashing crate |
+| EX-002, EX-004 (refused destinations) | no longer apply to Hermes and DeepSeek; the refusal is tested with a stand-in source-only adapter (`src/harnesses/mod.rs`, `a_destination_without_a_writer_is_refused_before_planning`) | |
+| EX-001, EX-003, EX-005 | hold, with schema 32 in place of 31 in EX-001 and EX-003 | |
+| RA-001, RA-002, RA-005 | stay rejected: no direct `state.db` write, no backup-zip import, no bypass flag | the import is none of these |
+
+Also decided on 2026-11-12: `--compaction summary` is refused from both (no run that leaves the
+session untouched: `hermes --resume` and `dsh --session-id` append to it); the TUI lists and hops
+both, resumes Hermes with `hermes --resume`, and says dsh has no terminal UI. Design:
+[2026-11-12-hermes-deepseek-design.md](../superpowers/specs/2026-11-12-hermes-deepseek-design.md).
 
 ## Context and Problem Statement
 
