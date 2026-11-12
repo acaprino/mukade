@@ -9,7 +9,8 @@
     "desktop": "cd apps/desktop && tauri dev",
     "desktop:build": "npm run build && cd apps/desktop && tauri build --debug --no-bundle",
     "desktop:release": "npm run build && cd apps/desktop && tauri build --no-bundle --features custom-protocol",
-    "test": "node --experimental-strip-types --test apps/desktop/tests/*.test.ts"
+    "test": "node --experimental-strip-types --test apps/desktop/tests/*.test.ts",
+    "smoke": "node apps/desktop/tests/smoke.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4"

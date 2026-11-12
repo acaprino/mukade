@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "The Mukade window: app commands, and the native file dialog for dump documents. No shell, filesystem or HTTP plugins.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }

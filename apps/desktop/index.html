@@ -19,28 +19,33 @@
     <symbol id="i-theme" viewBox="0 0 16 16"><path d="M8 2.500v11M8 2.500a5.500 5.500 0 1 0 0 11"/></symbol>
     <symbol id="i-close" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
     <symbol id="i-caret" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+    <symbol id="i-fork" viewBox="0 0 16 16"><path d="M4 2v3q0 3 4 3t4-3V2M8 8v6"/></symbol>
   </svg>
   <main id="app">
     <header class="titlebar">
       <svg class="brand-mark icon" aria-hidden="true"><use href="#i-mark"/></svg>
       <span class="wordmark">Mukade</span><span class="version" id="version"></span>
-      <nav class="views" role="tablist" aria-label="Views">
-        <button type="button" role="tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions <kbd>1</kbd></button>
-        <button type="button" role="tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>2</kbd></button>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <button type="button" role="tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions</button>
+        <button type="button" role="tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>c</kbd></button>
       </nav>
       <span class="spring"></span>
-      <button type="button" id="scan" title="Look for portable or custom installations in a folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Scan folder</button>
+      <input type="search" id="search" aria-label="Filter sessions" placeholder="Filter by title, id, folder   /" autocomplete="off" spellcheck="false">
+      <button type="button" id="scan" title="Look for portable or custom installations in a folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Scan folder <kbd>o</kbd></button>
       <button type="button" id="import" title="Write a dump document into an installation"><svg class="icon" aria-hidden="true"><use href="#i-import"/></svg>Import <kbd>i</kbd></button>
       <button type="button" id="reload" title="Read every store again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Reload <kbd>r</kbd></button>
       <button type="button" id="theme" title="Theme: follows the system" aria-label="Theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-name">Auto</span></button>
     </header>
-    <section id="view-sessions" class="view" aria-label="Sessions">
-      <aside id="installations" class="column" aria-label="Installations"></aside>
+    <section id="view-sessions" class="view" aria-label="Sessions" data-focus="installations">
+      <aside id="installations" class="column" aria-label="Installations and folders"></aside>
+      <div class="resizer" id="resize-installations" role="separator" aria-orientation="vertical" aria-label="Resize the installations column" title="Drag to resize · double-click to reset"></div>
       <section id="sessions" class="column" aria-label="Sessions of the installation"></section>
+      <div class="resizer" id="resize-sessions" role="separator" aria-orientation="vertical" aria-label="Resize the sessions column" title="Drag to resize · double-click to reset"></div>
       <section id="detail" class="column" aria-label="Session"></section>
+      <button type="button" class="back-column" data-back aria-label="Back one column">‹ Back</button>
     </section>
     <section id="view-chat" class="view" aria-label="Chat" hidden></section>
-    <footer class="statusbar"><i id="status-dot"></i><span id="status">ready</span><span class="spring"></span><span id="status-right"></span></footer>
+    <footer class="statusbar" id="statusbar"><i></i><span id="status">starting…</span><span id="status-counts" class="muted"></span><span class="spring"></span><span id="status-right" class="hints"></span></footer>
   </main>
   <script type="module" src="/src/main.ts"></script>
 </body>

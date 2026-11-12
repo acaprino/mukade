@@ -2345,12 +2345,14 @@ dependencies = [
 name = "mukade-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "mukade",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tokio",
 ]
 
 [[package]]

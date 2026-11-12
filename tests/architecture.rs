@@ -14,7 +14,7 @@ const HARNESS_ARMS: [&str; 6] = [
 ];
 
 /// The folders searched, from the repository root.
-const SEARCHED: [&str; 2] = ["src", "mukade-tui/src"];
+const SEARCHED: [&str; 3] = ["src", "mukade-tui/src", "apps/desktop/src-tauri/src"];
 
 /// Where naming a harness is the point: the adapters, the readers, writers and detectors of one
 /// harness, and the enum itself. A path ending in `/` is a folder; any other is one file.

@@ -105,12 +105,55 @@ input::placeholder { color: var(--muted); }
 .views { display: flex; gap: 0; }
 .views button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
 .views button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
-.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 8px; }
+.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 0; position: relative; }
+#view-chat { gap: 8px; }
 .column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-top-width: 2px; background: var(--pane); overflow: hidden; }
 .column.focused { border-top-color: var(--accent); }
-#installations { flex: 0 0 248px; }
-#sessions { flex: 0 0 clamp(340px, 34%, 520px); }
-#detail { flex: 1; }
+#installations { flex: 0 0 var(--w-installations, 248px); }
+#sessions { flex: 0 0 var(--w-sessions, clamp(340px, 34%, 520px)); }
+#detail { flex: 1 1 0; }
+/* The reader takes the room the installations had. */
+#view-sessions.reading #installations, #view-sessions.reading #resize-installations { display: none; }
+.resizer { flex: 0 0 8px; cursor: col-resize; position: relative; touch-action: none; }
+.resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background-color 120ms; }
+.resizer:hover::after, .resizer:active::after { background: var(--line-strong); }
+.back-column { display: none; }
+#search { flex: 0 1 300px; min-width: 140px; }
+#search:disabled { opacity: .5; }
+.hints { display: flex; gap: 12px; overflow: hidden; }
+.hints b { font-weight: 400; color: var(--ice); }
+.note.err { border-left-color: var(--error); color: var(--error); }
+.warn-text { color: var(--warning); }
+.row-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+.row-fields > * { flex: 1 1 180px; }
+.hint { font-size: 12px; }
+.plan.losses li::before { content: '· '; color: var(--warning); }
+dl.kv.keys { grid-template-columns: 140px minmax(0, 1fr); }
+button.ghost { border-color: transparent; color: var(--muted); }
+button.ghost:hover { color: var(--text); }
+.tabs { display: flex; }
+.tabs button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
+.tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
+
+/* Below 1000 px the detail column is a drawer over the sessions; below 700 px one column at a
+   time, with a back button (spec §2). */
+@media (max-width: 999px) {
+  #view-sessions #detail { position: absolute; top: 8px; right: 8px; bottom: 8px; width: min(560px, calc(100% - 40px)); z-index: 5; box-shadow: -18px 0 40px var(--shadow); transform: translateX(calc(100% + 16px)); transition: transform 160ms ease-out; }
+  #view-sessions[data-focus='detail'] #detail, #view-sessions.reading #detail { transform: none; }
+  #sessions { flex: 1 1 auto; }
+  #resize-sessions { display: none; }
+}
+@media (max-width: 699px) {
+  #view-sessions > .column, #view-sessions > .resizer { display: none !important; }
+  #view-sessions[data-focus='installations'] #installations,
+  #view-sessions[data-focus='sessions'] #sessions,
+  #view-sessions[data-focus='detail'] #detail { display: flex !important; flex: 1 1 auto; position: static; width: auto; transform: none; box-shadow: none; }
+  #view-sessions:not([data-focus='installations']) .back-column { display: inline-flex; position: absolute; left: 12px; bottom: 12px; z-index: 6; background: var(--chrome); }
+  .titlebar { flex-wrap: wrap; height: auto; padding: 6px 10px; }
+  #app { grid-template-rows: auto minmax(0, 1fr) 28px; }
+  .hints { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { #view-sessions #detail { transition: none; } }
 .column-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
 .column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .09em; text-transform: uppercase; color: var(--text-2); }
 .column-head small { font: 12px var(--mono); color: var(--muted); }
