@@ -428,22 +428,6 @@ fn opencode_model(config: &Path) -> Option<(String, Option<String>)> {
     Some((provider.to_string(), Some(model.to_string())))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::opencode_config_beside;
-    use std::path::PathBuf;
-
-    #[test]
-    fn only_an_xdg_data_layout_has_a_configuration_beside_it() {
-        let root = PathBuf::from("install");
-        assert_eq!(
-            opencode_config_beside(&root.join("data/share/opencode/opencode.db")),
-            Some(root.join("data/config/opencode/opencode.json"))
-        );
-        assert_eq!(opencode_config_beside(&root.join("store/opencode.db")), None);
-    }
-}
-
 /// OpenCode's interchange format: what `opencode session import` takes.
 struct Document;
 
@@ -584,5 +568,21 @@ fn web_fetch(input: &Value) -> Translation {
     Translation::Call {
         name: "webfetch",
         input: tools::obj_pairs(pairs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opencode_config_beside;
+    use std::path::PathBuf;
+
+    #[test]
+    fn only_an_xdg_data_layout_has_a_configuration_beside_it() {
+        let root = PathBuf::from("install");
+        assert_eq!(
+            opencode_config_beside(&root.join("data/share/opencode/opencode.db")),
+            Some(root.join("data/config/opencode/opencode.json"))
+        );
+        assert_eq!(opencode_config_beside(&root.join("store/opencode.db")), None);
     }
 }
