@@ -39,6 +39,7 @@ own sessions**.
 | carry a long session in less space | [`--compaction`, `--intent`](#make-a-long-session-smaller) |
 | leave out half-done turns | [`--interrupted drop`](#a-session-with-interrupted-turns) |
 | carry a rewound Codex thread whole | [`--all-branches`](#a-session-that-was-rewound-or-branched) |
+| carry the subagent sessions with their parent | [`--children`](#carry-the-subagent-sessions) |
 | know exactly what a hop lost | [the receipt, `--manifest`](#4-reading-the-receipt-and-the-manifest) |
 | understand an error | [exit codes](#11-exit-codes), [troubleshooting](#12-troubleshooting) |
 
@@ -317,8 +318,9 @@ is `null`: **a cleaner must read `null` as "not known", not as "not running".**
 
 #### Subagent sessions
 
-`--children` lists every session the store holds, subagent sessions included; any other command
-given it is a command-line mistake (exit 1). `dump` and `hop` read a child by its `id` as listed.
+`--children` lists every session the store holds, subagent sessions included. `dump` and `hop` take
+it too ([Carry the subagent sessions](#carry-the-subagent-sessions)); any other command given it is a
+command-line mistake (exit 1). `dump` and `hop` read a child by its `id` as listed.
 
 | harness | `--children` adds | child `id` | `parent` |
 |---|---|---|---|
@@ -328,8 +330,9 @@ given it is a command-line mistake (exit 1). `dump` and `hop` read a child by it
 | Pi | nothing: no subagents | | |
 
 What `parent_kind` holds per harness: [spec §3.1](session-interchange-spec.md#31-the-librarys-own-model-session).
-A hop of a parent does not carry its children; what a child reported to its parent travels in the
-parent as a user turn ([Choose what travels](#subagents-and-what-they-reported)).
+What a child reported to its parent travels in the parent as a user turn
+([Choose what travels](#subagents-and-what-they-reported)); the children themselves travel only
+with `--children`.
 
 #### Archived sessions
 
@@ -404,6 +407,8 @@ mukade dump codex --from-file 'C:\path\rollout.jsonl' --output C:\work\session.j
 - It exports the session as it is, interrupted turns included; what is left out is decided at write.
 - It takes `--compaction portable|summary` and `--intent`; `native` is refused, because the document
   is harness-neutral. It does not take `--interrupted` or `--without-tools`.
+- `--children` adds the session's subagent sessions to the document, in `children`
+  ([Carry the subagent sessions](#carry-the-subagent-sessions)).
 
 ### `mukade write`
 
@@ -425,6 +430,8 @@ mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --cla
 - It takes `--without-tools`, `--interrupted drop` and the destination options like `hop`; it refuses
   `--compaction` and `--intent` (chosen by `dump`) and imports the summary a document already holds.
 - A document saved with a UTF-8 byte-order mark is accepted.
+- It imports the session alone: a `children` list in the document is left unwritten, and `write` says
+  so on stderr. Use `hop --children` to write the subagent sessions.
 
 #### Move a session to another machine
 
@@ -458,6 +465,8 @@ mukade hop pi YOUR_PI_SESSION_ID opencode --cwd 'C:\work\my-project' --project-i
 - `--root` selects the **source**, even when both ends are the same harness; the destination takes its
   variable or `--dest-root` ([section 7](#7-stores-and-executables)).
 - With `--from-file` the source is that file; the `<session-id>` position is still written.
+- `--children` also writes the session's subagent sessions
+  ([Carry the subagent sessions](#carry-the-subagent-sessions)).
 - A hop is repeatable: each run writes another new session and changes nothing else.
 
 #### Rehearse first
@@ -580,6 +589,7 @@ Pi with `--compaction portable` (long paths shortened):
 | `counts` | every kind of loss as a number (all of them: [spec §6.3](session-interchange-spec.md#63-manifest-written-with-every-hop)); every number above zero also has a line in `losses` |
 | `strict` | the plan was held against the rules a provider API enforces (every tool call answered once, IDs in the allowed pattern, …) **before** writing; a plan that would be refused is not written (exit 4) |
 | `source.content_sha256` | the SHA-256 of the **source file's own bytes** |
+| `children` | only with `hop --children`: one entry per subagent session written ([Carry the subagent sessions](#carry-the-subagent-sessions)) |
 
 **Audit the loss.**
 
@@ -609,6 +619,7 @@ What the `losses` lines mean:
 | `empty steps dropped (n)` · `user attachments dropped (n)` · `structured tool-result blocks flattened to text (n)` | content the destination cannot hold (a PDF, an image toward a text-only result) is counted, never silently dropped. Images are rewritten into each harness's own shape |
 | `the source's compaction summary travels as one user message` | `--compaction portable` |
 | `the resume prompt did not complete: …` | the session was written but `--resume-prompt` failed (exit 5): see [troubleshooting](#12-troubleshooting) |
+| `child <id>: <reason>` | `hop --children`: a subagent session was not carried (`<id>` is the source's), or carried with a loss of its own (the child's own line, prefixed). See [Carry the subagent sessions](#carry-the-subagent-sessions) |
 
 ## 5. Choose what travels
 
@@ -824,6 +835,62 @@ A report on an abandoned branch (a rewind) is left behind with that branch and c
 it, `dump` and `hop` take it by its id ([Subagent sessions](#subagent-sessions)). The TUI does not
 resume a Claude Code subagent (`R`): Claude Code resumes sessions, not their subagents; it names the
 parent to resume instead.
+
+#### Carry the subagent sessions
+
+`--children` on `dump` and `hop` carries every readable subagent session of the session, at any
+depth. Without it nothing changes.
+
+| | |
+|---|---|
+| `dump --children` | the document gets `children`: one full document per child, nested as the children hang (a child's own children sit in its `children`). A child that could not be read is named in `children_lost`, one `<id>: <reason>` each. `--from-file` cannot go with it: children are found in the store |
+| `hop --children` | the session is written first, then each child as a session of its own, parents before children, in the order their spawn calls came in the parent; a spawn call unknown comes after those known |
+
+What `hop --children` writes, per destination:
+
+| destination | each child is | link to the parent |
+|---|---|---|
+| OpenCode | an imported session | `info.parentID`: the parent is imported first |
+| Claude Code | `<project>/<parent-id>/subagents/agent-<agentId>.jsonl` (every row `isSidechain`, `agentId`) and `agent-<agentId>.meta.json` (`agentType`, `description`, `spawnDepth`, `toolUseId`, `parentAgentId`); a child of a child is filed flat in the same folder | the folder; its id is `<parent-id>.<agentId>`, the id `list --children` shows |
+| Codex | a rollout of its own | none: Codex records no link a writer can make; the manifest is the only record |
+| Pi | a session file of its own | none: Pi's `parentSession` means fork, not spawner |
+
+- **Same pipeline, same options.** A child is read, planned and written like the session:
+  `--reasoning`, `--without-tools`, `--tool-map`, the destination facts. `--dest-id`, `--dest-path`,
+  `--metadata-file`, `--resume-prompt` and `--expect-sha256` are the session's alone; a child gets a
+  new id every run, so a repeated hop writes its children again.
+- **Compaction.** `--compaction native` applies to each child (it is deterministic); `portable` and
+  `summary` are the session's alone, and a child travels whole (`compaction: "none"` in its entry).
+- **The session names its children.** A spawn call written as text gets one more line, `→ <id>`:
+  the destination session of the child it started. A call written as a tool call of the destination
+  (`--tool-map`) names it through Claude Code's `toolUseId` instead.
+- **A child that cannot be read** (a Claude meta.json with no transcript, a Codex thread whose rollout
+  is gone, a Claude child that continues a sibling's transcript) is a `child <id>: <reason>` line in
+  `losses`; the hop goes on.
+- **A child that cannot be written** stops the children there: the session stays written, the later
+  children are lost lines (`not written, an earlier child failed`), the receipt is printed, `--manifest`
+  is saved and the exit code is 5.
+- **A child that inherits context** (a Claude `fork` agent, a Codex thread forked from its parent)
+  is written with what its own file holds; its entry has `inherits_context: true`.
+
+`manifest.children`, one entry per child written:
+
+| key | holds |
+|---|---|
+| `source_id` | the child's id in the source |
+| `dest_id`, `dest_path` | its id and file (or database) in the destination |
+| `link` | `native` (OpenCode, Claude Code) or `none` (Codex, Pi) |
+| `depth` | 1 for a child of the session, 2 for a child of a child, … |
+| `compaction` | how it was written: `none` or `native` |
+| `inherits_context` | `true` when the child starts from its parent's conversation, which its file does not hold |
+
+The receipt on stdout is unchanged; one line per child goes to stderr:
+`child <source id> -> <destination id> (linked to its parent)`.
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --children --cwd 'C:\work\my-project' --project-id YOUR_PROJECT --model-provider YOUR_PROVIDER
+mukade dump codex YOUR_CODEX_THREAD_ID --children --output C:\work\session.json
+```
 
 ### Leave out tool calls
 
@@ -1188,7 +1255,7 @@ start, left it absent. A test asserts the sandbox around the real binary stays e
 | 1 | a command-line mistake (unknown option, a flag without its value, an unexpected argument, an option the command does not take, a bad value), or another error outside the codes below (a document that cannot be read or parsed, a `MUKADE_DATA_DIR` that is not absolute) |
 | 2 | refused with a reason; nothing was written: the session is not there, the store is not configured, the ID is ambiguous, the source changed (`--expect-sha256`), or the request is not supported (a resume prompt starting with `-`, `--compaction portable` on a source that never compacted, `--all-branches` on a harness other than Codex, …) |
 | 4 | failed and nothing changed: the plan would be refused by a provider, the source's model could not write the summary, or the write failed before starting the destination import |
-| 5 | recovery is needed: the source could not be read, an external import has an uncertain outcome, or the session was written but the resume failed. A failed resume still prints its receipt and saves `--manifest`; an uncertain import names its destination ID |
+| 5 | recovery is needed: the source could not be read, an external import has an uncertain outcome, the session was written but the resume failed, or `--children` wrote the session but not all its subagent sessions. A failed resume or child still prints its receipt and saves `--manifest`; an uncertain import names its destination ID |
 
 ## 12. Troubleshooting
 

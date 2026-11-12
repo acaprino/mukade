@@ -14,6 +14,7 @@ mukade reads and writes its sessions: list, dump, hop in and out, resume, a summ
 | **Resume** | ✅ `pi -p --session <file>`, run from the session's working directory with `PI_CODING_AGENT_DIR` set |
 | **Summary by its own model** | ✅ `--compaction summary`: Pi forks the session into a scratch folder; the source file stays byte-identical [34] |
 | **Native compaction** | ✅ `--compaction native` appends Pi's own `compaction` entry; live Pi 1.4.0 resumed one and answered from the summary (2026-11-04) [53]. `Compaction::DestinationNative` ❌ |
+| **Subagents** | ⚠️ none of Pi's own; `hop --children` writes a source's subagents as session files of their own, unlinked: `parentSession` means fork |
 | **Notable gaps** | ⚠️ sessions moved with `--session-dir`, `PI_CODING_AGENT_SESSION_DIR` or `sessionDir` are not found; written `usage` counters are zero; no system message is written |
 | **Not supported** | ❌ Oh My Pi (`omp`), a different project (see Install and locate) |
 | **mukade name** | `pi` (`mukade list pi`, `mukade dump pi <id>`, `mukade hop <src> <id> pi …`) [32] |

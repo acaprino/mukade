@@ -78,6 +78,7 @@ and from `writer::for_harness` a writer that refuses every write (exit 2) withou
 | `src/tools.rs` | the canonical dispatch (`translate_with`), the accepted-keys check, the L11 offered-set safety net, the text form, the shared argument readers (`edit_call`, `grep_call`, …) and shared reasons |
 | `src/summary.rs` | running and timing the summary command, trimming and refusing an empty reply |
 | `src/hop.rs` | the pipeline: read, compact, plan, write, resume |
+| `src/children.rs` | a session's subagent sessions: finding and reading them through the reader, `dump --children`, `hop --children` (`Destination::links_children`, `Writer::child_id` say what a destination does with one) |
 | `src/writer/plan.rs` | the rendering plan; it asks the adapter for its flags and image shapes |
 | `src/native_compaction.rs` | native compaction records, harness-neutral |
 | `src/catalog.rs` | reading `catalog/harnesses.json` |

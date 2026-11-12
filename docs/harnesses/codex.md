@@ -11,8 +11,8 @@ with Codex's own model and compacts natively.
 |---|---|
 | Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`); subagent and guardian threads with `list --children` |
 | Write | ✅ a new rollout under `sessions/`; needs the destination's `cli_version` |
-| Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), subagent threads (each read on its own), forks, compressed rollouts |
-| Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form |
+| Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), forks, compressed rollouts; subagent threads travel only with `--children` |
+| Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form; `hop --children` writes each subagent as a rollout of its own, unlinked (below) |
 | Resume | ✅ `codex exec resume <id>` (receipt) or `codex resume <id>`; live-verified on 0.166.0 [48] |
 | Summary by its own model | ⚠️ `--compaction summary` runs `codex exec fork … --ephemeral`; checked against a mock only **[U]** [27] |
 | Native compaction | ✅ `--compaction native` appends a `compacted` record; live-verified 2026-11-04 [19 §4.4] |
@@ -323,6 +323,10 @@ What a real run offers after these switches **[U]** (reading `tools` in the requ
   - Cap: `agents.max_concurrent_threads_per_session` (legacy alias `agents.max_threads`).
   - On disk (Desktop): each subagent is its own rollout, 971 of the 982 scanned [26]. The CLI's
     persistence of subagent threads **[U]**.
+  - **Written subagents** (`hop --children`): the writer writes a session's rollout with no
+    `session_id`, `parent_thread_id` or `state_<n>.sqlite` row, so each child is a thread of its
+    own; Codex has no native link for a writer to make. The parent's text-form `spawn_agent` call
+    names it (`→ <thread id>`) and the manifest's `children` maps source to destination.
 
 ### Models and providers
 
@@ -400,8 +404,9 @@ Code: `src/reader/codex.rs` [22], `src/reader/codex/exec.rs`, `src/reader/codex_
    (`class_of()`). The root agent's messages to subagents (`send_message`, `followup_task`,
    `spawn_agent`, `message` encrypted the same way) travel as text form with that value replaced by
    `<encrypted by the source's provider, N chars>` (tables §3; `src/tools.rs` `without_encrypted()`).
-4. **Not converted:** a thread's subagent threads (each its own session, read by its id), forks, and
-   compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].
+4. **Not converted:** forks, and compressed/migrated rollouts (only `*.jsonl` files are listed)
+   **[U]** [19 §10]. A thread's subagent threads (each its own session, read by its id) travel only
+   with `--children`.
 5. **`apply_patch` is read at translate time** (`src/tools/patch.rs` `view()`): one added file is a
    write, one updated file with one hunk an edit, several hunks a multi-edit (Pi only); anything
    else stays text form (rules: same §5).

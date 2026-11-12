@@ -94,6 +94,7 @@ pub struct HopRequest {
                                          // "its configured store" for OpenCode
     pub write: WriteDetails,             // destination facts: version, protocol, shell, offered tools,
                                          // provider, model, project id, clock, executable
+    pub children: bool,                  // also write the source's subagent sessions (§6.4)
 }
 
 pub enum Compaction {
@@ -136,6 +137,10 @@ pub fn compact(s: &Session, c: &Compaction, roots: &StoreRoots) -> Result<(Cow<S
 pub fn document(s: &Session, summary: Option<&SummaryFacts>) -> Value;       // the `dump` document
 pub fn read_document(doc: &Value) -> Result<Session, HopError>;
 pub fn import_document(dest: HarnessId, doc: &Value, s: &Session, opts: &ImportOpts) -> Result<Receipt, HopError>;
+// src/children.rs: subagent sessions (§6.4)
+pub fn children_of(parent: &SessionRef, roots: &StoreRoots) -> Result<Vec<ChildSession>, HopError>;
+pub fn document(s: &Session, summary: Option<&SummaryFacts>, roots: &StoreRoots) -> Result<Value, HopError>;  // `document` + `children`
+pub fn import_with_children(dest: HarnessId, selected: &Session, source: &Session, source_roots: &StoreRoots, opts: &ImportOpts) -> Result<Receipt, HopError>;
 ```
 
 All of these live in `src/hop.rs`; the traits in `src/reader/mod.rs` and `src/writer/mod.rs`.
@@ -155,6 +160,7 @@ user, 4 failed and nothing changed, 5 failed and recovery needed; `HopError::exi
 | `VerifyFailed` | 5 | the source is there but could not be read |
 | `WriteUncertain` | 5 | an external import may have written; the error carries its ID and destination |
 | `ResumeFailed` | 5 | written; the error carries its receipt and manifest |
+| `ChildWriteFailed` | 5 | `children`: the session is written, a subagent session was not; the error carries its receipt and manifest (§6.4) |
 
 Host-supplied OpenCode IDs and metadata are checked in the explicitly selected destination after
 import (`src/writer/opencode.rs` `confirm_import()`, read-only); reconcile an unconfirmed result
@@ -771,6 +777,40 @@ above zero also has a `losses` line.**
 | `dropped_subagent_messages` | a message between a subagent and its parent with no readable text (Codex's encrypted `agent_message`) |
 | `dropped_unfinished_lines` | a last source line cut off mid-write, kept as text and not read |
 | `aborted_steps_as_replies` | aborted or failed steps written as ordinary replies where the destination cannot mark them (Pi keeps the step's end) |
+
+### 6.4 Subagent sessions (`children`)
+
+Opt-in: `HopRequest.children`, `dump --children`, `hop --children`. Without it nothing changes.
+Code: `src/children.rs`; writers: `src/writer/claude_code.rs` `write_child()`,
+`src/writer/opencode.rs` `document_from_plan_report()`; the pipeline: `src/hop.rs` `import_inner()`.
+
+- **Which.** Every readable session whose `parent` is the session, at any depth (`children_of()`:
+  the store is listed once, the session read once). Order: the calls that started them, in the
+  parent's order; a child with no known call comes after, by update time. A child that cannot be
+  read is a `losses` line, `child <id>: <reason>`; the hop goes on.
+- **Dump document.** `children`: one full dump document per child, nested as they hang; `children_lost`:
+  `<id>: <reason>` for each one not read (absent when none). Children are written whole
+  (`Compaction::None`); `write` imports the session alone.
+- **Write.** The session first, then each child as a session of its own with the parent's options
+  (`dest_id`, `dest_path`, metadata, the resume prompt and `--expect-sha256` are the session's).
+  Ids are chosen before the session is written (`Writer::new_id`, `child_id`), so its text can
+  name them. `Compaction::Native` applies to each child; any other compaction to the session only.
+
+| destination | link | how |
+|---|---|---|
+| OpenCode | native | the child's import document has `info.parentID` = its parent's destination id; the parent is imported first |
+| Claude Code | native | `<project>/<root-id>/subagents/agent-<agentId>.jsonl` (rows `isSidechain`, `agentId`) and `.meta.json` (`agentType`, `description`, `spawnDepth`, `toolUseId` when the spawn call became a tool call, `parentAgentId` below depth 1); child id `<root-id>.<agentId>` |
+| Codex, Pi | none | a session of its own; neither has a field a writer may set for a spawner (Pi's `parentSession` is a fork) |
+
+- **The spawn call stays text form (L14)**; its text gains one line, `→ <destination child id>`.
+- **Manifest.** `children`: `[{source_id, dest_id, dest_path, link: "native"|"none", depth,
+  compaction: "none"|"native", inherits_context?}]`, in write order; a child's own `losses` are copied
+  into the session's with the prefix `child <id>: `. `inherits_context` is set for a child whose
+  `ParentKind::Spawn.inherits_context` is true: its file does not hold the conversation it began from,
+  and none is added. The key is absent without `children`.
+- **Failure.** A child that cannot be written stops the children there; the session stays written.
+  `HopError::ChildWriteFailed { reason, receipt }` (exit 5) carries the receipt, whose manifest lists
+  the children written and a loss line for each not written.
 
 ## 7. Strict check (what a real API would refuse)
 

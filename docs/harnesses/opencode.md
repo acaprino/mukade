@@ -15,7 +15,8 @@ it never writes OpenCode's SQLite database itself [1][10][27].
 | Resume | ✅ `<exe> run --standalone --session <id>`; mukade's TUI: `<exe> mini --standalone --session <id>` |
 | Summary by its own model | ✅ `--compaction summary`: a deny-all `run --fork`, the fork deleted afterwards [37] |
 | Native compaction | ⚠️ reads the source's `compaction` record; `--compaction native` writes one (live on 2.2.5, 2026-11-04 [27 §4.4][56]); OpenCode's own HTTP compaction is never run by mukade |
-| Gaps | ⚠️ a hop does not carry a session's children (each is read on its own; `list --children` lists them); sibling `opencode*.db` and legacy rows listed, not read; signed reasoning dropped unless `--dest-protocol` names the protocol |
+| Subagents | ✅ read as sessions of their own; `hop --children` writes each as an imported session with `info.parentID` set, the parent imported first (live on 2.2.5, scratch store) |
+| Gaps | ⚠️ sibling `opencode*.db` and legacy rows listed, not read; signed reasoning dropped unless `--dest-protocol` names the protocol |
 
 **Versions** (harness facts as of 2026-11-01; mukade facts checked against the code on 2026-11-12):
 - **2.1.4: verified** [1]: reader, writer, probes, on-disk facts.
@@ -412,6 +413,7 @@ then `opencode session delete <id> --standalone`, settles both [52].
 - **Subagents** run in a foreground or background child session [17]; **forks** (`run --fork`):
   Ephemeral runs. Storage of both: Session store, Lineage [1][28].
 - Navigating the session tree in the TUI: **[U]**.
+- **Written subagents** (`hop --children`; `src/children.rs` `import_with_children()`, `src/writer/opencode.rs` `document_from_plan_report()`): the session is imported first; each child is a second import whose document has `info.parentID` = the written parent's id (a child of a child names its own parent), so `session import` finds its parent in the store. Ids are `ses_…`, chosen by mukade before the parent is imported; a child's id is not checked afterwards in the store unless the caller reserved it. Checked on 2026-11-12 with `opencode` 2.2.5 against a scratch `OPENCODE_DB` (no model call): a Claude parent with four children, one two deep, imported; `list opencode --children` showed each under its parent, kind `spawn`. A spawn call stays text form (L14): the parent's text names the child session, `→ ses_…`.
 
 ### Models and providers
 

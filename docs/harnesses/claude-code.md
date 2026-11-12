@@ -14,7 +14,8 @@ Anthropic's agentic coding tool: it reads a codebase, edits files, runs commands
 | Resume | ✅ `claude -p --resume <id> "<prompt>"` (the receipt's `resume`, plus a prompt) or `claude --resume <id>` interactive: same id, same file [1] |
 | Summary by its own model | ✅ `--compaction summary`: `claude -p` with no tools and no transcript; the source is left as it was [27] |
 | Native compaction | ✅ read (`compact_boundary`); written by `hop --compaction native`, resumed live on 2.1.318 [42] |
-| Notable gaps | a hop does not carry a session's subagents; a fork has no recorded parent; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
+| Subagents | ✅ read as sessions of their own; `hop --children` carries them (below); written into the destination's `subagents/` folder **[U]** whether Claude Code shows a written one |
+| Notable gaps | a fork has no recorded parent; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
 
 **Versions checked.** Page updated 2026-11-12.
 
@@ -357,7 +358,7 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 
 **Limits, costliest first**:
 - **Only the branch Claude Code resumes travels.** Rows off it are kept as `Meta(OffBranch)` and counted as `dropped_off_branch`; `--all-branches` is refused for Claude Code (`src/hop.rs` `all_branches_supported()`).
-- **A session's subagents do not travel with it.** Each is a session of its own (below); what one reported to the parent travels in the parent.
+- **A session's subagents travel only with `--children`.** Each is a session of its own (below); what one reported to the parent travels in the parent either way.
 - **A process killed while the model was answering leaves no sign**: that reply reads as an ordinary one; `--interrupted drop` keeps it ([usage](../usage.md#a-session-with-interrupted-turns)).
 - **Not exercised by a bench run** (Open points 1): branch selection is covered by synthetic tests on hand-made records [1][4].
 - **A title can be missed.** In a file bigger than the two peek windows, a `custom-title` written between them is not seen; the name falls back to the last prompt or the first one.
@@ -386,6 +387,12 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 - Refused: a child with a row whose `parentUuid` is in a sibling agent's transcript (7 of 825 [45]: `missing Claude Code parent`); `--compaction summary` of a child (`claude --resume` takes a session's id, exit 2).
 - A fork child starts with its first reply: the parent's context it continues is not read.
 - In a session's own file, an older Claude Code's `isSidechain` rows stay `Meta`.
+
+**Writing subagent sessions** (`hop --children`; `src/writer/claude_code.rs` `write_child()`, `src/children.rs` `import_with_children()`):
+- The session is written first. Each child is `<project>/<session-id>/subagents/agent-<agentId>.jsonl` of the **written** session (the folder of the tree's root, also for a child of a child) and `agent-<agentId>.meta.json`. `agentId` is `a` + 16 random hex; the child's id is `<session-id>.<agentId>`, chosen before the session is written.
+- Rows are the ordinary rows of a written session plus `isSidechain: true` and `agentId`; the first user row carries `promptSource: "agent"`. `sessionId` is the root's.
+- meta.json: `agentType` (the source's, else `general-purpose`), `description` (the source's title), `spawnDepth`, `finished: true`; `toolUseId` only when the parent's spawn call was written as a tool call of Claude Code (`--tool-map`), else absent, as for a teammate; `parentAgentId` for a child of a child. `requestShape`, `isFork` and `model` are not written.
+- Read back by mukade's own reader: `list --children` shows each under the written session, kind `spawn`. Whether Claude Code itself lists or resumes a written one: **[U]**, see Open points.
 
 **Reading one session** (`src/reader/claude_code.rs` `read()`, `parse_owned()`; `src/reader/claude_code/order.rs` `reconstruct()`):
 - `dump` and `hop` match the file name by prefix of the id; an ambiguous prefix is refused.
@@ -471,7 +478,7 @@ claude -p --tools "" --resume <id> --no-session-persistence --output-format json
 ## Open points
 
 1. **Real-life shapes** **[U]**: auto-compaction by threshold, a second compaction, a rewind or fork in a real source, an image going to Claude Code. Settled by hopping one when it happens.
-2. **Subagents** **[U]**: whether Claude Code resumes a subagent written into `subagents/` (phase 2); reading a fork child's context from its parent; children linked across agent transcripts; `forked-skill` files and `workflows/`.
+2. **Subagents** **[U]**: whether Claude Code shows a subagent written into `subagents/` by `hop --children` (the shape is the observed one [45]; settled by opening a written parent in Claude Code, [checklist](../verification/windows-checklist.md)); reading a fork child's context from its parent; children linked across agent transcripts; `forked-skill` files and `workflows/`.
 3. **Signed thinking really validated** **[U]**: needs a source whose last assistant turn is a tool call with thinking; then the tampered copy must be refused [43].
 4. **macOS `live`** **[U]**: `procStart` is not compared there. Needs a macOS machine.
 5. **Listing on a cold disk with an empty cache** **[U]**: the 11 s cold figure was not reproduced.
