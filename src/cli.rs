@@ -69,7 +69,9 @@ options:
   --cwd <dir>              the project the destination files the session under
   --dest-version <v>       the destination's own version stamp
   --dest-protocol <p>      anthropic-messages | openai-responses | openai-chat
-  --dest-shell <s>         bash | sh | zsh | powershell | pwsh â€” the destination's shell
+  --dest-shell <s>         bash | sh | zsh | powershell | pwsh | none: the shell the
+                           destination runs (default: the one its configuration or platform
+                           names; none: shell calls into Codex, OpenCode and Pi stay text)
   --model-provider <id>    the destination's provider id
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
@@ -1064,15 +1066,20 @@ impl Flags {
             Some(name) => Some(Protocol::from_provider(name)),
             None => crate::policy::destination_protocol(harness),
         };
+        let cwd = self.cwd.clone().or_else(|| session.meta.cwd.clone());
+        let project = cwd.as_deref().map(std::path::Path::new);
+        // The flag, else the shell the destination's own configuration or platform names.
         let dest_shell = match self.dest_shell.as_deref() {
+            Some("none") => None,
             Some(name) => match crate::writer::plan::shell_of(name) {
                 Some(shell) => Some(shell),
-                None => {
-                    anyhow::bail!("unknown --dest-shell {name} (bash, sh, zsh, powershell, pwsh)")
-                }
+                None => anyhow::bail!(
+                    "unknown --dest-shell {name} (bash, sh, zsh, powershell, pwsh, none)"
+                ),
             },
-            None => None,
+            None => crate::dest::shell_in(harness, roots, project),
         };
+        let offered = crate::tools::offered_in(harness, roots, project);
         // What the *destination* is configured to use, when the caller did not state it. OpenCode's
         // interchange format refuses a model reference without a provider, and Codex stamps the
         // provider its own config names, so both are read from the destination's own files.
@@ -1104,7 +1111,6 @@ impl Flags {
             let _span = crate::timing::span("probe destination version");
             crate::exe::version_of(&resolved_exe)
         });
-        let cwd = self.cwd.clone().or_else(|| session.meta.cwd.clone());
         // OpenCode's interchange format requires the destination's own project id; the destination
         // is the only one that knows it, so it is asked.
         let project_id = match self.project_id.clone() {
@@ -1120,7 +1126,7 @@ impl Flags {
             dest_version,
             dest_protocol,
             dest_shell,
-            offered: None,
+            offered: Some(offered),
             model_provider,
             model,
             project_id,

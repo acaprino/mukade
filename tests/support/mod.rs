@@ -333,7 +333,11 @@ pub fn cli_in(
         .env_remove("MUKADE_CLAUDE_EXE")
         .env_remove("MUKADE_CODEX_EXE")
         .env_remove("MUKADE_OPENCODE_EXE")
-        .env_remove("MUKADE_PI_EXE");
+        .env_remove("MUKADE_PI_EXE")
+        // Nor the shell the developer runs, which a destination's default shell reads.
+        .env_remove("SHELL")
+        .env_remove("OPENCODE_CONFIG_CONTENT")
+        .env_remove("CLAUDE_CODE_USE_POWERSHELL_TOOL");
     for (name, value) in overrides {
         command.env(name, value);
     }

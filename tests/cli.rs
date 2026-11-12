@@ -334,6 +334,136 @@ fn hop_writes_into_the_installation_dest_root_names() {
     );
 }
 
+/// A hop of the staged Codex rollout into `dest`, filed under `<scratch>/work`: what it printed.
+fn hop_codex_into(scratch: &Path, dest: HarnessId, extra: &[&str]) -> Value {
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut args = vec![
+        "hop",
+        "codex",
+        "01a17e07",
+        dest.as_str(),
+        "--dest-version",
+        "1.2.0",
+        "--model-provider",
+        "h27",
+        "--cwd",
+        work.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    let (ok, stdout, stderr) = cli(scratch, &args);
+    assert!(ok, "{stderr}");
+    serde_json::from_str(stdout.lines().last().unwrap()).unwrap()
+}
+
+/// The manifest's counts of shell calls written as calls and as text.
+fn shell_counts(printed: &Value) -> (u64, u64) {
+    let counts = &printed["manifest"]["counts"];
+    (
+        counts["tool_calls"].as_u64().unwrap(),
+        counts["tools_text_form"].as_u64().unwrap(),
+    )
+}
+
+/// Without `--dest-shell` a hop takes the shell the destination runs: Codex runs PowerShell on
+/// Windows and a POSIX shell elsewhere, so the rollout's two calls of that dialect stay calls and
+/// its `<environment_context>` names the shell. `--dest-shell none` keeps them text form.
+#[test]
+fn a_hop_into_codex_takes_the_shell_codex_runs() {
+    let scratch = support::scratch(HarnessId::Codex, "cli-codex-shell");
+    let _ = stage_fixture(HarnessId::Codex, &scratch);
+    let shell = if cfg!(windows) { "powershell" } else { "bash" };
+    if !cfg!(windows) {
+        // Off Windows a Codex rollout declares a POSIX shell.
+        let rollout = scratch.join(
+            "home/sessions/2026/10/27/rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl",
+        );
+        let text = std::fs::read_to_string(&rollout).unwrap();
+        std::fs::write(
+            &rollout,
+            text.replace("<shell>powershell</shell>", "<shell>bash</shell>"),
+        )
+        .unwrap();
+    }
+
+    let printed = hop_codex_into(&scratch, HarnessId::Codex, &[]);
+    assert_eq!(shell_counts(&printed), (2, 0), "{printed}");
+    let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
+    assert!(
+        written.contains(&format!("<shell>{shell}</shell>")),
+        "the rollout names the shell"
+    );
+
+    let printed = hop_codex_into(&scratch, HarnessId::Codex, &["--dest-shell", "none"]);
+    assert_eq!(shell_counts(&printed), (0, 2), "{printed}");
+}
+
+/// Pi runs its `bash` tool with the `shellPath` its settings name, the project's over the agent
+/// folder's: a PowerShell call stays a call toward a Pi that runs pwsh, and is text toward one that
+/// runs its default POSIX shell.
+#[test]
+fn a_hop_into_pi_takes_the_shell_its_settings_name() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-pi-shell");
+    let _ = stage_fixture(HarnessId::Codex, &scratch);
+
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &[]);
+    assert_eq!(shell_counts(&printed), (0, 2), "a POSIX shell: {printed}");
+
+    std::fs::write(
+        scratch.join("home/settings.json"),
+        r#"{"shellPath":"C:\\Program Files\\PowerShell\\7\\pwsh.exe"}"#,
+    )
+    .unwrap();
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &[]);
+    assert_eq!(shell_counts(&printed), (2, 0), "pwsh: {printed}");
+
+    let project = scratch.join("work/.pi/settings.json");
+    std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+    std::fs::write(&project, r#"{"shellPath":"/bin/bash"}"#).unwrap();
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &[]);
+    assert_eq!(
+        shell_counts(&printed),
+        (0, 2),
+        "the project's bash: {printed}"
+    );
+
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &["--dest-shell", "pwsh"]);
+    assert_eq!(shell_counts(&printed), (2, 0), "the flag wins: {printed}");
+}
+
+/// A Claude Code installation whose newest transcript records a PowerShell session offers its
+/// `PowerShell` tool: a PowerShell call becomes one. Without that evidence it stays text.
+#[test]
+fn a_hop_into_claude_code_writes_powershell_calls_where_it_runs_the_tool() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-claude-powershell");
+    let _ = stage_fixture(HarnessId::Codex, &scratch);
+
+    let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
+    assert_eq!(shell_counts(&printed), (0, 2), "no evidence: {printed}");
+
+    let snapshot = serde_json::json!({
+        "type": "attachment",
+        "attachment": {
+            "type": "environment",
+            "snapshot": {"platform": "win32", "shell": "PowerShell (primary); Bash tool also available for POSIX scripts"}
+        }
+    });
+    let transcript = scratch.join("home/projects/elsewhere/session.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, format!("{snapshot}\n")).unwrap();
+    let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
+    assert_eq!(
+        shell_counts(&printed),
+        (2, 0),
+        "PowerShell offered: {printed}"
+    );
+    let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
+    assert!(
+        written.contains(r#""name":"PowerShell""#),
+        "a PowerShell call"
+    );
+}
+
 /// A reserved file the destination cannot take is refused before anything is planned (exit 2, as
 /// docs/usage.md says): OpenCode keeps no file per session, and a file destination keeps its
 /// sessions inside its own store.
@@ -1728,7 +1858,7 @@ fn options_are_refused_where_they_cannot_apply() {
         ),
         (
             vec!["write", "pi", document, "--dest-shell", "nope"],
-            "unknown --dest-shell nope",
+            "unknown --dest-shell nope (bash, sh, zsh, powershell, pwsh, none)",
         ),
         (
             vec!["write", "pi", document, "--compaction", "bogus"],

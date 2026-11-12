@@ -980,10 +980,12 @@ fn import_read(
 }
 
 /// What a write into `dest` needs from the destination itself: its executable and version, its
-/// protocol, the model its own configuration names, and for OpenCode the project of `cwd`.
+/// protocol, the model its own configuration names, the shell it runs and the tools it offers in
+/// `cwd`, and for OpenCode the project of `cwd`.
 fn write_details_for(dest: &Location, cwd: Option<&str>) -> WriteDetails {
     let exe = dest.engine();
     let configured = dest::configured_model_in(dest.harness, &dest.roots);
+    let project = cwd.map(std::path::Path::new);
     let project_id = cwd.and_then(|cwd| {
         mukade::harnesses::get(dest.harness)
             .destination()?
@@ -994,6 +996,12 @@ fn write_details_for(dest: &Location, cwd: Option<&str>) -> WriteDetails {
     WriteDetails {
         dest_version: exe::version_of(&exe),
         dest_protocol: mukade::policy::destination_protocol(dest.harness),
+        dest_shell: dest::shell_in(dest.harness, &dest.roots, project),
+        offered: Some(mukade::tools::offered_in(
+            dest.harness,
+            &dest.roots,
+            project,
+        )),
         model_provider: configured.as_ref().map(|(provider, _)| provider.clone()),
         model: configured.and_then(|(_, model)| model),
         project_id,
