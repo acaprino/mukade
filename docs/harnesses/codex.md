@@ -539,11 +539,11 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
 | each step | `turn_context {turn_id:"turn-N", model, cwd}`, native `reasoning` (`summary`, `content: null`, `encrypted_content`), assistant `message` (`output_text`, `phase` `final_answer` or `commentary`), `function_call {name, arguments (JSON string), call_id}`; after a completed step `event_msg` `task_complete {turn_id, last_agent_message}` |
 | each result | `function_call_output {call_id, output}` as text; a text-form call's result is a user message in the same place |
 | `portable` summary | one user message |
-| not written | a `session_index.jsonl` line; **the writer never opens `state_5.sqlite`**, so no stale `threads` row (L7). The reader's `list` does open it, read-only |
+| not written | the `event_msg item_completed` records Codex 0.167 draws a resumed thread's screen from: the model reads the history, the screen shows none **[V]** ([Windows record](../verification/windows-2026-11-12.md)); a `session_index.jsonl` line; **the writer never opens `state_5.sqlite`**, so no stale `threads` row (L7). The reader's `list` does open it, read-only |
 
 | setting | source |
 |---|---|
-| `model_provider` | `--model-provider`, else the top-level `model_provider = "…"` of the destination's `$CODEX_HOME/config.toml`: only keys before the first `[table]`, the key exactly, the text inside the quotes (a trailing `# comment` dropped when unquoted); `[profiles.x]` and dotted `model_providers.x.*` are ignored (`src/harnesses/codex.rs` `configured_model()`, `top_level_string()`) |
+| `model_provider` | `--model-provider`, else the top-level `model_provider = "…"` of the destination's `$CODEX_HOME/config.toml`: only keys before the first `[table]`, the key exactly, the text inside the quotes (a trailing `# comment` dropped when unquoted); `[profiles.x]` and dotted `model_providers.x.*` are ignored (`src/harnesses/codex.rs` `configured_model()`, `top_level_string()`). With neither, none is written, and Codex 0.167.2 refuses to resume the thread (``Model provider `` not found``) **[V]** ([Windows record](../verification/windows-2026-11-12.md)) |
 | model | `--model`, else the source's |
 | executable in the receipt | `[<exe or "codex">, "exec", "resume", <new id>]` (`src/catalog.rs` `resume()`); interactive `[<exe>, "resume", <id>]` (`interactive_resume()`) |
 | compaction | `none` (default), `portable`, `summary`, `native` (with `--context-window`; [usage §5](../usage.md#make-a-long-session-smaller)); the library's `DestinationNative` is refused (`src/hop.rs` `select()`) |

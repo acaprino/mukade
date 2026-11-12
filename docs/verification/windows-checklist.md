@@ -126,6 +126,15 @@ mukade hop codex YOUR_DESKTOP_THREAD_ID pi --cwd 'C:\work\scratch'
 pi --session <the file the receipt names>
 ```
 
+
+> Until the Codex writer names a provider by itself, add `--model-provider openai` (or the one your
+> `config.toml` uses) to the Codex hop: without it `codex resume` refuses the copy
+> (``Model provider `` not found``). Its screen then shows no history (Codex 0.167 draws it from
+> records the writer does not write); the check runs on the file and on Pi. On resume Codex asks
+> for a working directory (pick one of the first two: the "Always" ones write the config) and may
+> ask to review hooks (`esc` skips). Behind a TLS proxy Codex does not trust, start it without
+> `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`. Run on 2026-11-12: [record](windows-2026-11-12.md).
+
 **Pass if**
 
 - [ ] Both manifests' losses name far fewer text-form calls than the thread has `exec` calls.
@@ -246,7 +255,9 @@ new session sits in the source's project folder, not in the one step 9 removes.
 ## 9. Claude Code: remove the old test sessions (1 min) 🟢
 
 **Do:** delete the folder `…-scratchpad-live-claude-work` under `%USERPROFILE%\.claude\projects\`, and
-the three `D--mukade-test-scratch-fork-*` folders the [fork check](2026-11-12-fork-link-live.md) left.
+the three `D--mukade-test-scratch-fork-*` folders the [fork check](2026-11-12-fork-link-live.md) left,
+`D--mukade-test-scratch-sub-check-work` and `D--mukade-test-scratch-shapes-work` ([Windows
+record](windows-2026-11-12.md)); their two trust entries in `%USERPROFILE%\.claude.json` can go too.
 
 - [ ] Done. No real project folder touched.
 
@@ -348,6 +359,12 @@ In Claude Code, with the session open:
 3. Quit, then run `mukade list claude_code --children` again: the session and its children are
    unchanged.
 
+
+> A scratch `CLAUDE_CONFIG_DIR` has no login: `claude` opens its first-run setup (theme, then
+> sign-in), not the session. To look at the session in Claude Code, hop into your own store with a
+> test folder as `--cwd`, answer **Yes, I trust this folder**, and delete that project folder after
+> (step 9). Run on 2026-11-12: [record](windows-2026-11-12.md).
+
 **Pass if**
 
 - [ ] `list` shows each child with `parent` = the new id and `kind` `spawn`.
@@ -428,6 +445,12 @@ $env:CLAUDE_CONFIG_DIR = 'C:\work\rehearsal\claude'
 mukade hop claude_code YOUR_CLAUDE_SESSION_ID claude_code --all-branches --root "$HOME\.claude" --cwd 'C:\work\my-project'
 cd 'C:\work\my-project'; claude --resume NEW_SESSION_ID     # send nothing; open /rewind or scroll the transcript
 ```
+
+
+> A scratch `CLAUDE_CONFIG_DIR` has no login: `claude` opens its first-run setup (theme, then
+> sign-in), not the session. To look at the session in Claude Code, hop into your own store with a
+> test folder as `--cwd`, answer **Yes, I trust this folder**, and delete that project folder after
+> (step 9). Run on 2026-11-12: [record](windows-2026-11-12.md).
 
 **Pass if**
 

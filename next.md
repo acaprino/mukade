@@ -51,30 +51,37 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 1. **Setup + whole suite on Windows** [0]: suite done on 2026-11-12 at `90c3d91` plus two Windows
    fixes (a launch file's path took `/`; a test fixture path took `/` that `cmd`'s `type` refuses):
    `cargo test --workspace --no-fail-fast` **1105 passed, 0 failed**, 5 ignored (CLI, TUI, desktop
-   `mukade-ui`); `npm test` 16 / 16. Left: `build.bat` and `mukade harnesses`.
-2. **TUI export / import by hand** [1].
-3. **Windows timeout still kills the tree** [2]: unchanged code, but no automated test covers it.
+   `mukade-ui`); `npm test` 16 / 16; `mukade harnesses` lists all six ([record](docs/verification/windows-2026-11-12.md)). Left: `build.bat`
+   built `mukade.exe` and `mukade-tui.exe`, its `mukade-ui` link failed while another session built
+   the same `target` (`LNK1181`); rerun it alone.
+2. ✅ **TUI export / import** [1]: `e` exports, `i` imports into Pi, Pi opens it (2026-11-12, driven in a pseudo-console).
+3. ✅ **Windows timeout still kills the tree** [2]: `summary failed` after 4.2 s, no child left (2026-11-12).
 
 **Codex**
 
-4. **Code mode on a real Desktop thread** [3]: the read-only census over 34 real rollouts passed
-   (every split call has one result); a live hop of a real Desktop thread is not done yet.
-5. **Subagent parent on a real thread** [4]: read-only on 2026-11-12, all 25 child rollouts on the
-   author's store (19 subagent, 6 guardian) read with `parent` = `parent_thread_id`; a hand check is left.
-6. **Chain of pages** [5] [U]: one page in 982 rollouts, its base a plain file; never a chain.
+4. **Code mode on a real Desktop thread** [3]: hopped live on 2026-11-12 (24 `exec`: 17 shell calls
+   and 4 patches split out, 7 kept whole). **Pi passes** (16 `bash`, 3 `write`, 1 `edit`, each with
+   its result). **Codex fails:** the copy does not resume without `--model-provider`, and its
+   screen shows no history (Needs code, *Codex writer*).
+5. ✅ **Subagent parent on a real thread** [4]: `dump` and `list --children` name the
+   `thread_spawn_edges` parent (2026-11-12).
+6. **Chain of pages** [5] [U]: one page in 982 rollouts, its base a plain file; never a chain. Needs
+   two edits of a message in the Codex app.
 
 **Cleanup, speed, real life**
 
 7. **Remove the old Claude Code test sessions** [9]: folder `…-scratchpad-live-claude-work`, and the
-   three `D--mukade-test-scratch-fork-*` folders of the [fork check](docs/verification/2026-11-12-fork-link-live.md).
-8. **Listing cache on a cold disk** [12] [U]: warm 65–72 ms measured; cold 11 s not reproduced.
-9. **100 MB session speed** [13]: 1, 10, 30 MB were re-measured, 100 MB not.
-10. **Real-life shapes** [14] [U]: auto-compaction by threshold, a second compaction, rewind or
-    `/tree`, an image going to Claude Code. Hop one whenever it happens.
-11. **Claude Code shows a written subagent** [15] [U]: `hop --children` writes a subagent into the
-    parent's `subagents/` folder in the shape Claude Code writes; mukade reads it back, whether Claude
-    Code lists or resumes it is not checked.
-12. **Claude Code resumes the right leaf of a hopped tree** [18] [U]: `hop --all-branches` writes a session with several leaves; mukade reads it back, Claude Code opening the active path is not checked.
+   three `D--mukade-test-scratch-fork-*` folders of the [fork check](docs/verification/2026-11-12-fork-link-live.md),
+   `D--mukade-test-scratch-sub-check-work` and `D--mukade-test-scratch-shapes-work` ([record](docs/verification/windows-2026-11-12.md)).
+8. **Listing cache on a cold disk** [12] [U]: warm disk on 2026-11-12, 436 rows: 458 ms with the
+   cache deleted, 189–197 ms after; cold 11 s not reproduced (needs a reboot).
+9. ✅ **100 MB session speed** [13]: 132 MB into Pi in 1638 ms (read 1008, write 183) on 2026-11-12.
+10. **Real-life shapes** [14]: auto-compaction, a second compaction, a Claude Code rewind and an
+    image hopped into Claude Code and opened on 2026-11-12. Left [U]: a Pi session after `/tree`.
+11. ✅ **Claude Code shows a written subagent** [15]: the parent opens, its transcript view shows
+    each spawn with `→ <child id>`, `/resume` lists no child (2026-11-12).
+12. ✅ **Claude Code resumes the right leaf of a hopped tree** [18]: it opens at the source's last
+    turn; the branch is still there afterwards (2026-11-12).
 
 ## 🟡 Needs a few model calls
 
@@ -88,6 +95,19 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
     prompt; a task that makes it read a file settles the converted tool history.
 
 ## 🔵 Needs code (next)
+
+**Found on Windows, 2026-11-12** ([record](docs/verification/windows-2026-11-12.md)); each changes behaviour, so each waits for a go:
+
+- *Codex writer, provider:* no `session_meta.model_provider` when neither `--model-provider` nor a
+  top-level `model_provider` in `config.toml` names one; Codex 0.167.2 then refuses to resume the
+  thread (``Model provider `` not found``). Codex's own default is `openai`.
+- *Codex writer, screen:* Codex 0.167 draws a resumed thread from `event_msg item_completed`
+  records, which the writer does not write: the model has the history, the screen shows none;
+  turns written without `task_complete` print `Conversation interrupted`.
+- *Claude Code reader:* one row whose `parentUuid` exists nowhere refuses the whole session
+  (`missing Claude Code parent`, a real 98 MB transcript).
+- *Pi writer from Claude Code:* `model` without `provider`; Pi warns `undefined/<model>` and takes
+  its default. The TUI's import has no `--model-provider`.
 
 **Forks, left open** ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)).
 
