@@ -148,6 +148,33 @@ pub fn stage_fixture(harness: HarnessId, scratch: &Path) -> String {
     }
 }
 
+/// The Claude Code parent with its `subagents/` folder (`fixtures/claude_code/subagents`), staged
+/// as the store's `projects/`.
+pub const CLAUDE_PARENT: &str = "5ab1c0de-0000-4000-8000-000000000001";
+
+/// Copy `fixtures/claude_code/subagents/projects` into the scratch store and answer its roots.
+pub fn stage_claude_subagents(scratch: &Path) -> StoreRoots {
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).expect("create a store folder");
+        for entry in std::fs::read_dir(from)
+            .expect("read a fixture folder")
+            .flatten()
+        {
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("a fixture entry").is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).expect("stage a fixture file");
+            }
+        }
+    }
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(FIXTURES)
+        .join("claude_code/subagents/projects");
+    copy_tree(&fixture, &scratch.join("home").join("projects"));
+    roots(scratch)
+}
+
 /// The destination's own facts as a write needs them, copied from the options the test stated.
 pub fn details(opts: &WriteOpts) -> WriteDetails {
     WriteDetails {

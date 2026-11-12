@@ -1,0 +1,10 @@
+{
+  "agentType": "in_process_teammate",
+  "description": "Changelog keeper",
+  "spawnDepth": 1,
+  "requestShape": "background",
+  "requestNonInteractive": true,
+  "name": "mate",
+  "teamName": "docs",
+  "taskKind": "teammate"
+}

@@ -54,6 +54,14 @@ impl Harness for ClaudeCode {
         opts: &SummarizeOpts,
         _scratch: &Path,
     ) -> Result<SummaryCommand, HopError> {
+        if session.meta.parent_kind.is_some() {
+            // `<parent-id>.<agentId>` is mukade's id; `--resume` takes a session's own.
+            return Err(HopError::Unsupported(format!(
+                "--compaction summary of Claude Code subagent session {}: Claude Code resumes \
+                 sessions, not their subagents",
+                session.meta.id
+            )));
+        }
         let mut args: Vec<String> = [
             "-p",
             "--tools",

@@ -16,8 +16,8 @@
 //! - a process killed mid-turn leaves the user row and nothing else (L9).
 
 use crate::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
+    Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::reader::{Reader, SessionInfo};
 use crate::roots::StoreRoots;
@@ -26,6 +26,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 mod order;
+mod subagents;
 
 /// The Claude Code reader.
 #[derive(Debug, Clone, Copy, Default)]
@@ -52,7 +53,8 @@ pub fn list_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<Sessi
         .into());
     };
     let files = session_files(&projects)?;
-    let mut out = peek_files(&files, &projects, cache);
+    let table = crate::cache::table_name("claude-list", &projects.to_string_lossy());
+    let mut out = peek_files(&files, &table, cache);
     add_what_the_transcripts_do_not_say(&mut out, config);
     out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
     Ok(out)
@@ -77,14 +79,45 @@ fn stamp(file: &Path) -> Option<Stamp> {
 /// it yet (the rule git applies to its index).
 const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// [`Reader::list_all`]: the root sessions, and every subagent session that has a transcript.
+/// A child is listed under its qualified id, with the title, parent and spawning call its
+/// meta.json gives; `cache` keeps what was read from its transcript as [`list_cached`] does.
+pub fn list_all_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<SessionInfo>> {
+    let mut out = list_cached(roots, cache)?;
+    let Some(projects) = roots.claude_projects() else {
+        return Ok(out);
+    };
+    let transcripts = subagents::transcripts(&projects)?;
+    let files: Vec<PathBuf> = transcripts.iter().map(|(file, _)| file.clone()).collect();
+    let table = crate::cache::table_name("claude-subagents", &projects.to_string_lossy());
+    for (mut info, (file, session)) in peek_files(&files, &table, cache)
+        .into_iter()
+        .zip(&transcripts)
+    {
+        let meta = subagents::agent_meta(file);
+        let agent = subagents::agent_id_of(file).unwrap_or_default();
+        let (parent, kind) = subagents::lineage(session, meta.as_ref());
+        info.id = subagents::qualified(session, agent);
+        info.title = meta
+            .as_ref()
+            .and_then(|m| m.description.clone())
+            .or(info.title);
+        info.parent = Some(parent);
+        info.parent_kind = Some(kind);
+        out.push(info);
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
+    Ok(out)
+}
+
 /// What each session file says about its session: from `cache` where the file is as it was,
-/// otherwise from the file (the files that changed or are new, read side by side).
-fn peek_files(files: &[PathBuf], projects: &Path, cache: Option<&Path>) -> Vec<SessionInfo> {
+/// otherwise from the file (the files that changed or are new, read side by side). `table_name`
+/// is the cache table the files are remembered in.
+fn peek_files(files: &[PathBuf], table_name: &str, cache: Option<&Path>) -> Vec<SessionInfo> {
     use serde_json::{Map, Value};
 
-    let table_name = crate::cache::table_name("claude-list", &projects.to_string_lossy());
     let remembered: Map<String, Value> = cache
-        .map(|dir| crate::cache::load_table(dir, &table_name))
+        .map(|dir| crate::cache::load_table(dir, table_name))
         .unwrap_or_default();
     let stamps: Vec<Option<Stamp>> = files.iter().map(|file| stamp(file)).collect();
     let mut peeked: Vec<Option<SessionInfo>> = vec![None; files.len()];
@@ -132,7 +165,7 @@ fn peek_files(files: &[PathBuf], projects: &Path, cache: Option<&Path>) -> Vec<S
     if let Some(dir) = cache
         && table != remembered
     {
-        crate::cache::store_table(dir, &table_name, &table);
+        crate::cache::store_table(dir, table_name, &table);
     }
     out
 }
@@ -217,6 +250,16 @@ pub fn read_file(path: &Path) -> Result<Session> {
     let mut session = parse_owned(file.rows, Some(path))?;
     session.meta.source_sha256 = Some(file.sha256.wait());
     super::json::keep_unfinished(&mut session, file.unfinished);
+    if let Some(session_id) = session.meta.parent.clone() {
+        // A subagent's transcript: its meta.json names the call, the agent and the task.
+        let meta = subagents::agent_meta(path);
+        let (parent, kind) = subagents::lineage(&session_id, meta.as_ref());
+        session.meta.parent = Some(parent);
+        session.meta.parent_kind = Some(kind);
+        if let Some(description) = meta.and_then(|m| m.description) {
+            session.meta.title = Some(description);
+        }
+    }
     Ok(session)
 }
 
@@ -228,11 +271,16 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
 /// instead of being copied there.
 pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    let sidechain = is_subagent_transcript(&rows);
     let reconstruction = {
         let _span = crate::timing::span("resumed branch");
-        order::reconstruct(&rows)?
+        order::reconstruct(&rows, sidechain)?
     };
-    let mut b = Builder::default();
+    let mut b = Builder {
+        sidechain,
+        ..Builder::default()
+    };
+    b.meta.title.sidechain = sidechain;
     {
         let _span = crate::timing::span("entries");
         let mut source: Vec<Option<Value>> = rows.into_iter().map(Some).collect();
@@ -246,6 +294,20 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
     }
     let _span = crate::timing::span("finish");
     b.finish(source_path)
+}
+
+/// A subagent's transcript: its conversation rows are all `isSidechain`. A session's own file
+/// holds none (an older Claude Code wrote its subagents' rows into it, beside its own).
+fn is_subagent_transcript(rows: &[Value]) -> bool {
+    let mut conversation = rows.iter().filter(|row| {
+        matches!(
+            row.get("type").and_then(Value::as_str),
+            Some("user" | "assistant")
+        )
+    });
+    let first = conversation.next();
+    first.is_some_and(|row| truthy(row.get("isSidechain")))
+        && conversation.all(|row| truthy(row.get("isSidechain")))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -264,6 +326,19 @@ enum Class {
     User,
     /// Anything that is kept but is not conversation.
     Meta(MetaKind),
+}
+
+/// What a row is in the rows being read: [`class_of`], except that a subagent's opening row is its
+/// prompt even where Claude Code marks it `isMeta` (an instruction the parent's agent expanded,
+/// not typed text). `sidechain`: the rows are a subagent's transcript.
+fn class_in(row: &Value, sidechain: bool) -> Class {
+    let opening = sidechain
+        && row.get("type").and_then(Value::as_str) == Some("user")
+        && row.get("parentUuid").is_none_or(Value::is_null)
+        && truthy(row.get("isMeta"))
+        && !has_tool_result(row)
+        && content_text(row).is_some_and(|text| !is_command_row(&text));
+    if opening { Class::User } else { class_of(row) }
 }
 
 fn class_of(row: &Value) -> Class {
@@ -450,6 +525,8 @@ struct Builder {
     /// The last command row was a prompt-type slash command: the `isMeta` row after it is the
     /// expanded prompt the model received.
     after_prompt_command: bool,
+    /// The rows are a subagent's transcript: its sidechain rows are its conversation.
+    sidechain: bool,
 }
 
 struct OpenStep {
@@ -460,6 +537,8 @@ struct OpenStep {
 #[derive(Default)]
 struct MetaBuilder {
     id: Option<String>,
+    /// `agentId`: the subagent whose transcript this is.
+    agent_id: Option<String>,
     cwd: Option<String>,
     title: TitleBuilder,
     git_branch: Option<String>,
@@ -479,6 +558,8 @@ struct TitleBuilder {
     last_prompt: Option<String>,
     first_prompt: Option<String>,
     slug: Option<String>,
+    /// A subagent's transcript, whose own prompt is a sidechain row.
+    sidechain: bool,
 }
 
 impl TitleBuilder {
@@ -503,10 +584,11 @@ impl TitleBuilder {
         if self.slug.is_none() {
             self.slug = title_line(at("/slug"));
         }
-        // The user's own first prompt: not a subagent's, not a command or summary row.
+        // The user's own first prompt: not a subagent's (in a subagent's transcript, its own),
+        // not a command or summary row.
         if self.first_prompt.is_none()
-            && !truthy(row.get("isSidechain"))
-            && matches!(class_of(row), Class::User)
+            && (self.sidechain || !truthy(row.get("isSidechain")))
+            && matches!(class_in(row, self.sidechain), Class::User)
         {
             self.first_prompt = title_line(content_text(row).as_deref());
         }
@@ -519,6 +601,7 @@ impl TitleBuilder {
             last_prompt,
             first_prompt,
             slug,
+            sidechain: _,
         } = self;
         custom.or(last_prompt).or(first_prompt).or(slug)
     }
@@ -530,6 +613,9 @@ impl MetaBuilder {
         self.title.observe(row);
         if self.id.is_none() {
             self.id = str_at("/sessionId");
+        }
+        if self.agent_id.is_none() {
+            self.agent_id = str_at("/agentId").filter(|agent| !agent.is_empty());
         }
         if self.cwd.is_none() {
             self.cwd = str_at("/cwd");
@@ -562,8 +648,8 @@ impl MetaBuilder {
 impl Builder {
     fn push(&mut self, index: usize, row: Value, on_branch: bool) {
         self.meta.observe(&row);
-        if truthy(row.get("isSidechain")) {
-            // A subagent's transcript: kept, never conversation (§10 "not exercised").
+        if !self.sidechain && truthy(row.get("isSidechain")) {
+            // A subagent's rows in its parent's file: kept, never conversation.
             self.flush_compaction();
             self.entries.push(Entry {
                 id: row_id(&row, index),
@@ -574,7 +660,7 @@ impl Builder {
             });
             return;
         }
-        let class = class_of(&row);
+        let class = class_in(&row, self.sidechain);
         if !on_branch {
             // An abandoned row cannot change slash-command state or split an active response.
             self.flush_compaction();
@@ -987,19 +1073,28 @@ impl Builder {
             }
         }
         let m = self.meta;
+        // A subagent's rows name its parent in `sessionId`; its own id is qualified by its agent's.
+        let (id, parent, parent_kind) = match (self.sidechain, m.id, m.agent_id) {
+            (true, Some(session), Some(agent)) => (
+                Some(subagents::qualified(&session, &agent)),
+                Some(session),
+                Some(ParentKind::spawn()),
+            ),
+            (_, id, _) => (id, None, None),
+        };
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::ClaudeCode,
                 harness_version: m.version.unwrap_or_else(|| "unknown".into()),
-                id: m.id.unwrap_or_else(|| "unknown".into()),
+                id: id.unwrap_or_else(|| "unknown".into()),
                 cwd: m.cwd,
                 title: m.title.pick(),
                 created: m.created,
                 updated: m.updated,
                 models: m.models,
                 git_branch: m.git_branch,
-                parent: None,
-                parent_kind: None,
+                parent,
+                parent_kind,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },
@@ -1019,6 +1114,10 @@ impl Reader for ClaudeCode {
         list_cached(roots, crate::cache::dir().as_deref())
     }
 
+    fn list_all(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
+        list_all_cached(roots, crate::cache::dir().as_deref())
+    }
+
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         let Some(projects) = roots.claude_projects() else {
             return Err(super::Lookup::NoStore(
@@ -1026,6 +1125,23 @@ impl Reader for ClaudeCode {
             )
             .into());
         };
+        if let Some((parent, agent)) = subagents::split(id) {
+            // A subagent session: matched exactly, never by prefix.
+            return match subagents::find(&projects, parent, agent).as_slice() {
+                [one] => read_file(one),
+                [] => Err(super::Lookup::NotFound(format!(
+                    "no Claude Code subagent session {id:?} under {}: \
+                     no {parent}/subagents/agent-{agent}.jsonl",
+                    projects.display()
+                ))
+                .into()),
+                many => Err(super::Lookup::Ambiguous(format!(
+                    "{id:?} matches {} Claude Code subagent sessions",
+                    many.len()
+                ))
+                .into()),
+            };
+        }
         let matches: Vec<PathBuf> = session_files(&projects)?
             .into_iter()
             .filter(|f| {
@@ -1164,7 +1280,10 @@ fn why_not_found(id: &str, projects: &Path, roots: &StoreRoots) -> String {
 /// for the rows Claude Code appends as the conversation goes on (`custom-title`, `last-prompt`).
 fn peek(file: &Path) -> SessionInfo {
     let mut info = SessionInfo::default();
-    let mut titles = TitleBuilder::default();
+    let mut titles = TitleBuilder {
+        sidechain: subagents::is_transcript(file),
+        ..TitleBuilder::default()
+    };
     {
         let mut into = |row: Value| {
             let str_at = |p: &str| row.pointer(p).and_then(Value::as_str).map(str::to_owned);

@@ -48,8 +48,8 @@ pub trait Reader {
     /// Every root session in the store, in a stable order.
     fn list(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>>;
 
-    /// Every session the store holds, forks included, in a stable order. A harness that has no
-    /// cross-session parent link returns the same list as [`Reader::list`].
+    /// Every session the store holds, forks and subagent sessions included, in a stable order. A
+    /// harness that has no cross-session parent link returns the same list as [`Reader::list`].
     fn list_all(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>> {
         self.list(roots)
     }

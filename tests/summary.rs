@@ -297,6 +297,26 @@ fn a_session_whose_directory_is_gone_runs_from_mukades_own() {
     assert_eq!(command.cwd.as_deref(), Some(dir.as_path()));
 }
 
+/// Claude Code resumes a session by its own id; a subagent session has none it can resume
+/// (`<parent-id>.<agentId>` is mukade's), so its summary is refused before anything runs.
+#[test]
+fn a_claude_subagent_session_is_not_summarized_by_claude() {
+    let mut session = support::read_source(HarnessId::ClaudeCode);
+    session.meta.id = format!("{}.a1111111111111111", session.meta.id);
+    session.meta.parent = Some("c45db7bc-542c-4201-89de-b590c6fdb797".into());
+    session.meta.parent_kind = Some(mukade::model::ParentKind::spawn());
+    let error = summary::summary_command(
+        &session,
+        &SummarizeOpts::default(),
+        &scratch("claude-child"),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, HopError::Unsupported(why) if why.contains("subagent")),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn a_pi_session_without_its_file_is_refused() {
     let mut session = support::read_source(HarnessId::Pi);
