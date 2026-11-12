@@ -37,6 +37,7 @@ fn request(source: HarnessId, dest: HarnessId, tag: &str) -> (HopRequest, PathBu
         reasoning: opts.reasoning,
         roots: roots(&scratch),
         write: support::details(&opts),
+        children: false,
     };
     (request, scratch)
 }

@@ -58,6 +58,10 @@ impl Writer for Opencode {
         HarnessId::OpenCode
     }
 
+    fn new_id(&self) -> String {
+        new_session_id()
+    }
+
     fn write_planned(
         &self,
         session: &Session,
@@ -176,7 +180,9 @@ impl Writer for Opencode {
             }
             .into());
         }
-        if opts.dest_id.is_some() || opts.metadata.is_some() {
+        // The store is checked for an id the caller reserved. One the hop assigned to a subagent
+        // session is not, so a destination without a selected database still takes a tree.
+        if (opts.dest_id.is_some() && !opts.subagents.assigned_id) || opts.metadata.is_some() {
             confirm_import(&id, &opts.roots, opts.metadata.as_ref()).map_err(|error| {
                 super::WriteOutcomeUnknown {
                     id: id.clone(),
@@ -399,6 +405,11 @@ pub fn document_from_plan_report(
 
     let mut info = Map::new();
     info.insert("id".into(), Value::String(id.to_string()));
+    // A subagent session names the session that spawned it; `session import` needs that one in the
+    // store already.
+    if let Some(of) = &opts.subagents.of {
+        info.insert("parentID".into(), Value::String(of.parent_id.clone()));
+    }
     info.insert("projectID".into(), Value::String(project_id));
     info.insert("location".into(), json!({"directory": cwd}));
     info.insert(

@@ -280,6 +280,11 @@ impl Destination for OpenCode {
         Ok(())
     }
 
+    /// `info.parentID`, with the parent imported first.
+    fn links_children(&self) -> bool {
+        true
+    }
+
     /// OpenCode ids are prefixed `ses_`.
     fn claims_id(&self, id: &str) -> bool {
         id.starts_with("ses_")

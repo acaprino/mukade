@@ -1161,6 +1161,7 @@ fn execute_hop(hop: &HopState) -> Vec<String> {
         reasoning: ReasoningPolicy::default(),
         roots: hop.source.roots.clone(),
         write,
+        children: false,
     };
     match mukade::hop_into(&request, &dest.roots) {
         Ok(receipt) => receipt_lines(&receipt, dest),

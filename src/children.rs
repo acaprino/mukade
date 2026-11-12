@@ -5,12 +5,16 @@
 //! sessions whose parent it is, and the children of those, parent before child. Nothing here knows
 //! a harness: the readers say what a child is.
 
-use crate::hop::{self, Compaction, HopError, SessionRef};
-use crate::model::{Kind, ParentKind, Session};
+use crate::hop::{
+    self, ChildrenDone, Compaction, HopError, ImportOpts, Receipt, SessionRef, SourceFacts,
+    WriteDetails,
+};
+use crate::model::{HarnessId, Kind, ParentKind, Session};
 use crate::reader::SessionInfo;
 use crate::roots::StoreRoots;
+use crate::writer::{ChildOf, Subagents, Written};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// A subagent session of a source session, with how deep it is: 1 for the session's own children.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,4 +293,194 @@ pub fn document(
         doc["children_lost"] = json!(lost);
     }
     Ok(doc)
+}
+
+/// How a child is written: its parent's compaction when that is deterministic (`native`), else
+/// whole. A summary the source's model wrote, or one the caller supplied, belongs to the
+/// parent's history alone.
+fn child_compaction(opts: &ImportOpts) -> Compaction {
+    match opts.native_budget.clone() {
+        Some(budget) if opts.compaction == "native" => Compaction::Native(budget),
+        _ => Compaction::None,
+    }
+}
+
+/// Write `selected` into `dest` and, after it, each subagent session of `source` as a session of
+/// its own, with the same options and the link the destination has: a parent link for OpenCode,
+/// the parent's `subagents/` folder for Claude Code, none for the others. The parent's text-form
+/// spawn calls name the destination session of their child. `--dest-id`, `--dest-path`, the
+/// session metadata and the resume prompt are the parent's alone.
+///
+/// A child that cannot be read is a loss in the manifest, and the hop goes on. A child that
+/// cannot be written stops the children there: the parent stays written and the error carries its
+/// receipt ([`HopError::ChildWriteFailed`]).
+pub fn import_with_children(
+    dest: HarnessId,
+    selected: &Session,
+    source: &Session,
+    source_roots: &StoreRoots,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
+    let destination = crate::harnesses::destination(dest)?;
+    let writer = destination.writer();
+    let read = read_children(source, source_roots)?;
+    let compaction = child_compaction(opts);
+
+    // Every id is chosen before the parent is written: its text names its children, and a Claude
+    // child's id holds the parent's.
+    let root_id = match (&opts.write.dest_id, writer.child_ids_hold_root()) {
+        (Some(id), _) => Some(id.clone()),
+        (None, true) => Some(writer.new_id()),
+        (None, false) => None,
+    };
+    let ids: Vec<Option<String>> = read
+        .iter()
+        .map(|child| {
+            child
+                .session
+                .is_ok()
+                .then(|| writer.child_id(root_id.as_deref().unwrap_or_default()))
+        })
+        .collect();
+    let spawned = |parent: Option<usize>| -> Vec<(String, String)> {
+        read.iter()
+            .zip(&ids)
+            .filter(|(child, _)| child.parent == parent)
+            .filter_map(|(child, id)| Some((child.call_id.clone()?, id.clone()?)))
+            .collect()
+    };
+    let mut parent_opts = opts.clone();
+    if ids.iter().any(Option::is_some) {
+        parent_opts.write.dest_id = root_id.clone();
+    }
+
+    let mut step = |written: &Written, calls: &HashMap<String, String>| -> ChildrenDone {
+        let mut done = ChildrenDone::default();
+        // Per child: its destination session and the destination call each of its own spawn
+        // calls became.
+        let mut landed: Vec<Option<(String, HashMap<String, String>)>> = vec![None; read.len()];
+        for (index, child) in read.iter().enumerate() {
+            let source_id = &child.info.id;
+            let session = match &child.session {
+                Ok(session) => session,
+                Err(reason) => {
+                    done.losses.push(format!("child {source_id}: {reason}"));
+                    continue;
+                }
+            };
+            if done.failure.is_some() {
+                done.losses.push(format!(
+                    "child {source_id}: not written, an earlier child failed"
+                ));
+                continue;
+            }
+            let (parent_id, parent_calls) = match child.parent {
+                None => (written.id.clone(), calls),
+                Some(parent) => match &landed[parent] {
+                    Some((id, parent_calls)) => (id.clone(), parent_calls),
+                    // Its parent was not written, which stopped the children before this one.
+                    None => continue,
+                },
+            };
+            let id = ids[index].clone().expect("a readable child has an id");
+            let of = ChildOf {
+                root_id: written.id.clone(),
+                root_location: written.location.clone(),
+                parent_id,
+                depth: child.depth,
+                agent: match &child.info.parent_kind {
+                    Some(ParentKind::Spawn { agent, .. }) => agent.clone(),
+                    _ => None,
+                },
+                description: session.meta.title.clone().or(child.info.title.clone()),
+                tool_use_id: child
+                    .call_id
+                    .as_ref()
+                    .and_then(|call| parent_calls.get(call))
+                    .cloned(),
+            };
+            let child_opts = ImportOpts {
+                cwd: opts.cwd.clone(),
+                roots: opts.roots.clone(),
+                reasoning: opts.reasoning,
+                write: WriteDetails {
+                    dest_id: Some(id.clone()),
+                    dest_path: None,
+                    metadata: None,
+                    ..opts.write.clone()
+                },
+                resume: None,
+                source_facts: SourceFacts::of(session),
+                compaction: compaction.name().to_string(),
+                summary: None,
+                native_budget: match &compaction {
+                    Compaction::Native(budget) => Some(budget.clone()),
+                    _ => None,
+                },
+            };
+            let result =
+                hop::compact(session, &compaction, source_roots).and_then(|(selection, _)| {
+                    hop::import_inner(
+                        dest,
+                        &selection,
+                        &child_opts,
+                        &Subagents {
+                            spawned: spawned(Some(index)),
+                            of: Some(of),
+                            assigned_id: true,
+                        },
+                        None,
+                    )
+                });
+            match result {
+                Ok(imported) => {
+                    let mut entry = json!({
+                        "source_id": source_id,
+                        "dest_id": imported.written.id,
+                        "dest_path": imported.written.location,
+                        "link": if destination.links_children() { "native" } else { "none" },
+                        "depth": child.depth,
+                        "compaction": compaction.name(),
+                    });
+                    if matches!(
+                        child.info.parent_kind,
+                        Some(ParentKind::Spawn {
+                            inherits_context: true,
+                            ..
+                        })
+                    ) {
+                        entry["inherits_context"] = json!(true);
+                    }
+                    done.entries.push(entry);
+                    for loss in imported.receipt.manifest["losses"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                    {
+                        done.losses.push(format!("child {source_id}: {loss}"));
+                    }
+                    landed[index] = Some((imported.written.id, imported.spawn_calls));
+                }
+                Err(error) => {
+                    done.losses
+                        .push(format!("child {source_id}: not written: {error}"));
+                    done.failure = Some(format!("child {source_id}: {error}"));
+                }
+            }
+        }
+        done
+    };
+    hop::import_inner(
+        dest,
+        selected,
+        &parent_opts,
+        &Subagents {
+            spawned: spawned(None),
+            of: None,
+            assigned_id: opts.write.dest_id.is_none(),
+        },
+        Some(&mut step),
+    )
+    .map(|imported| imported.receipt)
 }

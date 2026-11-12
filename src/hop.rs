@@ -12,8 +12,9 @@ use crate::sha256::records_sha256;
 use crate::strict::check_plan;
 use crate::summary::{MODEL_SUMMARY_HANDOFF, SummarizeOpts, Summary, SummaryFacts};
 use crate::tools::{Shell, ToolSet};
-use crate::writer::{self, WriteOpts, Written, plan};
+use crate::writer::{self, Subagents, WriteOpts, Written, plan};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -178,6 +179,8 @@ pub struct HopRequest {
     pub reasoning: ReasoningPolicy,
     pub roots: StoreRoots,
     pub write: WriteDetails,
+    /// Carry the source's subagent sessions too ([`crate::children::import_with_children`]).
+    pub children: bool,
 }
 
 /// The second half of a hop: write a session we already hold into a destination.
@@ -239,6 +242,12 @@ pub enum HopError {
     StrictCheckFailed(Vec<String>),
     /// The source harness could not write the summary asked of it. Nothing was written.
     SummaryFailed(String),
+    /// The session was written, and a subagent session of it was not (`--children`): the receipt
+    /// and its manifest say which children were.
+    ChildWriteFailed {
+        reason: String,
+        receipt: Box<Receipt>,
+    },
 }
 
 impl HopError {
@@ -247,7 +256,8 @@ impl HopError {
             HopError::NotFound(_) | HopError::SourceChanged { .. } | HopError::Unsupported(_) => 2,
             HopError::WriteFailed(_)
             | HopError::StrictCheckFailed(_)
-            | HopError::SummaryFailed(_) => 4,
+            | HopError::SummaryFailed(_)
+            | HopError::ChildWriteFailed { .. } => 4,
             HopError::VerifyFailed(_)
             | HopError::ResumeFailed { .. }
             | HopError::WriteUncertain { .. } => 5,
@@ -279,6 +289,11 @@ impl std::fmt::Display for HopError {
             ),
             HopError::VerifyFailed(what) => write!(f, "could not read the source: {what}"),
             HopError::SummaryFailed(what) => write!(f, "summary failed: {what}"),
+            HopError::ChildWriteFailed { reason, receipt } => write!(
+                f,
+                "write failed: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
+                receipt.location
+            ),
             HopError::ResumeFailed { reason, receipt } => write!(
                 f,
                 "resume failed: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
@@ -307,6 +322,37 @@ pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopErr
 
 /// Write a session we hold into a destination.
 pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
+    import_inner(dest, session, opts, &Subagents::default(), None).map(|done| done.receipt)
+}
+
+/// What [`import_inner`] hands back: the receipt, what was written, and which destination call
+/// each spawn call of the session became, when it was written as a tool call.
+pub(crate) struct Imported {
+    pub(crate) receipt: Receipt,
+    pub(crate) written: Written,
+    pub(crate) spawn_calls: HashMap<String, String>,
+}
+
+/// What the subagent sessions of a session came to, for its manifest.
+#[derive(Default)]
+pub(crate) struct ChildrenDone {
+    pub(crate) entries: Vec<Value>,
+    pub(crate) losses: Vec<String>,
+    /// Why a child was not written: the parent stays written, the hop reports a failed write.
+    pub(crate) failure: Option<String>,
+}
+
+/// The subagent step of a write: given where the session landed and which destination call each of
+/// its spawn calls became, write its children.
+pub(crate) type ChildrenStep<'a> = &'a mut dyn FnMut(&Written, &HashMap<String, String>) -> ChildrenDone;
+
+pub(crate) fn import_inner(
+    dest: HarnessId,
+    session: &Session,
+    opts: &ImportOpts,
+    subagents: &Subagents,
+    children: Option<ChildrenStep<'_>>,
+) -> Result<Imported, HopError> {
     let destination = crate::harnesses::destination(dest)?;
     let dest_writer = destination.writer();
     let write_opts = WriteOpts {
@@ -331,6 +377,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         now: opts.write.now.clone(),
         exe: opts.write.exe.clone(),
         native_budget: opts.native_budget.clone(),
+        subagents: subagents.clone(),
     };
     // What the destination does not take is refused before anything is planned.
     destination
@@ -381,6 +428,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
             },
         )?;
     drop(write_span);
+    let spawn_calls = native_spawn_calls(session, &plan, subagents);
 
     let mut receipt = Receipt {
         dest_id: written.id.clone(),
@@ -401,6 +449,22 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
                 .iter()
                 .any(|block| matches!(block, crate::writer::plan::PlannedBlock::Compaction { .. })),
     );
+    // The children are written before the destination is asked to resume, so it finds them.
+    let children_done = children.map(|step| step(&written, &spawn_calls));
+    let manifest = |losses: Vec<String>| {
+        let mut json = manifest_of(dest, session, opts, &written, &plan, losses).to_json();
+        if let Some(done) = &children_done {
+            attach_children(&mut json, done);
+        }
+        json
+    };
+    if let Some(reason) = children_done.as_ref().and_then(|done| done.failure.clone()) {
+        receipt.manifest = manifest(losses);
+        return Err(HopError::ChildWriteFailed {
+            reason,
+            receipt: Box::new(receipt),
+        });
+    }
     if let Some(prompt) = opts.resume.as_ref() {
         let cwd = write_opts.cwd.as_deref().map(Path::new);
         let store = Some((dest, &write_opts.roots));
@@ -408,8 +472,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
             Ok(output) => receipt.resume_output = Some(output),
             Err(HopError::ResumeFailed { reason, .. }) => {
                 losses.push(format!("the resume prompt did not complete: {reason}"));
-                receipt.manifest =
-                    manifest_of(dest, session, opts, &written, &plan, losses).to_json();
+                receipt.manifest = manifest(losses);
                 return Err(HopError::ResumeFailed {
                     reason,
                     receipt: Box::new(receipt),
@@ -419,8 +482,57 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         }
     }
 
-    receipt.manifest = manifest_of(dest, session, opts, &written, &plan, losses).to_json();
-    Ok(receipt)
+    receipt.manifest = manifest(losses);
+    Ok(Imported {
+        receipt,
+        written,
+        spawn_calls,
+    })
+}
+
+/// The manifest's `children`, and the losses the children carry.
+fn attach_children(manifest: &mut Value, done: &ChildrenDone) {
+    manifest["children"] = Value::Array(done.entries.clone());
+    if let Some(losses) = manifest["losses"].as_array_mut() {
+        losses.extend(done.losses.iter().cloned().map(Value::String));
+    }
+}
+
+/// Which destination call each spawn call of `session` became, for a spawn call written as a tool
+/// call of the destination: the planned call with the same tool and input, in order.
+fn native_spawn_calls(
+    session: &Session,
+    plan: &plan::Plan,
+    subagents: &Subagents,
+) -> HashMap<String, String> {
+    let planned: Vec<&plan::PlannedCall> = plan
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            plan::PlannedBlock::Step(step) => Some(step.calls.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut taken = HashSet::new();
+    let mut out = HashMap::new();
+    for (call_id, _) in &subagents.spawned {
+        let call = session.entries.iter().find_map(|entry| match &entry.kind {
+            Kind::Step { calls, .. } => calls.iter().find(|call| &call.id == call_id),
+            _ => None,
+        });
+        let Some(call) = call else { continue };
+        let found = planned.iter().enumerate().position(|(index, planned)| {
+            !taken.contains(&index)
+                && planned.source_name == call.source_name
+                && planned.source_input == call.input
+        });
+        if let Some(index) = found {
+            taken.insert(index);
+            out.insert(call_id.clone(), planned[index].id.clone());
+        }
+    }
+    out
 }
 
 /// Read, plan, check, write: the whole pipeline of Â§1.
@@ -450,6 +562,11 @@ pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, H
             _ => None,
         },
     };
+    if req.children {
+        return crate::children::import_with_children(
+            req.dest, &selection, &source, &req.roots, &opts,
+        );
+    }
     import(req.dest, &selection, &opts)
 }
 

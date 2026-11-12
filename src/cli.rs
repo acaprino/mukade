@@ -1229,6 +1229,7 @@ impl Flags {
                 Some("native") => Some(self.native_budget()?),
                 _ => None,
             },
+            subagents: Default::default(),
         })
     }
 
