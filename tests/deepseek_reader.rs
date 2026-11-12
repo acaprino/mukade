@@ -1017,6 +1017,102 @@ fn an_id_is_found_by_its_uuid_or_a_unique_prefix() {
     );
 }
 
+/// A read opens the log it names and no other: the id is matched against the folder names, so the
+/// other logs of the store are neither decoded nor consulted (here one whose header id would make
+/// the typed prefix ambiguous, and one that is no log at all).
+#[test]
+fn reading_one_session_does_not_consult_the_other_logs() {
+    let roots = store(
+        "read-one",
+        &[
+            (
+                "--p--",
+                "session-6de20419-aaaa",
+                &simple("session-6de20419-aaaa", "one"),
+            ),
+            (
+                "--p--",
+                "session-9999-bbbb",
+                &simple("session-6de20419-zzzz", "header says another id"),
+            ),
+        ],
+    );
+    let sessions = roots.dsh_sessions().unwrap();
+    write_to(
+        &sessions.join("--p--").join("session-7777-cccc"),
+        "session.v4.jsonl.zstd",
+        b"not a log",
+    );
+    assert_eq!(
+        dsh::DeepSeekHarness
+            .read("6de20419", &roots)
+            .unwrap()
+            .meta
+            .id,
+        "session-6de20419-aaaa"
+    );
+    // The corrupt one is reported when it is the one asked for, and only then.
+    let error = format!(
+        "{:#}",
+        dsh::DeepSeekHarness
+            .read("session-7777-cccc", &roots)
+            .unwrap_err()
+    );
+    assert!(
+        error.contains("not a DeepSeek Harness session log"),
+        "{error}"
+    );
+}
+
+/// A listing keeps what it read of each log under the log's size and modification time: a log that
+/// is as it was is not decoded again.
+#[test]
+fn a_listing_remembers_a_log_that_has_not_changed() {
+    let roots = store(
+        "list-cache",
+        &[(
+            "--p--",
+            "session-aaaa",
+            &simple("session-aaaa", "the first prompt"),
+        )],
+    );
+    let scratch = support::scratch(HarnessId::DeepSeekHarness, "list-cache-table");
+    let log = roots
+        .dsh_sessions()
+        .unwrap()
+        .join("--p--")
+        .join("session-aaaa")
+        .join("session.v4.jsonl.zstd");
+    let settled = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let touch = |at: std::time::SystemTime| {
+        std::fs::File::options()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    };
+    touch(settled);
+    let first = dsh::list_all_cached(&roots, Some(&scratch)).unwrap();
+    assert_eq!(first[0].title.as_deref(), Some("the first prompt"));
+
+    // The same size and time, other bytes: only the cache can still say what it was.
+    let size = std::fs::metadata(&log).unwrap().len() as usize;
+    std::fs::write(&log, vec![b'x'; size]).unwrap();
+    touch(settled);
+    let again = dsh::list_all_cached(&roots, Some(&scratch)).unwrap();
+    assert_eq!(
+        again[0].title.as_deref(),
+        Some("the first prompt"),
+        "{again:#?}"
+    );
+    assert!(again[0].unreadable.is_none());
+
+    // Without the cache the log is read, and is not one.
+    let cold = dsh::list_all_cached(&roots, None).unwrap();
+    assert!(cold[0].unreadable.is_some(), "{cold:#?}");
+}
+
 #[test]
 fn without_a_home_there_is_no_store() {
     let roots = StoreRoots::default();

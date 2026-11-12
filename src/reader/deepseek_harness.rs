@@ -900,13 +900,116 @@ fn sessions(roots: &StoreRoots, what: &str) -> Result<PathBuf> {
     })
 }
 
+/// A log's size and modification time (nanoseconds since 1970): what tells that it changed.
+type Stamp = (u64, u64);
+
+fn stamp(file: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(file).ok()?;
+    let nanos = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), u64::try_from(nanos).ok()?))
+}
+
+/// A log written this recently may still be growing, so what was read of it is not remembered.
+const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What the cache keeps of a log: its stamp, and what a listing read from it.
+fn to_entry((size, modified): Stamp, info: &SessionInfo) -> Value {
+    let mut entry = Map::new();
+    entry.insert("s".into(), size.into());
+    entry.insert("m".into(), modified.into());
+    for (key, value) in [
+        ("i", Some(&info.id)),
+        ("t", info.title.as_ref()),
+        ("c", info.cwd.as_ref()),
+        ("p", info.parent.as_ref()),
+        ("u", info.unreadable.as_ref()),
+    ] {
+        if let Some(value) = value {
+            entry.insert(key.into(), value.clone().into());
+        }
+    }
+    if let Some(kind) = info
+        .parent_kind
+        .as_ref()
+        .and_then(|kind| serde_json::to_value(kind).ok())
+    {
+        entry.insert("k".into(), kind);
+    }
+    entry.into()
+}
+
+/// What the cache kept for `log`, when it was kept for this very file.
+fn from_entry(entry: &Value, (size, modified): Stamp, log: &Log) -> Option<SessionInfo> {
+    if entry.get("s")?.as_u64()? != size || entry.get("m")?.as_u64()? != modified {
+        return None;
+    }
+    let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_owned);
+    Some(SessionInfo {
+        id: text("i")?,
+        title: text("t"),
+        cwd: text("c"),
+        updated: super::json::modified_rfc3339(&log.file),
+        path: log.file.to_string_lossy().into_owned(),
+        parent: text("p"),
+        parent_kind: entry
+            .get("k")
+            .and_then(|kind| serde_json::from_value(kind.clone()).ok()),
+        unreadable: text("u"),
+        ..SessionInfo::default()
+    })
+}
+
+/// Every session of the store, with each log's answer taken from `cache` (a folder) where the log
+/// is as it was, else from the log: a listing decodes a log only to find its title and its first
+/// prompt, and a log that has not changed is not decoded again. `None` is no cache.
+pub fn list_all_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<SessionInfo>> {
+    let dir = sessions(roots, "list")?;
+    listed_all(&dir, cache)
+}
+
+fn listed_all(dir: &Path, cache: Option<&Path>) -> Result<Vec<SessionInfo>> {
+    let found = logs(dir)?;
+    let name = crate::cache::table_name("dsh-list", &dir.to_string_lossy());
+    let remembered: Map<String, Value> = cache
+        .map(|folder| crate::cache::load_table(folder, &name))
+        .unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |age| u64::try_from(age.as_nanos()).unwrap_or(u64::MAX));
+    let settled = u64::try_from(SETTLED_AFTER.as_nanos()).unwrap_or(u64::MAX);
+    let mut table = Map::new();
+    let mut out = Vec::with_capacity(found.len());
+    for log in &found {
+        let key = log.file.to_string_lossy().into_owned();
+        let stamp = stamp(&log.file);
+        let info = stamp
+            .and_then(|stamp| from_entry(remembered.get(&key)?, stamp, log))
+            .unwrap_or_else(|| listed(log));
+        if let Some(stamp) = stamp
+            && stamp.1.saturating_add(settled) <= now
+        {
+            table.insert(key, to_entry(stamp, &info));
+        }
+        out.push(info);
+    }
+    if let Some(folder) = cache
+        && table != remembered
+    {
+        crate::cache::store_table(folder, &name, &table);
+    }
+    Ok(out)
+}
+
 /// Every session of the store, newest first. `roots_only` leaves out the subagents a session
 /// started, which a picker does not show; a fork of a session is a session of its own.
 fn list_in(roots: &StoreRoots, roots_only: bool) -> Result<Vec<SessionInfo>> {
-    let dir = sessions(roots, "list")?;
-    let mut out: Vec<SessionInfo> = logs(&dir)?
-        .iter()
-        .map(listed)
+    let mut out: Vec<SessionInfo> = list_all_cached(roots, crate::cache::dir().as_deref())?
+        .into_iter()
         .filter(|info| !roots_only || !matches!(info.parent_kind, Some(ParentKind::Spawn { .. })))
         .collect();
     out.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| a.id.cmp(&b.id)));
@@ -915,7 +1018,7 @@ fn list_in(roots: &StoreRoots, roots_only: bool) -> Result<Vec<SessionInfo>> {
 
 /// The sessions the store holds, and how many of them another session started or copied.
 pub fn store_counts(sessions: &Path) -> Result<(usize, usize)> {
-    let all: Vec<SessionInfo> = logs(sessions)?.iter().map(listed).collect();
+    let all = listed_all(sessions, crate::cache::dir().as_deref())?;
     let children = all.iter().filter(|info| info.parent_kind.is_some()).count();
     Ok((all.len(), children))
 }
@@ -933,29 +1036,36 @@ impl Reader for DeepSeekHarness {
         list_in(roots, false)
     }
 
+    /// The id is matched against the folder names, which dsh requires to be the id encoded: only
+    /// the log asked for is opened, never the others.
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
-        let all = list_in(roots, false)?;
+        let dir = sessions(roots, "read")?;
+        let named: Vec<(String, Log)> = logs(&dir)?
+            .into_iter()
+            .map(|log| (decode_segment(&log.folder), log))
+            .collect();
         // The id as dsh writes it, or what follows `session-`: the UUID a user copies.
-        let matches = |info: &&SessionInfo| {
-            info.id == id
-                || info.id.starts_with(id)
-                || info
-                    .id
+        let starts = |name: &str| {
+            name.starts_with(id)
+                || name
                     .strip_prefix("session-")
                     .is_some_and(|rest| rest.starts_with(id))
         };
-        let exact: Vec<&SessionInfo> = all.iter().filter(|info| info.id == id).collect();
-        let found: Vec<&SessionInfo> = if exact.is_empty() {
-            all.iter().filter(matches).collect()
+        let exact: Vec<&(String, Log)> = named.iter().filter(|(name, _)| name == id).collect();
+        let found: Vec<&(String, Log)> = if exact.is_empty() {
+            named.iter().filter(|(name, _)| starts(name)).collect()
         } else {
             exact
         };
         match found.as_slice() {
-            [one] => {
-                if let Some(why) = &one.unreadable {
-                    anyhow::bail!("DeepSeek Harness session {} cannot be read: {why}", one.id);
+            [(name, log)] => {
+                if let Some(version) = &log.other_format {
+                    anyhow::bail!(
+                        "DeepSeek Harness session {name} cannot be read: the folder holds only a \
+                         format {version} log; this reader knows format {FORMAT}"
+                    );
                 }
-                read_file(Path::new(&one.path))
+                read_file(&log.file)
             }
             [] => Err(Lookup::NotFound(format!("no DeepSeek Harness session {id:?}")).into()),
             several => Err(Lookup::Ambiguous(format!(
@@ -964,7 +1074,7 @@ impl Reader for DeepSeekHarness {
                 several
                     .iter()
                     .take(5)
-                    .map(|info| info.id.as_str())
+                    .map(|(name, _)| name.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
