@@ -118,6 +118,7 @@ options:
                            dump: the subagent sessions too, in the document's `children`
                            hop: write them too, each as a session of its own after the session,
                            linked where the destination has a link (OpenCode, Claude Code)
+                           write: write the document's `children` too, as hop does
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
@@ -239,8 +240,8 @@ pub fn run(args: &[String]) -> Result<()> {
     if flags.archived.is_some() && command != "list" {
         anyhow::bail!("--archived is supported only by list");
     }
-    if flags.children && !matches!(command.as_str(), "list" | "dump" | "hop") {
-        anyhow::bail!("--children is supported only by list, dump and hop");
+    if flags.children && !matches!(command.as_str(), "list" | "dump" | "hop" | "write") {
+        anyhow::bail!("--children is supported only by list, dump, hop and write");
     }
     if flags.children && flags.from_file.is_some() && command != "list" {
         anyhow::bail!(
@@ -576,9 +577,11 @@ pub fn run(args: &[String]) -> Result<()> {
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
             let session = crate::wire::from_document(&doc)?;
-            if let Some(children) = doc["children"].as_array().filter(|c| !c.is_empty()) {
+            if !flags.children
+                && let Some(children) = doc["children"].as_array().filter(|c| !c.is_empty())
+            {
                 eprintln!(
-                    "the document holds {} subagent session(s); write imports the session alone (hop --children writes them)",
+                    "the document holds {} subagent session(s); write imports the session alone (write --children writes them)",
                     children.len()
                 );
             }
@@ -589,10 +592,12 @@ pub fn run(args: &[String]) -> Result<()> {
                 &roots,
                 write_engine.as_deref(),
             )?;
-            deliver(
-                crate::hop::import_document(harness, &doc, &session, &opts),
-                flags.manifest.as_deref(),
-            )?;
+            let result = if flags.children {
+                crate::children::import_document_with_children(harness, &doc, &session, &opts)
+            } else {
+                crate::hop::import_document(harness, &doc, &session, &opts)
+            };
+            deliver(result, flags.manifest.as_deref())?;
         }
         "document" => {
             no_more(operands, 2)?;

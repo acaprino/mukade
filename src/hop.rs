@@ -621,6 +621,11 @@ pub fn import_document(
     session: &Session,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
+    import(dest, session, &document_opts(doc, opts))
+}
+
+/// `opts` with what only a document knows: who wrote its summary, and its fingerprint.
+pub(crate) fn document_opts(doc: &Value, opts: &ImportOpts) -> ImportOpts {
     let mut opts = opts.clone();
     if let Some(facts) = doc
         .get("summary")
@@ -636,7 +641,7 @@ pub fn import_document(
             .into_iter()
             .flatten(),
     );
-    import(dest, session, &opts)
+    opts
 }
 
 /// Apply compaction to a session already read from a file, then finish the normal import path.
