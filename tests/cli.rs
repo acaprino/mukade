@@ -2376,12 +2376,12 @@ fn list_names_an_opencode_forks_source_and_a_childs_spawner() {
 }
 
 #[test]
-fn children_is_a_list_option() {
+fn children_is_a_list_dump_and_hop_option() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "cli-children-only-list");
-    let (code, _, stderr) = cli_code(&scratch, &["dump", "claude_code", "x", "--children"]);
+    let (code, _, stderr) = cli_code(&scratch, &["write", "claude_code", "x", "--children"]);
     assert_eq!(code, Some(1), "{stderr}");
     assert!(
-        stderr.contains("--children is supported only by list"),
+        stderr.contains("--children is supported only by list, dump and hop"),
         "{stderr}"
     );
 }
