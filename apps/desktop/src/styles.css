@@ -1,0 +1,131 @@
+/* Mukade skin: Shinatama's, so the two apps look alike. Midnight navy, cobalt and ice lines, one
+   warm accent (pink). Warning, error and danger are states, not accents. No glow, no rounded
+   corners. Every chrome colour lives here; dark is the default, light follows the system (or the
+   Theme button: Auto, Light, Dark). */
+:root {
+  color-scheme: dark;
+  --stage: #04070f;
+  --chrome: #070c18;
+  --chrome-2: #0a1120;
+  --surface: #0e1729;
+  --surface-2: #13203a;
+  --pane: #050912;
+  --line: #1c3563;
+  --line-strong: #4a78e6;
+  --ice: #a9c8ff;
+  --text: #e6f0ff;
+  --text-2: #b4c8e8;
+  --muted: #8fa6c9;
+  --accent: #f48fb8;
+  --accent-soft: #ffb3d0;
+  --accent-ink: #1c0811;
+  --live: #6fe3d2;
+  --warning: #e8bb72;
+  --error: #ff8495;
+  --danger: #a0294e;
+  --danger-line: #e35f87;
+  --on-danger: #ffffff;
+  --selection: #2a4a8f;
+  --scrim: #02050bcc;
+  --shadow: #000000aa;
+  --spawn: #7fb2ff;
+  --fork: #e8bb72;
+  --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
+  --display: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+  background: var(--stage);
+  color: var(--text);
+}
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+/* Light: paper-white panes on a cool grey stage, the same cobalt lines, a deeper pink. */
+:root[data-theme='light'] {
+  --stage: #e9eef8; --chrome: #f5f8fd; --chrome-2: #edf1fa; --surface: #ffffff; --surface-2: #e3eaf8;
+  --pane: #fbfcff; --line: #c3d0ea; --line-strong: #3a62c4; --ice: #2b4fa6; --text: #0d1630;
+  --text-2: #2d3f66; --muted: #5b6f96; --accent: #c42a6b; --accent-soft: #a81e58; --accent-ink: #ffffff;
+  --live: #0e7a69; --warning: #8a5a00; --error: #b3223a; --danger: #a0294e; --danger-line: #7d1c3c;
+  --selection: #cddbf6; --scrim: #0d163066; --shadow: #0d163044; --spawn: #2b5fc4; --fork: #8a5a00;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --stage: #e9eef8; --chrome: #f5f8fd; --chrome-2: #edf1fa; --surface: #ffffff; --surface-2: #e3eaf8;
+    --pane: #fbfcff; --line: #c3d0ea; --line-strong: #3a62c4; --ice: #2b4fa6; --text: #0d1630;
+    --text-2: #2d3f66; --muted: #5b6f96; --accent: #c42a6b; --accent-soft: #a81e58; --accent-ink: #ffffff;
+    --live: #0e7a69; --warning: #8a5a00; --error: #b3223a; --danger: #a0294e; --danger-line: #7d1c3c;
+    --selection: #cddbf6; --scrim: #0d163066; --shadow: #0d163044; --spawn: #2b5fc4; --fork: #8a5a00;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body { overflow: hidden; background: var(--stage); }
+button, input, select, textarea { font: inherit; color: inherit; }
+::selection { background: var(--selection); color: var(--text); }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+button:focus:not(:focus-visible) { outline: none; }
+.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: square; stroke-linejoin: miter; }
+.spring { flex: 1; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); }
+
+/* Controls */
+button {
+  display: inline-flex; gap: 7px; align-items: center; justify-content: center;
+  min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 0; background: transparent;
+  font: 500 12px/1 var(--display); letter-spacing: .07em; text-transform: uppercase; white-space: nowrap;
+  cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms;
+}
+button:hover { border-color: var(--line-strong); background: var(--surface-2); }
+button:active { background: var(--line); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--line); background: transparent; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+button.primary:disabled:hover { background: var(--accent); border-color: var(--accent); }
+button.danger { background: var(--danger); border-color: var(--danger-line); color: var(--on-danger); font-weight: 600; }
+kbd { font: 12px var(--mono); color: var(--muted); letter-spacing: 0; text-transform: none; }
+button.primary kbd { color: inherit; opacity: .7; }
+input[type='text'], input[type='search'], input:not([type]), textarea, select {
+  min-height: 28px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 0; background: var(--surface);
+  color: var(--text); font: 13px var(--mono);
+}
+input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }
+input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
+input::placeholder { color: var(--muted); }
+
+/* Shell */
+#app { display: grid; grid-template-rows: 44px minmax(0, 1fr) 28px; }
+.titlebar { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--chrome); }
+.brand-mark { width: 18px; height: 18px; color: var(--accent); }
+.wordmark { font: 600 14px var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--ice); }
+.version { padding-left: 10px; margin-right: 8px; border-left: 1px solid var(--line); color: var(--muted); font: 12px var(--mono); }
+.views { display: flex; gap: 0; }
+.views button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
+.views button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
+.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 8px; }
+.column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-top-width: 2px; background: var(--pane); overflow: hidden; }
+.column.focused { border-top-color: var(--accent); }
+#installations { flex: 0 0 248px; }
+#sessions { flex: 0 0 clamp(340px, 34%, 520px); }
+#detail { flex: 1; }
+.column-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
+.column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .09em; text-transform: uppercase; color: var(--text-2); }
+.column-head small { font: 12px var(--mono); color: var(--muted); }
+.column-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.statusbar { display: flex; align-items: center; gap: 12px; padding: 0 10px; overflow: hidden; border-top: 1px solid var(--line); background: var(--chrome); font: 12px var(--mono); color: var(--text-2); white-space: nowrap; }
+.statusbar i { display: inline-block; width: 6px; height: 6px; background: var(--live); }
+.statusbar.busy i { background: var(--accent); animation: pulse 900ms ease-in-out infinite alternate; }
+.statusbar.error i { background: var(--error); }
+.statusbar.error #status { color: var(--error); }
+@keyframes pulse { to { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .statusbar.busy i { animation: none; } }
+
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 28px; text-align: center; color: var(--muted); }
+.empty h2 { margin: 0 0 8px; font: 500 15px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--text); }
+.empty p { max-width: 360px; margin: 0 0 6px; line-height: 1.6; color: var(--text-2); }
+.empty code, .hint code { font: 12px var(--mono); color: var(--ice); }
+.note { margin: 0; padding: 8px 10px; border-left: 2px solid var(--line-strong); background: var(--surface); color: var(--text-2); font-size: 12px; }
+.note.warn { border-left-color: var(--warning); color: var(--warning); }
+.note.err { border-left-color: var(--error); color: var(--error); }

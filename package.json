@@ -1,0 +1,22 @@
+{
+  "name": "mukade",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config apps/desktop/vite.config.ts",
+    "build": "tsc --noEmit && vite build --config apps/desktop/vite.config.ts",
+    "desktop": "cd apps/desktop && tauri dev",
+    "desktop:build": "npm run build && cd apps/desktop && tauri build --debug --no-bundle",
+    "desktop:release": "npm run build && cd apps/desktop && tauri build --no-bundle --features custom-protocol",
+    "test": "node --experimental-strip-types --test apps/desktop/tests/*.test.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

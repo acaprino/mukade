@@ -50,7 +50,7 @@ name = "mukade"
 path = "src/bin/mukade.rs"
 
 [workspace]
-members = ["mukade-tui"]
+members = ["mukade-tui", "apps/desktop/src-tauri"]
 default-members = ["."]
 resolver = "3"
 

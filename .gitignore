@@ -4,3 +4,6 @@
 /.codebase-map
 /effectiveness-metrics.json*
 /.superpowers
+/node_modules
+/apps/desktop/dist
+/apps/desktop/src-tauri/gen

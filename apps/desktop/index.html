@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light"><link rel="icon" href="data:,">
+  <title>Mukade</title>
+</head>
+<body>
+  <svg hidden aria-hidden="true">
+    <symbol id="i-mark" viewBox="0 0 18 18"><path d="M1 13q4-1 5.500-5T11 4l5-2"/><path d="M5 9 3.500 11.500M8 6.500 6.500 9M11 4.500 9.500 7M14 3 12.500 5.500"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.500 13.500v-11h5l1.500 2h6.500v9z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 16 16"><path d="M2 2.500h12v8H8l-3.500 3v-3H2z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 16 16"><path d="M2.500 3.500h11v9h-11zM2.500 7h11M6 3.500v9"/></symbol>
+    <symbol id="i-hop" viewBox="0 0 16 16"><path d="M2 5.500h11M10.500 3 13 5.500 10.500 8M14 10.500H3M5.500 8 3 10.500 5.500 13"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.500 3v10l8-5z"/></symbol>
+    <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 10.500v-8M5 5.500l3-3 3 3M2.500 10v3.500h11V10"/></symbol>
+    <symbol id="i-import" viewBox="0 0 16 16"><path d="M8 2.500v8M5 7.500l3 3 3-3M2.500 10v3.500h11V10"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.500-3.500M13 2.500v3h-3"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 16 16"><path d="M8 2.500v11M8 2.500a5.500 5.500 0 1 0 0 11"/></symbol>
+    <symbol id="i-close" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+    <symbol id="i-caret" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+  </svg>
+  <main id="app">
+    <header class="titlebar">
+      <svg class="brand-mark icon" aria-hidden="true"><use href="#i-mark"/></svg>
+      <span class="wordmark">Mukade</span><span class="version" id="version"></span>
+      <nav class="views" role="tablist" aria-label="Views">
+        <button type="button" role="tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions <kbd>1</kbd></button>
+        <button type="button" role="tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>2</kbd></button>
+      </nav>
+      <span class="spring"></span>
+      <button type="button" id="scan" title="Look for portable or custom installations in a folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Scan folder</button>
+      <button type="button" id="import" title="Write a dump document into an installation"><svg class="icon" aria-hidden="true"><use href="#i-import"/></svg>Import <kbd>i</kbd></button>
+      <button type="button" id="reload" title="Read every store again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Reload <kbd>r</kbd></button>
+      <button type="button" id="theme" title="Theme: follows the system" aria-label="Theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-name">Auto</span></button>
+    </header>
+    <section id="view-sessions" class="view" aria-label="Sessions">
+      <aside id="installations" class="column" aria-label="Installations"></aside>
+      <section id="sessions" class="column" aria-label="Sessions of the installation"></section>
+      <section id="detail" class="column" aria-label="Session"></section>
+    </section>
+    <section id="view-chat" class="view" aria-label="Chat" hidden></section>
+    <footer class="statusbar"><i id="status-dot"></i><span id="status">ready</span><span class="spring"></span><span id="status-right"></span></footer>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
