@@ -92,7 +92,8 @@ impl Harness for Codex {
                 "MUKADE_CHAT_AUTHORIZATION",
                 format!("Bearer {}", kit.server.token),
             )
-            .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id);
+            .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id)
+            .args(&kit.args);
         eprintln!(
             "mukade: Codex runs mukade's three hooks only once they are trusted: run \
              `mukade chat trust codex` once (or trust them with /hooks in Codex); until then this \

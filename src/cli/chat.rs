@@ -28,9 +28,10 @@ mukade chat: one shared local chat service for harness instances
                                       hook only when trusted (codex); no other hook is touched
   mukade chat launch <harness> --room <name> [--role peer|lead|worker|observer]
                      [--listen <seconds>] [--max-wakes <n>] [-- <harness arguments>]
-                                      start the harness already in the room: its hooks hand
-                                      it what the room writes; --listen keeps it waiting for
-                                      messages addressed to it after each turn
+                                      start the harness already in the room (claude_code,
+                                      codex, opencode, pi): its hooks or plugin hand it what
+                                      the room writes; --listen keeps it waiting for messages
+                                      addressed to it after each turn
   mukade chat <operation> [--<argument> <value>]... [--json] [--output <file>]
 
 Operations: open close reopen delete rooms join rejoin leave members candidates bind unbind
@@ -676,15 +677,22 @@ fn run_hook(harness: crate::HarnessId, event: crate::chat::adapter::Event) {
             .map_err(|_| failed("transport_failure", "no runtime for the hook"))?;
         runtime.block_on(async {
             let client = ChatClient::connect(&lifecycle::client_config(&paths)?).await?;
-            let delivery = adapter::handle(
-                &client,
-                &paths.bus_dir,
-                harness.as_str(),
-                &settings,
-                event,
-                &input,
-            )
-            .await;
+            // A plugin stops a listening hook when the user acts: the client is closed then, so
+            // the service ends the call it was waiting in instead of holding the stream.
+            let delivery = tokio::select! {
+                delivery = adapter::handle(
+                    &client,
+                    &paths.bus_dir,
+                    harness.as_str(),
+                    &settings,
+                    event,
+                    &input,
+                ) => delivery,
+                () = terminated() => {
+                    client.close().await;
+                    return Ok(());
+                }
+            };
             client.close().await;
             let Some(delivery) = delivery? else {
                 return Ok(());
@@ -705,6 +713,19 @@ fn run_hook(harness: crate::HarnessId, event: crate::chat::adapter::Event) {
     if let Err(error) = result {
         eprintln!("mukade chat hook: {}: {}", error.code, error.message);
     }
+}
+
+/// Resolves when this process is asked to terminate (SIGTERM); never on Windows, where a stopped
+/// hook is simply gone and its last call ends with its slice.
+async fn terminated() {
+    #[cfg(unix)]
+    if let Ok(mut signal) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        signal.recv().await;
+        return;
+    }
+    std::future::pending::<()>().await
 }
 
 /// A folder path without Windows's `\\?\` prefix, as the harness and its hooks read it back.
@@ -805,6 +826,7 @@ async fn run_launch(paths: &lifecycle::Paths, launch: &Launch) -> Result<(), Cha
             service_id: config.service_id,
         },
         stop_timeout: adapter::STOP_HOOK_TIMEOUT,
+        args: launch.harness_args.clone(),
     };
     let Some(mut command) = crate::harnesses::get(launch.harness).chat_launch(&kit)? else {
         return Err(failed(
@@ -816,7 +838,6 @@ async fn run_launch(paths: &lifecycle::Paths, launch: &Launch) -> Result<(), Cha
         ));
     };
     command
-        .args(&launch.harness_args)
         .env("MUKADE_DATA_DIR", plain_path(&paths.data_dir))
         .env(adapter::ENV_ROOM, &room_id)
         .env(adapter::ENV_ROLE, &launch.role)
@@ -862,6 +883,7 @@ fn run_trust(harness: crate::HarnessId, dry_run: bool) -> Result<Value, ChatErro
             service_id: String::new(),
         },
         stop_timeout: adapter::STOP_HOOK_TIMEOUT,
+        args: Vec::new(),
     };
     match adapter_of.chat_trust(&kit, dry_run)? {
         Some(report) => Ok(report),

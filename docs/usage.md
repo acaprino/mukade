@@ -548,6 +548,8 @@ The quickest way: start each instance already in the room.
 ```text
 mukade chat launch claude_code --room design --listen 300
 mukade chat launch claude_code --room design --role worker --listen 600
+mukade chat launch opencode --room design --listen 300
+mukade chat launch pi --room design --listen 300 -- --model sonnet
 ```
 
 | option | what it does |
@@ -560,17 +562,24 @@ mukade chat launch claude_code --room design --role worker --listen 600
 
 What the launched instance gets, without any setting of yours changing:
 
-1. Claude Code: a plugin for that session only (`claude --plugin-dir`), in the service's own folder, removed when the instance exits. Codex: `-c` overrides for that run only (the MCP entry and three hooks), the credential in the environment.
-2. At session start it joins the room; its name, role, `member_handle` and the rules of its role are given to the model.
-3. At each prompt, what the room wrote since is given to the model. A batch is acknowledged only at the next hook call, so a batch the session never took comes again.
-4. With `--listen`, at the end of a turn the Stop hook waits; a message addressed to the instance restarts it with the messages. One written to the whole room does not restart it: it comes with the next addressed one, or at the next prompt.
+1. The launch kit, in the service's own folder and removed when the instance exits:
+   - Claude Code: a plugin for that session only (`claude --plugin-dir`).
+   - Codex: `-c` overrides for that run only (the MCP entry and three hooks), the credential in the environment.
+   - OpenCode: a server plugin and the MCP entry, in `OPENCODE_CONFIG_CONTENT`, which OpenCode reads as one more configuration document on top of yours. The instance runs its own private server (`--standalone`, placed after `run` or `mini` when you pass one): the shared background service would not have the room in its environment. `--server` is refused. A value you set in `OPENCODE_CONFIG_CONTENT` is kept, with the two added to it.
+   - Pi: one extension for that run (`pi -e`), which registers the MCP entry for the session.
+   - OpenCode and Pi get the credential in the environment only: the plugin files hold none.
+2. At session start it joins the room; its name, role, `member_handle` and the rules of its role are given to the model. OpenCode has no session-start hook: it joins with its first prompt.
+3. At each prompt, what the room wrote since is given to the model: Claude Code and Codex as hook context, OpenCode as a synthetic message ahead of the prompt, Pi as a message with the turn. A batch is acknowledged only at the next hook call, so a batch the session never took comes again.
+4. With `--listen`, at the end of a turn the Stop hook waits (OpenCode: before the session goes idle; Pi: before the run settles); a message addressed to the instance restarts it with the messages. One written to the whole room does not restart it: it comes with the next addressed one, or at the next prompt. In OpenCode and Pi a prompt you type ends the wait at once, and so does Escape in Pi.
 5. The instance writes with the MCP tools (`chat_send`, `chat_signal`, `chat_observe`), never `chat_read` or `chat_wait`: its hooks are its reader.
+6. Only the launched session is a member: an OpenCode subagent's child session is not.
 
 | harness | adapter | first launch |
 |---|---|---|
-| `claude_code` | yes | nothing to do |
-| `codex` | yes | Codex runs a hook only once it is trusted. Run `mukade chat trust codex` once (below). Until then the instance does not join |
-| `opencode`, `pi` | not yet: `launch` refuses them (exit 2) | join with `connect` and the tools |
+| `claude_code` | hooks of a plugin | nothing to do |
+| `codex` | hooks as overrides | Codex runs a hook only once it is trusted. Run `mukade chat trust codex` once (below). Until then the instance does not join |
+| `opencode` | server plugin (OpenCode 2) | nothing to do |
+| `pi` | extension | nothing to do |
 
 Trust Codex's hooks once:
 
@@ -582,9 +591,9 @@ mukade chat trust codex
 1. `--dry-run` lists mukade's three hooks as Codex sees them (`untrusted`, `trusted` or `modified`) and writes nothing.
 2. Without it, Codex's own server (`codex app-server`) records trust for exactly those three, in `~/.codex/config.toml` under `[hooks.state]`. Your other hooks and plugins' hooks are not touched.
 3. The hooks name the mukade executable by its path. After mukade moves to another path, run it again; until then Codex shows them as `modified` and skips them.
-4. `claude_code` answers `not_needed`; a harness without an adapter is refused (exit 2).
+4. `claude_code`, `opencode` and `pi` answer `not_needed`; a harness without an adapter is refused (exit 2).
 
-Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
+Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there. The OpenCode plugin and the Pi extension follow the plugin APIs of OpenCode 2.2.7 and Pi 1.5.2 and run, under Node, against a real service in the test suite; a real OpenCode or Pi instance has not run them yet **[U]**.
 
 Connect a harness as an MCP client, with the service running:
 

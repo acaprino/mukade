@@ -17,6 +17,7 @@ Its step numbers are in brackets below.
 | Forks and branches, part B ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)) | `--all-branches` was Codex only and one linear splice; `dump` dropped every abandoned record | `Session.branches` and `branches` in the dump document; `--all-branches` for Claude Code, Codex and Pi sources; Claude Code and Pi destinations write the tree, Codex writes a branch and rolls it back, OpenCode, Hermes and DeepSeek Harness leave branches out and count them (`counts.branches_kept`, `branches_dropped`) |
 | Subagent sessions, phase 1 ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)) | Claude Code children unreadable and never listed; OpenCode's `parentID` missed; `parent` meant fork for Pi, spawner for Codex and OpenCode, unsaid; what a child reported to its parent read as `Meta` and lost silently | `parent_kind` (fork / spawn with call and agent) on every parent; Claude children `<parent-id>.<agentId>` read and listed (`list --children`, the TUI); reports the parent received are user turns, an encrypted Codex one counted (`dropped_subagent_messages`) |
 | Subagent sessions, phase 2 ([plan](docs/superpowers/plans/2026-11-12-subagents-phase2.md)) | a hop left a session's subagents behind; `dump` had no way to carry them | `dump --children` nests each child's document; `hop --children` writes each child as a session of its own after the parent, linked where the destination can (OpenCode `info.parentID`, checked with the real `opencode` 2.2.5 in a scratch store; Claude Code `subagents/` folder), unlinked for Codex and Pi, and lists them in `manifest.children` |
+| Chat launch for OpenCode and Pi ([record](docs/verification/2026-11-12-chat-live.md#run-9-the-opencode-and-pi-launch-kits-on-linux-without-the-harnesses)) | `chat launch opencode\|pi` refused (exit 2); a listener stopped by the user held the member's stream, so the next prompt's news was lost to `stream_busy` | OpenCode 2: a server plugin and the MCP entry in `OPENCODE_CONFIG_CONTENT`, a private server (`--standalone`); Pi: one extension (`pi -e`) that registers the MCP entry; both join, get the news with each prompt and go on when listening, a typed prompt (and Escape in Pi) ends the wait; a stopped hook cancels its call (`notifications/cancelled`), waits run in 5 s slices. Run under Node against a real service; no real OpenCode or Pi yet (below) |
 | Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` names no dialect, so shell calls into Codex, OpenCode and Pi stay text as before, while Claude's offered set is unchanged ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
 
 ## ✅ Done on 2026-11-11
@@ -76,6 +77,13 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
     imported, with the free OpenRouter route; the import and the read-back are verified, the answer is not.
 17. **dsh resumes a written session and the model calls a tool** [17] [U]: the live resume answered a plain
     prompt; a task that makes it read a file settles the converted tool history.
+
+- **OpenCode and Pi launched into a room** [U]: `mukade chat launch opencode --room r --listen 120`
+  and `mukade chat launch pi --room r --listen 120` next to a launched Claude Code, as in run 7 of the
+  [chat record](docs/verification/2026-11-12-chat-live.md). Settles what Node could not: OpenCode
+  loading the plugin folder with `--standalone` and expanding `{env:…}` in `OPENCODE_CONFIG_CONTENT`,
+  the synthetic message coming ahead of the prompt; Pi loading the `.ts` extension and connecting the
+  server it registers; both models answering through `chat_send`.
 
 ## 🔵 Needs code (next)
 

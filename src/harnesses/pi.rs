@@ -55,6 +55,43 @@ impl Harness for Pi {
         })
     }
 
+    /// The extension hands the answer over itself (a message with the turn, or a continuation),
+    /// so it reads mukade's own plugin format.
+    fn chat_hook_output(
+        &self,
+        event: crate::chat::adapter::Event,
+        delivery: &crate::chat::adapter::Delivery,
+    ) -> Option<String> {
+        crate::chat::adapter::plugin_json(event, delivery)
+    }
+
+    /// An extension for one run (`pi -e`): it registers the MCP entry for this session and runs
+    /// the hooks at session start, at each prompt and before a run settles. Nothing of the
+    /// user's is written; the credential stays in the environment.
+    fn chat_launch(
+        &self,
+        kit: &crate::chat::adapter::Kit,
+    ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
+        let source = kit.plugin_source(
+            "pi",
+            serde_json::json!({"endpoint": kit.server.endpoint}),
+            include_str!("../chat/kits/pi.js"),
+        );
+        let extension = kit.write("pi-extension/mukade-chat.ts", source.as_bytes())?;
+        let exe = crate::exe::resolve(self.id(), None);
+        let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
+        command
+            .arg("-e")
+            .arg(plain(&extension))
+            .args(&kit.args)
+            .env(
+                "MUKADE_CHAT_AUTHORIZATION",
+                format!("Bearer {}", kit.server.token),
+            )
+            .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id);
+        Ok(Some(command))
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {
@@ -405,6 +442,15 @@ fn ls(input: &Value) -> Translation {
     Translation::Call {
         name: "ls",
         input: tools::obj_pairs(pairs),
+    }
+}
+
+/// A path without Windows's `\\?\` prefix, which Pi's extension loader would not take.
+fn plain(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
     }
 }
 

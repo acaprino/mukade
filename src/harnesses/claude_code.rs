@@ -89,7 +89,7 @@ impl Harness for ClaudeCode {
         kit.write(".mcp.json", mcp.to_string().as_bytes())?;
         let exe = crate::exe::resolve(self.id(), None);
         let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
-        command.arg("--plugin-dir").arg(&kit.folder);
+        command.arg("--plugin-dir").arg(&kit.folder).args(&kit.args);
         Ok(Some(command))
     }
 
