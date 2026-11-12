@@ -414,18 +414,36 @@ fn the_explorer_listing_adds_subagents_and_every_rotated_half() {
     assert!(orphan.parent.is_none() && orphan.parent_kind.is_none());
 }
 
+/// `list` shows what Hermes's own `sessions list` shows: a `local` session is a person's, and a
+/// `oneshot`, `tool` or `kanban` one (finite runs, integrations, workers) is not. The explorer's
+/// listing keeps them, and each is readable by id.
 #[test]
-fn a_source_of_local_is_listed_with_the_ones_that_name_themselves() {
+fn a_listing_hides_the_sources_hermes_hides_and_the_explorer_keeps_them() {
     let (roots, db) = store("sources");
     for (id, source) in [
         ("a", "cli"),
         ("b", "local"),
         ("c", "oneshot"),
         ("d", "telegram"),
+        ("e", "tool"),
+        ("f", "kanban"),
     ] {
         db.session(id, source, 1794480000.0);
+        db.message(id, "user", Some("hello"));
     }
-    assert_eq!(hermes::Hermes.list(&roots).unwrap().len(), 4);
+    let ids = |listed: Vec<mukade::reader::SessionInfo>| {
+        let mut ids: Vec<String> = listed.into_iter().map(|info| info.id).collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(ids(hermes::Hermes.list(&roots).unwrap()), ["a", "b", "d"]);
+    assert_eq!(
+        ids(hermes::Hermes.list_all(&roots).unwrap()),
+        ["a", "b", "c", "d", "e", "f"]
+    );
+    for id in ["c", "e", "f"] {
+        assert_eq!(read(&roots, id).unwrap().meta.id, id);
+    }
 }
 
 #[test]

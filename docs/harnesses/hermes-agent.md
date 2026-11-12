@@ -9,7 +9,7 @@ Evidence: `[n]` = source n in [Sources](#sources); `[S n]` = Hermes source at ta
 
 | | |
 |---|---|
-| **Read** (`list`, `dump`) | ✅ `<HERMES_HOME>/state.db`, opened read-only; schema 32 and later (33 verified) with the columns the reader needs. Lists every session, `oneshot` and `tool` ones included [37] |
+| **Read** (`list`, `dump`) | ✅ `<HERMES_HOME>/state.db`, opened read-only; schema 32 and later (33 verified) with the columns the reader needs. `list` shows what Hermes's own `sessions list` shows; `--children` (and the TUI) add the sessions of the hidden sources and the subagents [37] |
 | **Write** | ⚠️ through `hermes sessions import --from claude`, never by writing `state.db`. Only user and assistant text arrives; every tool call is text; no model, no reasoning, no image. Takes about 70 s (the import starts the gateway) [33][35] |
 | **Hop as source** | ✅ `mukade hop hermes <id> <dst>`; `--all-branches` does not apply |
 | **Hop as destination** | ⚠️ works with the losses above; `--dest-id`, `--dest-agent` and `--metadata-file` are refused as a command-line mistake (exit 1, as toward every destination that does not take them), `--dest-path` and `--compaction native` as unsupported (exit 2); each before anything runs |
@@ -413,7 +413,7 @@ Code: `src/reader/hermes.rs`, adapter `src/harnesses/hermes.rs`, detector `src/d
 
 **Finding sessions**
 
-- **Listing.** Every session of the store, newest first by `last_activity_at`, else `ended_at`, else `started_at`: `id`, title (the stored one, else the first user text), `cwd`, update time, `archived` (`archived` or `auto_archived`). `source` is not a filter: a `oneshot` or `tool` session is listed too. `list` leaves out subagent sessions and the superseded half of a rotated chain; `--children` adds the subagents. A `/branch` copy is a session of its own with `kind: fork`.
+- **Listing.** Every session of the store, newest first by `last_activity_at`, else `ended_at`, else `started_at`: `id`, title (the stored one, else the first user text), `cwd`, update time, `archived` (`archived` or `auto_archived`). `list` leaves out what Hermes's pickers leave out (`INTERNAL_LISTING_SOURCES` = `kanban`, `tool`, `oneshot`: workers, integrations and finite `-q` / `-z` runs, which `hermes sessions list` hides too, and shows with `--source oneshot`), the subagent sessions and the superseded half of a rotated chain; `list --children` (the explorer's listing) adds all of them. A hidden session is read by its id like any other. A `local` session is a person's and is listed. A `/branch` copy is a session of its own with `kind: fork`.
 - **Ids.** `read` takes an exact id or the only id it is the start of.
 - **`--from-file`.** Reads one session from a `hermes sessions export --format jsonl` file.
 

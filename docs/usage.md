@@ -1225,7 +1225,9 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --cwd 'C:\work\my-project
 ### Hermes Agent
 
 - **Source.** `list hermes` reads `<HERMES_HOME>/state.db` read-only, without starting Hermes; it
-  lists every session, `oneshot` ones included. A store older than schema 32 is refused, naming it.
+  lists what Hermes's own `sessions list` lists: the sessions of the sources `oneshot`, `tool` and `kanban`
+  (finite runs, integrations, workers) are left out, and `list --children` and the TUI add them; any
+  is readable by id. A store older than schema 32 is refused, naming it.
 - **Destination.** mukade runs `hermes sessions import --from claude` on a file it writes, then deletes
   the file. That keeps user and assistant text only: every tool call and result is text inside the
   turns, no model or reasoning is recorded, and an image is `[image]`. Refused: `--dest-id`,

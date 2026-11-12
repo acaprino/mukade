@@ -833,6 +833,11 @@ fn read_session(path: &Path, typed: &str) -> Result<Session> {
     Ok(session)
 }
 
+/// The sources Hermes's pickers (`sessions list`, the TUI and Desktop lists) leave out: finite
+/// runs (`oneshot`), third-party integrations (`tool`) and workers (`kanban`)
+/// (`INTERNAL_LISTING_SOURCES`, v0.23.1).
+const INTERNAL_LISTING_SOURCES: [&str; 3] = ["kanban", "tool", "oneshot"];
+
 /// One session of a listing, with what sorts it.
 struct Listed {
     info: SessionInfo,
@@ -840,6 +845,8 @@ struct Listed {
     lineage: Lineage,
     /// It ended by a legacy rotating compaction and a continuation took over.
     superseded: bool,
+    /// Its `source` is one Hermes's own pickers hide: a finite run, an integration, a worker.
+    internal: bool,
 }
 
 fn listed(path: &Path) -> Result<Vec<Listed>> {
@@ -909,6 +916,8 @@ fn listed(path: &Path) -> Result<Vec<Listed>> {
             updated: updated.unwrap_or(0.0),
             lineage,
             superseded: false,
+            internal: str_at(&session, "/source")
+                .is_some_and(|source| INTERNAL_LISTING_SOURCES.contains(&source.as_str())),
         });
     }
     for item in &mut out {
@@ -927,7 +936,7 @@ fn listed(path: &Path) -> Result<Vec<Listed>> {
 fn first_prompt(db: &Connection, id: &str) -> Option<String> {
     let found = rows(
         db,
-        "SELECT * FROM messages WHERE session_id = ?1 AND role = 'user' AND active = 1 \
+        "SELECT content FROM messages WHERE session_id = ?1 AND role = 'user' AND active = 1 \
          ORDER BY id LIMIT 1",
         &[id],
     )
@@ -936,15 +945,19 @@ fn first_prompt(db: &Connection, id: &str) -> Option<String> {
     Some(text_of(message.get("content"))).filter(|text| !text.is_empty())
 }
 
-/// What a listing shows. `roots_only` leaves out subagent sessions and the old halves of a
-/// rotated compaction, which a picker never shows; a branch is a session of its own and stays.
+/// What a listing shows. `roots_only` leaves out subagent sessions, the old halves of a rotated
+/// compaction and the sessions of a source Hermes's own pickers hide, which a picker never shows;
+/// a branch is a session of its own and stays.
 fn list_in(roots: &StoreRoots, roots_only: bool) -> Result<Vec<SessionInfo>> {
     let db = state_db(roots, "list")?;
     let all = with_retry(|| listed(&db))?;
     Ok(all
         .into_iter()
         .filter(|item| {
-            !roots_only || (!item.superseded && !matches!(item.lineage, Lineage::Spawn(_)))
+            !roots_only
+                || (!item.superseded
+                    && !item.internal
+                    && !matches!(item.lineage, Lineage::Spawn(_)))
         })
         .map(|item| item.info)
         .collect())
