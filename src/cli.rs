@@ -594,9 +594,15 @@ pub fn run(args: &[String]) -> Result<()> {
                 .parse()?;
             crate::harnesses::destination(dest)?;
             flags.check_write_flags(dest)?;
+            let selection = flags.compaction(harness)?;
+            // The writer and optional resume use the destination's environment, or the
+            // installation --dest-root names, never the source override. A --dest-path is held to
+            // that store before the source is read: a refused hop runs nothing, a summarizing
+            // model included.
+            let (destination_roots, engine) = hop_destination(&flags, dest, destination_roots)?;
+            flags.check_dest_path(dest, &destination_roots)?;
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
-            let selection = flags.compaction(harness)?;
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
                 (Some(path), false) => crate::hop::export_path(harness, std::path::Path::new(path)),
                 (Some(path), true) => {
@@ -622,12 +628,9 @@ pub fn run(args: &[String]) -> Result<()> {
                     }));
                 }
             }
-            // Compaction (including a source-model summary) uses the source store. The writer and
-            // optional resume use the destination's environment, or the installation --dest-root
-            // names, never the source override.
-            let (destination_roots, engine) = hop_destination(&flags, dest, destination_roots)?;
             let mut opts =
                 flags.import_opts(harness, dest, &source, &destination_roots, engine.as_deref())?;
+            // Compaction (including a source-model summary) uses the source store.
             let (selected, summary) =
                 crate::hop::compact(&source, &selection, &roots).map_err(anyhow::Error::new)?;
             opts.summary = summary;
@@ -994,6 +997,21 @@ impl Flags {
                 .map(|_| serde_json::Value::Object(serde_json::Map::new())),
             ..WriteOpts::default()
         })
+    }
+
+    /// `--dest-path` held to the destination's own rules in `roots`, the store the write goes to:
+    /// the refusal the import gives (exit 2), given before the source is read.
+    fn check_dest_path(&self, harness: HarnessId, roots: &StoreRoots) -> Result<()> {
+        let Some(path) = self.dest_path.as_deref() else {
+            return Ok(());
+        };
+        crate::harnesses::destination(harness)?
+            .validate_write(&WriteOpts {
+                roots: roots.clone(),
+                dest_path: Some(std::path::PathBuf::from(path)),
+                ..WriteOpts::default()
+            })
+            .map_err(|error| anyhow::Error::new(HopError::Unsupported(format!("{error:#}"))))
     }
 
     /// `engine` is the executable the destination installation keeps beside its store: an

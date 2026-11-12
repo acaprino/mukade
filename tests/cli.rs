@@ -967,6 +967,46 @@ fn dump_exports_a_model_summary_and_write_imports_it() {
     assert!(losses.contains("session delete ses_fork1"), "{losses}");
 }
 
+/// A `--dest-path` the destination refuses is refused before the source is read: the summarizing
+/// model never runs.
+#[test]
+fn a_refused_dest_path_stops_the_hop_before_the_summary_runs() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-dest-path-before-summary");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    let ran = scratch.join("summary-ran.txt");
+    let pi = support::launcher(
+        &scratch.join("bin"),
+        "pi",
+        &format!("echo ran>>\"{}\"\r\necho The summary.", ran.display()),
+        &format!("echo ran >> '{}'\necho The summary.", ran.display()),
+    );
+    let outside = scratch.join("outside.jsonl");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "pi",
+            &id,
+            "claude_code",
+            "--compaction",
+            "summary",
+            "--pi-exe",
+            pi.to_str().unwrap(),
+            "--dest-version",
+            "2.1.312",
+            "--dest-path",
+            outside.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("--dest-path"), "{stderr}");
+    assert!(
+        !ran.exists(),
+        "the summarizing model ran before the refusal"
+    );
+    assert!(!outside.exists(), "nothing written at the refused path");
+}
+
 #[test]
 fn hop_with_a_model_summary_keeps_the_turns_asked_for() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "cli-hop-summary");
