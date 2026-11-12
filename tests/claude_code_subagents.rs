@@ -306,3 +306,108 @@ fn an_opening_prompt_marked_is_meta_is_the_childs_prompt() {
         );
     }
 }
+
+/// A background child's report reaches its parent as an attachment (`queued_command`,
+/// `commandMode: task-notification`): the parent's model received it, so it is a user turn in
+/// place, as the plain-row form of the same notification is.
+#[test]
+fn a_background_childs_report_is_a_user_turn_in_its_parent() {
+    let roots = staged("sub-report");
+    let parent = ClaudeCode.read(&PARENT[..8], &roots).unwrap();
+    let script = script(&parent);
+    assert_eq!(script.len(), 8, "{script:#?}");
+    assert!(
+        script[6].starts_with("user: <task-notification>")
+            && script[6].contains("<result>Module B exports render().</result>"),
+        "{script:#?}"
+    );
+    assert_eq!(script[7], "step: A exports parse(), B exports render(). []");
+    let report = parent.conversation().nth(6).unwrap();
+    assert_eq!(report.id, "p-n1");
+    assert_eq!(report.raw[0]["type"], "attachment");
+}
+
+/// A parent whose child reported into it hops into every file destination: the report is a user
+/// turn there too, and the plan passes the strict provider rules.
+#[test]
+fn a_parent_with_a_report_hops_into_every_file_destination() {
+    let roots = staged("sub-report-hop");
+    let parent = ClaudeCode.read(&PARENT[..8], &roots).unwrap();
+    support::assert_hops_keeping(&parent, "Module B exports render().", "sub-report-hop");
+}
+
+/// Most reports arrive while the parent is at work: after a tool's results, before the next call.
+/// The report is a user turn there, the call before it keeps its answer, and every file
+/// destination takes it.
+#[test]
+fn a_report_between_results_and_the_next_call_hops() {
+    let row = |uuid: &str, parent: Option<&str>, extra: serde_json::Value| {
+        let mut row = serde_json::json!({
+            "parentUuid": parent, "isSidechain": false, "uuid": uuid,
+            "timestamp": "2026-11-12T10:00:00.000Z", "cwd": "D:/work", "sessionId": PARENT,
+            "version": "2.1.318",
+        });
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        row
+    };
+    let call = |uuid: &str, parent: &str, id: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "assistant", "message": {"id": format!("msg_{uuid}"),
+                "role": "assistant", "model": "claude-opus-5-5", "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": id, "name": "Bash",
+                             "input": {"command": "ls"}}]}}),
+        )
+    };
+    let result = |uuid: &str, parent: &str, id: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "user", "sourceToolAssistantUUID": parent,
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": id, "content": "ok"}]}}),
+        )
+    };
+    let rows = vec![
+        row(
+            "u1",
+            None,
+            serde_json::json!({"type": "user", "message": {"role": "user", "content": "go"}}),
+        ),
+        call("a1", "u1", "toolu_1"),
+        result("r1", "a1", "toolu_1"),
+        row(
+            "n1",
+            Some("r1"),
+            serde_json::json!({"type": "attachment", "attachment": {
+                "type": "queued_command", "commandMode": "task-notification",
+                "prompt": "<task-notification>\n<result>The build is green.</result>\n</task-notification>"}}),
+        ),
+        call("a2", "n1", "toolu_2"),
+        result("r2", "a2", "toolu_2"),
+        row(
+            "a3",
+            Some("r2"),
+            serde_json::json!({"type": "assistant", "message": {"id": "msg_a3",
+                "role": "assistant", "model": "claude-opus-5-5", "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "Done."}]}}),
+        ),
+    ];
+    let session = claude_code::parse(&rows, None).unwrap();
+    assert_eq!(
+        script(&session),
+        [
+            "user: go",
+            "step:  [\"Bash\"]",
+            "results: 1",
+            "user: <task-notification>\n<result>The build is green.</result>\n</task-notification>",
+            "step:  [\"Bash\"]",
+            "results: 1",
+            "step: Done. []",
+        ]
+    );
+    support::assert_hops_keeping(&session, "The build is green.", "sub-report-mid");
+}

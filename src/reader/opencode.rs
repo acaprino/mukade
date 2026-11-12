@@ -149,6 +149,17 @@ impl Builder {
                 raw: vec![raw.clone()],
             }),
             "assistant" => self.assistant(index, m, raw),
+            // A subagent's report, which the parent's model received as a message of its own.
+            "synthetic" if str_at(m, "/metadata/source").as_deref() == Some("subagent") => {
+                self.entries.push(Entry {
+                    id: id_of(m, index),
+                    kind: Kind::User {
+                        text: str_at(m, "/text").unwrap_or_default(),
+                        attachments: Vec::new(),
+                    },
+                    raw: vec![raw.clone()],
+                })
+            }
             // A compaction OpenCode did not complete (`failed`: the summary did not match its
             // template) was never applied; it is not the source's compaction.
             "compaction" if str_at(m, "/status").is_some_and(|status| status != "completed") => {

@@ -531,3 +531,22 @@ pub fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .map(|l| serde_json::from_str(l).expect("each line is JSON"))
         .collect()
 }
+
+/// Hop `source` into each destination mukade writes as files (Claude Code, Codex, Pi), in
+/// scratch stores: each write passes the strict gate, and `text` is in a user turn of the session
+/// read back.
+pub fn assert_hops_keeping(source: &Session, text: &str, tag: &str) {
+    for dest in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+        let scratch = scratch(dest, &format!("{tag}-{}", dest.as_str()));
+        let write_opts = opts(dest, &scratch);
+        let receipt = mukade::hop::import(dest, source, &import_opts(&write_opts, source, None))
+            .unwrap_or_else(|error| panic!("{dest:?}: {error:?}"));
+        assert_eq!(receipt.manifest["strict"]["checked"], true, "{dest:?}");
+        let written = read_destination(dest, &receipt.location);
+        assert!(
+            user_texts(&written).iter().any(|turn| turn.contains(text)),
+            "{dest:?}: {:#?}",
+            user_texts(&written)
+        );
+    }
+}

@@ -381,6 +381,28 @@ fn class_of(row: &Value) -> Class {
     }
 }
 
+/// A background task's notification as Claude Code queues it for the model: an `attachment` row,
+/// `queued_command` with `commandMode: task-notification` (a subagent's report, a background
+/// shell's end). Its text, which the model received as a user message, as it does the plain-row
+/// form of the same notification.
+fn task_notification(row: &Value) -> Option<String> {
+    let queued = row.get("type").and_then(Value::as_str) == Some("attachment")
+        && row.pointer("/attachment/type").and_then(Value::as_str) == Some("queued_command")
+        && row
+            .pointer("/attachment/commandMode")
+            .and_then(Value::as_str)
+            == Some("task-notification");
+    if !queued {
+        return None;
+    }
+    match row.pointer("/attachment/prompt")? {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => Some(super::json::blocks_text(blocks)),
+        _ => None,
+    }
+    .filter(|text| !text.trim().is_empty())
+}
+
 /// L9: the row Claude Code writes when the user interrupts a turn (`[Request interrupted by
 /// user]`, `[Request interrupted by user for tool use]`). The user never typed it.
 fn is_interruption_marker(text: &str) -> bool {
@@ -660,7 +682,11 @@ impl Builder {
             });
             return;
         }
-        let class = class_in(&row, self.sidechain);
+        let notification = task_notification(&row);
+        let class = match notification {
+            Some(_) => Class::User,
+            None => class_in(&row, self.sidechain),
+        };
         if !on_branch {
             // An abandoned row cannot change slash-command state or split an active response.
             self.flush_compaction();
@@ -676,7 +702,7 @@ impl Builder {
             });
             return;
         }
-        let text = content_text(&row);
+        let text = content_text(&row).or(notification);
         let class =
             with_command_context(&row, class, text.as_deref(), &mut self.after_prompt_command);
         // L9: a row of the resumed branch that is the harness's own interruption marker. Only

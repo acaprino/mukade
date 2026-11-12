@@ -1462,3 +1462,117 @@ fn a_split_call_takes_the_shell_declared_before_it() {
     assert_eq!(call.source_name, "exec_command");
     assert_eq!(call.canonical, Some(CanonicalTool::PowerShell));
 }
+
+/// A Codex v2 `agent_message` row: what one agent of a spawn tree sent another, `encrypted`
+/// holding its body out of reach as Codex 0.167 writes most of them.
+fn agent_message(ordinal: u64, text: &str, encrypted: bool) -> String {
+    let mut content = vec![serde_json::json!({"type": "input_text", "text": text})];
+    if encrypted {
+        content
+            .push(serde_json::json!({"type": "encrypted_content", "encrypted_content": "gAAAA"}));
+    }
+    record(
+        ordinal,
+        "response_item",
+        serde_json::json!({"type": "agent_message", "id": format!("am{ordinal}"),
+                           "author": "/root/review", "recipient": "/root", "content": content,
+                           "internal_chat_message_metadata_passthrough": null}),
+    )
+}
+
+/// What a subagent told its parent is what the parent's model received: a plaintext message is
+/// a user turn where it was received; an encrypted one stays a record, counted as left behind.
+#[test]
+fn a_subagents_readable_message_is_a_user_turn_and_an_encrypted_one_is_counted() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-agent-message");
+    let text = record(
+        0,
+        "session_meta",
+        serde_json::json!({
+            "id": THREAD, "session_id": THREAD, "cwd": "/work", "cli_version": "0.167.0",
+        }),
+    ) + &say(1, "user", "review the change")
+        + &say(2, "assistant", "asked a reviewer")
+        + &agent_message(
+            3,
+            "Message Type: MESSAGE\nTask name: /root\nSender: /root/review\n",
+            true,
+        )
+        + &agent_message(4, "The change is safe.", false)
+        + &say(5, "assistant", "the reviewer says it is safe");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-41-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    let session = codex::read_file(&file).unwrap();
+
+    let turns: Vec<String> = session
+        .conversation()
+        .map(|entry| match &entry.kind {
+            Kind::User { text, .. } => format!("user: {text}"),
+            Kind::Step { text, .. } => format!("step: {}", text.join(" ")),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            "user: review the change",
+            "step: asked a reviewer",
+            "user: The change is safe.",
+            "step: the reviewer says it is safe",
+        ]
+    );
+    let encrypted = session
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                Kind::Meta {
+                    kind: MetaKind::SubagentMessage
+                }
+            )
+        })
+        .count();
+    assert_eq!(encrypted, 1);
+
+    let scratch_opts = support::scratch(HarnessId::Pi, "codex-agent-message-plan");
+    let plan = mukade::writer::plan::plan(
+        &session,
+        HarnessId::Pi,
+        &support::opts(HarnessId::Pi, &scratch_opts),
+    );
+    assert_eq!(plan.counts.dropped_subagent_messages, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("subagent")),
+        "{losses:?}"
+    );
+}
+
+/// A parent whose subagent reported into it hops into every file destination with the report.
+#[test]
+fn a_parent_with_a_readable_report_hops_into_every_file_destination() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-report-hop");
+    let text = record(0, "session_meta", serde_json::json!({
+            "id": THREAD, "session_id": THREAD, "cwd": "/work", "cli_version": "0.167.0",
+        }))
+        + &say(1, "user", "review the change")
+        + &say(2, "assistant", "asked a reviewer")
+        + &agent_message(3, "The change is safe.", false)
+        + &say(4, "assistant", "the reviewer says it is safe")
+        // Received while the model was at work: after its reasoning, before its next call.
+        + &say(5, "user", "and the tests?")
+        + &record(6, "response_item", serde_json::json!({"type": "reasoning", "summary": [],
+                  "encrypted_content": "gAAAA"}))
+        + &agent_message(7, "The tests pass.", false)
+        + &record(8, "response_item", serde_json::json!({"type": "function_call",
+                  "call_id": "call_1", "name": "shell", "arguments": "{\"command\":[\"ls\"]}"}))
+        + &record(9, "response_item", serde_json::json!({"type": "function_call_output",
+                  "call_id": "call_1", "output": "ok"}))
+        + &say(10, "assistant", "both are fine");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-41-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    let session = codex::read_file(&file).unwrap();
+    support::assert_hops_keeping(&session, "The change is safe.", "codex-report-hop");
+    support::assert_hops_keeping(&session, "The tests pass.", "codex-report-hop-mid");
+}

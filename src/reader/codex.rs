@@ -399,6 +399,23 @@ fn class_of(row: &Value) -> Class {
             "reasoning" | "function_call" | "custom_tool_call" | "local_shell_call"
             | "web_search_call" => Class::StepPart,
             "function_call_output" | "custom_tool_call_output" => Class::Result,
+            // What another agent of the spawn tree sent this one (a subagent's report, a
+            // parent's task): a user turn where its text is readable. Codex encrypts most of
+            // them: those stay records, counted as left behind.
+            "agent_message" => {
+                let content = payload.get("content").and_then(Value::as_array);
+                let encrypted = content.is_some_and(|blocks| {
+                    blocks.iter().any(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("encrypted_content")
+                    })
+                });
+                let readable = content.is_some_and(|blocks| !blocks_text(blocks).trim().is_empty());
+                match (encrypted, readable) {
+                    (true, _) => Class::Meta(MetaKind::SubagentMessage),
+                    (false, true) => Class::User,
+                    (false, false) => Class::Meta(MetaKind::Internal),
+                }
+            }
             "message" => match payload.get("role").and_then(Value::as_str).unwrap_or("") {
                 "assistant" => Class::StepPart,
                 "developer" | "system" => Class::Meta(MetaKind::SystemPrompt),

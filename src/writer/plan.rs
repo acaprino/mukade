@@ -125,6 +125,9 @@ pub struct Counts {
     pub dropped_result_blocks: usize,
     /// Compaction summaries with no readable text (encrypted by the source's provider).
     pub dropped_unreadable_summaries: usize,
+    /// Messages between a subagent and its parent with no readable text (Codex's encrypted
+    /// `agent_message`), not written.
+    pub dropped_subagent_messages: usize,
 }
 
 impl Counts {
@@ -289,6 +292,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let mut counts = Counts {
         dropped_off_branch: source_records(MetaKind::OffBranch),
         dropped_unfinished_lines: source_records(MetaKind::Unfinished),
+        dropped_subagent_messages: source_records(MetaKind::SubagentMessage),
         ..Counts::default()
     };
     // The calls of the step just planned: which of them the destination took natively, and which
