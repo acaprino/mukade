@@ -330,14 +330,26 @@ checked. No prompt is sent.
 $env:CLAUDE_CONFIG_DIR = 'C:\work\rehearsal\claude'      # an empty scratch destination
 mukade hop claude_code YOUR_CLAUDE_SESSION_ID claude_code --children --root "$HOME\.claude" --cwd 'C:\work\my-project' --manifest C:\work\rehearsal\manifest.json
 mukade list claude_code --children                       # the children sit under the new id
-claude --resume NEW_SESSION_ID                           # then look for the subagents; send nothing
+Get-ChildItem -Recurse "$env:CLAUDE_CONFIG_DIR\projects" -Filter 'agent-*'    # the files written
+cd 'C:\work\my-project'; claude --resume NEW_SESSION_ID  # send nothing
 ```
+
+In Claude Code, with the session open:
+
+1. Press `Ctrl+O` for the transcript view and scroll to the first spawn call (`Task` or `Agent`).
+   The call is text form and ends with a line `→ <child id>`: that id is the child's in `list`.
+2. Open `/resume`: the children must **not** appear as sessions of their own.
+3. Quit, then run `mukade list claude_code --children` again: the session and its children are
+   unchanged.
 
 **Pass if**
 
 - [ ] `list` shows each child with `parent` = the new id and `kind` `spawn`.
-- [ ] Claude Code opens the new session, and its own listing of the session's agents shows the
-      children (or says what it refused).
+- [ ] `Get-ChildItem` shows an `agent-<id>.jsonl` and an `agent-<id>.meta.json` per child under
+      `projects\<project>\NEW_SESSION_ID\subagents\`.
+- [ ] Claude Code opens the session without an error, and the `→ <child id>` line of step 1 is there.
+- [ ] The children are not listed in `/resume`.
+- [ ] Anything Claude Code shows of the agents (a block, a count, a refusal) is written down below.
 
 **Write down:** what Claude Code showed, and its version.
 

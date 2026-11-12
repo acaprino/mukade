@@ -866,7 +866,7 @@ What `hop --children` writes, per destination:
 | destination | each child is | link to the parent |
 |---|---|---|
 | OpenCode | an imported session | `info.parentID`: the parent is imported first |
-| Claude Code | `<project>/<parent-id>/subagents/agent-<agentId>.jsonl` (every row `isSidechain`, `agentId`) and `agent-<agentId>.meta.json` (`agentType`, `description`, `spawnDepth`, `toolUseId`, `parentAgentId`); a child of a child is filed flat in the same folder | the folder; its id is `<parent-id>.<agentId>`, the id `list --children` shows |
+| Claude Code | `subagents/agent-<agentId>.jsonl` and its `.meta.json` in the folder of the parent's id; layout and fields: [Claude Code page, "Writing subagent sessions"](harnesses/claude-code.md) | the folder; its id is `<parent-id>.<agentId>`, the id `list --children` shows |
 | Codex | a rollout of its own | none: Codex records no link a writer can make; the manifest is the only record |
 | Pi | a session file of its own | none: Pi's `parentSession` means fork, not spawner |
 
@@ -1289,6 +1289,7 @@ start, left it absent. A test asserts the sandbox around the real binary stays e
 |---|---|
 | "mukade could not create its temporary directory" (exit 4, hop to OpenCode) | the data folder cannot be written; nothing was imported. Set `MUKADE_DATA_DIR` to an absolute writable folder |
 | External OpenCode import uncertain (exit 5) | the error names the attempted session ID: check it and its provenance in the selected database before retrying; a zero exit from the underlying command does not prove the import |
+| A child write failed (`hop --children`, exit 5) | the session and the children before the failed one are written; the receipt on stdout and `--manifest` list them, and each later child is a `not written, an earlier child failed` loss line. Fix the cause the error names, then hop again with a fresh `--dest-id`: the id of the session already written is refused, so reusing it never overwrites. Without `--dest-id` a repeated hop writes the session and its children again under new ids |
 | Manifest could not be saved | the session was still written, its receipt is on stdout: save the receipt's `manifest` field, do not run again |
 | Path problem on Windows | Pi files a session under a folder named after the whole project path, which can pass 260 characters: use a shorter `--cwd` |
 

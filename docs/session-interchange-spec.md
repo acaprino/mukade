@@ -799,13 +799,13 @@ Code: `src/children.rs`; writers: `src/writer/claude_code.rs` `write_child()`,
 | destination | link | how |
 |---|---|---|
 | OpenCode | native | the child's import document has `info.parentID` = its parent's destination id; the parent is imported first |
-| Claude Code | native | `<project>/<root-id>/subagents/agent-<agentId>.jsonl` (rows `isSidechain`, `agentId`) and `.meta.json` (`agentType`, `description`, `spawnDepth`, `toolUseId` when the spawn call became a tool call, `parentAgentId` below depth 1); child id `<root-id>.<agentId>` |
+| Claude Code | native | `subagents/agent-<agentId>.jsonl` and `.meta.json` in the folder of the root's id (layout and fields: [Claude Code page](harnesses/claude-code.md)); child id `<root-id>.<agentId>` |
 | Codex, Pi | none | a session of its own; neither has a field a writer may set for a spawner (Pi's `parentSession` is a fork) |
 
 - **The spawn call stays text form (L14)**; its text gains one line, `→ <destination child id>`.
-- **Manifest.** `children`: `[{source_id, dest_id, dest_path, link: "native"|"none", depth,
-  compaction: "none"|"native", inherits_context?}]`, in write order; a child's own `losses` are copied
-  into the session's with the prefix `child <id>: `. `inherits_context` is set for a child whose
+- **Manifest.** `children` lists one entry per child written, in write order; its keys are in
+  [usage](usage.md#carry-the-subagent-sessions). A child's own `losses` are copied into the
+  session's with the prefix `child <id>: `. `inherits_context` is set for a child whose
   `ParentKind::Spawn.inherits_context` is true: its file does not hold the conversation it began from,
   and none is added. The key is absent without `children`.
 - **Failure.** A child that cannot be written stops the children there; the session stays written.

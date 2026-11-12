@@ -422,7 +422,7 @@ fn a_claude_child_file_holds_only_the_rows_a_real_one_does() {
 /// meta.json has the keys Claude Code writes, and a description that is a string.
 #[test]
 fn a_claude_childs_meta_json_has_the_keys_a_real_one_has() {
-    let (_, meta) = write_claude_child(
+    let (file, meta) = write_claude_child(
         "cw-child-meta",
         "5ab1c0de-0000-4000-8000-0000000000aa.jsonl",
         mukade::writer::ChildOf {
@@ -432,6 +432,16 @@ fn a_claude_childs_meta_json_has_the_keys_a_real_one_has() {
         None,
     );
 
+    // Both files arrive whole through a temporary file and a rename: none is left in the folder.
+    let names: Vec<String> = std::fs::read_dir(file.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        names.iter().all(|name| name.starts_with("agent-")),
+        "{names:?}"
+    );
+    assert_eq!(names.len(), 2, "{names:?}");
     assert_eq!(meta["agentType"], "Explore");
     assert_eq!(
         meta["description"], "Explore",

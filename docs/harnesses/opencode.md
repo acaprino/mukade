@@ -666,8 +666,8 @@ Ranked by cost to a user. The rest: [../../next.md](../../next.md) and the **[U]
 1. **Only 2.1.4 is verified end to end [U].** 2.2.0 already changes media blobs, compaction start and
    instruction persistence [6][28]. Re-running reader, writer and probes against 2.2.5 in a scratch
    store settles it.
-2. **OpenCode's own `anthropic` provider [U]:** `native.signature` / `native.encrypted` written, only `openrouter` verified live; needs an API key (next.md item 14).
-3. **OpenAI encrypted reasoning through OpenRouter [U]:** written as `reasoning.encrypted`, never exercised; needs an API key (next.md item 15).
+2. **OpenCode's own `anthropic` provider [U]:** `native.signature` / `native.encrypted` written, only `openrouter` verified live; needs an API key (next.md, "Needs an API key": *OpenCode's own `anthropic` provider*).
+3. **OpenAI encrypted reasoning through OpenRouter [U]:** written as `reasoning.encrypted`, never exercised; needs an API key (next.md, "Needs an API key": *OpenAI encrypted reasoning through OpenRouter*).
 4. **Replay of a kept `reasoningDetails` array [U]:** import and storage are proven, the outgoing
    request and provider acceptance are not. Observing at least two sequential tool steps (three model
    requests) and the outgoing proof settles it [27 §3.3].
