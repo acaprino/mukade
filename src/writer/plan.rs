@@ -222,7 +222,10 @@ fn carry_attachments(
         } else if source == dest {
             Some(attachment.raw.clone())
         } else {
-            media::image_of(&attachment.raw).map(|image| media::user_block(&image, dest))
+            media::image_of(&attachment.raw)
+                .map(|image| media::user_block(&image, dest))
+                // A destination with no shape for an image answers null: nothing to carry.
+                .filter(|block| !block.is_null())
         };
         match raw {
             Some(raw) => carried.push(Attachment {

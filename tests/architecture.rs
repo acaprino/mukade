@@ -33,6 +33,7 @@ const ADAPTER_FILES: &[&str] = &[
     "src/reader/deepseek_harness.rs",
     "src/writer/claude_code.rs",
     "src/writer/codex.rs",
+    "src/writer/deepseek_harness.rs",
     "src/writer/opencode.rs",
     "src/writer/pi.rs",
     "src/detect/claude_code.rs",

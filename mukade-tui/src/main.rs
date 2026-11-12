@@ -2430,7 +2430,7 @@ mod tests {
             panic!("the hop dialog opens");
         };
         assert_eq!(hop.source.harness, HarnessId::ClaudeCode);
-        assert_eq!(hop.destinations.len(), 4);
+        assert_eq!(hop.destinations.len(), 5);
         assert!(
             hop.destinations
                 .iter()

@@ -3,6 +3,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod deepseek_harness;
 pub mod media;
 pub mod opencode;
 pub mod pi;
@@ -236,6 +237,14 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
         text.push_str(&serde_json::to_string(row).context("serialize a record")?);
         text.push('\n');
     }
+    write_bytes(path, text.as_bytes())
+}
+
+/// Write a new session file: its folders are made, and it appears whole or not at all. A file that
+/// is already there is never overwritten.
+pub(crate) fn write_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use anyhow::Context;
+    anyhow::ensure!(!path.exists(), "destination already exists: {}", path.display());
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
@@ -250,7 +259,7 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
             use std::io::Write;
             let mut file = std::fs::File::create_new(&temporary)
                 .with_context(|| format!("create {}", temporary.display()))?;
-            file.write_all(text.as_bytes())
+            file.write_all(bytes)
                 .with_context(|| format!("write {}", temporary.display()))?;
             file.sync_all()
                 .with_context(|| format!("flush {}", temporary.display()))?;

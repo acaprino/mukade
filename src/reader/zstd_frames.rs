@@ -4,7 +4,7 @@
 //! line alone, every later frame is one durable batch of lines. A crash leaves the last frame cut
 //! off. This module finds the frames without decompressing them (the structural scan dsh's own
 //! `scanZstdFrames` does), decompresses each with `ruzstd`, compares the content checksum, and
-//! reports a cut-off tail instead of failing the whole file.
+//! reports a cut-off tail instead of failing the whole file. [`encode_frame`] writes one such frame.
 
 use anyhow::{Context, Result};
 use std::io::Read;
@@ -180,6 +180,19 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded> {
     })
 }
 
+/// One frame holding `content`, compressed, with the content checksum on, as dsh writes its log
+/// frames. `ruzstd`'s encoder leaves the checksum off (it needs the `hash` feature and a hashing
+/// crate); the frame header's checksum flag is set here and the 32 bits follow the last block.
+pub fn encode_frame(content: &[u8]) -> Vec<u8> {
+    let mut frame =
+        ruzstd::encoding::compress_to_vec(content, ruzstd::encoding::CompressionLevel::Fastest);
+    debug_assert_eq!(u32_at(&frame, 0), Some(MAGIC));
+    // Frame_Header_Descriptor, bit 2: Content_Checksum_flag.
+    frame[4] |= 0b0000_0100;
+    frame.extend((xxh64(content, 0) as u32).to_le_bytes());
+    frame
+}
+
 /// XXH64, the hash a frame's content checksum is the low 32 bits of.
 pub fn xxh64(data: &[u8], seed: u64) -> u64 {
     const P1: u64 = 0x9E37_79B1_85EB_CA87;
@@ -325,6 +338,28 @@ mod tests {
         file.extend(stored_frame(b"x\n", true));
         let decoded = decode(&file).unwrap();
         assert_eq!(decoded.frames, [&b"x\n"[..]]);
+    }
+
+    #[test]
+    fn an_encoded_frame_decodes_with_its_checksum_compared() {
+        let content = "{\"type\":\"turn/start\",\"seq\":0}\n".repeat(400);
+        let frame = encode_frame(content.as_bytes());
+        assert!(frame.len() < content.len() / 4, "it is compressed");
+        let scanned = scan(&frame).unwrap();
+        assert_eq!(scanned.frames.len(), 1);
+        assert_eq!(
+            scanned.frames[0].checksum,
+            Some(xxh64(content.as_bytes(), 0) as u32)
+        );
+        let decoded = decode(&frame).unwrap();
+        assert_eq!(decoded.frames, [content.as_bytes()]);
+        let mut damaged = frame.clone();
+        let last = damaged.len() - 1;
+        damaged[last] ^= 0x01;
+        assert!(format!("{:#}", decode(&damaged).unwrap_err()).contains("checksum"));
+        // Frames of different content join into one file, as dsh's log is.
+        let file = [encode_frame(b"a\n"), encode_frame(b""), frame].concat();
+        assert_eq!(decode(&file).unwrap().frames.len(), 3);
     }
 
     #[test]

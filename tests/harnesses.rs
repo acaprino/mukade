@@ -59,16 +59,15 @@ fn hermes_and_deepseek_harness_are_named_as_users_type_them() {
     assert!(unknown.contains("hermes, deepseek_harness"), "{unknown}");
 }
 
-/// Until its writer exists, a write toward Hermes or DeepSeek Harness is refused before planning,
-/// like a write toward any harness that is no destination.
+/// Until its writer exists, a write toward Hermes is refused before planning, like a write toward
+/// any harness that is no destination.
 #[test]
 fn a_harness_without_its_writer_is_refused_as_a_destination() {
-    for id in [HarnessId::Hermes, HarnessId::DeepSeekHarness] {
-        let Err(refusal) = mukade::harnesses::destination(id) else {
-            panic!("{id} has no writer yet");
-        };
-        assert_eq!(refusal.exit_code(), 2, "{id}: {refusal}");
-    }
+    let id = HarnessId::Hermes;
+    let Err(refusal) = mukade::harnesses::destination(id) else {
+        panic!("{id} has no writer yet");
+    };
+    assert_eq!(refusal.exit_code(), 2, "{id}: {refusal}");
 }
 
 /// A root for every harness, each its own.
@@ -381,11 +380,14 @@ fn only_pi_keeps_the_end_of_a_failed_step() {
 }
 
 #[test]
-fn claude_code_and_codex_flatten_result_blocks() {
+fn claude_code_codex_and_deepseek_harness_flatten_result_blocks() {
     for id in destinations() {
         assert_eq!(
             destination(id).flattens_result_blocks(),
-            matches!(id, HarnessId::ClaudeCode | HarnessId::Codex),
+            matches!(
+                id,
+                HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::DeepSeekHarness
+            ),
             "{id}"
         );
     }

@@ -285,7 +285,7 @@ mod tests {
             .position(|l| l.harness == HarnessId::OpenCode && l.store.is_none())
             .unwrap();
         let offered = destinations(&locations, opencode);
-        assert_eq!(offered.len(), 4);
+        assert_eq!(offered.len(), 5);
         assert!(
             !offered
                 .iter()
