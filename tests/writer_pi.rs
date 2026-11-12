@@ -139,6 +139,7 @@ fn a_shell_call_carries_its_timeout_in_seconds() {
                 raw: vec![],
             },
         ],
+        branches: Vec::new(),
     };
     let opts = support::opts(HarnessId::Pi, &scratch);
     let written = for_harness(HarnessId::Pi)

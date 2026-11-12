@@ -798,6 +798,7 @@ fn select<'a>(
             Ok(std::borrow::Cow::Owned(Session {
                 meta: source.meta.clone(),
                 entries,
+                branches: Vec::new(),
             }))
         }
     }

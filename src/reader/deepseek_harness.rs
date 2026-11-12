@@ -723,6 +723,7 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
             source_sha256: None,
         },
         entries,
+        branches: Vec::new(),
     })
 }
 

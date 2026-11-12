@@ -22,8 +22,8 @@
 //! grouping (§6.2). A `Compaction` is one user message holding the source's own summary (L4).
 
 use crate::model::{
-    Attachment, CanonicalTool, Entry, Kind, Meta, ModelRef, Reasoning, ResultContent, Session,
-    StepEnd, ToolCall, ToolResult,
+    Attachment, Branch, CanonicalTool, Entry, Kind, Meta, ModelRef, Reasoning, ResultContent,
+    Session, StepEnd, ToolCall, ToolResult,
 };
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
@@ -32,9 +32,13 @@ use serde_json::{Value, json};
 pub const LIBRARY: &str = "mukade";
 
 /// Project a session into its document form.
-pub fn to_document(session: &Session) -> Value {
+/// The messages of a run of entries: the conversation among them, Meta left out.
+fn messages_of<'a>(entries: impl Iterator<Item = &'a Entry>) -> Vec<Value> {
     let mut messages = Vec::new();
-    for (n, entry) in session.conversation().enumerate() {
+    for (n, entry) in entries
+        .filter(|e| !matches!(e.kind, Kind::Meta { .. }))
+        .enumerate()
+    {
         let timestamp = timestamp_of(entry);
         match &entry.kind {
             Kind::User { text, attachments } => {
@@ -119,11 +123,29 @@ pub fn to_document(session: &Session) -> Value {
             Kind::Meta { .. } => {}
         }
     }
-    json!({
+    messages
+}
+
+pub fn to_document(session: &Session) -> Value {
+    let messages = messages_of(session.entries.iter());
+    let mut doc = json!({
         "meta": serde_json::to_value(&session.meta).unwrap_or(Value::Null),
         "library": {"name": LIBRARY, "version": env!("CARGO_PKG_VERSION")},
         "messages": messages,
-    })
+    });
+    // The branches the session left, each from the entry it leaves (null: before the first).
+    if !session.branches.is_empty() {
+        doc["branches"] = Value::Array(
+            session
+                .branches
+                .iter()
+                .map(|branch| {
+                    json!({"from": branch.from, "messages": messages_of(branch.entries.iter())})
+                })
+                .collect(),
+        );
+    }
+    doc
 }
 
 /// Rebuild a session from its document form.
@@ -134,7 +156,36 @@ pub fn from_document(doc: &Value) -> Result<Session> {
         .get("messages")
         .and_then(Value::as_array)
         .context("the document has no `messages` array")?;
+    let entries = entries_of(messages)?;
+    let mut branches = Vec::new();
+    for (n, branch) in doc
+        .get("branches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let messages = branch
+            .get("messages")
+            .and_then(Value::as_array)
+            .with_context(|| format!("branch {n} has no `messages` array"))?;
+        branches.push(Branch {
+            from: branch
+                .get("from")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            entries: entries_of(messages).with_context(|| format!("branch {n}"))?,
+        });
+    }
+    Ok(Session {
+        meta,
+        entries,
+        branches,
+    })
+}
 
+/// The entries the messages of a document stand for.
+fn entries_of(messages: &[Value]) -> Result<Vec<Entry>> {
     let mut entries: Vec<Entry> = Vec::new();
     for (n, message) in messages.iter().enumerate() {
         let role = message
@@ -328,7 +379,7 @@ pub fn from_document(doc: &Value) -> Result<Session> {
             }
         }
     }
-    Ok(Session { meta, entries })
+    Ok(entries)
 }
 
 /// A tool result's content: this library's `{text}` / `{blocks}` form, or Claude's own plain

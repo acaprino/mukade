@@ -100,6 +100,7 @@ fn session(entries: Vec<Kind>) -> Session {
                 raw: Vec::new(),
             })
             .collect(),
+        branches: Vec::new(),
     }
 }
 

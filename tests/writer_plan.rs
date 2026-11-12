@@ -29,6 +29,7 @@ fn session(entries: Vec<Entry>) -> Session {
             source_sha256: None,
         },
         entries,
+        branches: Vec::new(),
     }
 }
 

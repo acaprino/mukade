@@ -1207,6 +1207,7 @@ impl Builder {
                 source_sha256: None,
             },
             entries: self.entries,
+            branches: Vec::new(),
         })
     }
 }

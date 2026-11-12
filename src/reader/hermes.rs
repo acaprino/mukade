@@ -261,6 +261,7 @@ pub fn parse(
             source_sha256: None,
         },
         entries: builder.entries,
+        branches: Vec::new(),
     })
 }
 

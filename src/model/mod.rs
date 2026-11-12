@@ -122,6 +122,25 @@ impl ParentKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub meta: Meta,
+    /// The conversation the harness resumes: the active path.
+    pub entries: Vec<Entry>,
+    /// The branches the conversation left, when the read asked for them (`--all-branches`): each
+    /// a run of entries that hangs off an entry of the active path or of an earlier branch.
+    /// Without the request the records of an abandoned branch stay in `entries` as
+    /// [`MetaKind::OffBranch`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<Branch>,
+}
+
+/// A branch of a session: a run of entries that leaves the conversation at an earlier entry
+/// (a rewind, an edited prompt, a `/tree` navigation), kept as a branch of its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Branch {
+    /// The entry the branch leaves from: an id in [`Session::entries`] or in an earlier branch.
+    /// `None`: it leaves before the first entry (the first prompt was edited).
+    pub from: Option<String>,
+    /// The branch's own entries, after `from`; the entries before it are shared with the path it
+    /// hangs from.
     pub entries: Vec<Entry>,
 }
 
@@ -285,6 +304,7 @@ mod tests {
                 source_sha256: None,
             },
             entries,
+            branches: Vec::new(),
         }
     }
 
