@@ -8,10 +8,12 @@
 //!   substitute `[Tool result missing due to internal error]` (§6.2);
 //! - `<CLAUDE_CONFIG_DIR>\projects\<cwd, non-alphanumerics → ->\<uuid>.jsonl`; no index is needed,
 //!   a session file written outside Claude Code resumes by id [V].
+//! - a subagent session is `<project>/<parent-uuid>/subagents/agent-<agentId>.jsonl`, every row
+//!   `isSidechain` with its `agentId`, beside an `agent-<agentId>.meta.json`.
 
 use super::media::Image;
 use super::plan::{self, PlannedBlock, PlannedResult, PlannedStep};
-use super::{WriteOpts, Writer, Written, write_jsonl};
+use super::{ChildOf, WriteOpts, Writer, Written, write_jsonl, write_new_file};
 use crate::model::{HarnessId, Reasoning, Session};
 use crate::native_compaction::{NativeItem, plan_native_items};
 use crate::policy::{Clock, ReasoningPlan};
@@ -30,6 +32,16 @@ impl Writer for ClaudeCode {
         HarnessId::ClaudeCode
     }
 
+    /// A subagent's id is its parent's, a dot, and its agent id: `a` and 16 hex digits.
+    fn child_id(&self, root_id: &str) -> String {
+        let hex = uuid::Uuid::new_v4().simple().to_string();
+        format!("{root_id}.a{}", &hex[..16])
+    }
+
+    fn child_ids_hold_root(&self) -> bool {
+        true
+    }
+
     fn write_planned(
         &self,
         session: &Session,
@@ -37,6 +49,9 @@ impl Writer for ClaudeCode {
         opts: &WriteOpts,
     ) -> Result<Written> {
         crate::harnesses::destination(HarnessId::ClaudeCode)?.validate_write(opts)?;
+        if let Some(of) = &opts.subagents.of {
+            return write_child(session, plan, opts, of);
+        }
         let root =
             opts.roots.claude_config_dir.clone().context(
                 "CLAUDE_CONFIG_DIR is not set: nowhere to write the Claude Code session",
@@ -74,6 +89,93 @@ impl Writer for ClaudeCode {
             ),
         })
     }
+}
+
+/// A subagent session: the transcript and its meta.json, in the root session's own folder.
+fn write_child(
+    session: &Session,
+    plan: &plan::Plan,
+    opts: &WriteOpts,
+    of: &ChildOf,
+) -> Result<Written> {
+    let id = opts
+        .dest_id
+        .clone()
+        .context("a Claude Code subagent needs the id the hop gave it")?;
+    let (root, agent) = id
+        .split_once('.')
+        .context("a Claude Code subagent's id is its parent's, a dot, and its agent id")?;
+    anyhow::ensure!(
+        root == of.root_id,
+        "the subagent {id} does not belong to the session {}",
+        of.root_id
+    );
+    let cwd = opts
+        .cwd
+        .clone()
+        .or_else(|| session.meta.cwd.clone())
+        .context("a working directory is required")?;
+    // The folder is `<root id>` beside the root session's file, whatever that file is called: the
+    // one Claude Code looks in for that session id.
+    let folder = Path::new(&of.root_location)
+        .parent()
+        .context("the root session's file has no folder")?
+        .join(root)
+        .join("subagents");
+    let file = folder.join(format!("agent-{agent}.jsonl"));
+    let meta_file = folder.join(format!("agent-{agent}.meta.json"));
+
+    let mut clock = Clock::new(opts.now.as_deref());
+    let mut rows = rows(plan, session, root, &cwd, opts, &mut clock);
+    // A subagent's file holds its sidechain rows alone: the title and last-prompt rows belong to a
+    // session's own file and carry the root's id.
+    rows.retain(|row| !matches!(row["type"].as_str(), Some("custom-title" | "last-prompt")));
+    for row in &mut rows {
+        if let Some(map) = row.as_object_mut() {
+            map.insert("isSidechain".into(), Value::Bool(true));
+            map.insert("agentId".into(), Value::String(agent.to_string()));
+        }
+    }
+
+    let agent_type = of.agent.clone().unwrap_or_else(|| "general-purpose".into());
+    let mut meta = json!({
+        "agentType": agent_type,
+        "description": of
+            .description
+            .clone()
+            .or_else(|| session.meta.title.clone())
+            .unwrap_or_else(|| agent_type.clone()),
+        "spawnDepth": of.depth,
+        "requestShape": "foreground",
+        "requestNonInteractive": false,
+        "isBuiltIn": false,
+        "finished": true,
+    });
+    if let Some(call) = &of.tool_use_id {
+        meta["toolUseId"] = Value::String(call.clone());
+    }
+    // A child of a child is filed flat in the root's folder; its meta names the agent above it.
+    if of.depth > 1
+        && let Some((_, above)) = of.parent_id.split_once('.')
+    {
+        meta["parentAgentId"] = Value::String(above.to_string());
+    }
+    write_jsonl(&file, &rows)?;
+    if let Err(error) = write_new_file(&meta_file, &serde_json::to_string(&meta)?) {
+        let _ = std::fs::remove_file(&file);
+        return Err(error);
+    }
+    Ok(Written {
+        id: id.clone(),
+        location: file.to_string_lossy().into_owned(),
+        // A subagent is resumed through its parent.
+        resume: crate::catalog::resume(
+            HarnessId::ClaudeCode,
+            opts.exe.as_deref().unwrap_or("claude"),
+            root,
+            None,
+        ),
+    })
 }
 
 struct RowWriter<'a> {

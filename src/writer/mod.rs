@@ -92,6 +92,42 @@ pub struct WriteOpts {
     /// §4.4: destination-model facts for a deterministic native compaction boundary. The writer keeps
     /// the whole generated session and appends the destination's own record when needed.
     pub native_budget: Option<NativeBudget>,
+    /// The subagent sessions around the session being written (`hop --children`).
+    pub subagents: Subagents,
+}
+
+/// What a writer is told about the subagent sessions of the session it writes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Subagents {
+    /// The session's own calls that started a subagent: the source's call id and the id the
+    /// destination gives that subagent's session. The text form of such a call names it.
+    pub spawned: Vec<(String, String)>,
+    /// Set when the session being written is itself a subagent of another.
+    pub of: Option<ChildOf>,
+    /// `dest_id` was assigned by the hop for the tree, not reserved by its caller: a destination
+    /// that verifies a reserved id in its store need not.
+    pub assigned_id: bool,
+}
+
+/// Where a subagent session hangs in the destination.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChildOf {
+    /// The destination id of the session at the top of the tree; Claude Code files every
+    /// subagent in that session's own folder.
+    pub root_id: String,
+    /// Where that session was written ([`Written::location`]).
+    pub root_location: String,
+    /// The destination id of the session that spawned this one: the root, or another subagent.
+    pub parent_id: String,
+    /// 1 for a subagent of the root.
+    pub depth: usize,
+    /// The agent type it ran as, where the source records it.
+    pub agent: Option<String>,
+    /// The short task its parent gave it.
+    pub description: Option<String>,
+    /// The destination's own id of the parent's call that started it, when that call was written
+    /// as a tool call of the destination.
+    pub tool_use_id: Option<String>,
 }
 
 /// A session that was written.
@@ -161,6 +197,21 @@ pub trait Writer {
     /// The tools this destination offers for the pinned version (tables Â§2, L11).
     fn offered(&self) -> ToolSet {
         offered(self.harness())
+    }
+
+    /// A new session id in this harness's own shape.
+    fn new_id(&self) -> String {
+        crate::policy::new_session_id()
+    }
+
+    /// The id a subagent of the session `root_id` gets, in this harness's own shape.
+    fn child_id(&self, _root_id: &str) -> String {
+        self.new_id()
+    }
+
+    /// Whether [`Writer::child_id`] holds the root's id, so the root's is chosen before any child.
+    fn child_ids_hold_root(&self) -> bool {
+        false
     }
 
     /// Write the session as a new native session of this harness.
@@ -240,6 +291,17 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
         text.push_str(&serde_json::to_string(row).context("serialize a record")?);
         text.push('\n');
     }
+    write_new_file(path, &text)
+}
+
+/// Write `text` as a file that did not exist: whole or not at all, never over another file.
+pub(crate) fn write_new_file(path: &std::path::Path, text: &str) -> Result<()> {
+    use anyhow::Context;
+    anyhow::ensure!(
+        !path.exists(),
+        "destination already exists: {}",
+        path.display()
+    );
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;

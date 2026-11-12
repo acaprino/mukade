@@ -181,7 +181,29 @@ impl Destination for ClaudeCode {
     }
 
     fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
-        super::validate_file_write(self, opts)
+        if opts.subagents.of.is_none() {
+            return super::validate_file_write(self, opts);
+        }
+        // A subagent's id is `<parent uuid>.<agent id>`; the rest of the rules are a session's.
+        let id = opts.dest_id.as_deref().unwrap_or_default();
+        let (root, _) = id
+            .split_once('.')
+            .filter(|(_, agent)| {
+                !agent.is_empty()
+                    && agent
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            })
+            .ok_or_else(|| anyhow::anyhow!("invalid destination subagent ID"))?;
+        let mut plain = opts.clone();
+        plain.dest_id = Some(root.to_string());
+        plain.dest_path = None;
+        super::validate_file_write(self, &plain)
+    }
+
+    /// `<parent>/subagents/agent-<agentId>.jsonl` and its meta.json.
+    fn links_children(&self) -> bool {
+        true
     }
 
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {

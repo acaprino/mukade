@@ -13,6 +13,7 @@ Its step numbers are in brackets below.
 | what | before | now |
 |---|---|---|
 | Subagent sessions, phase 1 ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)) | Claude Code children unreadable and never listed; OpenCode's `parentID` missed; `parent` meant fork for Pi, spawner for Codex and OpenCode, unsaid; what a child reported to its parent read as `Meta` and lost silently | `parent_kind` (fork / spawn with call and agent) on every parent; Claude children `<parent-id>.<agentId>` read and listed (`list --children`, the TUI); reports the parent received are user turns, an encrypted Codex one counted (`dropped_subagent_messages`) |
+| Subagent sessions, phase 2 ([plan](docs/superpowers/plans/2026-11-12-subagents-phase2.md)) | a hop left a session's subagents behind; `dump` had no way to carry them | `dump --children` nests each child's document; `hop --children` writes each child as a session of its own after the parent, linked where the destination can (OpenCode `info.parentID`, checked with the real `opencode` 2.2.5 in a scratch store; Claude Code `subagents/` folder), unlinked for Codex and Pi, and lists them in `manifest.children` |
 | Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` names no dialect, so shell calls into Codex, OpenCode and Pi stay text as before, while Claude's offered set is unchanged ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
 
 ## ✅ Done on 2026-11-11
@@ -57,21 +58,28 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 9. **100 MB session speed** [13]: 1, 10, 30 MB were re-measured, 100 MB not.
 10. **Real-life shapes** [14] [U]: auto-compaction by threshold, a second compaction, rewind or
     `/tree`, an image going to Claude Code. Hop one whenever it happens.
+11. **Claude Code shows a written subagent** [15] [U]: `hop --children` writes a subagent into the
+    parent's `subagents/` folder in the shape Claude Code writes; mukade reads it back, whether Claude
+    Code lists or resumes it is not checked.
 
 ## 🟡 Needs a few model calls
 
-11. **Codex summary with its real model** [6] [U]: only a mock so far (quota).
-12. **A session bigger than the source model's window** [7] [U]: must end `summary failed`, never half a summary.
-13. **Claude Code signed thinking really validated** [8] [U]: needs a source whose last assistant
+12. **Codex summary with its real model** [6] [U]: only a mock so far (quota).
+13. **A session bigger than the source model's window** [7] [U]: must end `summary failed`, never half a summary.
+14. **Claude Code signed thinking really validated** [8] [U]: needs a source whose last assistant
     turn is a tool call with thinking; then the tampered copy must be refused.
 
 ## 🔵 Needs code (next)
 
-**Subagents, phase 2** ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)): `dump --children`
-puts each readable child in the document; `hop --children` writes each child as its own destination
-session after the parent, linked where the destination can (OpenCode `info.parentID`; Claude Code
-`subagents/` **[U]** whether it shows one), and the manifest maps source child → destination child.
-Left open by phase 1:
+**Subagents, left open** ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md); phases 1 and 2 are done above):
+
+- *Writing:* `write` imports a document's session alone and says so when it holds `children`; a
+  `write` that carries them would need a manifest of its own. A fork or inherited-context child is
+  written with what its own file holds (`inherits_context` in its manifest entry); Codex and Pi
+  children are unlinked sessions (neither records a spawner a writer can set). A repeated
+  `hop --children` writes the children again under new ids. `--compaction portable|summary` covers
+  the session alone.
+- *Claude Code, written children:* **[U]** whether Claude Code lists or resumes one ([11]).
 
 - *Claude Code:* a fork child's context (its `fork-context-ref` into the parent) is not read; a
   child whose chain continues in a sibling agent's transcript is refused (7 of 825 on the author's
@@ -96,15 +104,15 @@ Left open by phase 1:
 
 ## 🔴 Needs an API key
 
-14. **OpenCode's own `anthropic` provider** [10] [U]: mukade writes `native.signature` /
+15. **OpenCode's own `anthropic` provider** [10] [U]: mukade writes `native.signature` /
     `native.encrypted`; only `openrouter` is verified live.
-15. **OpenAI encrypted reasoning through OpenRouter** [11] [U]: written as `reasoning.encrypted`,
+16. **OpenAI encrypted reasoning through OpenRouter** [11] [U]: written as `reasoning.encrypted`,
     never exercised.
 
 ## ⚪ Needs macOS (no machine yet)
 
-16. `live` uses `ps -p` and does **not** compare `procStart` there [U]: a reused pid reads as live.
-17. The process-tree kill through `ps -A` [U] (Linux uses `/proc`; same logic).
+17. `live` uses `ps -p` and does **not** compare `procStart` there [U]: a reused pid reads as live.
+18. The process-tree kill through `ps -A` [U] (Linux uses `/proc`; same logic).
 
 ---
 

@@ -195,6 +195,12 @@ pub trait Destination: Send + Sync {
     /// silently ignored.
     fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()>;
 
+    /// Whether a subagent session written here is linked to its parent by the harness itself
+    /// (`hop --children`). A destination with no such link writes it as a session of its own.
+    fn links_children(&self) -> bool {
+        false
+    }
+
     /// Whether `id` has this harness's own session id shape, so its verdict on the id is the one
     /// given before the destination is known.
     fn claims_id(&self, _id: &str) -> bool {
@@ -426,6 +432,18 @@ impl<W: Writer + ?Sized> Writer for &W {
 
     fn offered(&self) -> crate::tools::ToolSet {
         (**self).offered()
+    }
+
+    fn new_id(&self) -> String {
+        (**self).new_id()
+    }
+
+    fn child_id(&self, root_id: &str) -> String {
+        (**self).child_id(root_id)
+    }
+
+    fn child_ids_hold_root(&self) -> bool {
+        (**self).child_ids_hold_root()
     }
 
     fn write(&self, session: &Session, opts: &WriteOpts) -> anyhow::Result<Written> {

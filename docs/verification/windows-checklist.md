@@ -315,6 +315,34 @@ Whenever one of these shows up in your normal work, hop it once and check the re
 
 ---
 
+## 15. Claude Code shows a subagent that `hop --children` wrote (5 min) 🟢
+
+New: `hop --children` writes each subagent into the written session's `subagents/` folder, in the
+shape Claude Code writes. mukade reads it back; whether Claude Code lists or resumes it is not
+checked. No prompt is sent.
+
+**Needs:** a Claude Code session with subagents (`mukade list claude_code --children` shows rows with a
+`parent`), and a scratch config folder.
+
+**Do**
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = 'C:\work\rehearsal\claude'      # an empty scratch destination
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID claude_code --children --root "$HOME\.claude" --cwd 'C:\work\my-project' --manifest C:\work\rehearsal\manifest.json
+mukade list claude_code --children                       # the children sit under the new id
+claude --resume NEW_SESSION_ID                           # then look for the subagents; send nothing
+```
+
+**Pass if**
+
+- [ ] `list` shows each child with `parent` = the new id and `kind` `spawn`.
+- [ ] Claude Code opens the new session, and its own listing of the session's agents shows the
+      children (or says what it refused).
+
+**Write down:** what Claude Code showed, and its version.
+
+---
+
 ## When you are done
 
 Send back the ticked list and the "Write down" values. Each passed block becomes a dated line in

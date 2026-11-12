@@ -12,6 +12,7 @@
 
 pub mod bus;
 pub mod cache;
+pub mod children;
 pub mod catalog;
 pub mod chat;
 pub mod cli;

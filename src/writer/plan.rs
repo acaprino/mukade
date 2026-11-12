@@ -448,7 +448,11 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                             if !counts.text_form_tools.contains(&call.source_name) {
                                 counts.text_form_tools.push(call.source_name.clone());
                             }
-                            planned.text.push(tools::text_form_call(call, dest));
+                            planned.text.push(names_child(
+                                tools::text_form_call(call, dest),
+                                &call.id,
+                                &opts.subagents,
+                            ));
                         }
                     }
                 }
@@ -541,6 +545,14 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     drop_empty_steps(&mut blocks, &mut counts);
     counts.messages_out = blocks.len();
     Plan { blocks, counts }
+}
+
+/// The text form of a call that started a subagent session says which session it became.
+fn names_child(text: String, call_id: &str, subagents: &super::Subagents) -> String {
+    match subagents.spawned.iter().find(|(call, _)| call == call_id) {
+        Some((_, child)) => format!("{text}\n→ {child}"),
+        None => text,
+    }
 }
 
 /// §7: every `tool_use` must be answered in the next message. A call the source never answered is

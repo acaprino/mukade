@@ -110,6 +110,9 @@ options:
                            false leaves them out; the same for every harness
   --children               list: also the subagent sessions (Claude Code, Codex, OpenCode); a
                            row with a parent names it and its kind, spawn or fork
+                           dump: the subagent sessions too, in the document's `children`
+                           hop: write them too, each as a session of its own after the session,
+                           linked where the destination has a link (OpenCode, Claude Code)
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
@@ -229,8 +232,11 @@ pub fn run(args: &[String]) -> Result<()> {
     if flags.archived.is_some() && command != "list" {
         anyhow::bail!("--archived is supported only by list");
     }
-    if flags.children && command != "list" {
-        anyhow::bail!("--children is supported only by list");
+    if flags.children && !matches!(command.as_str(), "list" | "dump" | "hop") {
+        anyhow::bail!("--children is supported only by list, dump and hop");
+    }
+    if flags.children && flags.from_file.is_some() && command != "list" {
+        anyhow::bail!("--children finds subagent sessions in the store: it cannot go with --from-file");
     }
     // Every harness alike: the sessions its store marks archived are kept or left out.
     let with_archived = match flags.archived.as_deref() {
@@ -539,7 +545,12 @@ pub fn run(args: &[String]) -> Result<()> {
                 eprintln!("the summarizing run left a fork in the source store: run {command}");
             }
             // Who wrote the summary travels with it, for the manifest `write` makes later.
-            let doc = crate::hop::document(&selection, summary.as_ref());
+            let doc = if flags.children {
+                crate::children::document(&selection, summary.as_ref(), &roots)
+                    .map_err(anyhow::Error::new)?
+            } else {
+                crate::hop::document(&selection, summary.as_ref())
+            };
             let doc = serde_json::to_string_pretty(&doc)?;
             match flags.output.as_deref() {
                 // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
@@ -556,6 +567,12 @@ pub fn run(args: &[String]) -> Result<()> {
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
             let session = crate::wire::from_document(&doc)?;
+            if let Some(children) = doc["children"].as_array().filter(|c| !c.is_empty()) {
+                eprintln!(
+                    "the document holds {} subagent session(s); write imports the session alone (hop --children writes them)",
+                    children.len()
+                );
+            }
             let opts = flags.import_opts(
                 session.meta.harness,
                 harness,
@@ -704,7 +721,11 @@ pub fn run(args: &[String]) -> Result<()> {
             let (selected, summary) =
                 crate::hop::compact(&source, &selection, &roots).map_err(anyhow::Error::new)?;
             opts.summary = summary;
-            let result = crate::hop::import(dest, &selected, &opts);
+            let result = if flags.children {
+                crate::children::import_with_children(dest, &selected, &source, &roots, &opts)
+            } else {
+                crate::hop::import(dest, &selected, &opts)
+            };
             deliver(result, flags.manifest.as_deref())?;
         }
         other => anyhow::bail!("unknown command {other}\n\n{USAGE}"),
@@ -908,8 +929,24 @@ fn deliver(result: Result<Receipt, HopError>, manifest: Option<&str>) -> Result<
             let written = (*receipt).clone();
             (written, Some(HopError::ResumeFailed { reason, receipt }))
         }
+        Err(HopError::ChildWriteFailed { reason, receipt }) => {
+            let written = (*receipt).clone();
+            (written, Some(HopError::ChildWriteFailed { reason, receipt }))
+        }
         Err(other) => return Err(anyhow::Error::new(other)),
     };
+    // One line per subagent session written, so a person sees where each went.
+    for child in receipt.manifest["children"].as_array().into_iter().flatten() {
+        eprintln!(
+            "child {} -> {} ({})",
+            child["source_id"].as_str().unwrap_or("?"),
+            child["dest_id"].as_str().unwrap_or("?"),
+            match child["link"].as_str() {
+                Some("native") => "linked to its parent",
+                _ => "not linked: the destination has no link",
+            }
+        );
+    }
     println!(
         "{}",
         json!({
@@ -1229,6 +1266,7 @@ impl Flags {
                 Some("native") => Some(self.native_budget()?),
                 _ => None,
             },
+            subagents: Default::default(),
         })
     }
 
