@@ -913,6 +913,36 @@ fn a_patch_that_is_not_one_plain_file_stays_text() {
 
 /// Toward Codex a patch is still text form: Codex's own apply_patch form is not written.
 #[test]
+fn a_grep_toward_claude_keeps_every_argument_or_becomes_text() {
+    // Claude's own Grep keeps its call; another harness's grep carries only what the translation
+    // writes, so line context, an offset, multiline and `-n: false` make it text form (tables §1.2).
+    for extra in [
+        json!({"-A": 2}),
+        json!({"-B": 2}),
+        json!({"offset": 5}),
+        json!({"multiline": true}),
+        json!({"-n": false}),
+    ] {
+        let mut input = json!({"pattern": "x", "path": "src"});
+        input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let out = translate(&call(CanonicalTool::Grep, "grep", input.clone()), HarnessId::ClaudeCode, None);
+        assert!(
+            matches!(out, Translation::Text { why: "an argument has no counterpart" }),
+            "{input} → {out:?}"
+        );
+        let own = translate(&call(CanonicalTool::Grep, "Grep", input.clone()), HarnessId::ClaudeCode, None);
+        assert!(own.is_call(), "Claude's own Grep {input} → {own:?}");
+    }
+    // What the translation writes anyway still translates.
+    for same in [json!({"multiline": false}), json!({"-n": true})] {
+        let mut input = json!({"pattern": "x", "path": "src"});
+        input.as_object_mut().unwrap().extend(same.as_object().unwrap().clone());
+        let out = translate(&call(CanonicalTool::Grep, "grep", input.clone()), HarnessId::ClaudeCode, None);
+        assert!(out.is_call(), "{input} → {out:?}");
+    }
+}
+
+#[test]
 fn a_patch_toward_codex_stays_text() {
     let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1")));
     assert!(matches!(
@@ -1571,7 +1601,7 @@ fn translation_is_unchanged_for_every_destination() {
         (
             "grep with an extra key",
             [
-                r#"Grep {"pattern":"x","path":"src","output_mode":"content","-n":true}"#,
+                r#"text: an argument has no counterpart"#,
                 r#"text: no grep tool offered"#,
                 r#"text: an argument has no counterpart"#,
                 r#"text: an argument has no counterpart"#,

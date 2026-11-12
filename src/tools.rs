@@ -440,7 +440,7 @@ pub(crate) struct GrepCall {
 
 /// Read a grep call in any harness's spelling; `Err` is its text form. Another `output_mode` and a
 /// file `type` block it (tables §4.4, L13). Line numbers and `multiline` are blocked by the
-/// destination's accepted keys; Claude Code's accept them.
+/// destination's accepted keys; Claude Code's serve its own Grep, so its adapter refuses them.
 pub(crate) fn grep_call(input: &Value) -> Result<GrepCall, Translation> {
     if let Some(mode) = arg(input, "output_mode").and_then(Value::as_str)
         && mode != "files_with_matches"

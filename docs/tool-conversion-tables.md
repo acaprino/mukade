@@ -7,7 +7,7 @@ readers: `src/model/tool.rs` `CanonicalTool`.
 
 | | |
 |---|---|
-| **Last updated** | 2026-11-11 |
+| **Last updated** | 2026-11-12 |
 | **Verified against** | Claude Code 2.1.311 · Codex CLI 0.164.0 (rollouts of Codex Desktop up to 0.164.0-alpha.11.1; code mode §5 on Codex Desktop 0.167.0 / 0.167.1 rollouts) · OpenCode 2.1.4 · Pi 1.2.0 |
 | **Status** | draft; policy (§1) decided; tables are what mukade's writers do (spec L10–L14) |
 | **Owner document** | [`session-interchange-spec.md`](session-interchange-spec.md) §3 and §8 (requirements L10–L14) |
@@ -258,7 +258,8 @@ and its patch form is not written (`src/tools.rs` `edit()`).
   (Claude's default); `type`; `-n`, `multiline`, `offset`, one-sided context (`-A`, `-B`); context
   into OpenCode.
 - Into Claude from OpenCode or Pi: `literal` is text form (Claude's Grep is regex only); otherwise
-  the call gets `output_mode: "content"` with `-n: true`, which is what those tools print.
+  the call gets `output_mode: "content"` with `-n: true`, which is what those tools print. So
+  `-n: true` and `multiline: false` are kept there; `-n: false` and `multiline: true` are text form.
 
 **Glob**
 - `pattern`, `path` everywhere. OpenCode adds `hidden`, `limit`; Pi `find` and `ls` add `limit`.
@@ -345,6 +346,7 @@ offered set where enabled ([`next.md`](../next.md), destination shell).
 
 | date | change |
 |---|---|
+| 2026-11-12 | Grep into Claude from another harness: `-A`, `-B`, `offset`, `multiline: true` and `-n: false` are text form, as §4.4 says (they were dropped without notice). |
 | 2026-11-11 | L10 built (§5). Tables checked against the code: shell calls need `--dest-shell` outside Claude; `PowerShell` into Claude is text form, into Codex writes no `shell` argument, into Pi is `bash`; text form not cut; Grep `output_mode`; manifest key `tool_calls`; `--tool-map`, `--without-tools`, reading table. |
 | 2026-10-28 | Claude Code column; argument policy explicit and implemented; every spelling accepted; Pi `grep`/`find`/`ls` schemas from source; OpenCode `background`/`replaceAll`, single-entry Pi edits, unanswered calls, id rewriting toward Anthropic. |
 | 2026-10-27 | First version. Policy decided ("translate to the equivalent where possible, else text form"). |

@@ -335,6 +335,18 @@ fn grep(source_name: &str, input: &Value) -> Translation {
             input: input.clone(),
         };
     }
+    // The accepted keys are Claude's own; a translated call carries only what is written below,
+    // so line context, an offset, multiline and unnumbered lines have no counterpart (tables §1.2).
+    let dropped = ["-A", "-B", "offset"]
+        .iter()
+        .any(|key| tools::arg(input, key).is_some())
+        || tools::arg(input, "multiline").and_then(Value::as_bool) == Some(true)
+        || tools::arg(input, "-n").and_then(Value::as_bool) == Some(false);
+    if dropped {
+        return Translation::Text {
+            why: "an argument has no counterpart",
+        };
+    }
     let GrepCall {
         mut pairs,
         filter,
