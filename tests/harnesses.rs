@@ -383,6 +383,8 @@ fn only_the_harnesses_with_a_tree_or_pages_read_every_branch() {
         let adapter = get(id);
         let by_path = adapter.read_all_branches(&support::source_path(id));
         let by_id = adapter.read_all_branches_by_id("any-id", &StoreRoots::default());
+        assert_eq!(adapter.reads_all_branches(), by_path.is_some(), "{id}");
+        assert_eq!(adapter.reads_all_branches(), by_id.is_some(), "{id}");
         if matches!(id, HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Pi) {
             let session = by_path
                 .unwrap_or_else(|| panic!("{id} reads every branch"))
@@ -592,6 +594,31 @@ fn only_a_claude_subagent_and_any_deepseek_session_are_refused_a_resume() {
             );
         } else {
             assert_eq!(refusal, None, "{id}");
+        }
+    }
+}
+
+/// The question a caller asks before offering `--all-branches`: answered for every harness without
+/// reading, the same through the library's `hop::reads_all_branches` and a boxed reader, which
+/// forwards the reads themselves too.
+#[test]
+fn every_harness_says_whether_it_reads_every_branch_without_reading() {
+    for adapter in all() {
+        let id = adapter.reader().harness();
+        let expected = matches!(id, HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Pi);
+        assert_eq!(adapter.reads_all_branches(), expected, "{id}");
+        assert_eq!(mukade::hop::reads_all_branches(id), expected, "{id}");
+        let boxed = mukade::reader::for_harness(id).unwrap();
+        // Codex answers at the adapter (its reader keeps the default); the others at the reader.
+        if id != HarnessId::Codex {
+            assert_eq!(boxed.reads_all_branches(), expected, "{id}");
+            assert_eq!(
+                boxed
+                    .read_all_branches("any-id", &StoreRoots::default())
+                    .is_some(),
+                expected,
+                "{id}"
+            );
         }
     }
 }

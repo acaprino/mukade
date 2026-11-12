@@ -156,6 +156,13 @@ pub trait Harness: Send + Sync {
         self.reader().read_all_branches(id, roots)
     }
 
+    /// Whether this harness's sessions are read with every branch ([`Harness::read_all_branches`]
+    /// answers `Some`), asked without reading a session. A caller offering `--all-branches` asks
+    /// this instead of naming harnesses.
+    fn reads_all_branches(&self) -> bool {
+        self.reader().reads_all_branches()
+    }
+
     /// Why this harness cannot resume `info` in its own interface, or `None` when it can. A
     /// session mukade lists is not always one the harness resumes by itself.
     fn resume_refusal(&self, info: &crate::reader::SessionInfo) -> Option<String> {
@@ -469,6 +476,18 @@ impl<R: Reader + ?Sized> Reader for &R {
 
     fn read(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<Session> {
         (**self).read(id, roots)
+    }
+
+    fn read_all_branches(&self, id: &str, roots: &StoreRoots) -> Option<anyhow::Result<Session>> {
+        (**self).read_all_branches(id, roots)
+    }
+
+    fn read_file_all_branches(&self, path: &Path) -> Option<anyhow::Result<Session>> {
+        (**self).read_file_all_branches(path)
+    }
+
+    fn reads_all_branches(&self) -> bool {
+        (**self).reads_all_branches()
     }
 }
 

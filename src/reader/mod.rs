@@ -73,6 +73,12 @@ pub trait Reader {
     fn read_file_all_branches(&self, _path: &std::path::Path) -> Option<anyhow::Result<Session>> {
         None
     }
+
+    /// Whether [`Reader::read_all_branches`] reads this harness's branches, answered without
+    /// reading anything. It holds exactly when the two reads above answer `Some`.
+    fn reads_all_branches(&self) -> bool {
+        false
+    }
 }
 
 /// A session a reader could not hand back for a reason that is a refusal, not a file it failed to

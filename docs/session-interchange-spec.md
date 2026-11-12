@@ -95,6 +95,8 @@ pub struct HopRequest {
     pub write: WriteDetails,             // destination facts: version, protocol, shell, offered tools,
                                          // provider, model, project id, clock, executable
     pub children: bool,                  // also write the source's subagent sessions (§6.4)
+    pub all_branches: bool,              // read the source with every branch it keeps (CLI --all-branches);
+                                         // a source that keeps one branch is refused before anything is read
 }
 // HopRequest::new(source, dest, roots): every option at its default, so a caller names only what it changes
 
@@ -130,8 +132,9 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError>;
 pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError>;  // destination in its own stores
 pub fn export(src: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError>;  // read + reader rules
 pub fn export_path(harness: HarnessId, path: &Path) -> Result<Session, HopError>;  // a session file
-pub fn export_all_branches(src: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError>;   // Codex only
-pub fn export_path_all_branches(harness: HarnessId, path: &Path) -> Result<Session, HopError>;  // Codex only
+pub fn export_all_branches(src: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError>;   // where reads_all_branches
+pub fn export_path_all_branches(harness: HarnessId, path: &Path) -> Result<Session, HopError>;  // where reads_all_branches
+pub fn reads_all_branches(harness: HarnessId) -> bool;  // Claude Code, Codex, Pi today; asked without reading
 pub fn import(dest: HarnessId, s: &Session, opts: &ImportOpts) -> Result<Receipt, HopError>;
 pub fn hop_session(dest: HarnessId, s: &Session, c: &Compaction, opts: &ImportOpts) -> Result<Receipt, HopError>;
 pub fn compact(s: &Session, c: &Compaction, roots: &StoreRoots) -> Result<(Cow<Session>, Option<SummaryFacts>), HopError>;  // §4.5

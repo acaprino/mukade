@@ -441,7 +441,7 @@ fn codex_reads_the_turns_a_rollback_dropped_as_branches() {
 // writers: branches travel where the destination keeps a tree
 
 use mukade::writer::plan::{BranchKeeping, PlannedBlock, plan};
-use mukade::writer::{WriteOpts, Writer};
+use mukade::writer::WriteOpts;
 
 fn opts_for(_dest: HarnessId) -> WriteOpts {
     WriteOpts {
@@ -720,6 +720,63 @@ fn a_destination_with_one_conversation_gets_the_active_path_and_a_count() {
         "{manifest}"
     );
     assert_eq!(manifest["counts"]["messages_out"], 4);
+}
+
+/// A library caller asks for every branch with `HopRequest::all_branches`, the CLI's
+/// `--all-branches`: off by default, the tree travels when set, and a source that keeps one branch
+/// is refused before anything is read or written.
+#[test]
+fn a_library_hop_carries_the_branches_when_the_request_asks() {
+    use mukade::hop::{HopError, HopRequest, SessionRef, hop};
+    let scratch = staged_claude_tree("branches-library-hop");
+    let roots = support::roots(&scratch);
+    let base = HopRequest {
+        cwd: Some("/work".into()),
+        ..HopRequest::new(
+            SessionRef::id(HarnessId::ClaudeCode, "s-1"),
+            HarnessId::Pi,
+            roots.clone(),
+        )
+    };
+    assert!(!base.all_branches);
+
+    let plain = hop(&base).unwrap();
+    assert_eq!(
+        plain.manifest["counts"]["branches_kept"], 0,
+        "{}",
+        plain.manifest
+    );
+    let written = mukade::reader::pi::read_file_all_branches(Path::new(&plain.location)).unwrap();
+    assert!(written.branches.is_empty());
+
+    let receipt = hop(&HopRequest {
+        all_branches: true,
+        ..base.clone()
+    })
+    .unwrap();
+    assert_eq!(
+        receipt.manifest["counts"]["branches_kept"], 2,
+        "{}",
+        receipt.manifest
+    );
+    let written = mukade::reader::pi::read_file_all_branches(Path::new(&receipt.location)).unwrap();
+    assert_eq!(written.branches.len(), 2);
+
+    let before = support::files_under(&scratch.join("home"));
+    let refused = hop(&HopRequest {
+        all_branches: true,
+        ..HopRequest::new(
+            SessionRef::id(HarnessId::OpenCode, "x"),
+            HarnessId::Pi,
+            roots,
+        )
+    })
+    .unwrap_err();
+    assert!(
+        matches!(&refused, HopError::Unsupported(reason) if reason.contains("claude_code, codex, pi")),
+        "{refused:?}"
+    );
+    assert_eq!(support::files_under(&scratch.join("home")), before);
 }
 
 // ---------------------------------------------------------------------------------------------

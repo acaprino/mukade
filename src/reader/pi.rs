@@ -706,6 +706,10 @@ impl Reader for Pi {
         Some(read_file_all_branches(path))
     }
 
+    fn reads_all_branches(&self) -> bool {
+        true
+    }
+
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         read_in(id, roots, false)
     }

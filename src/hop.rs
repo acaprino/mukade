@@ -186,6 +186,10 @@ pub struct HopRequest {
     pub write: WriteDetails,
     /// Carry the source's subagent sessions too ([`crate::children::import_with_children`]).
     pub children: bool,
+    /// Read the source with every branch it keeps ([`export_all_branches`], the CLI's
+    /// `--all-branches`). A source whose harness keeps one branch only is refused before anything
+    /// is read; [`reads_all_branches`] answers that up front.
+    pub all_branches: bool,
 }
 
 impl HopRequest {
@@ -202,6 +206,7 @@ impl HopRequest {
             roots,
             write: WriteDetails::default(),
             children: false,
+            all_branches: false,
         }
     }
 }
@@ -570,7 +575,11 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
 /// portable JanuraCode, say) cannot share one [`StoreRoots`].
 pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
     crate::harnesses::destination(req.dest)?;
-    let source = export(&req.source, &req.roots)?;
+    let source = if req.all_branches {
+        export_all_branches(&req.source, &req.roots)?
+    } else {
+        export(&req.source, &req.roots)?
+    };
     let facts = SourceFacts::of(&source);
     let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
     let opts = ImportOpts {
@@ -1097,6 +1106,12 @@ pub fn export_all_branches(source: &SessionRef, roots: &StoreRoots) -> Result<Se
     all_branches_supported(source.harness, read)
 }
 
+/// Whether `harness`'s sessions are read with every branch ([`export_all_branches`],
+/// [`HopRequest::all_branches`]), answered without reading anything.
+pub fn reads_all_branches(harness: HarnessId) -> bool {
+    crate::harnesses::get(harness).reads_all_branches()
+}
+
 /// [`export_path`] with every branch the source keeps (see [`export_all_branches`]).
 pub fn export_path_all_branches(
     harness: HarnessId,
@@ -1114,11 +1129,19 @@ fn all_branches_supported(
 ) -> Result<Session, HopError> {
     match read {
         Some(read) => read.map_err(classify_read),
-        None => Err(HopError::Unsupported(format!(
-            "--all-branches (every branch, abandoned ones included) is read for Claude Code, Codex \
-             and Pi sessions only; {} sessions are read as the branch the harness resumes",
-            harness.as_str()
-        ))),
+        None => {
+            let readers: Vec<&str> = HarnessId::ALL
+                .into_iter()
+                .filter(|&id| reads_all_branches(id))
+                .map(HarnessId::as_str)
+                .collect();
+            Err(HopError::Unsupported(format!(
+                "--all-branches (every branch, abandoned ones included) is read for {} sessions \
+                 only; {} sessions are read as the branch the harness resumes",
+                readers.join(", "),
+                harness.as_str()
+            )))
+        }
     }
 }
 

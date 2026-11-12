@@ -179,6 +179,10 @@ impl Harness for Codex {
         ))
     }
 
+    fn reads_all_branches(&self) -> bool {
+        true
+    }
+
     // `exec resume --ephemeral` still appends to the rollout it resumes; a fork does not.
     fn summary_command(
         &self,

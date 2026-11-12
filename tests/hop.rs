@@ -38,6 +38,7 @@ fn request(source: HarnessId, dest: HarnessId, tag: &str) -> (HopRequest, PathBu
         roots: roots(&scratch),
         write: support::details(&opts),
         children: false,
+        all_branches: false,
     };
     (request, scratch)
 }
