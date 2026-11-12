@@ -982,7 +982,7 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --de
 
 **Use it from a program.** Mukade is a library first: `mukade::hop(&HopRequest { … })` does what the
 command does, with typed errors (`HopError::ResumeFailed` carries the written session's receipt).
-See the [README](../README.md#library).
+See the [README](../README.md#rust-library).
 
 | option | rule |
 |---|---|
