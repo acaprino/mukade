@@ -38,12 +38,23 @@ impl Harness for DeepSeekHarness {
 
     /// A subagent's or a fork's log names its parent in its own header.
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
-        let listed = super::listed_stats(self, roots);
-        let forks = Some(match &listed.sessions {
-            Ok(_) => Err("not counted yet".to_string()),
-            Err(error) => Err(error.clone()),
-        });
-        StoreStats { forks, ..listed }
+        let counted = match roots.dsh_sessions() {
+            Some(sessions) => crate::reader::deepseek_harness::store_counts(&sessions),
+            None => Err(anyhow::anyhow!("no DeepSeek Harness sessions folder to count")),
+        };
+        match counted {
+            Ok((sessions, forks)) => StoreStats {
+                sessions: Ok(sessions),
+                forks: Some(Ok(forks)),
+            },
+            Err(error) => {
+                let error = format!("{error:#}");
+                StoreStats {
+                    sessions: Err(error.clone()),
+                    forks: Some(Err(error)),
+                }
+            }
+        }
     }
 
     fn summary_command(

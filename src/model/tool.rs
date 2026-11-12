@@ -110,6 +110,26 @@ impl CanonicalTool {
         }
     }
 
+    /// The canonical form of a DeepSeek Harness tool name (0.2.2). `apply_patch` takes a Codex
+    /// patch, which the translator reads as the write or edit it makes.
+    pub fn from_dsh(name: &str) -> CanonicalTool {
+        match name {
+            "read" => CanonicalTool::Read,
+            "write" => CanonicalTool::Write,
+            "edit" | "apply_patch" => CanonicalTool::Edit,
+            "bash" => CanonicalTool::Bash,
+            "pwsh" => CanonicalTool::PowerShell,
+            "grep" => CanonicalTool::Grep,
+            "glob" => CanonicalTool::Glob,
+            "web_fetch" => CanonicalTool::WebFetch,
+            "web_search" => CanonicalTool::WebSearch,
+            "subagent" => CanonicalTool::Agent,
+            "skill" => CanonicalTool::Skill,
+            "ask_user_question" => CanonicalTool::AskUserQuestion,
+            other => CanonicalTool::Other(other.to_string()),
+        }
+    }
+
     /// The canonical form of a Codex tool name. A Codex Desktop `exec` script the reader could not
     /// split into its calls (spec L10) stays one opaque call, and travels in text form.
     pub fn from_codex(name: &str) -> CanonicalTool {

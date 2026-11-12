@@ -213,7 +213,7 @@ fn the_store_env_names_the_root_or_clears_opencode() {
 
 #[test]
 fn read_file_reads_each_fixture() {
-    for id in WITH_FIXTURE {
+    for id in WITH_FIXTURE.into_iter().chain([HarnessId::DeepSeekHarness]) {
         let session = get(id)
             .read_file(&support::source_path(id))
             .unwrap_or_else(|error| panic!("{id}: {error:#}"));

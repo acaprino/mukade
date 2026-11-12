@@ -20,6 +20,9 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
+# Decodes the frames of a DeepSeek Harness session log. Without its `hash` feature: the content
+# checksum is compared by `reader::zstd_frames`, which carries its own XXH64.
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
 
 [build-dependencies]
 embed-resource = "3"
