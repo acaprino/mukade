@@ -33,6 +33,29 @@ impl Harness for OpenCode {
         crate::reader::opencode::read_file(path)
     }
 
+    fn chat_mcp_target(
+        &self,
+        vars: &crate::catalog::Vars,
+        server: &crate::chat::connect::Server,
+    ) -> Option<crate::chat::connect::Target> {
+        let folder = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        let path = folder("XDG_CONFIG_HOME")
+            .or_else(|| vars.home.as_ref().map(|home| home.join(".config")))?
+            .join("opencode")
+            .join("opencode.json");
+        Some(crate::chat::connect::Target {
+            path,
+            format: crate::chat::connect::Format::Json,
+            tables: vec!["mcp", "servers"],
+            entry: serde_json::json!({"type": "remote", "url": server.endpoint, "oauth": false, "protocol": "legacy",
+                "headers": server.headers(), "timeout": {"execution": 330000}}),
+        })
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {

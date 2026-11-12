@@ -30,6 +30,28 @@ impl Harness for ClaudeCode {
         crate::reader::claude_code::read_file(path)
     }
 
+    fn chat_mcp_target(
+        &self,
+        vars: &crate::catalog::Vars,
+        server: &crate::chat::connect::Server,
+    ) -> Option<crate::chat::connect::Target> {
+        let folder = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        // With `CLAUDE_CONFIG_DIR` the user file moves into that folder.
+        let path = folder("CLAUDE_CONFIG_DIR")
+            .or_else(|| vars.home.clone())?
+            .join(".claude.json");
+        Some(crate::chat::connect::Target {
+            path,
+            format: crate::chat::connect::Format::Json,
+            tables: vec!["mcpServers"],
+            entry: serde_json::json!({"type": "http", "url": server.endpoint, "headers": server.headers()}),
+        })
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {

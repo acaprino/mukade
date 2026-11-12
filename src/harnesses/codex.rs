@@ -30,6 +30,28 @@ impl Harness for Codex {
         crate::reader::codex::read_file(path)
     }
 
+    fn chat_mcp_target(
+        &self,
+        vars: &crate::catalog::Vars,
+        server: &crate::chat::connect::Server,
+    ) -> Option<crate::chat::connect::Target> {
+        let folder = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        let path = folder("CODEX_HOME")
+            .or_else(|| vars.home.as_ref().map(|home| home.join(".codex")))?
+            .join("config.toml");
+        Some(crate::chat::connect::Target {
+            path,
+            format: crate::chat::connect::Format::Toml,
+            tables: vec!["mcp_servers"],
+            // A wait may last 300 s: the tool timeout sits above it.
+            entry: serde_json::json!({"url": server.endpoint, "http_headers": server.headers(), "tool_timeout_sec": 330}),
+        })
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {

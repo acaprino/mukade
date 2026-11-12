@@ -1,5 +1,6 @@
 //! Authenticated local MCP chat service and official SDK client.
 pub mod client;
+pub mod connect;
 mod http_body;
 pub mod lifecycle;
 pub mod security;

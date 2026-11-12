@@ -60,6 +60,16 @@ pub trait Harness: Send + Sync {
         crate::reader::origin::Origin::Unknown
     }
 
+    /// Where this harness keeps its user-scope MCP servers, and the entry that names the
+    /// local chat service there (`None`: mukade writes no such configuration for it).
+    fn chat_mcp_target(
+        &self,
+        _vars: &crate::catalog::Vars,
+        _server: &crate::chat::connect::Server,
+    ) -> Option<crate::chat::connect::Target> {
+        None
+    }
+
     /// The folder that holds the store, when the root names a file inside it.
     fn store_folder(&self, root: &Path) -> PathBuf {
         root.to_path_buf()

@@ -68,7 +68,11 @@ pub fn contains(parent: &Path, child: &Path) -> bool {
 pub fn create_private_directory(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {
-            let f = platform::open(path, false, false)?;
+            // Already private: nothing to change, and no right to change it is asked for.
+            if verify_directory(path).is_ok() {
+                return Ok(());
+            }
+            let f = platform::open(path, true, false)?;
             platform::validate(&f, true, false)?;
             platform::harden(&f, true)?;
             platform::validate(&f, true, true)

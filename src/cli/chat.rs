@@ -20,6 +20,9 @@ mukade chat: one shared local chat service for harness instances
   mukade chat stop                    stop it; rooms and messages stay
   mukade chat serve [--port <n>]      run it in the foreground (Ctrl-C stops it)
   mukade chat tools                   every operation with its arguments, as JSON
+  mukade chat connect <harness> [--dry-run]     add the running service to the harness's
+                                      own MCP servers (user scope); no credential is shown
+  mukade chat disconnect <harness> [--dry-run]  take that entry out again
   mukade chat <operation> [--<argument> <value>]... [--json] [--output <file>]
 
 Operations: open close reopen delete rooms join rejoin leave members candidates bind unbind
@@ -45,6 +48,12 @@ pub enum Command {
     Serve {
         port: Option<u16>,
         parent_id: Option<String>,
+    },
+    /// Write (`remove: false`) or take out the service's entry in a harness's MCP configuration.
+    Connect {
+        harness: crate::HarnessId,
+        remove: bool,
+        dry_run: bool,
     },
     Domain(DomainCommand),
 }
@@ -143,6 +152,36 @@ pub fn parse(args: &[String]) -> Result<Command, ChatError> {
                 "tools" => Command::Tools,
                 "status" => Command::Status,
                 _ => Command::Stop,
+            });
+        }
+        "connect" | "disconnect" => {
+            let mut harness = None;
+            let mut dry_run = false;
+            for arg in rest {
+                match arg.as_str() {
+                    "--dry-run" => dry_run = true,
+                    "--project" => {
+                        return Err(usage(
+                            "project scope is not written: the credential would sit in a file that can be committed; the user scope serves every project",
+                        ));
+                    }
+                    other if other.starts_with("--") => {
+                        return Err(usage(format!("unknown option {other} for chat {name}")));
+                    }
+                    other if harness.is_none() => {
+                        harness = Some(other.parse::<crate::HarnessId>().map_err(|_| {
+                            usage(format!(
+                                "unknown harness {other}; one of claude_code, codex, opencode, pi"
+                            ))
+                        })?);
+                    }
+                    other => return Err(usage(format!("unexpected argument {other}"))),
+                }
+            }
+            return Ok(Command::Connect {
+                harness: harness.ok_or_else(|| usage(format!("chat {name} needs a harness")))?,
+                remove: name == "disconnect",
+                dry_run,
             });
         }
         "start" | "serve" => {
@@ -418,6 +457,34 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             Command::Stop => print_value(stdout, &lifecycle::stop(&paths).await?),
             Command::Serve { port, parent_id } => {
                 lifecycle::serve(paths.clone(), port, parent_id).await
+            }
+            Command::Connect {
+                harness,
+                remove,
+                dry_run,
+            } => {
+                // The entry names the running service: its endpoint and credential are read
+                // from the service's own protected folder, and the service must be running.
+                let config = lifecycle::client_config(&paths)?;
+                let server = crate::chat::connect::Server {
+                    endpoint: config.endpoint,
+                    token: config.token,
+                    service_id: config.service_id,
+                };
+                let target = crate::chat::connect::target_of(
+                    harness,
+                    &crate::catalog::Vars::from_env(),
+                    &server,
+                )?;
+                let act = if remove {
+                    crate::chat::connect::disconnect
+                } else {
+                    crate::chat::connect::connect
+                };
+                print_value(
+                    stdout,
+                    &act(&target, &paths.bus_dir, harness.as_str(), dry_run)?,
+                )
             }
             Command::Domain(domain) => {
                 let client = ChatClient::connect(&lifecycle::client_config(&paths)?).await?;

@@ -30,6 +30,31 @@ impl Harness for Pi {
         crate::reader::pi::read_file(path)
     }
 
+    fn chat_mcp_target(
+        &self,
+        vars: &crate::catalog::Vars,
+        server: &crate::chat::connect::Server,
+    ) -> Option<crate::chat::connect::Target> {
+        let folder = |name: &str| {
+            std::env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        let path = folder("PI_CODING_AGENT_DIR")
+            .or_else(|| {
+                vars.home
+                    .as_ref()
+                    .map(|home| home.join(".pi").join("agent"))
+            })?
+            .join("mcp.json");
+        Some(crate::chat::connect::Target {
+            path,
+            format: crate::chat::connect::Format::Json,
+            tables: vec!["mcpServers"],
+            entry: serde_json::json!({"url": server.endpoint, "headers": server.headers(), "timeout": 330, "exposure": "direct"}),
+        })
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {
