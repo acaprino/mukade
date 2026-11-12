@@ -1134,8 +1134,90 @@ fn a_subagent_rollout_names_its_parent_thread() {
         std::fs::write(&file, text).unwrap();
         codex::read_file(&file).expect("the rollout reads")
     };
-    assert_eq!(write("sub", parent).meta.parent.as_deref(), Some(parent));
-    assert_eq!(write("root", THREAD).meta.parent, None);
+    let sub = write("sub", parent).meta;
+    assert_eq!(sub.parent.as_deref(), Some(parent));
+    assert_eq!(sub.parent_kind, Some(mukade::model::ParentKind::spawn()));
+    let root = write("root", THREAD).meta;
+    assert_eq!(root.parent, None);
+    assert_eq!(root.parent_kind, None);
+}
+
+/// A subagent's `session_meta` as Codex 0.167 writes it: `parent_thread_id` names the thread that
+/// spawned this one, and `source` says how. `session_id` here names another thread.
+fn spawned(tag: &str, meta: serde_json::Value) -> mukade::model::Meta {
+    let scratch = support::scratch(HarnessId::Codex, tag);
+    let mut payload = serde_json::json!({
+        "id": THREAD, "session_id": "01a181df-0000-7000-8000-0000000000a0", "cwd": "/work",
+        "cli_version": "0.167.0",
+    });
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(meta.as_object().unwrap().clone());
+    let text =
+        record(0, "session_meta", payload) + &say(1, "user", "go") + &say(2, "assistant", "done");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-41-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    codex::read_file(&file).expect("the rollout reads").meta
+}
+
+/// `parent_thread_id` is the spawner, whatever `session_id` says; the role the subagent ran as
+/// is its agent.
+#[test]
+fn a_subagent_names_the_thread_that_spawned_it_and_its_role() {
+    use mukade::model::ParentKind;
+    let spawner = "01a181df-0000-7000-8000-0000000000b1";
+    let meta = spawned(
+        "codex-spawned-role",
+        serde_json::json!({
+            "parent_thread_id": spawner,
+            "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": spawner, "depth": 2, "agent_path": "/root/a/b",
+                "agent_nickname": "Curie", "agent_role": "worker",
+            }}},
+            "thread_source": "subagent", "agent_role": "worker",
+        }),
+    );
+    assert_eq!(meta.parent.as_deref(), Some(spawner));
+    assert_eq!(
+        meta.parent_kind,
+        Some(ParentKind::Spawn {
+            call_id: None,
+            agent: Some("worker".into())
+        })
+    );
+
+    let only_in_source = spawned(
+        "codex-spawned-source",
+        serde_json::json!({
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": spawner, "depth": 2}}},
+        }),
+    );
+    assert_eq!(only_in_source.parent.as_deref(), Some(spawner));
+    assert_eq!(only_in_source.parent_kind, Some(ParentKind::spawn()));
+}
+
+/// A guardian review is a thread Codex ran for another; its agent says so.
+#[test]
+fn a_guardian_review_is_spawned_by_the_thread_it_reviews() {
+    use mukade::model::ParentKind;
+    let reviewed = "01a181df-0000-7000-8000-0000000000c1";
+    let meta = spawned(
+        "codex-guardian",
+        serde_json::json!({
+            "session_id": reviewed, "parent_thread_id": reviewed,
+            "source": {"subagent": {"other": "guardian"}}, "thread_source": "guardian_review",
+            "agent_role": null,
+        }),
+    );
+    assert_eq!(meta.parent.as_deref(), Some(reviewed));
+    assert_eq!(
+        meta.parent_kind,
+        Some(ParentKind::Spawn {
+            call_id: None,
+            agent: Some("guardian_review".into())
+        })
+    );
 }
 
 // ------------------------------------------------------------------------- L10: code mode

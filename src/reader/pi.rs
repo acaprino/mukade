@@ -14,8 +14,8 @@
 use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    Session, StepEnd, ToolCall, ToolResult, Trigger,
+    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
+    Reasoning, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -611,6 +611,8 @@ impl Builder {
                 updated: m.updated,
                 models: m.models,
                 git_branch: None,
+                // Pi's `parentSession` is the session this one was forked from.
+                parent_kind: m.parent.as_ref().map(|_| ParentKind::Fork),
                 parent: m.parent,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
@@ -697,6 +699,7 @@ fn peek(file: &Path) -> SessionInfo {
                 }
                 if info.parent.is_none() {
                     info.parent = str_at(&row, "/parentSession").filter(|p| !p.is_empty());
+                    info.parent_kind = info.parent.as_ref().map(|_| ParentKind::Fork);
                 }
             }
             titles.observe(&row);

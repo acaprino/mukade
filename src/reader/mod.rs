@@ -9,7 +9,7 @@ pub mod json;
 pub mod opencode;
 pub mod pi;
 
-use crate::model::{HarnessId, Session};
+use crate::model::{HarnessId, ParentKind, Session};
 use crate::roots::StoreRoots;
 
 /// What a reader knows about a session before reading it.
@@ -26,6 +26,8 @@ pub struct SessionInfo {
     /// The native parent link, when the harness records one. `None` is "not recorded or no
     /// parent", never a guess.
     pub parent: Option<String>,
+    /// How the session came from [`SessionInfo::parent`]: set whenever `parent` is.
+    pub parent_kind: Option<ParentKind>,
     /// Why [`Reader::read`] cannot hand this session back, when the listing already knows: the
     /// store still names the session but its transcript is gone (a Codex `threads` row whose
     /// rollout was deleted, a Claude Code prompt in `history.jsonl` without a session file), or

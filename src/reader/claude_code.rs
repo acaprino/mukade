@@ -999,6 +999,7 @@ impl Builder {
                 models: m.models,
                 git_branch: m.git_branch,
                 parent: None,
+                parent_kind: None,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },

@@ -39,6 +39,7 @@ fn meta_comes_from_the_session_header() {
     assert_eq!(s.meta.models[0].provider.as_deref(), Some("h27"));
     assert_eq!(s.meta.models[0].id, "h27-mock");
     assert_eq!(s.meta.parent, None, "the source session is not a fork");
+    assert_eq!(s.meta.parent_kind, None);
 }
 
 #[test]
@@ -742,7 +743,7 @@ fn listing_exposes_the_parent_session_without_reading_the_transcript() {
         json!({"type": "message", "id": "u1", "parentId": null, "timestamp": "2026-09-01T10:00:01.000Z",
                "message": {"role": "user", "content": [{"type": "text", "text": "Una domanda"}]}}),
     ];
-    let (roots, _file) = store_of(
+    let (roots, file) = store_of(
         "title-parent",
         &format!("2026-09-01T10-00-00-000Z_{id}.jsonl"),
         &rows,
@@ -752,6 +753,14 @@ fn listing_exposes_the_parent_session_without_reading_the_transcript() {
         info.parent.as_deref(),
         Some("01a07fff-0000-7000-8000-000000000001")
     );
+    assert_eq!(
+        info.parent_kind,
+        Some(mukade::model::ParentKind::Fork),
+        "Pi's `parentSession` is the session this one was forked from"
+    );
+    let read = pi::read_file(&file).unwrap().meta;
+    assert_eq!(read.parent, info.parent);
+    assert_eq!(read.parent_kind, Some(mukade::model::ParentKind::Fork));
     assert_eq!(info.title.as_deref(), Some("Una domanda"));
     assert_eq!(
         info.updated.as_deref(),

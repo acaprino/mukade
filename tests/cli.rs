@@ -1606,9 +1606,12 @@ fn reader_list_all_includes_opencode_forks_while_list_keeps_roots() {
     assert_eq!(listed.len(), 2);
     assert_eq!(all.len(), 3);
     assert!(listed.iter().all(|info| info.parent.is_none()));
-    assert!(
-        all.iter()
-            .any(|info| info.parent.as_deref() == Some("root"))
+    let child = all.iter().find(|info| info.id == "child-a").unwrap();
+    assert_eq!(child.parent.as_deref(), Some("root"));
+    assert_eq!(
+        child.parent_kind,
+        Some(mukade::model::ParentKind::spawn()),
+        "`parent_id` is the session that spawned this one"
     );
 }
 

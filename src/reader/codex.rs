@@ -25,8 +25,8 @@ mod exec;
 use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
+    Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -467,6 +467,12 @@ struct MetaBuilder {
     /// `session_meta.session_id`: the thread's own id, except in a subagent's rollout, where it
     /// names the thread that spawned it.
     session_id: Option<String>,
+    /// `session_meta.parent_thread_id` (or `source.subagent.thread_spawn.parent_thread_id`): the
+    /// thread that spawned this one, preferred to `session_id` (the same thread at depth 1).
+    parent_thread_id: Option<String>,
+    /// The role a spawned subagent ran as (`agent_role`), or `guardian_review` for a guardian
+    /// review (`thread_source`, or `source.subagent.other: "guardian"`).
+    agent: Option<String>,
     cwd: Option<String>,
     version: Option<String>,
     created: Option<String>,
@@ -489,6 +495,23 @@ impl MetaBuilder {
             }
             if self.session_id.is_none() {
                 self.session_id = str_at(payload, "/session_id").filter(|s| !s.is_empty());
+            }
+            if self.parent_thread_id.is_none() {
+                self.parent_thread_id = str_at(payload, "/parent_thread_id")
+                    .or_else(|| str_at(payload, "/source/subagent/thread_spawn/parent_thread_id"))
+                    .filter(|s| !s.is_empty());
+            }
+            if self.agent.is_none() {
+                let guardian = str_at(payload, "/thread_source").as_deref()
+                    == Some("guardian_review")
+                    || str_at(payload, "/source/subagent/other").as_deref() == Some("guardian");
+                self.agent = if guardian {
+                    Some("guardian_review".into())
+                } else {
+                    str_at(payload, "/agent_role")
+                        .or_else(|| str_at(payload, "/source/subagent/thread_spawn/agent_role"))
+                        .filter(|s| !s.is_empty())
+                };
             }
             if self.cwd.is_none() {
                 self.cwd = str_at(payload, "/cwd");
@@ -831,10 +854,16 @@ impl Builder {
             }
         }
         let m = self.meta;
-        // A subagent's rollout names the thread that spawned it in `session_id`.
-        let parent = m
-            .session_id
-            .filter(|session| m.id.as_deref().is_some_and(|id| id != session));
+        // A subagent's rollout names the thread that spawned it in `parent_thread_id`; an older
+        // one only in `session_id`, which is the thread's own id in a root thread.
+        let parent = m.parent_thread_id.or_else(|| {
+            m.session_id
+                .filter(|session| m.id.as_deref().is_some_and(|id| id != session))
+        });
+        let parent_kind = parent.as_ref().map(|_| ParentKind::Spawn {
+            call_id: None,
+            agent: m.agent,
+        });
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::Codex,
@@ -847,6 +876,7 @@ impl Builder {
                 models: m.models,
                 git_branch: m.git_branch,
                 parent,
+                parent_kind,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },
@@ -993,6 +1023,7 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
             listed.remove(&thread.id);
             continue;
         }
+        let parent_kind = thread.parent_kind();
         if let Some(info) = listed.get_mut(&thread.id) {
             info.title = info.title.take().or(thread.title);
             info.cwd = info.cwd.take().or(thread.cwd);
@@ -1001,6 +1032,7 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
             // Archived when either says so: the folder the rollout sits in, or its row.
             info.archived |= thread.archived;
             info.parent = thread.parent;
+            info.parent_kind = parent_kind;
             continue;
         }
         let on_disk = thread.rollout.as_deref().filter(|file| file.is_file());
@@ -1015,6 +1047,7 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
                 .map(|file| file.to_string_lossy().into_owned())
                 .unwrap_or_else(|| database.clone()),
             parent: thread.parent.clone(),
+            parent_kind,
             unreadable: on_disk.is_none().then(|| {
                 format!("rollout file is gone; the thread survives only as a row in {database}")
             }),

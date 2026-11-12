@@ -399,3 +399,40 @@ fn reasoning_details_are_read_as_the_opaque_payload() {
         mukade::model::Protocol::AnthropicMessages
     );
 }
+
+/// A child session names the session that spawned it: `info.parentID` in an export (OpenCode
+/// 2.2.5 `session/info.ts`), `parent_id` in a store row. A fork names its source in `info.fork`.
+#[test]
+fn a_child_names_its_parent_in_either_form_and_a_fork_its_source() {
+    use mukade::model::ParentKind;
+    let mut doc = export_doc();
+    doc["info"]["parentID"] = "ses_parent".into();
+    let child = opencode::parse(&doc, None).unwrap().meta;
+    assert_eq!(child.parent.as_deref(), Some("ses_parent"));
+    assert_eq!(child.parent_kind, Some(ParentKind::spawn()));
+
+    let mut doc = export_doc();
+    let boundary = serde_json::json!({"type": "through", "messageID": "msg_1"});
+    doc["info"]["fork"] = serde_json::json!({"sessionID": "ses_source", "boundary": boundary});
+    let fork = opencode::parse(&doc, None).unwrap().meta;
+    assert_eq!(fork.parent.as_deref(), Some("ses_source"));
+    assert_eq!(fork.parent_kind, Some(ParentKind::Fork));
+
+    let mut rows: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(source("rows.json")).unwrap()).unwrap();
+    rows["session_v2"][0]["parent_id"] = "ses_parent".into();
+    let row = opencode::parse(&rows, None).unwrap().meta;
+    assert_eq!(row.parent.as_deref(), Some("ses_parent"));
+    assert_eq!(row.parent_kind, Some(ParentKind::spawn()));
+
+    rows["session_v2"][0]["parent_id"] = serde_json::Value::Null;
+    rows["session_v2"][0]["fork_session_id"] = "ses_source".into();
+    rows["session_v2"][0]["fork_boundary"] =
+        serde_json::json!({"type": "through", "messageID": "msg_1"});
+    let forked_row = opencode::parse(&rows, None).unwrap().meta;
+    assert_eq!(forked_row.parent.as_deref(), Some("ses_source"));
+    assert_eq!(forked_row.parent_kind, Some(ParentKind::Fork));
+
+    let root = read_export().meta;
+    assert_eq!((root.parent, root.parent_kind), (None, None));
+}

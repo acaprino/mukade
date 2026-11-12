@@ -18,7 +18,8 @@ use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
     CanonicalTool, ChatReasoning, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque,
-    Protocol, Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+    ParentKind, Protocol, Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult,
+    Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -320,6 +321,7 @@ impl Builder {
                 .and_then(chrono::DateTime::from_timestamp_millis)
                 .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         };
+        let (parent, parent_kind) = lineage(&session).unzip();
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::OpenCode,
@@ -332,13 +334,33 @@ impl Builder {
                 updated: epoch("/time_updated").or_else(|| epoch("/time/updated")),
                 models,
                 git_branch: None,
-                parent: str_at(&session, "/parent_id"),
+                parent,
+                parent_kind,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },
             entries: self.entries,
         })
     }
+}
+
+/// The session this one came from, and how. A child names the session that spawned it:
+/// `parentID` in an export (`info`), `parent_id` in a store row. A fork names its source in
+/// `fork.sessionID` (export) or `fork_session_id` (row), which OpenCode reads as a fork only with
+/// its boundary beside it.
+fn lineage(session: &Value) -> Option<(String, ParentKind)> {
+    let spawner = str_at(session, "/parentID").or_else(|| str_at(session, "/parent_id"));
+    if let Some(parent) = spawner.filter(|p| !p.is_empty()) {
+        return Some((parent, ParentKind::spawn()));
+    }
+    let bounded = |id: &str, boundary: &str| {
+        str_at(session, id)
+            .filter(|p| !p.is_empty())
+            .filter(|_| session.pointer(boundary).is_some_and(|b| !b.is_null()))
+    };
+    bounded("/fork/sessionID", "/fork/boundary")
+        .or_else(|| bounded("/fork_session_id", "/fork_boundary"))
+        .map(|source| (source, ParentKind::Fork))
 }
 
 fn id_of(m: &Value, index: usize) -> String {
@@ -574,6 +596,9 @@ fn session_rows(
                     .map(|time| time.to_rfc3339()),
                 archived: row.get::<_, Option<i64>>(4)?.is_some(),
                 path: path.to_string_lossy().into_owned(),
+                parent_kind: row
+                    .get::<_, Option<String>>(5)?
+                    .map(|_| ParentKind::spawn()),
                 parent: row.get(5)?,
                 ..Default::default()
             },

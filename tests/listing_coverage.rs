@@ -38,7 +38,7 @@ const THREAD_B: &str = "019e0000-0000-7000-8000-00000000000b";
 const THREAD_SUB: &str = "019e0000-0000-7000-8000-0000000000c1";
 const THREAD_GUARD: &str = "019e0000-0000-7000-8000-0000000000c2";
 
-/// One `threads` row, with the columns Codex 0.166 gives it that matter here.
+/// One `threads` row, with the columns Codex 0.166 gives it that matter here (`agent_role`: 0.167).
 struct Thread {
     id: &'static str,
     rollout_path: String,
@@ -48,6 +48,7 @@ struct Thread {
     preview: &'static str,
     source: &'static str,
     thread_source: Option<&'static str>,
+    agent_role: Option<&'static str>,
     archived: bool,
     updated_ms: i64,
 }
@@ -68,6 +69,7 @@ impl Thread {
             preview: "",
             source: "cli",
             thread_source: Some("user"),
+            agent_role: None,
             archived: false,
             updated_ms: 1_794_149_000_000,
         }
@@ -85,7 +87,7 @@ fn codex_state(home: &Path, file: &str, threads: &[Thread], edges: &[(&str, &str
              updated_at INTEGER NOT NULL, source TEXT NOT NULL, cwd TEXT NOT NULL,
              title TEXT NOT NULL, archived INTEGER NOT NULL, first_user_message TEXT NOT NULL,
              created_at_ms INTEGER, updated_at_ms INTEGER, thread_source TEXT,
-             preview TEXT NOT NULL, name TEXT);
+             preview TEXT NOT NULL, name TEXT, agent_role TEXT);
          CREATE TABLE thread_spawn_edges (
              parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY,
              status TEXT NOT NULL);",
@@ -93,7 +95,7 @@ fn codex_state(home: &Path, file: &str, threads: &[Thread], edges: &[(&str, &str
     .unwrap();
     for t in threads {
         db.execute(
-            "INSERT INTO threads VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO threads VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 t.id,
                 t.rollout_path,
@@ -108,6 +110,7 @@ fn codex_state(home: &Path, file: &str, threads: &[Thread], edges: &[(&str, &str
                 t.thread_source,
                 t.preview,
                 t.name,
+                t.agent_role,
             ],
         )
         .unwrap();
@@ -136,6 +139,7 @@ fn codex_home_without_rollouts(tag: &str) -> PathBuf {
     let mut sub = Thread::root(&home, THREAD_SUB, "D:/work/alpha");
     sub.source = "subagent-thread_spawn";
     sub.thread_source = Some("subagent");
+    sub.agent_role = Some("explorer");
     let mut guard = Thread::root(&home, THREAD_GUARD, "D:/work/gamma");
     guard.source = "subagent-guardian";
     guard.thread_source = Some("guardian_review");
@@ -201,10 +205,20 @@ fn codex_list_all_adds_the_subagent_threads_with_their_parent() {
         Some(THREAD_A),
         "the spawn edge is the parent link"
     );
+    assert_eq!(
+        sub.parent_kind,
+        Some(mukade::model::ParentKind::Spawn {
+            call_id: None,
+            agent: Some("explorer".into())
+        }),
+        "a spawned thread, with the role its row records"
+    );
     let guard = all.iter().find(|s| s.id == THREAD_GUARD).unwrap();
     assert_eq!(guard.parent, None);
+    assert_eq!(guard.parent_kind, None);
     let a = all.iter().find(|s| s.id == THREAD_A).unwrap();
     assert_eq!(a.parent, None);
+    assert_eq!(a.parent_kind, None);
 }
 
 #[test]
