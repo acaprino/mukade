@@ -5,12 +5,14 @@
 //! what is dropped. A writer's job is then only to lay the plan out as native records.
 
 use crate::model::{
-    Attachment, HarnessId, Kind, MetaKind, ModelRef, Protocol, ResultContent, Session, StepEnd,
+    Attachment, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Protocol, ResultContent, Session,
+    StepEnd,
 };
 use crate::policy::{ReasoningDrop, ReasoningPlan, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::{Interrupted, WriteOpts, media};
 use serde_json::Value;
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 
 /// One call that will be written as the destination's own tool.
@@ -333,6 +335,23 @@ fn carry_result_content(
 
 /// Plan the conversation of a session for a destination.
 pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
+    let mut plan = plan_conversation(&session.meta, &session.entries, dest, opts);
+    if !session.branches.is_empty() {
+        plan_branches(session, dest, opts, &mut plan);
+    }
+    plan
+}
+
+/// The plan of one conversation, `entries` in order, of the session `meta` describes: the active
+/// path, or a branch with the path it shares. Entries are borrowed, so a branch costs no copy of
+/// the records it shares.
+fn plan_conversation<E: Borrow<Entry>>(
+    meta: &Meta,
+    entries: &[E],
+    dest: HarnessId,
+    opts: &WriteOpts,
+) -> Plan {
+    let each = || entries.iter().map(Borrow::borrow);
     let dest_protocol = opts
         .dest_protocol
         .clone()
@@ -342,9 +361,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let offered = opts.offered.unwrap_or_else(|| tools::offered(dest));
     let mut blocks: Vec<PlannedBlock> = Vec::new();
     let source_records = |of: MetaKind| {
-        session
-            .entries
-            .iter()
+        each()
             .filter(|entry| matches!(&entry.kind, Kind::Meta { kind } if *kind == of))
             .count()
     };
@@ -360,13 +377,13 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let mut last_step_calls: Vec<String> = Vec::new();
     // The calls of that step already answered, across its result groups.
     let mut step_answered: Vec<String> = Vec::new();
-    let source = session.meta.harness;
+    let source = meta.harness;
     let mut ids = CallIds::new(dest_protocol.as_ref() == Some(&Protocol::AnthropicMessages));
 
     // The structured (non-text) result blocks of each call, counted once: a call that travels as
     // text loses them, and looking them up per call would rescan every result.
     let mut structured: HashMap<&str, usize> = HashMap::new();
-    for entry in session.conversation() {
+    for entry in each().filter(|entry| !matches!(entry.kind, Kind::Meta { .. })) {
         if let Kind::Results { results } = &entry.kind {
             for result in results {
                 if let ResultContent::Blocks(blocks) = &result.content {
@@ -386,9 +403,9 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     // their results go together, so no call is left without its answer; the prompt stays.
     let left_out = match opts.interrupted {
         Interrupted::Keep => Vec::new(),
-        Interrupted::Drop => session.interrupted_work(),
+        Interrupted::Drop => crate::model::interrupted_work(entries),
     };
-    for (index, entry) in session.entries.iter().enumerate() {
+    for (index, entry) in each().enumerate() {
         counts.messages_in += 1;
         if left_out.get(index).copied().unwrap_or(false) {
             if matches!(entry.kind, Kind::Step { .. }) {
@@ -438,11 +455,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         ReasoningPlan::Native(native)
                             if native.opaque.as_ref().is_some_and(|opaque| {
                                 let provider = opts.model_provider.as_deref().or_else(|| {
-                                    session
-                                        .meta
-                                        .models
-                                        .first()
-                                        .and_then(|m| m.provider.as_deref())
+                                    meta.models.first().and_then(|m| m.provider.as_deref())
                                 });
                                 crate::harnesses::get(dest).destination().is_some_and(
                                     |destination| destination.payload_fits(opaque, provider),
@@ -603,21 +616,17 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     move_unanswered_calls_to_text(&mut blocks, &mut counts);
     drop_empty_steps(&mut blocks, &mut counts);
     counts.messages_out = blocks.len();
-    let mut plan = Plan {
+    Plan {
         blocks,
         counts,
         branches: Vec::new(),
-    };
-    if !session.branches.is_empty() {
-        plan_branches(session, dest, opts, &mut plan);
     }
-    plan
 }
 
 /// Plan the branches of a session for a destination: each with what it shares with the path it
 /// hangs from, so it is judged as the conversation a provider would receive. A branch the
 /// destination cannot hold, cannot place, or would refuse is left out and counted.
-fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mut Plan) {
+fn plan_branches<'s>(session: &'s Session, dest: HarnessId, opts: &WriteOpts, plan: &mut Plan) {
     let keeping = crate::writer::for_harness(dest).keeps_branches();
     let total = session.branches.len();
     if keeping == BranchKeeping::None || opts.native_budget.is_some() {
@@ -630,36 +639,28 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
         .or_else(|| crate::policy::destination_protocol(dest));
     // The conversation entries of every chain, and for each branch the chain and place it hangs
     // from. `chains[0]` is the active path; `chains[n + 1]` is `session.branches[n]`.
-    let conversation = |entries: &[crate::model::Entry]| -> Vec<crate::model::Entry> {
+    let conversation = |entries: &'s [Entry]| -> Vec<&'s Entry> {
         entries
             .iter()
             .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
-            .cloned()
             .collect()
     };
-    let mut chains: Vec<Vec<crate::model::Entry>> = vec![conversation(&session.entries)];
+    let mut chains: Vec<Vec<&Entry>> = vec![conversation(&session.entries)];
     // Every chain's own entries, Meta included: a branch can leave from a bookkeeping entry.
-    let mut whole: Vec<&[crate::model::Entry]> = vec![&session.entries];
+    let mut whole: Vec<&[Entry]> = vec![&session.entries];
     let mut hangs: Vec<Option<(usize, usize)>> = vec![None];
     // The chain a planned branch came from, so a branch that hangs off a dropped one is dropped.
     let mut planned_as: Vec<Option<usize>> = vec![Some(0)];
     // The blocks before each chain starts (what it shares with the chain above it).
     let mut base: Vec<usize> = vec![0];
-    let planned_of = |entries: Vec<crate::model::Entry>| {
-        let sub = Session {
-            meta: session.meta.clone(),
-            entries,
-            branches: Vec::new(),
-        };
-        self::plan(&sub, dest, opts)
-    };
-    let path_to = |chains: &[Vec<crate::model::Entry>],
+    let planned_of = |entries: &[&Entry]| plan_conversation(&session.meta, entries, dest, opts);
+    let path_to = |chains: &[Vec<&'s Entry>],
                    hangs: &[Option<(usize, usize)>],
                    chain: usize,
                    upto: usize|
-     -> Vec<crate::model::Entry> {
+     -> Vec<&'s Entry> {
         // The entries from the start of the session through entry `upto` of `chain`.
-        let mut path: Vec<crate::model::Entry> = Vec::new();
+        let mut path: Vec<&Entry> = Vec::new();
         let (mut c, mut end) = (chain, Some(upto));
         let mut parts: Vec<(usize, Option<usize>)> = Vec::new();
         loop {
@@ -674,16 +675,14 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
         }
         for (c, end) in parts.into_iter().rev() {
             let take = end.map_or(0, |end| end + 1);
-            path.extend(chains[c].iter().take(take).cloned());
+            path.extend(chains[c].iter().take(take).copied());
         }
         path
     };
     // The entries a branch shares with the path it leaves from, and their plan, by where it leaves.
     #[allow(clippy::type_complexity)]
-    let mut shared: std::collections::HashMap<
-        Option<(usize, usize)>,
-        (Vec<crate::model::Entry>, Vec<PlannedBlock>),
-    > = std::collections::HashMap::new();
+    let mut shared: HashMap<Option<(usize, usize)>, (Vec<&Entry>, Vec<PlannedBlock>)> =
+        HashMap::new();
     for branch in &session.branches {
         let number = chains.len();
         chains.push(conversation(&branch.entries));
@@ -717,13 +716,13 @@ fn plan_branches(session: &Session, dest: HarnessId, opts: &WriteOpts, plan: &mu
                     None => Vec::new(),
                     Some((c, at)) => path_to(&chains, &hangs, c, at),
                 };
-                let before = planned_of(prefix.clone()).blocks;
+                let before = planned_of(&prefix).blocks;
                 (prefix, before)
             });
             let mut entries = Vec::with_capacity(prefix.len() + chains[number].len());
-            entries.extend(prefix.iter().cloned());
-            entries.extend(chains[number].iter().cloned());
-            let full = planned_of(entries);
+            entries.extend(prefix.iter().copied());
+            entries.extend(chains[number].iter().copied());
+            let full = planned_of(&entries);
             let k = before.len();
             if full.blocks.len() <= k || full.blocks[..k] != before[..] {
                 return None;

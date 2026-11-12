@@ -170,6 +170,28 @@ fn interrupts(entry: &Entry) -> bool {
     )
 }
 
+/// [`Session::interrupted_work`] for entries held elsewhere (a branch with the path it shares).
+pub fn interrupted_work<E: std::borrow::Borrow<Entry>>(entries: &[E]) -> Vec<bool> {
+    let kind = |index: usize| &entries[index].borrow().kind;
+    let mut work = vec![false; entries.len()];
+    let mut start = 0;
+    while start < entries.len() {
+        let end = (start + 1..entries.len())
+            .find(|&index| matches!(kind(index), Kind::User { .. } | Kind::Compaction { .. }))
+            .unwrap_or(entries.len());
+        if entries[start..end]
+            .iter()
+            .any(|entry| interrupts(entry.borrow()))
+        {
+            for (flag, index) in work[start..end].iter_mut().zip(start..end) {
+                *flag = matches!(kind(index), Kind::Step { .. } | Kind::Results { .. });
+            }
+        }
+        start = end;
+    }
+    work
+}
+
 impl Session {
     /// The entries that are conversation, in order: everything the destination should receive.
     pub fn conversation(&self) -> impl Iterator<Item = &Entry> {
@@ -208,21 +230,7 @@ impl Session {
     /// when it holds a step that was killed or aborted, or the source's own abort marker. The
     /// prompt itself is never work: it is the user's, and complete.
     pub fn interrupted_work(&self) -> Vec<bool> {
-        let mut work = vec![false; self.entries.len()];
-        let mut start = 0;
-        while start < self.entries.len() {
-            let end = self.entries[start + 1..]
-                .iter()
-                .position(|e| matches!(e.kind, Kind::User { .. } | Kind::Compaction { .. }))
-                .map_or(self.entries.len(), |next| start + 1 + next);
-            if self.entries[start..end].iter().any(interrupts) {
-                for (flag, entry) in work[start..end].iter_mut().zip(&self.entries[start..end]) {
-                    *flag = matches!(entry.kind, Kind::Step { .. } | Kind::Results { .. });
-                }
-            }
-            start = end;
-        }
-        work
+        interrupted_work(&self.entries)
     }
 
     /// The last compaction entry, if the source compacted the conversation at all.
