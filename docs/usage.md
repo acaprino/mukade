@@ -559,7 +559,7 @@ Connect a harness as an MCP client, with the service running:
 - Everything else in the file stays; the earlier file is kept in `<data folder>/bus/backups/` (five per harness).
 - Refused, with the file untouched: an entry `mukade` that mukade did not write or that was changed since; a JSON file with comments; `--project` (the credential would sit in a file that can be committed).
 - Restart the harness session to load the entry. By hand instead: an HTTP server at the `endpoint`, with the headers `Authorization: Bearer <content of <data folder>/bus/credential>` and `X-Mukade-Service-Id: <service_id>`.
-- Only Claude Code has been seen calling a tool through such an entry ([record](verification/2026-11-12-chat-live.md)); the other three entries follow each harness's documented format and are not yet tried live **[U]**.
+- Seen live: a Claude Code and a Codex instance exchanging a tagged question and answer through these entries ([record](verification/2026-11-12-chat-live.md)). The OpenCode and Pi entries follow each harness's documented format and are not yet tried live **[U]**.
 - A harness without an MCP entry can run the same operations as shell commands.
 
 | limit | detail |
