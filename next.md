@@ -91,14 +91,14 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 **Forks, left open** ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)).
 
 - *Branches, written:* whether Claude Code 2.1.322 resumes the intended leaf of a mukade-written file with several leaves, and whether Codex counts the user-role messages mukade writes inside a turn (a tool result written as text) when it rolls back, are **[U]** (a live load without a prompt would settle them); a paginated Codex fork or redo page is read, never written; OpenCode keeps no branches (its `revert` is not read).
-- *A fork hopped is a copy:* the manifest names the origin, nothing links the written fork to a written origin (needs a hop registry: which destination id and uuids the origin got).
+- *A fork hopped is a copy:* the manifest names the origin, nothing links the written fork to a written origin. Proposed: a hop registry ([design](docs/superpowers/specs/2026-11-12-hop-registry-design.md), two choices open).
 - *Claude Code `--fork-session`* [U]: whether its rows carry `forkedFrom`. The leaf flags of 2.1.322 are not read: they sit on `last-prompt` rows (`leafUuid`, `explicit`, `rewound`, `cutUuid`); in the binary, an explicit rewound checkpoint marks `cutUuid` and its ancestors hidden until a later row descends from them (`noteCheckpoint`/`noteRow`), and a `leafUuid: null` with `explicit` clears the leaf. A real rewound transcript is needed to implement it against.
 - *Codex:* a thread that survives only as a database row cannot be told as a fork (no fork column); a paginated fork is read, never written.
 - *DeepSeek Harness:* a fork made in dsh's web UI (0.2.2-rc.1, `forkSession`) writes `isSeeded: true` and **no `parentSession`**, so its parent is not recorded and it lists as a root; its `at` is set only where a header names the parent. Hermes `/branch` has no `at` (the copy boundary is not recorded).
 
 **Subagents, left open** ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md); phases 1 and 2 are done above):
 
-- *Writing:* `write` imports a document's session alone and says so when it holds `children`; a
+- *Writing:* `write` imports a document's session alone and says so when it holds `children` (proposed: `write --children`, [design](docs/superpowers/specs/2026-11-12-hop-registry-design.md) §3); a
   `write` that carries them would need a manifest of its own. A fork or inherited-context child is
   written with what its own file holds (`inherits_context` in its manifest entry); Codex and Pi
   children are unlinked sessions (neither records a spawner a writer can set). A repeated
