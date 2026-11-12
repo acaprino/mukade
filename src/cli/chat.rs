@@ -23,6 +23,9 @@ mukade chat: one shared local chat service for harness instances
   mukade chat connect <harness> [--dry-run]     add the running service to the harness's
                                       own MCP servers (user scope); no credential is shown
   mukade chat disconnect <harness> [--dry-run]  take that entry out again
+  mukade chat trust <harness> [--dry-run]
+                                      trust the launch hooks once, for a harness that runs a
+                                      hook only when trusted (codex); no other hook is touched
   mukade chat launch <harness> --room <name> [--role peer|lead|worker|observer]
                      [--listen <seconds>] [--max-wakes <n>] [-- <harness arguments>]
                                       start the harness already in the room: its hooks hand
@@ -62,6 +65,11 @@ pub enum Command {
     },
     /// Start a harness as a member of a room, with the adapter's hooks.
     Launch(Launch),
+    /// Trust the adapter's hooks in a harness that runs a hook only once trusted.
+    Trust {
+        harness: crate::HarnessId,
+        dry_run: bool,
+    },
     /// One hook call of a launched harness: the event's JSON on standard input.
     Hook {
         harness: crate::HarnessId,
@@ -176,6 +184,30 @@ pub fn parse(args: &[String]) -> Result<Command, ChatError> {
                 "tools" => Command::Tools,
                 "status" => Command::Status,
                 _ => Command::Stop,
+            });
+        }
+        "trust" => {
+            let mut harness = None;
+            let mut dry_run = false;
+            for arg in rest {
+                match arg.as_str() {
+                    "--dry-run" => dry_run = true,
+                    other if other.starts_with("--") => {
+                        return Err(usage(format!("unknown option {other} for chat trust")));
+                    }
+                    other if harness.is_none() => {
+                        harness = Some(
+                            other
+                                .parse::<crate::HarnessId>()
+                                .map_err(|_| usage(format!("unknown harness {other}")))?,
+                        );
+                    }
+                    other => return Err(usage(format!("unexpected argument {other}"))),
+                }
+            }
+            return Ok(Command::Trust {
+                harness: harness.ok_or_else(|| usage("chat trust needs a harness"))?,
+                dry_run,
             });
         }
         "hook" => {
@@ -543,6 +575,16 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             run_hook(*harness, *event);
             return Ok(());
         }
+        Command::Trust { harness, dry_run } => {
+            match run_trust(*harness, *dry_run) {
+                Ok(report) => write_value(stdout, &report, true)?,
+                Err(error) => {
+                    eprintln!("{}: {}", error.code, error.message);
+                    std::process::exit(error.exit_code());
+                }
+            }
+            return Ok(());
+        }
         _ => {}
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -592,7 +634,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                 client.close().await;
                 done
             }
-            Command::Help | Command::Tools | Command::Hook { .. } => Ok(()),
+            Command::Help | Command::Tools | Command::Hook { .. } | Command::Trust { .. } => Ok(()),
         }
     });
     // A service past its shutdown deadline may still hold blocking database work: the process
@@ -802,4 +844,39 @@ async fn run_launch(paths: &lifecycle::Paths, launch: &Launch) -> Result<(), Cha
         )
     })?;
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// Trust the launch hooks of `harness`, as this mukade executable writes them. Nothing else of
+/// the harness's trust is read or changed, and no service is needed.
+fn run_trust(harness: crate::HarnessId, dry_run: bool) -> Result<Value, ChatError> {
+    use crate::chat::adapter;
+    let adapter_of = crate::harnesses::get(harness);
+    let kit = adapter::Kit {
+        exe: std::env::current_exe()
+            .map_err(|_| failed("transport_failure", "the mukade executable cannot be found"))?,
+        folder: PathBuf::new(),
+        // Only the hooks matter here; the MCP entry is not part of what is trusted.
+        server: crate::chat::connect::Server {
+            endpoint: String::new(),
+            token: String::new(),
+            service_id: String::new(),
+        },
+        stop_timeout: adapter::STOP_HOOK_TIMEOUT,
+    };
+    match adapter_of.chat_trust(&kit, dry_run)? {
+        Some(report) => Ok(report),
+        None if adapter_of
+            .chat_hook_output(
+                adapter::Event::Stop,
+                &adapter::Delivery::Continue(String::new()),
+            )
+            .is_some() =>
+        {
+            Ok(json!({"status": "not_needed", "harness": harness.as_str()}))
+        }
+        None => Err(failed(
+            "unsupported",
+            format!("{harness} has no chat adapter yet"),
+        )),
+    }
 }

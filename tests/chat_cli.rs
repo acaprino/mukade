@@ -275,6 +275,49 @@ fn launching_a_harness_without_an_adapter_starts_nothing() {
     assert!(!root.join("bus").join("instance.json").exists());
 }
 
+/// `chat trust` touches only a harness that needs it: Claude Code runs its plugin hooks as they
+/// are, a harness without an adapter is refused, and neither starts a service.
+#[test]
+fn trust_is_answered_without_a_service_for_a_harness_that_needs_none() {
+    let root = scratch().join("data");
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_mukade"))
+            .args(args)
+            .env("MUKADE_DATA_DIR", &root)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["chat", "trust", "claude_code"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["status"], "not_needed", "{report}");
+
+    let out = run(&["chat", "trust", "pi"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no chat adapter"));
+    assert!(!root.join("bus").join("instance.json").exists());
+
+    for bad in [
+        vec!["chat", "trust"],
+        vec!["chat", "trust", "codex", "--yes"],
+        vec!["chat", "trust", "codex", "pi"],
+        vec!["chat", "trust", "nobody"],
+    ] {
+        let bad: Vec<String> = bad.iter().map(|a| a.to_string()).collect();
+        assert!(chat::parse(&bad[1..]).is_err(), "{bad:?}");
+    }
+}
+
 /// Run mukade and collect its output, failing (not hanging) when the output never closes.
 fn run_capturing(root: &std::path::Path, args: &[&str]) -> std::process::Output {
     let child = std::process::Command::new(env!("CARGO_BIN_EXE_mukade"))

@@ -5,11 +5,9 @@
 # Usage: codex-claude-launch.sh <mukade executable>
 #
 # - Throwaway service and folder (MUKADE_LIVE_SCRATCH, default TMPDIR), removed at the end.
-# - No harness configuration is written. Codex uses its own CODEX_HOME (its login) with
-#   `-c features.plugins=false`, so its plugins' hooks are not loaded; with no other hook left,
-#   `--dangerously-bypass-hook-trust` runs only mukade's three hooks and stands in for the
-#   one-time `/hooks` review. Check that first: with a mock model the same command starts
-#   exactly three hooks (docs/verification/2026-11-12-chat-live.md, run 7).
+# - Run `mukade chat trust codex` once before (same mukade executable): Codex runs a hook only
+#   once it is trusted. Codex then starts with its own CODEX_HOME (its login), its plugins and
+#   their trusted hooks as usual; no trust bypass. The script writes no harness configuration.
 # - Where HTTPS goes through a local TLS proxy that Codex does not trust, Codex runs without
 #   HTTPS_PROXY and NODE_EXTRA_CA_CERTS.
 # - Paid for: a few Codex turns (its configured model) and a few Claude Code `haiku` turns.
@@ -24,7 +22,6 @@ cd "$WORK"
 
 # Codex: greets, then listens; one wake-up is enough.
 env -u HTTPS_PROXY -u NODE_EXTRA_CA_CERTS "$M" chat launch codex --room duo --listen 200 --max-wakes 1 -- \
-  -c features.plugins=false --dangerously-bypass-hook-trust \
   exec --ephemeral --skip-git-repo-check -s read-only -c 'approval_policy="never"' \
   "Greet the room in one short message with the chat_send tool, then end your turn. If a member asks you something later, answer it with chat_send, addressed to that member." \
   < /dev/null > codex.out 2>&1 &
