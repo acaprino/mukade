@@ -925,7 +925,7 @@ fn check_resume_prompt(prompt: &str, dest: HarnessId, exe: Option<&str>) -> Resu
 
 /// A read failure is a refusal when the session (or the store) is not there, and a verification
 /// failure when the harness is configured but what we found is not a session we understand.
-fn classify_read(error: anyhow::Error) -> HopError {
+pub(crate) fn classify_read(error: anyhow::Error) -> HopError {
     let message = format!("{error:#}");
     let refused = error.chain().any(|cause| {
         cause.downcast_ref::<crate::reader::Lookup>().is_some()
