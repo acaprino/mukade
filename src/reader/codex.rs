@@ -144,8 +144,16 @@ fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
         return Ok(session);
     };
     let prefix = base_prefix(path, &base, branches, &mut vec![path.to_path_buf()])?;
-    let mut rows = prefix.rows;
-    rows.extend(file.rows);
+    // A fork's own header names the session, not the origin's records it continues from.
+    let mut rows = Vec::with_capacity(prefix.rows.len() + file.rows.len());
+    let mut own = file.rows.into_iter();
+    if base.thread != rollout_id(path)
+        && let Some(header) = own.next()
+    {
+        rows.push(header);
+    }
+    rows.extend(prefix.rows);
+    rows.extend(own);
     let _span = crate::timing::span("build entries");
     let mut session = parse_owned(rows, Some(path))?;
     // The fingerprint is that of the bytes read, in the order they were read: the earlier files
@@ -342,7 +350,17 @@ fn base_prefix(
         });
         out.active_len += head_rows.len();
         out.rows.extend(head_rows);
-        match branches {
+        // A fork continues its origin's file by reference: what the origin did after the cut is
+        // the origin's own, never a branch of the fork, whichever branches were asked for.
+        let of_this_thread = rollout_id(page) == base.thread;
+        match if of_this_thread {
+            branches
+        } else {
+            Branches::Active
+        } {
+            Branches::Active if !of_this_thread => {
+                out.bytes.extend_from_slice(prefix);
+            }
             Branches::Active => {
                 out.bytes.extend_from_slice(prefix);
                 out.left.extend(
@@ -385,11 +403,58 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
 /// instead of being copied there.
 pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    let rolled_back = rolled_back(&rows);
     let mut b = Builder::default();
+    let mut abandoned = Vec::new();
     for (i, row) in rows.into_iter().enumerate() {
-        b.push(i, row);
+        if rolled_back[i] {
+            abandoned.push(row);
+        } else {
+            b.push(i, row);
+        }
     }
-    b.finish(source_path)
+    let mut session = b.finish(source_path)?;
+    // What a rollback dropped is kept, verbatim, as the branch it was.
+    for (index, row) in abandoned.into_iter().enumerate() {
+        session.entries.push(Entry {
+            id: fallback_id("rolled-back", index),
+            kind: Kind::Meta {
+                kind: MetaKind::OffBranch,
+            },
+            raw: vec![row],
+        });
+    }
+    Ok(session)
+}
+
+/// Which records a `thread_rolled_back { num_turns }` took out of the thread: Codex replays it by
+/// dropping the last `num_turns` user turns of what it had so far, with everything that followed
+/// them. Only conversation records are dropped; the bookkeeping between them stays where it is.
+fn rolled_back(rows: &[Value]) -> Vec<bool> {
+    let mut dropped = vec![false; rows.len()];
+    for (at, row) in rows.iter().enumerate() {
+        let is_rollback = row.get("type").and_then(Value::as_str) == Some("event_msg")
+            && row.pointer("/payload/type").and_then(Value::as_str) == Some("thread_rolled_back");
+        let turns = row
+            .pointer("/payload/num_turns")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        if !is_rollback || turns == 0 {
+            continue;
+        }
+        let users: Vec<usize> = (0..at)
+            .filter(|&earlier| !dropped[earlier] && matches!(class_of(&rows[earlier]), Class::User))
+            .collect();
+        let Some(&first) = users.get(users.len().saturating_sub(turns)) else {
+            continue;
+        };
+        for earlier in first..at {
+            if !dropped[earlier] && !matches!(class_of(&rows[earlier]), Class::Meta(_)) {
+                dropped[earlier] = true;
+            }
+        }
+    }
+    dropped
 }
 
 /// What `row.get("payload")` is for a record without one.

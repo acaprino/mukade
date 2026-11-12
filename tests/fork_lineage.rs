@@ -353,3 +353,202 @@ fn a_pi_forks_parent_is_the_id_in_its_origins_header_in_the_listing_and_when_rea
     assert_eq!(Pi.read(PI_LOOSE, &roots).unwrap().meta.parent, loose.parent);
     assert_eq!(by_id(&listed, PI_ORIGIN).parent, None);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Codex: what a replay drops
+
+fn codex_session_of(roots: &StoreRoots, id: &str, all: bool) -> mukade::model::Session {
+    use mukade::reader::codex::{Branches, read_with};
+    read_with(
+        id,
+        roots,
+        if all { Branches::All } else { Branches::Active },
+    )
+    .unwrap()
+}
+
+fn texts_of(session: &mukade::model::Session) -> Vec<String> {
+    use mukade::model::Kind;
+    session
+        .conversation()
+        .map(|entry| match &entry.kind {
+            Kind::User { text, .. } => format!("user: {text}"),
+            Kind::Step { text, .. } => format!("assistant: {}", text.join(" ")),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+fn off_branch(session: &mukade::model::Session) -> usize {
+    use mukade::model::{Kind, MetaKind};
+    session
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.kind,
+                Kind::Meta {
+                    kind: MetaKind::OffBranch
+                }
+            )
+        })
+        .count()
+}
+
+/// Codex replays `thread_rolled_back { num_turns }` by dropping the last `num_turns` user turns
+/// (and what followed them) of what it had so far: they are an abandoned branch, not history.
+#[test]
+fn a_rolled_back_turn_is_an_abandoned_branch_and_not_history() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-rollback");
+    let roots = support::roots(&scratch);
+    let home = roots.codex_home.clone().unwrap();
+    codex_rollout(
+        &home,
+        CODEX_ORIGIN,
+        json!({}),
+        vec![
+            codex_say(1, "user", "q1"),
+            codex_say(2, "assistant", "a1"),
+            codex_say(3, "user", "q2"),
+            codex_say(4, "assistant", "a2"),
+            codex_say(5, "user", "q3"),
+            codex_say(6, "assistant", "a3"),
+            codex_record(
+                7,
+                "event_msg",
+                json!({"type": "thread_rolled_back", "num_turns": 2}),
+            ),
+            codex_say(8, "user", "q4"),
+            codex_say(9, "assistant", "a4"),
+            // A second rollback counts the turns that are still there.
+            codex_record(
+                10,
+                "event_msg",
+                json!({"type": "thread_rolled_back", "num_turns": 1}),
+            ),
+            codex_say(11, "user", "q5"),
+        ],
+    );
+    let session = codex_session_of(&roots, CODEX_ORIGIN, false);
+    assert_eq!(
+        texts_of(&session),
+        ["user: q1", "assistant: a1", "user: q5"]
+    );
+    // q2, a2, q3, a3 and then q4, a4: nothing is lost, each record is kept as an abandoned one.
+    assert_eq!(off_branch(&session), 6);
+    // A rollback of more turns than there are drops them all.
+    codex_rollout(
+        &home,
+        CODEX_FORK,
+        json!({}),
+        vec![
+            codex_say(1, "user", "only"),
+            codex_record(
+                2,
+                "event_msg",
+                json!({"type": "thread_rolled_back", "num_turns": 9}),
+            ),
+        ],
+    );
+    let session = codex_session_of(&roots, CODEX_FORK, false);
+    assert!(texts_of(&session).is_empty(), "{:?}", texts_of(&session));
+    assert_eq!(off_branch(&session), 1);
+}
+
+/// A fork that continues its origin by reference (`history_base` names the origin's file): the
+/// origin's records up to the cut are its history; what the origin did after them is the
+/// origin's, not a branch the fork left.
+#[test]
+fn a_referenced_fork_reads_the_origins_prefix_and_leaves_no_branch() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-referenced-fork");
+    let roots = support::roots(&scratch);
+    let home = roots.codex_home.clone().unwrap();
+    let origin_rows = vec![
+        codex_record(
+            0,
+            "session_meta",
+            json!({"id": CODEX_ORIGIN, "cwd": "/work", "cli_version": "0.167.0",
+                "timestamp": "2026-11-12T10:00:00.000Z"}),
+        ),
+        codex_say(1, "user", "q1"),
+        codex_say(2, "assistant", "a1"),
+        codex_say(3, "user", "origin q2"),
+        codex_say(4, "assistant", "origin a2"),
+    ];
+    let origin_path = home.join(format!(
+        "sessions/2026/11/12/rollout-2026-11-12T10-00-00-{CODEX_ORIGIN}.jsonl"
+    ));
+    write_lines(&origin_path, &origin_rows);
+    let cut: usize = origin_rows[..3]
+        .iter()
+        .map(|row| row.to_string().len() + 1)
+        .sum();
+    codex_rollout(
+        &home,
+        CODEX_FORK,
+        json!({"forked_from_id": CODEX_ORIGIN,
+            "history_base": {"thread_id": CODEX_ORIGIN, "end_ordinal_exclusive": 3,
+                "end_byte_offset": cut}}),
+        vec![
+            codex_say(3, "user", "fork q2"),
+            codex_say(4, "assistant", "fork a2"),
+        ],
+    );
+    for all in [false, true] {
+        let session = codex_session_of(&roots, CODEX_FORK, all);
+        assert_eq!(
+            texts_of(&session),
+            [
+                "user: q1",
+                "assistant: a1",
+                "user: fork q2",
+                "assistant: fork a2"
+            ],
+            "all: {all}"
+        );
+        assert_eq!(off_branch(&session), 0, "all: {all}");
+        assert_eq!(session.meta.parent.as_deref(), Some(CODEX_ORIGIN));
+        assert_eq!(
+            session.meta.parent_kind,
+            Some(ParentKind::Fork {
+                at: Some("3".into())
+            })
+        );
+    }
+}
+
+/// A subagent started with its parent's turns copies them into its own rollout, after the
+/// parent's own `session_meta`: that record is bookkeeping, the turns are what the child saw.
+#[test]
+fn a_forked_subagents_copied_parent_header_is_not_conversation() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-forked-subagent");
+    let roots = support::roots(&scratch);
+    let home = roots.codex_home.clone().unwrap();
+    codex_rollout(
+        &home,
+        CODEX_SUBAGENT,
+        json!({"forked_from_id": CODEX_ORIGIN, "parent_thread_id": CODEX_ORIGIN}),
+        vec![
+            codex_record(
+                1,
+                "session_meta",
+                json!({"id": CODEX_ORIGIN, "cwd": "/parent", "cli_version": "0.167.0"}),
+            ),
+            codex_say(2, "user", "the parent's prompt"),
+            codex_say(3, "assistant", "the parent's answer"),
+            codex_say(4, "user", "You are now a newly spawned child agent"),
+        ],
+    );
+    let session = codex_session_of(&roots, CODEX_SUBAGENT, false);
+    assert_eq!(session.meta.id, CODEX_SUBAGENT);
+    assert_eq!(session.meta.cwd.as_deref(), Some("/work"));
+    assert_eq!(
+        texts_of(&session),
+        [
+            "user: the parent's prompt",
+            "assistant: the parent's answer",
+            "user: You are now a newly spawned child agent"
+        ]
+    );
+    assert_eq!(off_branch(&session), 0);
+}
