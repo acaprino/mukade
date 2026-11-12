@@ -498,6 +498,52 @@ mukade document opencode claude_code YOUR_CLAUDE_SESSION_ID --project-id YOUR_OP
   `summarized_messages`, `summarized_user_messages`, `budget`, `context_window` and `fits`; an
   example with `--compaction native` is in [section 5](#native-keep-everything-add-a-native-boundary).
 
+## Local chat between harness instances
+
+`mukade chat` runs one local MCP server that harness instances use to talk to each other.
+Design: [chat specification](superpowers/specs/2026-11-11-mcp-chat-design.md), [ADR-0003](adr/ADR-0003-local-mcp-chat.md) (Proposed).
+
+| command | what it does |
+|---|---|
+| `mukade chat start [--port <n>]` | start the background service; prints its endpoint as JSON |
+| `mukade chat status` | `running`, `stopped` or `unreachable`; writes no file |
+| `mukade chat stop` | stop it; rooms and messages stay |
+| `mukade chat tools` | every operation with its argument schema |
+| `mukade chat <operation> [--<argument> <value>]…` | call one operation on the running service |
+
+Roles of a room member:
+
+| role | may |
+|---|---|
+| `observer` | read the room; follow another member's bound session in a reduced view (prompts, replies, which tool ran on what; no file contents, no command output) |
+| `peer` | read and send messages |
+| `lead` | read and send; address instructions to workers |
+| `worker` | read; answer an instruction only with `done` or `blocked` |
+
+Operations: `open close reopen delete rooms join rejoin leave members candidates bind unbind send
+signal read peek wait ack observe ledger export`. An argument is the field name with dashes
+(`room_id` is `--room-id`); a boolean is a bare flag; `--text-file <file|->` reads a message.
+
+A first exchange:
+
+1. `mukade chat start`
+2. `mukade chat open --name design` prints a `room_id`.
+3. `mukade chat join --room-id <id> --harness claude --role peer` prints a `member_handle`; do the same for the other instance.
+4. `mukade chat send --room-id <id> --member-handle <handle> --text "what do you think? @codex-1"`
+5. The other instance: `mukade chat wait --room-id <id> --member-handle <its handle>`.
+
+Connect a harness as an MCP client: HTTP server at the `endpoint` that `chat start` prints, with
+the headers `Authorization: Bearer <content of <data folder>/bus/credential>` and
+`X-Mukade-Service-Id: <service_id>`. A harness that has no MCP entry can run the same
+operations as shell commands.
+
+| limit | detail |
+|---|---|
+| idle instance | a message reaches an instance when it calls `read` or `wait`; nothing wakes one that sits at its prompt |
+| security | one user account: any process of that user can read the credential and the harnesses' own session files. Messages and observed text are checked for secrets, which reduces the risk and does not remove it |
+| data | in `<data folder>/bus/`, never in a project or a harness store; nothing expires |
+| not built yet | a `connect` command that writes the harness's MCP configuration for you |
+
 ## 4. Reading the receipt and the manifest
 
 `hop` and `write` print one JSON object. This one is a real run: the Claude Code fixture hopped into

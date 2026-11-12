@@ -226,6 +226,10 @@ cargo run -p mukade-tui -- --check       # harnesses and session counts, then ex
 
 Keys, the hop dialog, examples: [mukade-tui/README.md](mukade-tui/README.md).
 
+## Local chat between harness instances
+
+`mukade chat start` runs one local MCP server; Claude Code, Codex, OpenCode and Pi instances join a room as `observer`, `peer`, `lead` or `worker` and exchange messages, or follow each other's work in a reduced view. Commands, roles and limits: [docs/usage.md](docs/usage.md#local-chat-between-harness-instances).
+
 ## One executable, nothing to install
 
 `build.bat` (Windows) or `sh build.sh` (Linux) builds `target/release/mukade[.exe]` and `mukade-tui[.exe]`. Copy it anywhere, a USB stick too. The Windows executable carries the Musashi icon and the C runtime, so it needs no redistributable. No installer, no configuration file, no mode to switch on.

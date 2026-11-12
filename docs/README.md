@@ -58,6 +58,8 @@ Records of single runs, not guarantees for later versions, in [verification/](ve
 
 - [Native compaction records](verification/native-compaction-live.md): §4.4's records accepted live by the four harnesses.
 - [Source-model summary](verification/source-model-summary-live.md): summary runs and their isolation.
+- [Local chat live](verification/2026-11-12-chat-live.md): service lifecycle and a real Claude Code client (2026-11-12).
+- Design: [local MCP chat specification](superpowers/specs/2026-11-11-mcp-chat-design.md), [ADR-0003](adr/ADR-0003-local-mcp-chat.md) (Proposed).
 - [Linux 2026-11-11](verification/linux-2026-11-11.md): Claude Code `live` (a bug fixed), process-tree kill, suite green.
 - [Listing coverage](verification/listing-coverage-2026-11-08.md): sessions whose transcripts are gone (Codex `state_5.sqlite`, Claude Code `history.jsonl`, OpenCode's other databases), `live`, the cache.
 - [Codex code mode](verification/2026-11-11-codex-code-mode.md): the L10 census: 725 of 981 `exec` scripts read as calls.
