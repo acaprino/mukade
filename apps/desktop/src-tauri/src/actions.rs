@@ -12,7 +12,7 @@ use crate::view::{self, ReceiptView};
 use mukade::dest;
 use mukade::exe;
 use mukade::hop::{
-    Compaction, HopError, ImportOpts, KeepFrom, ResumePrompt, SessionRef, SourceFacts,
+    Compaction, HopError, HopRequest, ImportOpts, KeepFrom, ResumePrompt, SessionRef, SourceFacts,
     SummarySource, WriteDetails,
 };
 use mukade::model::{ParentKind, Session};
@@ -246,25 +246,23 @@ fn prompt(text: Option<&str>) -> Option<ResumePrompt> {
 }
 
 /// F6: read the source from its own installation, compact it there, write it into the
-/// destination's stores (two installations of one harness keep theirs apart).
+/// destination's stores (two installations of one harness keep theirs apart). The library's
+/// `hop_into` does the hop, so its refusals and its registry hold here as in the CLI and the TUI.
 pub fn hop(state: &AppState, args: &HopArgs) -> CmdResult<ReceiptView> {
     let (source, info) = readable(state, &args.source, &args.id)?;
     let dest = state.location(&args.dest)?;
-    mukade::harnesses::destination(dest.harness)?;
-    if args.all_branches && args.compaction == "summary" {
-        return Err(CmdError::refused(
-            "a summary with all branches: the summary stands for the branch the source resumes",
-        ));
-    }
-    let selection = compaction(&args.compaction)?;
+    let compaction = compaction(&args.compaction)?;
     let reasoning = reasoning(args.reasoning.as_deref())?;
     let reference = SessionRef::id(source.harness, info.id.clone());
-    let session = if args.all_branches {
-        mukade::hop::export_all_branches(&reference, &source.roots)?
-    } else {
-        mukade::export(&reference, &source.roots)?
+    // The destination's facts depend on the folder: the listing's, else the session's own, read
+    // only when the window holds no copy of it.
+    let cwd = match info.cwd.clone() {
+        Some(cwd) => Some(cwd),
+        None => match state.cached_session(&args.source, &info.id) {
+            Some(session) => session.meta.cwd.clone(),
+            None => mukade::export(&reference, &source.roots)?.meta.cwd,
+        },
     };
-    let cwd = session.meta.cwd.clone().or(info.cwd.clone());
     let mut write = write_details_for(&dest, cwd.as_deref());
     match args.dest_shell.as_deref().map(str::trim) {
         None | Some("") | Some("default") => {}
@@ -277,30 +275,17 @@ pub fn hop(state: &AppState, args: &HopArgs) -> CmdResult<ReceiptView> {
             })?);
         }
     }
-    let (selected, summary) = mukade::hop::compact(&session, &selection, &source.roots)?;
-    let opts = ImportOpts {
+    let request = HopRequest {
         cwd,
-        roots: dest.roots.clone(),
+        compaction,
+        resume: prompt(args.prompt.as_deref()),
         reasoning,
         write,
-        resume: prompt(args.prompt.as_deref()),
-        source_facts: SourceFacts::of(&session),
-        compaction: selection.name().to_string(),
-        summary,
-        native_budget: None,
+        children: args.children,
+        all_branches: args.all_branches,
+        ..HopRequest::new(reference, dest.harness, source.roots.clone())
     };
-    let result = if args.children {
-        mukade::children::import_with_children(
-            dest.harness,
-            &selected,
-            &session,
-            &source.roots,
-            &opts,
-        )
-    } else {
-        mukade::import(dest.harness, &selected, &opts)
-    };
-    deliver(result, &dest)
+    deliver(mukade::hop_into(&request, &dest.roots), &dest)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -641,5 +626,53 @@ mod tests {
             }
         }
         assert!(!written.is_empty(), "no destination took the hop");
+        // The window's hops go through the library's, so its registry remembers them.
+        let registry = scratch.join("mukade-data").join("registry");
+        let records = records_under(&registry);
+        assert!(
+            records >= written.len(),
+            "{records} records for {} writes in {}",
+            written.len(),
+            registry.display()
+        );
+    }
+
+    /// The records the registry files in `dir` and its folders hold (each file is a JSON list).
+    fn records_under(dir: &Path) -> usize {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| match entry.file_type() {
+                Ok(kind) if kind.is_dir() => records_under(&entry.path()),
+                Ok(_) => std::fs::read_to_string(entry.path())
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<Vec<Value>>(&text).ok())
+                    .map_or(0, |records| records.len()),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+
+    /// The library's refusal reaches the window: a summary from the source's model stands for the
+    /// branch the source resumes, so it does not go with every branch.
+    #[test]
+    fn a_summary_with_every_branch_is_refused() {
+        let scratch = Scratch::new("hop-branches");
+        let state = listed(claude_store(&scratch));
+        let args = HopArgs {
+            source: "claude_code".into(),
+            id: CLAUDE_FIXTURE.into(),
+            dest: "claude_code".into(),
+            compaction: "summary".into(),
+            children: false,
+            all_branches: true,
+            reasoning: None,
+            dest_shell: None,
+            prompt: None,
+        };
+        let error = hop(&state, &args).unwrap_err();
+        assert_eq!(error.kind, "refused", "{}", error.message);
+        assert!(error.message.contains("every branch"), "{}", error.message);
     }
 }

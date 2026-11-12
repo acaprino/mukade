@@ -116,7 +116,7 @@ each Rust type with a TS fixture).
 | `transcript` | `{ installation, id, turns }` | `Entry[]` (view model: role, time, text, calls, results, compaction) |
 | `raw` | `{ installation, id, entry_id }` | `Value[]` |
 | `hop_options` | `{ source, id }` | destinations, compaction modes available, `has_children`, `all_branches_supported`, default dest shell per destination |
-| `hop` | `{ source, id, dest, compaction, children, all_branches, reasoning?, dest_shell?, prompt? }` | `Receipt` (new id, location, resume commands, manifest path, losses, child lines, reply) |
+| `hop` | `{ source, id, dest, compaction, children, all_branches, reasoning?, dest_shell?, prompt? }` | `Receipt` (new id, location, resume commands, manifest path, losses, child lines, reply), from the library's `hop_into`: its refusals and its registry hold as in the CLI and the TUI |
 | `export` | `{ installation, id, to? }` | `{ path, messages }` |
 | `import` | `{ document, into, prompt? }` | `Receipt` |
 | `resume` | `{ installation, id }` | `{ launched: bool, refusal?, command: string[] }` |
