@@ -6,6 +6,10 @@ description = "Desktop app for the harness sessions manager: browse, hop, export
 license = "MIT"
 publish = false
 
+[[bin]]
+name = "mukade-ui"
+path = "src/main.rs"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 

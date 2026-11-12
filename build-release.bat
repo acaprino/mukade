@@ -1,10 +1,10 @@
 @echo off
 rem Build Mukade and assemble the portable package in .\release:
-rem   release\mukade-desktop.exe   the desktop app (Tauri, the UI embedded)
+rem   release\mukade-ui.exe        the desktop app (Tauri, the UI embedded)
 rem   release\mukade.exe           the command line
 rem Both sit in one folder on purpose: they share release\mukade-data (exports, manifests, the chat
 rem service's files), so the app reads the chat that `mukade chat start` runs from there.
-rem Usage: build-release.bat   (then run release\mukade-desktop.exe)
+rem Usage: build-release.bat   (then run release\mukade-ui.exe)
 setlocal
 cd /d "%~dp0"
 
@@ -19,7 +19,7 @@ if not exist "node_modules\@tauri-apps\cli" (
 echo [2/4] Command line ^(mukade.exe, release profile^)
 cargo build --release --locked -p mukade --bin mukade || goto fail
 
-echo [3/4] Desktop app ^(mukade-desktop.exe, the UI embedded^)
+echo [3/4] Desktop app ^(mukade-ui.exe, the UI embedded^)
 rem `tauri build` runs `npm run build` first (beforeBuildCommand) and embeds apps\desktop\dist.
 pushd apps\desktop
 call npx tauri build --no-bundle --features custom-protocol
@@ -31,13 +31,13 @@ echo [4/4] Copy to release
 if not exist "release" mkdir "release"
 rem Only the programs are replaced: release\mukade-data, if it is there, is the user's and stays.
 copy /y "target\release\mukade.exe" "release\mukade.exe" >nul || (echo Could not copy mukade.exe. & goto fail)
-copy /y "target\release\mukade-desktop.exe" "release\mukade-desktop.exe" >nul || (echo Could not copy mukade-desktop.exe. & goto fail)
+copy /y "target\release\mukade-ui.exe" "release\mukade-ui.exe" >nul || (echo Could not copy mukade-ui.exe. & goto fail)
 copy /y "docs\desktop.md" "release\LEGGIMI-desktop.md" >nul
 copy /y "LICENSE" "release\LICENSE" >nul
 
 echo.
 echo OK. Ready:
-echo   "%CD%\release\mukade-desktop.exe"   ^(the app; needs the WebView2 runtime, built into Windows 11^)
+echo   "%CD%\release\mukade-ui.exe"        ^(the app; needs the WebView2 runtime, built into Windows 11^)
 echo   "%CD%\release\mukade.exe"           ^(the command line: list, hop, dump, write, chat ...^)
 echo Data: "%CD%\release\mukade-data" ^(made on first use, beside both programs^)
 echo.

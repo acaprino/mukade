@@ -15,12 +15,11 @@ npm run desktop
 ```
 
 `npm run desktop` opens the window with live reload. `npm run desktop:build` builds a debug binary
-(`target/debug/mukade-desktop`, no installer). `npm run dev` serves the same page in a browser with
+(`target/debug/mukade-ui`, no installer). `npm run dev` serves the same page in a browser with
 made-up sessions (`apps/desktop/src/mock.ts`): every view can be seen without stores.
 
 The portable package: `build-release.bat` (Windows) or `build-release.sh` builds the release
-command line and the app with the UI embedded into `release\`: `mukade-desktop.exe` and
-`mukade.exe` side by side, sharing `release\mukade-data` (exports, manifests, the chat service). A
+command line and the app with the UI embedded into `release\`: `mukade-ui.exe` (the app) and `mukade.exe` side by side, sharing `release\mukade-data` (exports, manifests, the chat service). A
 rebuild replaces the two programs and leaves `mukade-data` alone. The app needs the WebView2
 runtime (part of Windows 11).
 
