@@ -240,3 +240,39 @@ fn a_child_write_failure_is_exit_5_with_the_parents_receipt() {
     let saved = json(&std::fs::read_to_string(manifest_file).unwrap());
     assert!(saved["losses"].to_string().contains("not written"), "{saved:#}");
 }
+
+/// `write` imports the session of a document that holds subagent sessions, and says it left them.
+#[test]
+fn write_says_it_leaves_a_documents_children() {
+    let scratch = staged("cc-write-note");
+    let file = scratch.join("session.json");
+    let (code, _, stderr) = cli_code(
+        &scratch,
+        &[
+            "dump",
+            "claude_code",
+            PARENT,
+            "--children",
+            "--output",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "write",
+            "pi",
+            file.to_str().unwrap(),
+            "--dest-version",
+            "1.2.0",
+            "--cwd",
+            scratch.join("work").to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stderr.contains("subagent session(s)"), "{stderr}");
+    assert!(json(&stdout)["manifest"].get("children").is_none());
+}

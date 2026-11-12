@@ -567,6 +567,12 @@ pub fn run(args: &[String]) -> Result<()> {
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
             let session = crate::wire::from_document(&doc)?;
+            if let Some(children) = doc["children"].as_array().filter(|c| !c.is_empty()) {
+                eprintln!(
+                    "the document holds {} subagent session(s); write imports the session alone (hop --children writes them)",
+                    children.len()
+                );
+            }
             let opts = flags.import_opts(
                 session.meta.harness,
                 harness,
