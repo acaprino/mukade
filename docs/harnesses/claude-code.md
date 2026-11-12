@@ -158,7 +158,7 @@ JSON Lines, one record per line. Anthropic publishes no versioned schema: treat 
 | `user` | a prompt; tool results as `tool_result` blocks; slash-command rows (`<command-name>`, `<local-command-stdout>`, `<local-command-caveat>`, with `isMeta`); the compaction summary | `message.content`, `isMeta`, `isVisibleInTranscriptOnly`, `isCompactSummary`, `tool_use_id`, `is_error` |
 | `assistant` | **one row per content block**, sharing `message.id`, chained by `parentUuid`; blocks `thinking` (with `signature`), `redacted_thinking` (with `data`), `text`, `tool_use` | `message.id`, `message.model`, `message.stop_reason` |
 | `system` | notably `subtype: "compact_boundary"` | `subtype`, `compactMetadata` |
-| `attachment` | files re-injected after a compaction; `queued_command` with `commandMode: "task-notification"`: a background task's notification (a subagent's report) as the model received it | `attachment.prompt` of a task notification; the rest kept, not conversation |
+| `attachment` | files re-injected after a compaction; `queued_command` with `commandMode: "task-notification"` (a background task's notification, a subagent's report) or `commandMode: "prompt"` (a prompt typed while a turn ran), as the model received it | `attachment.prompt` as a user turn in place, once when a plain row repeats it next to it; the rest kept, not conversation |
 | `custom-title`, `last-prompt` | the `/rename` name; the last prompt and its leaf | `customTitle`; `lastPrompt`, `leafUuid` |
 | others | request/cost/telemetry rows (`api-request` among them) | kept, not conversation |
 

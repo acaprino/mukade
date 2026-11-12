@@ -1172,33 +1172,48 @@ fn arguments_of(payload: &Value) -> Value {
     }
 }
 
-/// The shell a harness runs commands with, as its own environment block states it [V].
+/// The shell an `<environment_context>` declares (`<shell>…</shell>`), as the canonical tool its
+/// command lines are written for. A shell of no dialect mukade translates (`cmd`, `fish`) is
+/// `Other` with its name: its calls are not read as `Bash`.
 fn shell_declared(text: &str) -> Option<CanonicalTool> {
     let start = text.find("<shell>")? + "<shell>".len();
     let end = text[start..].find("</shell>")? + start;
-    match text[start..end].trim().to_ascii_lowercase().as_str() {
-        "bash" | "sh" | "zsh" | "posix" | "git-bash" => Some(CanonicalTool::Bash),
-        "powershell" | "pwsh" => Some(CanonicalTool::PowerShell),
-        _ => None,
+    shell_tool(text[start..end].trim())
+}
+
+/// The canonical tool of a shell named by its program or path (`pwsh`, `/bin/bash`,
+/// `C:\Windows\System32\cmd.exe`, `git-bash`). `None`: no name.
+fn shell_tool(name: &str) -> Option<CanonicalTool> {
+    if name.is_empty() {
+        return None;
     }
+    if matches!(name.to_ascii_lowercase().as_str(), "posix" | "git-bash") {
+        return Some(CanonicalTool::Bash);
+    }
+    Some(match crate::tools::shell_named(name) {
+        Some(crate::tools::Shell::Posix) => CanonicalTool::Bash,
+        Some(crate::tools::Shell::PowerShell) => CanonicalTool::PowerShell,
+        None => CanonicalTool::Other(name.to_string()),
+    })
 }
 
 /// The canonical form of a Codex call. `exec_command` inherits the harness's shell dialect unless
-/// the call names one itself; the dialect is what decides whether a hop may keep a shell call or
-/// has to carry it as text (L13). When nothing states the shell, the command line is read as the
-/// canonical `Bash`, which is what that name means in this vocabulary.
+/// the call names one itself (by name or by path); the dialect is what decides whether a hop may
+/// keep a shell call or has to carry it as text (L13). A shell of no dialect mukade translates
+/// leaves the call as Codex's own tool, which travels as text. When nothing states the shell, the
+/// command line is read as the canonical `Bash`, which is what that name means in this vocabulary.
 fn canonical_call(name: &str, input: &Value, env_shell: Option<CanonicalTool>) -> CanonicalTool {
-    let from_argument = input
+    if !matches!(name, "exec_command" | "local_shell") {
+        return CanonicalTool::from_codex(name);
+    }
+    let own = input
         .get("shell")
         .and_then(Value::as_str)
-        .map(|s| s.to_ascii_lowercase());
-    match (name, from_argument.as_deref()) {
-        ("exec_command" | "local_shell", Some("pwsh" | "powershell")) => CanonicalTool::PowerShell,
-        ("exec_command" | "local_shell", Some("bash" | "sh" | "zsh" | "posix")) => {
-            CanonicalTool::Bash
-        }
-        ("exec_command" | "local_shell", _) => env_shell.unwrap_or(CanonicalTool::Bash),
-        _ => CanonicalTool::from_codex(name),
+        .and_then(shell_tool);
+    match own.or(env_shell) {
+        Some(CanonicalTool::Other(_)) => CanonicalTool::Other(name.to_string()),
+        Some(shell) => shell,
+        None => CanonicalTool::Bash,
     }
 }
 

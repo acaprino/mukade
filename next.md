@@ -18,6 +18,7 @@ Its step numbers are in brackets below.
 | Subagent sessions, phase 1 ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)) | Claude Code children unreadable and never listed; OpenCode's `parentID` missed; `parent` meant fork for Pi, spawner for Codex and OpenCode, unsaid; what a child reported to its parent read as `Meta` and lost silently | `parent_kind` (fork / spawn with call and agent) on every parent; Claude children `<parent-id>.<agentId>` read and listed (`list --children`, the TUI); reports the parent received are user turns, an encrypted Codex one counted (`dropped_subagent_messages`) |
 | Subagent sessions, phase 2 ([plan](docs/superpowers/plans/2026-11-12-subagents-phase2.md)) | a hop left a session's subagents behind; `dump` had no way to carry them | `dump --children` nests each child's document; `hop --children` writes each child as a session of its own after the parent, linked where the destination can (OpenCode `info.parentID`, checked with the real `opencode` 2.2.5 in a scratch store; Claude Code `subagents/` folder), unlinked for Codex and Pi, and lists them in `manifest.children` |
 | Chat launch for OpenCode and Pi ([record](docs/verification/2026-11-12-chat-live.md#run-9-the-opencode-and-pi-launch-kits-on-linux-without-the-harnesses)) | `chat launch opencode\|pi` refused (exit 2); a listener stopped by the user held the member's stream, so the next prompt's news was lost to `stream_busy` | OpenCode 2: a server plugin and the MCP entry in `OPENCODE_CONFIG_CONTENT`, a private server (`--standalone`); Pi: one extension (`pi -e`) that registers the MCP entry; both join, get the news with each prompt and go on when listening, a typed prompt (and Escape in Pi) ends the wait; a stopped hook cancels its call (`notifications/cancelled`), waits run in 5 s slices. Run under Node against a real service; no real OpenCode or Pi yet (below) |
+| `next.md` code items, 2026-11-12 (afternoon) | the items below | Claude Code `queued_command` prompts typed mid-turn are user turns in place (once when a plain row repeats them); the Codex reader reads `<shell>cmd</shell>` and a call's shell given as a path (`cmd`, `fish`: no dialect, text form); Pi's `powershell` tool where `defaultTools` turns it on; a seeded DeepSeek fork names `at` (dsh's `buildForkSeed`: the event before `session/end-seed`); `list --children` keeps each child's `meta.json` in the listing cache; the summary's run folder is unique per call and spared while its process runs; the manifest names no model when the summarizing run named none; a test covers the fork leftover `dump` prints |
 | Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` names no dialect, so shell calls into Codex, OpenCode and Pi stay text as before, while Claude's offered set is unchanged ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
 
 ## ✅ Done on 2026-11-11
@@ -91,9 +92,9 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 - *Branches, written:* whether Claude Code 2.1.322 resumes the intended leaf of a mukade-written file with several leaves, and whether Codex counts the user-role messages mukade writes inside a turn (a tool result written as text) when it rolls back, are **[U]** (a live load without a prompt would settle them); a paginated Codex fork or redo page is read, never written; OpenCode keeps no branches (its `revert` is not read).
 - *A fork hopped is a copy:* the manifest names the origin, nothing links the written fork to a written origin (needs a hop registry: which destination id and uuids the origin got).
-- *Claude Code `--fork-session`* [U]: whether its rows carry `forkedFrom`; the leaf flags `explicit`, `rewound`, `cutUuid` of 2.1.322 are not read.
+- *Claude Code `--fork-session`* [U]: whether its rows carry `forkedFrom`. The leaf flags of 2.1.322 are not read: they sit on `last-prompt` rows (`leafUuid`, `explicit`, `rewound`, `cutUuid`); in the binary, an explicit rewound checkpoint marks `cutUuid` and its ancestors hidden until a later row descends from them (`noteCheckpoint`/`noteRow`), and a `leafUuid: null` with `explicit` clears the leaf. A real rewound transcript is needed to implement it against.
 - *Codex:* a thread that survives only as a database row cannot be told as a fork (no fork column); a paginated fork is read, never written.
-- *DeepSeek Harness:* a `isSeeded` fork's `at` is not set (the entry before `session/end-seed`); Hermes `/branch` has no `at` (the copy boundary is not recorded).
+- *DeepSeek Harness:* a fork made in dsh's web UI (0.2.2-rc.1, `forkSession`) writes `isSeeded: true` and **no `parentSession`**, so its parent is not recorded and it lists as a root; its `at` is set only where a header names the parent. Hermes `/branch` has no `at` (the copy boundary is not recorded).
 
 **Subagents, left open** ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md); phases 1 and 2 are done above):
 
@@ -110,20 +111,15 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
   store); `forked-skill` files and `workflows/` are not listed.
 - *Codex:* the encrypted prompts a parent sends its children stay encrypted; threads whose rollout
   is gone are listed by `--children` as before.
-- *TUI:* children are flat rows (nesting comes with the TUI work); `R` on a Claude Code child names
-  the parent to resume instead.
-- *Claude Code `queued_command` attachments* (prompts the user typed mid-turn, `commandMode:
-  prompt`) still read as `Meta(Attachment)` and are dropped uncounted: 1110 on the author's store,
-  25 also as a plain row. Same fix as the reports: a user turn in place.
-- *`list --children` cost:* every child's `meta.json` is read on each call (~150 ms for 840 children
-  on the author's store); keep its fields in the listing cache.
+- *TUI:* `R` on a Claude Code child names the parent to resume instead.
+- *Claude Code queued prompts* [U]: the 25 on the author's store that are also a plain row are read
+  once when the two are adjacent; whether Claude Code ever writes the plain row further away is not
+  checked.
 
 **Shell dialects, left open** ([spec](docs/superpowers/specs/2026-11-12-destination-shell-design.md)).
 
-- *Pi's `powershell` tool* as a destination tool: off unless `defaultTools` names it; today a
-  PowerShell call goes to `bash`, and only toward a `shellPath` of PowerShell.
-- *Codex reader:* `<shell>cmd</shell>` is read as `Bash`, and a call's own `shell` given as a path
-  is ignored (`src/reader/codex.rs` `shell_declared()`).
+- *Pi with `defaultTools` naming plain tools* (e.g. `["read","powershell","edit","write"]`): Pi then
+  drops `bash`, mukade still offers it.
 - *Codex Desktop with its agent in WSL* [U]: which shell its rollouts declare.
 
 ## 🔴 Needs an API key
@@ -170,11 +166,7 @@ Not bugs. Each is stated in the docs where it applies.
 
 **Small review points still open** (harmless, low priority)
 
-- The manifest names the recorded model when OpenCode ran with its default.
-- A summary run's folder name is pid and time: two threads of one library caller could share it,
-  and a run longer than an hour can be swept by another mukade.
 - The tests sharing `mukade-data/tmp` assume `cargo test` runs one test binary at a time (not nextest).
-- No test covers the fork leftover `dump` prints.
 - A test that the strict gate writes nothing on refusal would need a hook in production code.
 
 ---

@@ -90,11 +90,12 @@ pub fn list_all_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<S
     let transcripts = subagents::transcripts(&projects)?;
     let files: Vec<PathBuf> = transcripts.iter().map(|(file, _)| file.clone()).collect();
     let table = crate::cache::table_name("claude-subagents-2", &projects.to_string_lossy());
-    for (mut info, (file, session)) in peek_files(&files, &table, cache)
+    let metas = agent_metas(&files, &projects, cache);
+    for ((mut info, (file, session)), meta) in peek_files(&files, &table, cache)
         .into_iter()
         .zip(&transcripts)
+        .zip(metas)
     {
-        let meta = subagents::agent_meta(file);
         let agent = subagents::agent_id_of(file).unwrap_or_default();
         let (parent, kind) = subagents::lineage(session, meta.as_ref());
         info.id = subagents::qualified(session, agent);
@@ -108,6 +109,50 @@ pub fn list_all_cached(roots: &StoreRoots, cache: Option<&Path>) -> Result<Vec<S
     }
     out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
     Ok(out)
+}
+
+/// Each child's meta.json, from `cache` where the file is as it was when it was read (a listing of
+/// hundreds of children otherwise opens every one of them each time).
+fn agent_metas(
+    transcripts: &[PathBuf],
+    projects: &Path,
+    cache: Option<&Path>,
+) -> Vec<Option<subagents::AgentMeta>> {
+    use serde_json::{Map, Value};
+    let name = crate::cache::table_name("claude-subagent-meta-1", &projects.to_string_lossy());
+    let remembered: Map<String, Value> = cache
+        .map(|dir| crate::cache::load_table(dir, &name))
+        .unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |age| u64::try_from(age.as_nanos()).unwrap_or(u64::MAX));
+    let settled = u64::try_from(SETTLED_AFTER.as_nanos()).unwrap_or(u64::MAX);
+    let mut table = Map::new();
+    let metas = transcripts
+        .iter()
+        .map(|transcript| {
+            let file = subagents::meta_file(transcript)?;
+            let (size, modified) = stamp(&file)?;
+            let key = file.to_string_lossy().into_owned();
+            let meta = remembered
+                .get(&key)
+                .and_then(|entry| subagents::AgentMeta::from_entry(entry, size, modified))
+                .unwrap_or_else(|| subagents::agent_meta(transcript));
+            if modified.saturating_add(settled) <= now {
+                table.insert(
+                    key,
+                    subagents::AgentMeta::to_entry(meta.as_ref(), size, modified),
+                );
+            }
+            meta
+        })
+        .collect();
+    if let Some(dir) = cache
+        && table != remembered
+    {
+        crate::cache::store_table(dir, &name, &table);
+    }
+    metas
 }
 
 /// What each session file says about its session: from `cache` where the file is as it was,
@@ -433,17 +478,17 @@ fn class_of(row: &Value) -> Class {
     }
 }
 
-/// A background task's notification as Claude Code queues it for the model: an `attachment` row,
-/// `queued_command` with `commandMode: task-notification` (a subagent's report, a background
-/// shell's end). Its text, which the model received as a user message, as it does the plain-row
-/// form of the same notification.
+/// What Claude Code queued for the model while a turn ran: an `attachment` row, `queued_command`
+/// with `commandMode: task-notification` (a subagent's report, a background shell's end) or
+/// `commandMode: prompt` (a prompt the user typed mid-turn). Its text, which the model received as
+/// a user message, as it does the plain-row form of the same text.
 fn task_notification(row: &Value) -> Option<String> {
-    let queued = row.get("type").and_then(Value::as_str) == Some("attachment")
-        && row.pointer("/attachment/type").and_then(Value::as_str) == Some("queued_command")
-        && row
-            .pointer("/attachment/commandMode")
-            .and_then(Value::as_str)
-            == Some("task-notification");
+    let queued = is_queued_command(row)
+        && matches!(
+            row.pointer("/attachment/commandMode")
+                .and_then(Value::as_str),
+            Some("task-notification" | "prompt")
+        );
     if !queued {
         return None;
     }
@@ -453,6 +498,11 @@ fn task_notification(row: &Value) -> Option<String> {
         _ => None,
     }
     .filter(|text| !text.trim().is_empty())
+}
+
+fn is_queued_command(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("attachment")
+        && row.pointer("/attachment/type").and_then(Value::as_str) == Some("queued_command")
 }
 
 /// L9: the row Claude Code writes when the user interrupts a turn (`[Request interrupted by
@@ -899,6 +949,18 @@ impl Builder {
                     });
                 }
             }
+            Class::User if self.repeats_queued(&row, text.as_deref()) => {
+                // The same queued text written twice, as the attachment and as a plain row: the
+                // model read it once.
+                self.flush_compaction();
+                self.entries.push(Entry {
+                    id: row_id(&row, index),
+                    kind: Kind::Meta {
+                        kind: MetaKind::Attachment,
+                    },
+                    raw: vec![row],
+                });
+            }
             Class::User => {
                 self.flush();
                 self.unsummarized = None;
@@ -952,6 +1014,30 @@ impl Builder {
     }
 
     /// Flush the pending boundary of a compaction block that has no summary row after it.
+    /// Whether this user row repeats the user turn just before it, one of the two being a
+    /// `queued_command` attachment.
+    fn repeats_queued(&self, row: &Value, text: Option<&str>) -> bool {
+        let Some(text) = text.filter(|t| !t.trim().is_empty()) else {
+            return false;
+        };
+        let Some(last) = self
+            .entries
+            .iter()
+            .rev()
+            .find(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+        else {
+            return false;
+        };
+        let Kind::User {
+            text: last_text, ..
+        } = &last.kind
+        else {
+            return false;
+        };
+        last_text.trim() == text.trim()
+            && (is_queued_command(row) || last.raw.first().is_some_and(is_queued_command))
+    }
+
     fn flush(&mut self) {
         self.flush_step();
         self.open_results = None;

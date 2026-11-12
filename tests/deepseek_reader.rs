@@ -894,6 +894,31 @@ fn a_subagent_a_seeded_subagent_and_a_fork_are_told_apart() {
     assert_eq!(read("session-p").parent_kind, None);
 }
 
+/// A seeded fork says where it left its parent: dsh copies the parent's events through the
+/// boundary as they are and marks the end of the copy with `session/end-seed`.
+#[test]
+fn a_seeded_fork_names_the_parents_event_the_copy_ends_at() {
+    let mut fork = child("kid-4", "session-p", json!({"isSeeded": true}));
+    let boundary = fork.events.len() as u64 - 1;
+    fork.push("session/end-seed", json!({"inherited": true}), json!({}));
+    fork.user("and now this");
+    let session = session_of(&fork, "seeded-fork");
+    assert_eq!(session.meta.parent.as_deref(), Some("session-p"));
+    assert_eq!(
+        session.meta.parent_kind,
+        Some(ParentKind::Fork {
+            at: Some(boundary.to_string())
+        })
+    );
+    // A marker dsh wrote on adopting a session (no inherited copy) says nothing about a fork.
+    let mut adopted = child("kid-5", "session-p", json!({"isSeeded": true}));
+    adopted.push("session/end-seed", json!({}), json!({}));
+    assert_eq!(
+        session_of(&adopted, "adopted").meta.parent_kind,
+        Some(ParentKind::fork())
+    );
+}
+
 #[test]
 fn a_listing_shows_roots_and_forks_and_the_explorer_adds_subagents() {
     let roots = store(

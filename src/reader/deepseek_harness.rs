@@ -207,6 +207,25 @@ fn lineage(header: &Value) -> (Option<String>, Option<ParentKind>) {
     (Some(parent), Some(kind))
 }
 
+/// Where a seeded fork left its parent: dsh copies the parent's events `0..=boundary` as they are
+/// and writes `session/end-seed` (`data.inherited: true`) at `boundary + 1`, so the parent's event
+/// the copy ends at is the one before that marker (`buildForkSeed`, dsh 0.2.2-rc.1). The listing,
+/// which reads the header only, leaves it unset.
+fn fork_boundary(header: &Value, events: &[&Value]) -> Option<String> {
+    if header.get("isSeeded").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    let marker = events.iter().find(|event| {
+        kind_of(event) == "session/end-seed"
+            && event.pointer("/data/inherited").and_then(Value::as_bool) == Some(true)
+    })?;
+    marker
+        .get("seq")
+        .and_then(Value::as_u64)?
+        .checked_sub(1)
+        .map(|seq| seq.to_string())
+}
+
 /// The header of a log: its first record, checked against the format this reader reads.
 fn header_of(rows: &[Value]) -> Result<&Value> {
     let header = rows
@@ -702,7 +721,10 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
         .iter()
         .filter_map(|event| event.get("time").and_then(Value::as_i64))
         .max();
-    let (parent, parent_kind) = lineage(header);
+    let (parent, mut parent_kind) = lineage(header);
+    if let Some(ParentKind::Fork { at }) = &mut parent_kind {
+        *at = fork_boundary(header, &events);
+    }
     Ok(Session {
         meta: Meta {
             harness: HarnessId::DeepSeekHarness,

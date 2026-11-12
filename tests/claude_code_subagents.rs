@@ -138,6 +138,44 @@ fn list_all_from_the_cache_lists_the_same_children() {
         tables.iter().any(|name| name.contains("claude-subagents")),
         "{tables:?}"
     );
+
+    // Each child's meta.json is remembered too: a warm listing takes it from the cache while the
+    // file is as it was, and reads the file again once it changed.
+    let meta_table = tables
+        .iter()
+        .find(|name| name.contains("claude-subagent-meta"))
+        .unwrap_or_else(|| panic!("{tables:?}"));
+    let path = cache.join(meta_table);
+    let mut table: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let (file, entry) = table
+        .as_object_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|(_, entry)| entry.get("d").is_some())
+        .map(|(file, entry)| (file.clone(), entry))
+        .unwrap();
+    entry["d"] = serde_json::json!("remembered");
+    std::fs::write(&path, table.to_string()).unwrap();
+    let titled = |listing: &[mukade::reader::SessionInfo]| {
+        listing
+            .iter()
+            .any(|info| info.title.as_deref() == Some("remembered"))
+    };
+    assert!(titled(
+        &claude_code::list_all_cached(&roots, Some(&cache)).unwrap()
+    ));
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, format!("{text} ")).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    assert!(!titled(
+        &claude_code::list_all_cached(&roots, Some(&cache)).unwrap()
+    ));
 }
 
 /// A child is read by its qualified id: its sidechain rows are its conversation, and its meta
@@ -442,4 +480,100 @@ fn a_report_between_results_and_the_next_call_hops() {
         ]
     );
     support::assert_hops_keeping(&session, "The build is green.", "sub-report-mid");
+}
+
+/// A prompt the user typed while a turn ran is queued for the model as an attachment
+/// (`queued_command`, `commandMode: prompt`): a user turn in place, read once even when Claude Code
+/// also wrote it as a plain row.
+#[test]
+fn a_prompt_typed_mid_turn_is_one_user_turn_in_place() {
+    let row = |uuid: &str, parent: Option<&str>, extra: serde_json::Value| {
+        let mut row = serde_json::json!({
+            "parentUuid": parent, "isSidechain": false, "uuid": uuid,
+            "timestamp": "2026-11-12T10:00:00.000Z", "cwd": "D:/work", "sessionId": PARENT,
+            "version": "2.1.322",
+        });
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        row
+    };
+    let call = |uuid: &str, parent: &str, id: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "assistant", "message": {"id": format!("msg_{uuid}"),
+                "role": "assistant", "model": "claude-opus-5-5", "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": id, "name": "Bash",
+                             "input": {"command": "ls"}}]}}),
+        )
+    };
+    let result = |uuid: &str, parent: &str, id: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "user", "sourceToolAssistantUUID": parent,
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": id, "content": "ok"}]}}),
+        )
+    };
+    let queued = |uuid: &str, parent: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "attachment", "attachment": {
+                "type": "queued_command", "commandMode": "prompt",
+                "prompt": "also check the docs"}}),
+        )
+    };
+    let plain = |uuid: &str, parent: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "user",
+                "message": {"role": "user", "content": "also check the docs"}}),
+        )
+    };
+    let done = |uuid: &str, parent: &str| {
+        row(
+            uuid,
+            Some(parent),
+            serde_json::json!({"type": "assistant", "message": {"id": "msg_done",
+                "role": "assistant", "model": "claude-opus-5-5", "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "Done."}]}}),
+        )
+    };
+    let expected = [
+        "user: go",
+        "step:  [\"Bash\"]",
+        "results: 1",
+        "user: also check the docs",
+        "step: Done. []",
+    ];
+    let start = || {
+        vec![
+            row(
+                "u1",
+                None,
+                serde_json::json!({"type": "user", "message": {"role": "user", "content": "go"}}),
+            ),
+            call("a1", "u1", "toolu_1"),
+            result("r1", "a1", "toolu_1"),
+        ]
+    };
+    let mut alone = start();
+    alone.extend([queued("q1", "r1"), done("a2", "q1")]);
+    let session = claude_code::parse(&alone, None).unwrap();
+    assert_eq!(script(&session), expected);
+    support::assert_hops_keeping(&session, "also check the docs", "queued-prompt");
+
+    for twice in [
+        [queued("q1", "r1"), plain("p1", "q1"), done("a2", "p1")],
+        [plain("p1", "r1"), queued("q1", "p1"), done("a2", "q1")],
+    ] {
+        let mut rows = start();
+        rows.extend(twice);
+        let session = claude_code::parse(&rows, None).unwrap();
+        assert_eq!(script(&session), expected);
+    }
 }
