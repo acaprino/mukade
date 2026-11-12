@@ -1,4 +1,4 @@
-﻿//! One hop, end to end (Â§1.2): read a source session, apply the compaction policy, plan, check the
+//! One hop, end to end (Â§1.2): read a source session, apply the compaction policy, plan, check the
 //! strict gate, write, and report what happened in a [`Manifest`].
 //!
 //! `hop` is the whole pipeline; [`import`] is the second half alone, for a caller that already holds
@@ -363,7 +363,8 @@ pub(crate) struct ChildrenDone {
 
 /// The subagent step of a write: given where the session landed and which destination call each of
 /// its spawn calls became, write its children.
-pub(crate) type ChildrenStep<'a> = &'a mut dyn FnMut(&Written, &HashMap<String, String>) -> ChildrenDone;
+pub(crate) type ChildrenStep<'a> =
+    &'a mut dyn FnMut(&Written, &HashMap<String, String>) -> ChildrenDone;
 
 pub(crate) fn import_inner(
     dest: HarnessId,

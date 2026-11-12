@@ -12,9 +12,9 @@
 
 pub mod bus;
 pub mod cache;
-pub mod children;
 pub mod catalog;
 pub mod chat;
+pub mod children;
 pub mod cli;
 pub mod dest;
 pub mod detect;

@@ -1155,7 +1155,9 @@ fn reconstructed_parallel_calls_round_trip_through_each_destination_format() {
                 HarnessId::ClaudeCode => claude_code::read_file(path).unwrap(),
                 HarnessId::Codex => mukade::reader::codex::read_file(path).unwrap(),
                 HarnessId::Pi => pi::read_file(path).unwrap(),
-                HarnessId::OpenCode | HarnessId::Hermes | HarnessId::DeepSeekHarness => unreachable!(),
+                HarnessId::OpenCode | HarnessId::Hermes | HarnessId::DeepSeekHarness => {
+                    unreachable!()
+                }
             }
         };
         let calls: usize = written

@@ -43,10 +43,7 @@ pub struct ChildRead {
 /// a session are in the order of the calls that started them in it (a child whose call is unknown
 /// comes after those that have one, by update time); those of a child are ordered without
 /// reading it, by update time. The session is read once, the store listed once.
-pub fn children_of(
-    parent: &SessionRef,
-    roots: &StoreRoots,
-) -> Result<Vec<ChildSession>, HopError> {
+pub fn children_of(parent: &SessionRef, roots: &StoreRoots) -> Result<Vec<ChildSession>, HopError> {
     let session = hop::export(parent, roots)?;
     let listing = list_all(&session, roots)?;
     let mut out = Vec::new();
@@ -76,7 +73,13 @@ fn collect(
             info: info.clone(),
             depth,
         });
-        collect(listing, ordered(listing, &info.id, None), depth + 1, seen, out);
+        collect(
+            listing,
+            ordered(listing, &info.id, None),
+            depth + 1,
+            seen,
+            out,
+        );
     }
 }
 
@@ -142,7 +145,15 @@ fn walk(
             call_id,
             session,
         });
-        walk(ctx, below, Some(index), reason.as_deref(), depth + 1, seen, out);
+        walk(
+            ctx,
+            below,
+            Some(index),
+            reason.as_deref(),
+            depth + 1,
+            seen,
+            out,
+        );
     }
 }
 
@@ -235,9 +246,12 @@ fn linked_call(value: &Value, child: &str, agent: Option<&str>) -> Option<String
             {
                 return Some(call.to_string());
             }
-            map.values().find_map(|inner| linked_call(inner, child, agent))
+            map.values()
+                .find_map(|inner| linked_call(inner, child, agent))
         }
-        Value::Array(items) => items.iter().find_map(|inner| linked_call(inner, child, agent)),
+        Value::Array(items) => items
+            .iter()
+            .find_map(|inner| linked_call(inner, child, agent)),
         _ => None,
     }
 }
@@ -313,8 +327,8 @@ fn spawn_facts(session: &Session, info: &SessionInfo) -> (Option<String>, bool) 
         .as_ref()
         .and_then(|(agent, _)| agent.clone())
         .or_else(|| listed.as_ref().and_then(|(agent, _)| agent.clone()));
-    let inherits = read.is_some_and(|(_, inherits)| inherits)
-        || listed.is_some_and(|(_, inherits)| inherits);
+    let inherits =
+        read.is_some_and(|(_, inherits)| inherits) || listed.is_some_and(|(_, inherits)| inherits);
     (agent, inherits)
 }
 

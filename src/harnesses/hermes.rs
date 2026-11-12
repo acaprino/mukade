@@ -116,10 +116,14 @@ impl Destination for Hermes {
     /// agent, metadata or compaction record to take: each is refused, not ignored.
     fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
         if opts.dest_id.is_some() {
-            anyhow::bail!("--dest-id is not supported toward Hermes: Hermes allocates the session id");
+            anyhow::bail!(
+                "--dest-id is not supported toward Hermes: Hermes allocates the session id"
+            );
         }
         if opts.dest_path.is_some() {
-            anyhow::bail!("--dest-path is not supported toward Hermes: its sessions live in state.db");
+            anyhow::bail!(
+                "--dest-path is not supported toward Hermes: its sessions live in state.db"
+            );
         }
         if opts.dest_agent.is_some() || opts.metadata.is_some() {
             anyhow::bail!(

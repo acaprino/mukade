@@ -241,7 +241,9 @@ pub fn run(args: &[String]) -> Result<()> {
         anyhow::bail!("--children is supported only by list, dump and hop");
     }
     if flags.children && flags.from_file.is_some() && command != "list" {
-        anyhow::bail!("--children finds subagent sessions in the store: it cannot go with --from-file");
+        anyhow::bail!(
+            "--children finds subagent sessions in the store: it cannot go with --from-file"
+        );
     }
     // Every harness alike: the sessions its store marks archived are kept or left out.
     let with_archived = match flags.archived.as_deref() {
@@ -936,12 +938,19 @@ fn deliver(result: Result<Receipt, HopError>, manifest: Option<&str>) -> Result<
         }
         Err(HopError::ChildWriteFailed { reason, receipt }) => {
             let written = (*receipt).clone();
-            (written, Some(HopError::ChildWriteFailed { reason, receipt }))
+            (
+                written,
+                Some(HopError::ChildWriteFailed { reason, receipt }),
+            )
         }
         Err(other) => return Err(anyhow::Error::new(other)),
     };
     // One line per subagent session written, so a person sees where each went.
-    for child in receipt.manifest["children"].as_array().into_iter().flatten() {
+    for child in receipt.manifest["children"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
         eprintln!(
             "child {} -> {} ({})",
             child["source_id"].as_str().unwrap_or("?"),

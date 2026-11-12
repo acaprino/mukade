@@ -51,7 +51,12 @@ impl Writer for Hermes {
         let state_db = home.join("state.db").to_string_lossy().into_owned();
 
         let temp = crate::portable::temp_dir()?;
-        crate::portable::sweep_stale(&temp, "mukade-hermes-", ".jsonl", crate::portable::STALE_AFTER);
+        crate::portable::sweep_stale(
+            &temp,
+            "mukade-hermes-",
+            ".jsonl",
+            crate::portable::STALE_AFTER,
+        );
         let name = uuid::Uuid::new_v4().simple().to_string();
         // The folder the rows name: Hermes keeps it only when it exists, so a session whose folder
         // is not one here names a folder that is nowhere.

@@ -58,7 +58,11 @@ fn claude_children_are_read_with_the_call_and_the_child_they_hang_from() {
     assert_eq!(read[0].parent, None);
     assert_eq!(read[0].call_id.as_deref(), Some("toolu_fg"));
     assert_eq!(read[1].call_id.as_deref(), Some("toolu_bg"));
-    assert_eq!(read[2].parent, Some(1), "the deep child hangs from the background one");
+    assert_eq!(
+        read[2].parent,
+        Some(1),
+        "the deep child hangs from the background one"
+    );
     assert_eq!(read[2].depth, 2);
     assert_eq!(read[2].call_id.as_deref(), Some("toolu_b_inner"));
     assert_eq!(read[3].call_id, None);
@@ -96,7 +100,11 @@ fn record(ordinal: u64, kind: &str, payload: serde_json::Value) -> String {
 }
 
 fn say(ordinal: u64, role: &str, text: &str) -> String {
-    let block = if role == "user" { "input_text" } else { "output_text" };
+    let block = if role == "user" {
+        "input_text"
+    } else {
+        "output_text"
+    };
     record(
         ordinal,
         "response_item",
@@ -158,8 +166,7 @@ fn codex_home_with(tag: &str, forked: Option<&str>) -> mukade::roots::StoreRoots
         if forked == Some(id) {
             meta["forked_from_id"] = serde_json::json!(ROOT);
         }
-        record(0, "session_meta", meta) + &say(1, "user", prompt)
-            + &say(2, "assistant", "done")
+        record(0, "session_meta", meta) + &say(1, "user", prompt) + &say(2, "assistant", "done")
     };
     std::fs::write(file(KID_1), kid(KID_1, "first task")).unwrap();
     std::fs::write(file(KID_2), kid(KID_2, "second task")).unwrap();
@@ -185,9 +192,24 @@ fn codex_state(home: &Path, file: &dyn Fn(&str) -> std::path::PathBuf) {
     .unwrap();
     for (id, source, role, updated) in [
         (ROOT, "cli", None, 1_794_149_000_000_i64),
-        (KID_1, "subagent-thread_spawn", Some("explorer"), 1_794_149_100_000),
-        (KID_2, "subagent-thread_spawn", Some("explorer"), 1_794_149_050_000),
-        (GONE, "subagent-thread_spawn", Some("explorer"), 1_794_149_200_000),
+        (
+            KID_1,
+            "subagent-thread_spawn",
+            Some("explorer"),
+            1_794_149_100_000,
+        ),
+        (
+            KID_2,
+            "subagent-thread_spawn",
+            Some("explorer"),
+            1_794_149_050_000,
+        ),
+        (
+            GONE,
+            "subagent-thread_spawn",
+            Some("explorer"),
+            1_794_149_200_000,
+        ),
     ] {
         db.execute(
             "INSERT INTO threads VALUES (?1, ?2, ?3, ?3, ?4, '/work', '', 0, '', ?5, ?5, ?6, '', NULL, ?7)",
@@ -257,13 +279,20 @@ fn the_dump_document_nests_the_children() {
     assert_eq!(doc["meta"]["id"], PARENT);
     assert_eq!(ids(&doc), [child(FG), child(BG), child(MATE)]);
     let bg = &doc["children"][1];
-    assert_eq!(ids(bg), [child(DEEP)], "the background agent's own child hangs from it");
+    assert_eq!(
+        ids(bg),
+        [child(DEEP)],
+        "the background agent's own child hangs from it"
+    );
     assert_eq!(bg["meta"]["parent"], PARENT);
     assert!(
         bg["messages"].as_array().is_some_and(|m| !m.is_empty()),
         "a child is a full document: {bg}"
     );
-    assert!(doc.get("children_lost").is_none(), "nothing was lost: {doc}");
+    assert!(
+        doc.get("children_lost").is_none(),
+        "nothing was lost: {doc}"
+    );
 }
 
 /// A child that cannot be read is named, with the reason, and the others are still dumped.

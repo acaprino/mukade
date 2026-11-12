@@ -305,7 +305,11 @@ pub(crate) fn write_new_file(path: &std::path::Path, text: &str) -> Result<()> {
 /// is already there is never overwritten.
 pub(crate) fn write_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     use anyhow::Context;
-    anyhow::ensure!(!path.exists(), "destination already exists: {}", path.display());
+    anyhow::ensure!(
+        !path.exists(),
+        "destination already exists: {}",
+        path.display()
+    );
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;

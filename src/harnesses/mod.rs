@@ -546,7 +546,12 @@ mod tests {
         assert_eq!(refusal.exit_code(), 2, "refused with a reason");
         for adapter in all() {
             let writes = adapter.destination().is_some();
-            assert_eq!(destination(adapter.id()).is_ok(), writes, "{}", adapter.id());
+            assert_eq!(
+                destination(adapter.id()).is_ok(),
+                writes,
+                "{}",
+                adapter.id()
+            );
             assert_eq!(require_writer(adapter).is_ok(), writes, "{}", adapter.id());
         }
     }

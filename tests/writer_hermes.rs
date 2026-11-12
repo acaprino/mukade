@@ -35,13 +35,21 @@ fn stand_in(dir: &Path, code: i32, reply: &str) -> PathBuf {
         "echo %HERMES_HOME%>\"{c}.home\"\r\necho %1 %2 %3 %4>\"{c}.args\"\r\necho %5>\"{c}.handed\"\r\n\
          copy /Y %5 \"{c}.jsonl\" >nul\r\n{reply_win}exit /b {code}",
         c = capture.display(),
-        reply_win = if reply.is_empty() { String::new() } else { format!("echo {reply}\r\n") },
+        reply_win = if reply.is_empty() {
+            String::new()
+        } else {
+            format!("echo {reply}\r\n")
+        },
     );
     let unix = format!(
         "printf '%s' \"$HERMES_HOME\" > '{c}.home'\necho \"$1 $2 $3 $4\" > '{c}.args'\necho \"$5\" > '{c}.handed'\n\
          cp \"$5\" '{c}.jsonl'\n{reply_unix}exit {code}",
         c = capture.display(),
-        reply_unix = if reply.is_empty() { String::new() } else { format!("echo '{reply}'\n") },
+        reply_unix = if reply.is_empty() {
+            String::new()
+        } else {
+            format!("echo '{reply}'\n")
+        },
     );
     support::launcher(dir, "hermes", &win, &unix)
 }
@@ -61,7 +69,10 @@ fn observed(dir: &Path) -> Run {
             .collect(),
         handed: PathBuf::from(text("handed")),
         home: text("home"),
-        args: text("args").split_whitespace().map(str::to_string).collect(),
+        args: text("args")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect(),
     }
 }
 
@@ -85,7 +96,12 @@ fn opts(scratch: &Path, exe: &Path) -> WriteOpts {
     }
 }
 
-fn run(session: &Session, tag: &str, code: i32, reply: &str) -> (anyhow::Result<mukade::writer::Written>, Run, WriteOpts) {
+fn run(
+    session: &Session,
+    tag: &str,
+    code: i32,
+    reply: &str,
+) -> (anyhow::Result<mukade::writer::Written>, Run, WriteOpts) {
     let scratch = support::scratch(HERMES, tag);
     let exe = stand_in(&scratch.join("bin"), code, reply);
     let opts = opts(&scratch, &exe);
@@ -109,7 +125,10 @@ fn the_import_is_asked_for_a_claude_session_by_its_path_and_the_id_comes_from_it
         opts.roots.hermes_home.clone().unwrap().join("state.db")
     );
     assert_eq!(seen.args, ["sessions", "import", "--from", "claude"]);
-    assert_eq!(PathBuf::from(&seen.home), opts.roots.hermes_home.clone().unwrap());
+    assert_eq!(
+        PathBuf::from(&seen.home),
+        opts.roots.hermes_home.clone().unwrap()
+    );
     // The file is mukade's own and is gone when the write is.
     assert!(!seen.handed.exists(), "{}", seen.handed.display());
     assert_eq!(
@@ -132,7 +151,10 @@ fn every_tool_call_reaches_the_import_in_text_form_with_its_result() {
     written.expect("the write");
     let mut calls = 0;
     for row in &seen.rows {
-        assert!(matches!(row["type"].as_str(), Some("user" | "assistant")), "{row}");
+        assert!(
+            matches!(row["type"].as_str(), Some("user" | "assistant")),
+            "{row}"
+        );
         for block in row["message"]["content"].as_array().into_iter().flatten() {
             // Hermes keeps a `tool_use` as `[ran tool: x]` and a `tool_result` as nothing.
             assert_eq!(block["type"], "text", "{block}");
@@ -158,9 +180,16 @@ fn every_tool_call_reaches_the_import_in_text_form_with_its_result() {
         .filter(|r| r["type"] == "user")
         .flat_map(texts_of)
         .collect();
-    assert!(texts.iter().any(|t| t.starts_with("[tool result · id ")), "{texts:#?}");
+    assert!(
+        texts.iter().any(|t| t.starts_with("[tool result · id ")),
+        "{texts:#?}"
+    );
     // And no text of a user turn opens with a context tag Hermes would drop.
-    assert!(texts.iter().all(|t| !t.trim_start().starts_with("<system-reminder")));
+    assert!(
+        texts
+            .iter()
+            .all(|t| !t.trim_start().starts_with("<system-reminder"))
+    );
 }
 
 #[test]
@@ -174,7 +203,11 @@ fn a_folder_that_is_here_is_named_and_one_that_is_not_names_none() {
     with.cwd = Some(existing.display().to_string());
     for_harness(HERMES).write(&source, &with).expect("write");
     let seen = observed(&scratch.join("bin"));
-    assert!(seen.rows.iter().all(|r| r["cwd"] == existing.display().to_string()));
+    assert!(
+        seen.rows
+            .iter()
+            .all(|r| r["cwd"] == existing.display().to_string())
+    );
 
     let scratch = support::scratch(HERMES, "hermes-cwd-missing");
     let exe = stand_in(&scratch.join("bin"), 0, CONFIRMED);
@@ -183,7 +216,10 @@ fn a_folder_that_is_here_is_named_and_one_that_is_not_names_none() {
     for_harness(HERMES).write(&source, &without).expect("write");
     let seen = observed(&scratch.join("bin"));
     let named = seen.rows[0]["cwd"].as_str().unwrap();
-    assert!(!Path::new(named).exists(), "Hermes keeps a folder only when it exists: {named}");
+    assert!(
+        !Path::new(named).exists(),
+        "Hermes keeps a folder only when it exists: {named}"
+    );
     assert!(
         seen.rows.iter().all(|r| r["cwd"] == named),
         "every row names the same folder"
@@ -195,18 +231,37 @@ fn an_import_that_failed_or_did_not_confirm_may_have_written_and_says_so() {
     let source = support::read_source(HarnessId::ClaudeCode);
     let (failed, seen, opts) = run(&source, "hermes-failed", 3, "");
     let error = failed.unwrap_err();
-    let unknown = error.downcast_ref::<WriteOutcomeUnknown>().expect("an unknown outcome");
+    let unknown = error
+        .downcast_ref::<WriteOutcomeUnknown>()
+        .expect("an unknown outcome");
     assert!(unknown.reason.contains("failed"), "{}", unknown.reason);
     assert_eq!(
         unknown.location.as_deref(),
-        Some(opts.roots.hermes_home.clone().unwrap().join("state.db").to_str().unwrap())
+        Some(
+            opts.roots
+                .hermes_home
+                .clone()
+                .unwrap()
+                .join("state.db")
+                .to_str()
+                .unwrap()
+        )
     );
-    assert!(!seen.handed.exists(), "the temporary file goes whatever came of the import");
+    assert!(
+        !seen.handed.exists(),
+        "the temporary file goes whatever came of the import"
+    );
 
     let (silent, seen, _) = run(&source, "hermes-silent", 0, "all done");
     let error = silent.unwrap_err();
-    let unknown = error.downcast_ref::<WriteOutcomeUnknown>().expect("an unknown outcome");
-    assert!(unknown.reason.contains("did not confirm"), "{}", unknown.reason);
+    let unknown = error
+        .downcast_ref::<WriteOutcomeUnknown>()
+        .expect("an unknown outcome");
+    assert!(
+        unknown.reason.contains("did not confirm"),
+        "{}",
+        unknown.reason
+    );
     assert!(!seen.handed.exists());
 }
 
@@ -219,13 +274,25 @@ fn what_hermes_cannot_take_is_refused_before_anything_runs() {
     let refused = |change: &dyn Fn(&mut WriteOpts), expect: &str| {
         let mut opts = base.clone();
         change(&mut opts);
-        let error = format!("{:#}", for_harness(HERMES).write(&source, &opts).unwrap_err());
+        let error = format!(
+            "{:#}",
+            for_harness(HERMES).write(&source, &opts).unwrap_err()
+        );
         assert!(error.contains(expect), "{error}");
     };
-    refused(&|o| o.dest_id = Some("20261112_000000_abc123".into()), "--dest-id");
-    refused(&|o| o.dest_path = Some(base.roots.hermes_home.clone().unwrap().join("x")), "--dest-path");
+    refused(
+        &|o| o.dest_id = Some("20261112_000000_abc123".into()),
+        "--dest-id",
+    );
+    refused(
+        &|o| o.dest_path = Some(base.roots.hermes_home.clone().unwrap().join("x")),
+        "--dest-path",
+    );
     refused(&|o| o.dest_agent = Some("a".into()), "--dest-agent");
-    refused(&|o| o.metadata = Some(serde_json::json!({})), "--metadata-file");
+    refused(
+        &|o| o.metadata = Some(serde_json::json!({})),
+        "--metadata-file",
+    );
     refused(
         &|o| {
             o.native_budget = Some(mukade::native_compaction::NativeBudget {
@@ -245,20 +312,36 @@ fn what_hermes_cannot_take_is_refused_before_anything_runs() {
 
 #[test]
 fn the_hop_counts_every_call_as_text_form_and_passes_the_strict_gate() {
-    for source_id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi, HarnessId::DeepSeekHarness] {
+    for source_id in [
+        HarnessId::ClaudeCode,
+        HarnessId::Codex,
+        HarnessId::Pi,
+        HarnessId::DeepSeekHarness,
+    ] {
         let source = support::read_source(source_id);
         let scratch = support::scratch(HERMES, &format!("hermes-hop-{}", source_id.as_str()));
         let exe = stand_in(&scratch.join("bin"), 0, CONFIRMED);
         let write_opts = opts(&scratch, &exe);
-        let receipt = mukade::hop::import(HERMES, &source, &support::import_opts(&write_opts, &source, None))
-            .unwrap_or_else(|error| panic!("{source_id}: {error:?}"));
+        let receipt = mukade::hop::import(
+            HERMES,
+            &source,
+            &support::import_opts(&write_opts, &source, None),
+        )
+        .unwrap_or_else(|error| panic!("{source_id}: {error:?}"));
         assert_eq!(receipt.dest_id, "20261112_000000_abc123", "{source_id}");
         let counts = &receipt.manifest["counts"];
         assert_eq!(receipt.manifest["strict"]["checked"], true, "{source_id}");
         // `tool_calls` counts the calls written as calls: none. Every call is text form.
         assert_eq!(counts["tool_calls"], 0, "{source_id}: {counts}");
-        assert!(counts["tools_text_form"].as_u64().unwrap() >= 1, "{source_id}: {counts}");
-        for repair in ["dropped_orphan_results", "dropped_duplicate_results", "unanswered_calls"] {
+        assert!(
+            counts["tools_text_form"].as_u64().unwrap() >= 1,
+            "{source_id}: {counts}"
+        );
+        for repair in [
+            "dropped_orphan_results",
+            "dropped_duplicate_results",
+            "unanswered_calls",
+        ] {
             assert_eq!(counts[repair], 0, "{source_id}: {repair}");
         }
         assert_eq!(receipt.manifest["dest"]["harness"], "hermes", "{source_id}");
@@ -271,14 +354,22 @@ fn the_hop_counts_every_call_as_text_form_and_passes_the_strict_gate() {
             .flat_map(texts_of)
             .collect::<Vec<_>>()
             .join("\n");
-        let first = support::user_texts(&source).into_iter().next().unwrap_or_default();
-        assert!(handed.contains(first.trim()), "{source_id}: {first:?} not in {handed:?}");
+        let first = support::user_texts(&source)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        assert!(
+            handed.contains(first.trim()),
+            "{source_id}: {first:?} not in {handed:?}"
+        );
     }
 }
 
 #[test]
 fn hermes_is_a_destination_that_offers_no_tool() {
-    let destination = harnesses::get(HERMES).destination().expect("a destination now");
+    let destination = harnesses::get(HERMES)
+        .destination()
+        .expect("a destination now");
     assert!(destination.offered().names.is_empty());
     assert_eq!(destination.protocol(), None);
     let call = mukade::model::ToolCall {

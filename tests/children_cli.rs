@@ -97,7 +97,13 @@ fn children_is_refused_where_it_means_nothing() {
     }
     let (code, _, stderr) = cli_code(
         &scratch,
-        &["dump", "claude_code", "--from-file", "x.jsonl", "--children"],
+        &[
+            "dump",
+            "claude_code",
+            "--from-file",
+            "x.jsonl",
+            "--children",
+        ],
     );
     assert_eq!(code, Some(1), "{stderr}");
     assert!(stderr.contains("--from-file"), "{stderr}");
@@ -151,7 +157,14 @@ fn hop_children_into_a_destination_without_a_link() {
 
     let (code, stdout, stderr) = cli_code(
         &scratch,
-        &["hop", "claude_code", PARENT, "pi", "--dest-version", "1.2.0"],
+        &[
+            "hop",
+            "claude_code",
+            PARENT,
+            "pi",
+            "--dest-version",
+            "1.2.0",
+        ],
     );
     assert_eq!(code, Some(0), "{stderr}");
     assert!(json(&stdout)["manifest"].get("children").is_none());
@@ -238,7 +251,10 @@ fn a_child_write_failure_is_exit_5_with_the_parents_receipt() {
     let receipt = json(&stdout);
     assert_eq!(receipt["id"], reserved);
     let saved = json(&std::fs::read_to_string(manifest_file).unwrap());
-    assert!(saved["losses"].to_string().contains("not written"), "{saved:#}");
+    assert!(
+        saved["losses"].to_string().contains("not written"),
+        "{saved:#}"
+    );
 }
 
 /// `write` imports the session of a document that holds subagent sessions, and says it left them.

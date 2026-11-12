@@ -85,13 +85,22 @@ fn claude_children_are_written_into_the_parents_subagents_folder() {
         let file = std::path::PathBuf::from(kid["dest_path"].as_str().unwrap());
         assert!(file.starts_with(&folder), "{}", file.display());
         assert!(file.is_file());
-        assert!(file.with_extension("").with_extension("meta.json").is_file(), "{file:?}");
+        assert!(
+            file.with_extension("")
+                .with_extension("meta.json")
+                .is_file(),
+            "{file:?}"
+        );
     }
 
     // Read back: the destination's reader lists each child under the parent it was written with.
     let all = ClaudeCode.list_all(&dest_roots).unwrap();
     let listed = |dest_id: &str| all.iter().find(|s| s.id == dest_id).unwrap().clone();
-    let fg = listed(entry(manifest, &format!("{PARENT}.{FG}"))["dest_id"].as_str().unwrap());
+    let fg = listed(
+        entry(manifest, &format!("{PARENT}.{FG}"))["dest_id"]
+            .as_str()
+            .unwrap(),
+    );
     assert_eq!(fg.parent.as_deref(), Some(receipt.dest_id.as_str()));
     assert_eq!(fg.title.as_deref(), Some("Read module A"));
     let Some(ParentKind::Spawn { agent, call_id, .. }) = &fg.parent_kind else {
@@ -108,9 +117,19 @@ fn claude_children_are_written_into_the_parents_subagents_folder() {
         "the text form names the child: {}",
         text_of(&parent)
     );
-    let bg_dest = entry(manifest, &format!("{PARENT}.{BG}"))["dest_id"].as_str().unwrap();
-    let deep = listed(entry(manifest, &format!("{PARENT}.{DEEP}"))["dest_id"].as_str().unwrap());
-    assert_eq!(deep.parent.as_deref(), Some(bg_dest), "a child of a child hangs from it");
+    let bg_dest = entry(manifest, &format!("{PARENT}.{BG}"))["dest_id"]
+        .as_str()
+        .unwrap();
+    let deep = listed(
+        entry(manifest, &format!("{PARENT}.{DEEP}"))["dest_id"]
+            .as_str()
+            .unwrap(),
+    );
+    assert_eq!(
+        deep.parent.as_deref(),
+        Some(bg_dest),
+        "a child of a child hangs from it"
+    );
     assert_eq!(entry(manifest, &format!("{PARENT}.{DEEP}"))["depth"], 2);
 
     // And the child is the conversation it was.
@@ -132,14 +151,20 @@ fn children_without_a_native_link_are_sessions_of_their_own_named_by_the_parent(
         let manifest = &receipt.manifest;
         let kids = manifest["children"].as_array().unwrap();
         assert_eq!(kids.len(), 4, "{dest:?}: {manifest:#}");
-        assert!(kids.iter().all(|c| c["link"] == "none"), "{dest:?}: {kids:?}");
+        assert!(
+            kids.iter().all(|c| c["link"] == "none"),
+            "{dest:?}: {kids:?}"
+        );
         let fg = entry(manifest, &format!("{PARENT}.{FG}"));
         let written = support::read_destination(dest, fg["dest_path"].as_str().unwrap());
         assert!(
             text_of(&written).contains("Module A exports parse()."),
             "{dest:?}: the child is its conversation"
         );
-        assert_eq!(written.meta.parent, None, "{dest:?}: no native link is written");
+        assert_eq!(
+            written.meta.parent, None,
+            "{dest:?}: no native link is written"
+        );
         // The parent says which session its first call became.
         let parent = support::read_destination(dest, &receipt.location);
         let first_call = parent
@@ -205,9 +230,8 @@ fn a_child_that_cannot_be_written_leaves_the_parent_and_fails_the_hop() {
     // The parent's id is reserved, so its folder is known: a file stands where `subagents` goes.
     let reserved = "5ab1c0de-0000-4000-8000-0000000000ff";
     opts.dest_id = Some(reserved.into());
-    let project = mukade::roots::claude_project_dir_name(std::path::Path::new(
-        opts.cwd.as_deref().unwrap(),
-    ));
+    let project =
+        mukade::roots::claude_project_dir_name(std::path::Path::new(opts.cwd.as_deref().unwrap()));
     let folder = dest_roots
         .claude_config_dir
         .clone()
@@ -224,14 +248,19 @@ fn a_child_that_cannot_be_written_leaves_the_parent_and_fails_the_hop() {
     let HopError::ChildWriteFailed { reason, receipt } = error else {
         panic!("{error:?}")
     };
-    assert!(reason.starts_with(&format!("child {PARENT}.{FG}: ")), "{reason}");
+    assert!(
+        reason.starts_with(&format!("child {PARENT}.{FG}: ")),
+        "{reason}"
+    );
     assert_eq!(receipt.dest_id, reserved, "the parent was written");
     assert!(std::path::Path::new(&receipt.location).is_file());
     assert_eq!(receipt.manifest["children"], serde_json::json!([]));
     let losses = receipt.manifest["losses"].to_string();
     assert!(losses.contains("not written"), "{losses}");
     assert!(
-        losses.contains(&format!("child {PARENT}.{MATE}: not written, an earlier child failed")),
+        losses.contains(&format!(
+            "child {PARENT}.{MATE}: not written, an earlier child failed"
+        )),
         "the children after it were not tried: {losses}"
     );
 }
@@ -261,7 +290,9 @@ fn a_spawn_call_written_as_a_tool_call_is_the_childs_tool_use_id() {
     let receipt = hop_children(HarnessId::ClaudeCode, &source, &opts).unwrap();
 
     let all = ClaudeCode.list_all(&dest_roots).unwrap();
-    let fg_dest = entry(&receipt.manifest, &format!("{PARENT}.{FG}"))["dest_id"].as_str().unwrap();
+    let fg_dest = entry(&receipt.manifest, &format!("{PARENT}.{FG}"))["dest_id"]
+        .as_str()
+        .unwrap();
     let fg = all.iter().find(|s| s.id == fg_dest).unwrap();
     let Some(ParentKind::Spawn { call_id, .. }) = &fg.parent_kind else {
         panic!("{:?}", fg.parent_kind)
@@ -353,7 +384,8 @@ fn write_claude_child(
         .write(&session, &opts)
         .unwrap();
     let file = std::path::PathBuf::from(&written.location);
-    let meta = std::fs::read_to_string(file.with_extension("").with_extension("meta.json")).unwrap();
+    let meta =
+        std::fs::read_to_string(file.with_extension("").with_extension("meta.json")).unwrap();
     (file, serde_json::from_str(&meta).unwrap())
 }
 
@@ -370,7 +402,10 @@ fn a_claude_child_file_holds_only_the_rows_a_real_one_does() {
     );
 
     let text = std::fs::read_to_string(file).unwrap();
-    let rows: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let rows: Vec<Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
     assert!(!rows.is_empty());
     for row in &rows {
         let kind = row["type"].as_str().unwrap();
@@ -398,7 +433,10 @@ fn a_claude_childs_meta_json_has_the_keys_a_real_one_has() {
     );
 
     assert_eq!(meta["agentType"], "Explore");
-    assert_eq!(meta["description"], "Explore", "no title: the agent type, never null");
+    assert_eq!(
+        meta["description"], "Explore",
+        "no title: the agent type, never null"
+    );
     assert_eq!(meta["requestShape"], "foreground");
     assert_eq!(meta["requestNonInteractive"], false);
     assert_eq!(meta["isBuiltIn"], false);
@@ -441,11 +479,16 @@ fn a_childs_own_losses_are_prefixed_into_the_parents() {
         .collect();
     // The background child spawns the deep one: its Agent call is text form in Pi.
     assert!(
-        losses.iter().any(|l| l.starts_with(&format!("child {PARENT}.{BG}: tool calls written as text"))),
+        losses
+            .iter()
+            .any(|l| l.starts_with(&format!("child {PARENT}.{BG}: tool calls written as text"))),
         "{losses:?}"
     );
     assert!(
-        losses.iter().filter(|l| l.starts_with("child ")).all(|l| l.contains(": ")),
+        losses
+            .iter()
+            .filter(|l| l.starts_with("child "))
+            .all(|l| l.contains(": ")),
         "{losses:?}"
     );
 }
@@ -474,9 +517,15 @@ fn a_refused_child_is_a_loss_line_and_the_others_are_written() {
 
     let kids = receipt.manifest["children"].as_array().unwrap();
     assert_eq!(kids.len(), 3, "{:#}", receipt.manifest);
-    assert!(kids.iter().all(|c| c["source_id"] != format!("{PARENT}.{FG}").as_str()));
+    assert!(
+        kids.iter()
+            .all(|c| c["source_id"] != format!("{PARENT}.{FG}").as_str())
+    );
     let losses = receipt.manifest["losses"].to_string();
-    assert!(losses.contains(&format!("child {PARENT}.{FG}: ")), "{losses}");
+    assert!(
+        losses.contains(&format!("child {PARENT}.{FG}: ")),
+        "{losses}"
+    );
 }
 
 /// What a child is written with follows the session's compaction: `native` is deterministic and
