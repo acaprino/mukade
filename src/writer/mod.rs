@@ -4,6 +4,7 @@
 pub mod claude_code;
 pub mod codex;
 pub mod deepseek_harness;
+pub mod hermes;
 pub mod media;
 pub mod opencode;
 pub mod pi;
