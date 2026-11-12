@@ -76,6 +76,15 @@ impl Harness for DeepSeekHarness {
         }
     }
 
+    /// dsh 0.2.2 ships the profiles `headless`, `web`, `acp` and `sdk`: none is a terminal UI that
+    /// opens a session. The headless profile continues one with a task.
+    fn resume_refusal(&self, info: &crate::reader::SessionInfo) -> Option<String> {
+        Some(format!(
+            "DeepSeek Harness has no terminal UI to open a session in; continue it with a task:              dsh --profile headless --session-id {} \"<task>\"",
+            info.id
+        ))
+    }
+
     /// Refused: dsh has no run that saves nothing. `--session-id <id>` adopts the session and
     /// appends to its log; a run without it cannot see the session; the shipped profiles all keep
     /// their log, and `dsh` has no flag that turns the tools off or the log away.

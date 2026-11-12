@@ -548,9 +548,11 @@ fn every_adapter_builds_a_summary_command() {
 }
 
 /// Claude Code resumes a session by its own id; a subagent listed as `<parent-id>.<agentId>`
-/// is refused with the parent to resume instead. Every other listed session resumes.
+/// is refused with the parent to resume instead. DeepSeek Harness ships no terminal UI: every
+/// session of it is refused, with the headless command that continues it. Every other listed
+/// session resumes.
 #[test]
-fn only_a_claude_subagent_is_refused_a_resume() {
+fn only_a_claude_subagent_and_any_deepseek_session_are_refused_a_resume() {
     let child = mukade::reader::SessionInfo {
         id: "p-1.a1111111111111111".into(),
         parent: Some("p-1".into()),
@@ -563,8 +565,18 @@ fn only_a_claude_subagent_is_refused_a_resume() {
     };
     for id in HarnessId::ALL {
         let adapter = get(id);
-        assert_eq!(adapter.resume_refusal(&root), None, "{id}");
         let refusal = adapter.resume_refusal(&child);
+        if id == HarnessId::DeepSeekHarness {
+            for refused in [adapter.resume_refusal(&root), refusal] {
+                let refused = refused.expect("dsh has no interface to open a session in");
+                assert!(
+                    refused.contains("dsh --profile headless --session-id p-1"),
+                    "{refused}"
+                );
+            }
+            continue;
+        }
+        assert_eq!(adapter.resume_refusal(&root), None, "{id}");
         if id.as_str() == "claude_code" {
             assert!(
                 refusal

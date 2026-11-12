@@ -1189,12 +1189,16 @@ fn receipt_lines_with(
         path: receipt.location.clone(),
         ..Default::default()
     };
-    let interactive = resume_argv(dest.harness, &dest.engine(), &info);
+    // A harness with no interface to open a session in says so, with what continues it instead.
+    let interactive = match mukade::harnesses::get(dest.harness).resume_refusal(&info) {
+        Some(refusal) => format!("none: {refusal}"),
+        None => resume_argv(dest.harness, &dest.engine(), &info).join(" "),
+    };
     let mut lines = vec![
         format!("destination  {} ({})", receipt.dest_id, dest.label),
         format!("location     {}", receipt.location),
         format!("headless     {}", receipt.resume_command.join(" ")),
-        format!("interactive  {}", interactive.join(" ")),
+        format!("interactive  {interactive}"),
     ];
     if let Some(path) = manifest {
         lines.push(format!("manifest     {path}"));
@@ -2613,6 +2617,21 @@ mod tests {
             tail(HarnessId::Pi),
             vec!["--session".to_string(), "/tmp/session.jsonl".to_string()]
         );
+        assert_eq!(
+            tail(HarnessId::Hermes),
+            vec!["--resume".to_string(), "abc".to_string()]
+        );
+        // dsh has no terminal UI: `R` shows the refusal; the catalog's headless resume is what a
+        // hop's receipt carries.
+        assert_eq!(
+            tail(HarnessId::DeepSeekHarness),
+            ["--profile", "headless", "--session-id", "abc"].map(String::from)
+        );
+        assert!(
+            mukade::harnesses::get(HarnessId::DeepSeekHarness)
+                .resume_refusal(&info)
+                .is_some()
+        );
     }
 
     #[test]
@@ -2640,6 +2659,44 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("headless")));
         assert!(lines.iter().any(|line| line.contains("interactive")));
         assert!(lines.iter().any(|line| line.contains("two")));
+    }
+
+    #[test]
+    fn a_receipt_into_hermes_opens_it_and_one_into_dsh_says_it_has_no_terminal_ui() {
+        let receipt = |id: &str, resume: &[&str]| mukade::Receipt {
+            dest_id: id.to_string(),
+            location: "store".to_string(),
+            resume_command: resume.iter().map(|part| part.to_string()).collect(),
+            manifest: serde_json::json!({ "losses": [] }),
+            resume_output: None,
+        };
+        let location = |harness| {
+            location::standard_locations(&StoreRoots::default())
+                .into_iter()
+                .find(|location| location.harness == harness)
+                .unwrap()
+        };
+        let hermes = receipt_lines_with(
+            &receipt("20261112_000000_abc123", &["hermes", "chat"]),
+            &location(HarnessId::Hermes),
+            None,
+        );
+        assert!(
+            hermes.iter().any(|line| line.starts_with("interactive")
+                && line.contains("--resume 20261112_000000_abc123")),
+            "{hermes:?}"
+        );
+        let dsh = receipt_lines_with(
+            &receipt("session-1", &["dsh", "--profile", "headless"]),
+            &location(HarnessId::DeepSeekHarness),
+            None,
+        );
+        assert!(
+            dsh.iter().any(
+                |line| line.starts_with("interactive  none") && line.contains("no terminal UI")
+            ),
+            "{dsh:?}"
+        );
     }
 
     #[test]
