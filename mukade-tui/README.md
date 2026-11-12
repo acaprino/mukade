@@ -55,13 +55,17 @@ Columns: **harness/installation → folder → sessions → details**. From 120 
 
 | mark | means |
 |---|---|
-| `↳` | has a parent (a fork or a subagent); details show `parent` |
+| `↳ agent <type>` | a subagent session, indented under its parent (`<type>` is the agent type, when the source records it) |
+| `⑂ fork` | a fork of its parent, indented under it |
+| `↳` | linked to a parent by a relation the source did not name |
 | `[live]` | running now (Claude Code only) |
 | `[archived]` | the harness marked it archived |
 | `[unreadable]` | listed, not readable: open, hop, export and resume refuse it and say why |
 | time, or `—` | `updated`, or none recorded |
 
-A harness row marked `!` could not be listed; its details show the error. **Details:** `harness`, `id`, `parent`, `cwd`, `updated`, `archived`, `live`, `unreadable`, `path`; a scanned installation adds `store` and `engine`.
+**Children and forks nest.** The list is a tree: each subagent session and fork sits under its parent, two cells in per level, in the order the store lists them. A child whose parent is not in the list (another folder filter, or a parent the store no longer holds) stays at the top with its mark, so every session stays reachable. Within a folder filter a child nests under its parent only when both are in that filter. There is no collapsing yet.
+
+A harness row marked `!` could not be listed; its details show the error. **Details:** `harness`, `id`, `parent` (with `(not listed)` when the parent is not in the list), `kind` (`subagent · <type>`, with `started from the parent's conversation` where it did; `fork`, with `at <entry>` where the source records it), `children` (`3 (2 subagents, 1 fork)`), `cwd`, `updated`, `archived`, `live`, `unreadable`, `path`; a scanned installation adds `store` and `engine`.
 
 ## Keys
 
@@ -69,7 +73,7 @@ A harness row marked `!` could not be listed; its details show the error. **Deta
 
 | key | does |
 |---|---|
-| `↑`/`↓` or `j`/`k` | move in the focused list (scroll, in the transcript) |
+| `↑`/`↓` or `j`/`k` | move in the focused list, in the order shown (a parent, then its children); scroll, in the transcript |
 | `tab` / `→` · `shift+tab` / `←` | next / previous column |
 | `enter` | next column, or open the selected session's transcript |
 | `esc` | close the transcript, or go back one column |
@@ -103,12 +107,13 @@ The footer shows every key but `g`/`G` and the page keys. A result box scrolls w
    - `none`: the whole history;
    - `portable`: the source's last compaction summary plus what follows (the source must have compacted);
    - `summary`: the source's own model writes a handoff summary, no turn kept verbatim (may take minutes, costs a model call).
-4. **Prompt:** an optional resume prompt (empty = write only), then `enter` to run.
-5. Read the result (`j`/`k`, page keys), then `esc`.
+4. **Subagents:** shown only when the source has subagent sessions in the list. `↑`/`↓` or `space` toggle `leave behind` (the default) and `carry`. Carrying is the CLI's `hop --children` ([usage](../docs/usage.md#carry-the-subagent-sessions)): each readable subagent session, at any depth, is written as a session of its own after the session, linked to its parent where the destination has a link. Forks are not subagents and are never carried.
+5. **Prompt:** an optional resume prompt (empty = write only), then `enter` to run.
+6. Read the result (`j`/`k`, page keys), then `esc`.
 
-`tab` moves between the three fields, `esc` cancels. The session keeps its (shown) working directory.
+`tab` / `shift+tab` move between the fields, `esc` cancels. The session keeps its (shown) working directory.
 The result shows the **new id**, **location**, **headless** and **interactive** resume commands,
-**manifest** path (`mukade-data/manifests/<harness>-<id>.json`), **every loss**, and the destination's reply to a prompt.
+**manifest** path (`mukade-data/manifests/<harness>-<id>.json`), **every loss**, one line per carried subagent session (`<source id> -> <new id>`, and whether the destination linked it to its parent), and the destination's reply to a prompt. If a subagent session cannot be written, the result says so and shows the receipt of the session itself, which is written.
 
 **Model and provider** come from the destination installation's own configuration
 (`src/dest.rs` `configured_model_in()`):

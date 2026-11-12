@@ -1,5 +1,6 @@
 //! A view over session metadata; original session indices remain the action targets.
 
+use crate::tree;
 use mukade::reader::SessionInfo;
 use std::collections::BTreeMap;
 
@@ -7,10 +8,14 @@ pub struct Group {
     pub cwd: Option<String>,
     pub display_path: String,
     sessions: Vec<usize>,
+    depths: Vec<usize>,
 }
 
+/// The sessions of every directory filter, each child or fork placed under its parent when the
+/// filter lists the parent too ([`tree::arrange`]).
 pub struct Directories {
     all: Vec<usize>,
+    all_depths: Vec<usize>,
     groups: Vec<Group>,
 }
 
@@ -27,21 +32,29 @@ impl Directories {
         let path_names: Vec<_> = paths.keys().cloned().collect();
         let mut groups: Vec<_> = paths
             .into_iter()
-            .map(|(cwd, sessions)| Group {
-                display_path: distinguishing_path(&cwd, &path_names),
-                cwd: Some(cwd),
-                sessions,
+            .map(|(cwd, members)| {
+                let (sessions, depths) = arranged(sessions, &members);
+                Group {
+                    display_path: distinguishing_path(&cwd, &path_names),
+                    cwd: Some(cwd),
+                    sessions,
+                    depths,
+                }
             })
             .collect();
         if !unknown.is_empty() {
+            let (members, depths) = arranged(sessions, &unknown);
             groups.push(Group {
                 cwd: None,
                 display_path: String::new(),
-                sessions: unknown,
+                sessions: members,
+                depths,
             });
         }
+        let (all, all_depths) = arranged(sessions, &(0..sessions.len()).collect::<Vec<_>>());
         Self {
-            all: (0..sessions.len()).collect(),
+            all,
+            all_depths,
             groups,
         }
     }
@@ -61,9 +74,28 @@ impl Directories {
         }
     }
 
+    /// How deep each of [`Directories::sessions`] sits under a listed parent, in the same order.
+    pub fn depths(&self, directory: usize) -> &[usize] {
+        if directory == 0 {
+            &self.all_depths
+        } else {
+            self.groups
+                .get(directory - 1)
+                .map_or(&[], |group| group.depths.as_slice())
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.groups.len() + 1
     }
+}
+
+/// `members` in tree order, with the depth of each.
+fn arranged(sessions: &[SessionInfo], members: &[usize]) -> (Vec<usize>, Vec<usize>) {
+    tree::arrange(sessions, members)
+        .into_iter()
+        .map(|place| (place.index, place.depth))
+        .unzip()
 }
 
 /// Shared leaf names need a distinguishing parent before the path is clipped to a column.
@@ -123,5 +155,36 @@ mod tests {
         assert_eq!(name("C:\\a\\app\\"), "app");
         assert_eq!(name("/work/日本語"), "日本語");
         assert_eq!(name("/"), "/");
+    }
+
+    fn listed(id: &str, cwd: &str, parent: Option<&str>) -> SessionInfo {
+        SessionInfo {
+            id: id.to_string(),
+            cwd: Some(cwd.to_string()),
+            parent: parent.map(String::from),
+            parent_kind: parent.map(|_| mukade::model::ParentKind::fork()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_child_follows_its_parent_in_every_filter_that_lists_both() {
+        let sessions = [
+            listed("kid", "/a", Some("top")),
+            listed("top", "/a", None),
+            listed("far", "/b", Some("top")),
+            listed("lone", "/b", None),
+        ];
+        let directories = Directories::new(&sessions);
+        // All: the parent first, then its two children, then the rest.
+        assert_eq!(directories.sessions(0), [1, 0, 2, 3]);
+        assert_eq!(directories.depths(0), [0, 1, 1, 0]);
+        // /a lists the parent and a child.
+        assert_eq!(directories.sessions(1), [1, 0]);
+        assert_eq!(directories.depths(1), [0, 1]);
+        // /b lists a child whose parent is in /a: it stays at the top, so it is still found.
+        assert_eq!(directories.sessions(2), [2, 3]);
+        assert_eq!(directories.depths(2), [0, 0]);
+        assert!(directories.depths(99).is_empty());
     }
 }

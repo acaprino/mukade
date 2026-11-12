@@ -11,6 +11,7 @@ mod directory;
 mod location;
 #[cfg(test)]
 mod scratch;
+mod tree;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
@@ -112,8 +113,33 @@ struct HopState {
     /// The chosen one, an index into `destinations`.
     dest: usize,
     compaction: usize,
+    /// Carry the source's subagent sessions too (`HopRequest::children`). Off until asked.
+    children: bool,
+    /// How many subagent sessions the source has in the listing, for the dialog's line.
+    subagents: usize,
     prompt: String,
+    /// The fields this dialog offers, in `tab` order, and the one that has the focus (an index).
+    fields: Vec<HopField>,
     field: usize,
+}
+
+/// One field of the hop dialog. `Children` is offered only for a source that has subagents.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum HopField {
+    Destination,
+    Compaction,
+    Children,
+    Prompt,
+}
+
+impl HopState {
+    fn focus(&self) -> HopField {
+        self.fields[self.field % self.fields.len()]
+    }
+
+    fn focused(&self, field: HopField) -> bool {
+        self.focus() == field
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1038,6 +1064,9 @@ fn open_hop(app: &mut App) {
         app.status = "no session selected".to_string();
         return;
     };
+    let subagents = app.selected_row().map_or(0, |row| {
+        tree::children_of(&row.sessions, &info.id).subagents
+    });
     let rows: Vec<Location> = app.rows.iter().map(|row| row.location.clone()).collect();
     let destinations = location::destinations(&rows, app.harness);
     if destinations.is_empty() {
@@ -1051,7 +1080,18 @@ fn open_hop(app: &mut App) {
         destinations,
         dest: 0,
         compaction: 0,
+        children: false,
+        subagents,
         prompt: String::new(),
+        fields: [
+            Some(HopField::Destination),
+            Some(HopField::Compaction),
+            (subagents > 0).then_some(HopField::Children),
+            Some(HopField::Prompt),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         field: 0,
     }));
 }
@@ -1063,32 +1103,38 @@ fn handle_hop_key(app: &mut App, code: KeyCode) {
             return;
         };
         let count = hop.destinations.len().max(1);
+        let fields = hop.fields.len();
         match code {
             KeyCode::Esc => app.mode = Mode::Normal,
-            KeyCode::Tab => hop.field = (hop.field + 1) % 3,
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => match hop.field {
-                0 => {
+            KeyCode::Tab => hop.field = (hop.field + 1) % fields,
+            KeyCode::BackTab => hop.field = (hop.field + fields - 1) % fields,
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => match hop.focus() {
+                HopField::Destination => {
                     hop.dest = if matches!(code, KeyCode::Up | KeyCode::Left) {
                         (hop.dest + count - 1) % count
                     } else {
                         (hop.dest + 1) % count
                     };
                 }
-                1 => {
+                HopField::Compaction => {
                     hop.compaction = if matches!(code, KeyCode::Up | KeyCode::Left) {
                         (hop.compaction + 2) % 3
                     } else {
                         (hop.compaction + 1) % 3
                     };
                 }
-                _ => {}
+                HopField::Children => hop.children = !hop.children,
+                HopField::Prompt => {}
             },
-            KeyCode::Enter if hop.field < 2 => hop.field += 1,
+            KeyCode::Char(' ') if hop.focused(HopField::Children) => hop.children = !hop.children,
+            KeyCode::Enter if !hop.focused(HopField::Prompt) => hop.field += 1,
             KeyCode::Enter => run = true,
-            KeyCode::Backspace if hop.field == 2 => {
+            KeyCode::Backspace if hop.focused(HopField::Prompt) => {
                 hop.prompt.pop();
             }
-            KeyCode::Char(character) if hop.field == 2 => hop.prompt.push(character),
+            KeyCode::Char(character) if hop.focused(HopField::Prompt) => {
+                hop.prompt.push(character);
+            }
             _ => {}
         }
     }
@@ -1138,6 +1184,15 @@ fn compaction_for(index: usize) -> Compaction {
 /// Read the source from its location, write it into the destination's: two installations of one
 /// harness keep their stores apart (`mukade::hop_into`).
 fn execute_hop(hop: &HopState) -> Vec<String> {
+    execute_hop_with(hop, write_details_for)
+}
+
+/// [`execute_hop`] with the destination's facts taken from `details`, so a test needs no
+/// installation to ask.
+fn execute_hop_with(
+    hop: &HopState,
+    details: impl Fn(&Location, Option<&str>) -> WriteDetails,
+) -> Vec<String> {
     let Some(dest) = hop.destinations.get(hop.dest) else {
         return vec!["hop failed: no destination".to_string()];
     };
@@ -1150,23 +1205,29 @@ fn execute_hop(hop: &HopState) -> Vec<String> {
             Err(error) => return vec![format!("hop failed: {error}")],
         },
     };
-    let write = write_details_for(dest, cwd.as_deref());
+    let write = details(dest, cwd.as_deref());
     let request = HopRequest {
-        source,
-        dest: dest.harness,
         cwd,
         compaction,
         resume: (!hop.prompt.trim().is_empty())
             .then(|| ResumePrompt::new(hop.prompt.trim().to_string())),
-        reasoning: ReasoningPolicy::default(),
-        roots: hop.source.roots.clone(),
         write,
-        children: false,
+        children: hop.children && hop.subagents > 0,
+        ..HopRequest::new(source, dest.harness, hop.source.roots.clone())
     };
     match mukade::hop_into(&request, &dest.roots) {
         Ok(receipt) => receipt_lines(&receipt, dest),
         Err(HopError::ResumeFailed { reason, receipt }) => {
             let mut lines = vec![format!("resume failed: {reason}"), String::new()];
+            lines.extend(receipt_lines(&receipt, dest));
+            lines
+        }
+        Err(HopError::ChildWriteFailed { reason, receipt }) => {
+            let mut lines = vec![
+                format!("a subagent session was not written: {reason}"),
+                "the session itself was written".to_string(),
+                String::new(),
+            ];
             lines.extend(receipt_lines(&receipt, dest));
             lines
         }
@@ -1223,10 +1284,37 @@ fn receipt_lines_with(
         }
         None => lines.push("losses       (not in manifest)".to_string()),
     }
+    lines.extend(child_lines(&receipt.manifest));
     if let Some(reply) = &receipt.resume_output {
         lines.push(String::new());
         lines.push("resume reply".to_string());
         lines.extend(reply.lines().map(str::to_string));
+    }
+    lines
+}
+
+/// What became of each subagent session a hop carried (the manifest's `children`): where it went
+/// and whether the destination linked it to its parent. Nothing when none was carried.
+fn child_lines(manifest: &serde_json::Value) -> Vec<String> {
+    let children = manifest
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .filter(|children| !children.is_empty());
+    let Some(children) = children else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!("children     {}", children.len())];
+    for child in children {
+        let id = |key: &str| child.get(key).and_then(serde_json::Value::as_str);
+        let link = match id("link") {
+            Some("native") => "linked to its parent",
+            _ => "not linked: the destination has no link",
+        };
+        lines.push(format!(
+            "  · {} -> {} ({link})",
+            id("source_id").unwrap_or("?"),
+            id("dest_id").unwrap_or("?"),
+        ));
     }
     lines
 }
@@ -1335,7 +1423,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
-    let rect = centered(area, 78, 17);
+    let rect = centered(area, 78, if hop.subagents > 0 { 19 } else { 17 });
     frame.render_widget(Clear, rect);
     let mut lines = vec![
         Line::from(vec![
@@ -1346,7 +1434,7 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
     ];
     for (index, destination) in hop.destinations.iter().enumerate() {
         let selected = index == hop.dest;
-        let focus = hop.field == 0 && selected;
+        let focus = hop.focused(HopField::Destination) && selected;
         lines.push(Line::from(vec![
             Span::styled(
                 if focus { "▶ " } else { "  " },
@@ -1372,15 +1460,51 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
     let compaction = ["none", "portable", "summary"][hop.compaction];
     lines.push(Line::from(vec![
         Span::styled(
-            if hop.field == 1 { "▶ " } else { "  " },
+            if hop.focused(HopField::Compaction) {
+                "▶ "
+            } else {
+                "  "
+            },
             Style::default().fg(Color::Green),
         ),
         Span::styled("compaction  ", Style::default().fg(Color::DarkGray)),
         Span::styled(compaction, Style::default().fg(Color::Yellow)),
     ]));
+    if hop.subagents > 0 {
+        lines.push(Line::from(vec![
+            Span::styled(
+                if hop.focused(HopField::Children) {
+                    "▶ "
+                } else {
+                    "  "
+                },
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled("subagents   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                if hop.children {
+                    "carry"
+                } else {
+                    "leave behind"
+                },
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                format!(
+                    "  ({} in the source, written as sessions of their own)",
+                    hop.subagents
+                ),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
     lines.push(Line::from(vec![
         Span::styled(
-            if hop.field == 2 { "▶ " } else { "  " },
+            if hop.focused(HopField::Prompt) {
+                "▶ "
+            } else {
+                "  "
+            },
             Style::default().fg(Color::Green),
         ),
         Span::styled("prompt      ", Style::default().fg(Color::DarkGray)),
@@ -1405,7 +1529,7 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "tab field · ↑/↓ change · enter next/run · esc cancel",
+        "tab field · ↑/↓ change (space toggles) · enter next/run · esc cancel",
         Style::default().fg(Color::DarkGray),
     )));
     let block = Block::default().borders(Borders::ALL).title(" hop ");
@@ -1707,11 +1831,13 @@ fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let visible = app.visible_sessions();
+    let depths = row.directories.depths(app.directory);
     let title = format!(" sessions · {} ", visible.len());
     let items: Vec<ListItem> = visible
         .iter()
-        .map(|&index| &row.sessions[index])
-        .map(|info| {
+        .zip(depths)
+        .map(|(&index, &depth)| (&row.sessions[index], depth))
+        .map(|(info, depth)| {
             let title = session_label(info);
             let when = info.updated.as_deref().unwrap_or("—");
             let archived = if info.archived { " [archived]" } else { "" };
@@ -1725,9 +1851,9 @@ fn draw_sessions(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 ""
             };
-            let fork = if info.parent.is_some() { " ↳" } else { "" };
+            let lead = tree::prefix(info, depth);
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{title}{fork}"), Style::default().fg(Color::White)),
+                Span::styled(format!("{lead}{title}"), Style::default().fg(Color::White)),
                 Span::styled(
                     format!("{live}{unreadable}{archived}  {when}"),
                     Style::default().fg(Color::DarkGray),
@@ -1798,7 +1924,22 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &mut App) {
         field(&mut lines, "harness", row.location.harness.as_str());
         field(&mut lines, "id", &info.id);
         if let Some(parent) = &info.parent {
-            field(&mut lines, "parent", parent);
+            let listed = row.sessions.iter().any(|other| &other.id == parent);
+            field(
+                &mut lines,
+                "parent",
+                &if listed {
+                    parent.clone()
+                } else {
+                    format!("{parent} (not listed)")
+                },
+            );
+        }
+        if let Some(kind) = tree::kind_text(info) {
+            field(&mut lines, "kind", &kind);
+        }
+        if let Some(children) = tree::children_of(&row.sessions, &info.id).text() {
+            field(&mut lines, "children", &children);
         }
         if let Some(cwd) = &info.cwd {
             field(&mut lines, "cwd", cwd);
@@ -2127,6 +2268,339 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// A listing as `list_all` hands it back: a child before its parent, a fork, a subagent of a
+    /// session that is not listed, in two folders.
+    fn app_with_a_tree() -> App {
+        use mukade::model::ParentKind;
+        let roots = StoreRoots::default();
+        let locations = location::standard_locations(&roots);
+        let session = |id: &str, cwd: &str, parent: Option<(&str, ParentKind)>| SessionInfo {
+            id: id.to_string(),
+            title: Some(id.to_string()),
+            cwd: Some(cwd.to_string()),
+            path: format!("{id}.jsonl"),
+            parent: parent.as_ref().map(|(parent, _)| parent.to_string()),
+            parent_kind: parent.map(|(_, kind)| kind),
+            ..Default::default()
+        };
+        let spawn = ParentKind::Spawn {
+            call_id: None,
+            agent: Some("explore".to_string()),
+            inherits_context: false,
+        };
+        let sessions = vec![
+            session("helper", "/projects/a", Some(("main", spawn.clone()))),
+            session("main", "/projects/a", None),
+            session("branch", "/projects/a", Some(("main", ParentKind::fork()))),
+            session("stray", "/projects/b", Some(("gone", spawn))),
+            session(
+                "far-fork",
+                "/projects/b",
+                Some(("main", ParentKind::fork())),
+            ),
+        ];
+        let rows = locations
+            .iter()
+            .enumerate()
+            .map(|(index, location)| {
+                let sessions = if index == 0 {
+                    sessions.clone()
+                } else {
+                    Vec::new()
+                };
+                HarnessRow::new(location.clone(), sessions, None)
+            })
+            .collect();
+        App::new(locations, roots, rows, 50)
+    }
+
+    #[test]
+    fn the_session_list_nests_children_and_forks_under_their_parent() {
+        let mut app = app_with_a_tree();
+        app.focus = Focus::Sessions;
+        let ids: Vec<_> = app
+            .visible_sessions()
+            .iter()
+            .map(|&index| app.rows[0].sessions[index].id.clone())
+            .collect();
+        assert_eq!(ids, ["main", "helper", "branch", "far-fork", "stray"]);
+        // The selection walks the displayed order and lands on the session, not on a position of
+        // the unarranged listing.
+        app.move_down();
+        assert_eq!(app.selected_session().unwrap().id, "helper");
+        let text = screen(&mut app, 120, 20);
+        assert!(text.contains("↳ agent explore"), "{text}");
+        assert!(text.contains("⑂ fork"), "{text}");
+    }
+
+    #[test]
+    fn a_child_is_indented_under_its_parent_and_an_orphan_is_not() {
+        let app = app_with_a_tree();
+        let row = &app.rows[0];
+        let lines: Vec<String> = row
+            .directories
+            .sessions(0)
+            .iter()
+            .zip(row.directories.depths(0))
+            .map(|(&index, &depth)| {
+                let info = &row.sessions[index];
+                format!("{}{}", tree::prefix(info, depth), session_label(info))
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "main",
+                "  ↳ agent explore helper",
+                "  ⑂ fork branch",
+                "  ⑂ fork far-fork",
+                "↳ agent explore stray",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folder_filter_still_finds_a_child_whose_parent_is_in_another_folder() {
+        let mut app = app_with_a_tree();
+        app.focus = Focus::Directories;
+        app.move_down();
+        app.move_down();
+        app.focus = Focus::Sessions;
+        let ids: Vec<_> = app
+            .visible_sessions()
+            .iter()
+            .map(|&index| app.rows[0].sessions[index].id.clone())
+            .collect();
+        assert_eq!(ids, ["stray", "far-fork"], "/projects/b");
+        assert_eq!(app.rows[0].directories.depths(2), [0, 0]);
+        assert_eq!(app.selected_session().unwrap().id, "stray");
+    }
+
+    #[test]
+    fn the_detail_pane_names_the_parent_the_kind_and_the_children() {
+        let mut app = app_with_a_tree();
+        app.focus = Focus::Sessions;
+        let parent = screen(&mut app, 120, 30);
+        assert!(parent.contains("3 (1 subagent, 2 forks)"), "{parent}");
+        assert!(!parent.contains("parent  "), "a root has no parent line");
+        app.move_down();
+        let child = screen(&mut app, 120, 30);
+        assert!(child.contains("parent"), "{child}");
+        assert!(child.contains("subagent · explore"), "{child}");
+        assert!(!child.contains("(not listed)"), "{child}");
+        // The orphan's parent is named, and said not to be listed.
+        app.move_down();
+        app.move_down();
+        app.move_down();
+        assert_eq!(app.selected_session().unwrap().id, "stray");
+        let orphan = screen(&mut app, 120, 30);
+        assert!(orphan.contains("gone (not listed)"), "{orphan}");
+    }
+
+    fn select(app: &mut App, id: &str) {
+        app.focus = Focus::Sessions;
+        app.session = app
+            .visible_sessions()
+            .iter()
+            .position(|&index| app.rows[0].sessions[index].id == id)
+            .expect("the session is listed");
+    }
+
+    fn hop_of(app: &App) -> &HopState {
+        let Mode::Hop(hop) = &app.mode else {
+            panic!("the hop dialog is open");
+        };
+        hop
+    }
+
+    #[test]
+    fn a_hop_offers_subagents_only_for_a_source_that_has_them_and_leaves_them_off() {
+        let mut app = app_with_a_tree();
+        select(&mut app, "branch");
+        open_hop(&mut app);
+        assert_eq!(
+            hop_of(&app).fields,
+            [
+                HopField::Destination,
+                HopField::Compaction,
+                HopField::Prompt
+            ],
+            "a fork's source has no subagents"
+        );
+        assert!(!hop_of(&app).children);
+        let text = screen(&mut app, 120, 30);
+        assert!(!text.contains("subagents"), "{text}");
+        app.mode = Mode::Normal;
+
+        select(&mut app, "main");
+        open_hop(&mut app);
+        assert_eq!(
+            hop_of(&app).fields,
+            [
+                HopField::Destination,
+                HopField::Compaction,
+                HopField::Children,
+                HopField::Prompt
+            ]
+        );
+        assert!(!hop_of(&app).children, "the default is to leave them");
+        let text = screen(&mut app, 120, 30);
+        assert!(text.contains("subagents"), "{text}");
+        assert!(text.contains("leave behind"), "{text}");
+    }
+
+    #[test]
+    fn the_subagent_field_toggles_with_the_arrows_and_the_space_bar_and_enter_walks_past_it() {
+        let mut app = app_with_a_tree();
+        select(&mut app, "main");
+        open_hop(&mut app);
+        handle_hop_key(&mut app, KeyCode::Enter);
+        handle_hop_key(&mut app, KeyCode::Enter);
+        assert_eq!(hop_of(&app).focus(), HopField::Children);
+        handle_hop_key(&mut app, KeyCode::Right);
+        assert!(hop_of(&app).children);
+        let text = screen(&mut app, 120, 30);
+        assert!(text.contains("carry"), "{text}");
+        handle_hop_key(&mut app, KeyCode::Char(' '));
+        assert!(!hop_of(&app).children);
+        handle_hop_key(&mut app, KeyCode::Char(' '));
+        assert!(hop_of(&app).children);
+        // The space bar is text in the prompt, and a toggle nowhere else.
+        handle_hop_key(&mut app, KeyCode::Enter);
+        assert_eq!(hop_of(&app).focus(), HopField::Prompt);
+        handle_hop_key(&mut app, KeyCode::Char(' '));
+        assert!(hop_of(&app).children);
+        assert_eq!(hop_of(&app).prompt, " ");
+        // Shift+tab goes back through the same fields.
+        handle_hop_key(&mut app, KeyCode::BackTab);
+        assert_eq!(hop_of(&app).focus(), HopField::Children);
+        handle_hop_key(&mut app, KeyCode::Tab);
+        handle_hop_key(&mut app, KeyCode::Tab);
+        assert_eq!(hop_of(&app).focus(), HopField::Destination, "tab wraps");
+    }
+
+    #[test]
+    fn a_hops_children_come_back_as_lines_of_the_result() {
+        let manifest = serde_json::json!({
+            "losses": [],
+            "children": [
+                {"source_id": "a1", "dest_id": "d1", "link": "native"},
+                {"source_id": "a2", "dest_id": "d2", "link": "none"},
+            ],
+        });
+        assert_eq!(
+            child_lines(&manifest),
+            [
+                "children     2",
+                "  · a1 -> d1 (linked to its parent)",
+                "  · a2 -> d2 (not linked: the destination has no link)",
+            ]
+        );
+        assert!(child_lines(&serde_json::json!({"children": []})).is_empty());
+        assert!(child_lines(&serde_json::json!({"losses": []})).is_empty());
+    }
+
+    fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap().flatten() {
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).unwrap();
+            }
+        }
+    }
+
+    /// The Claude Code fixture whose session has subagents, listed by the explorer's own loader
+    /// (`list_all`), hopped into a scratch Pi store with and without `HopRequest::children`.
+    #[test]
+    fn a_hop_carries_the_subagent_sessions_only_when_asked() {
+        let dir = scratch("hop-children");
+        let claude = dir.join("claude");
+        copy_tree(
+            std::path::Path::new("../fixtures/claude_code/subagents/projects"),
+            &claude.join("projects"),
+        );
+        let roots = StoreRoots {
+            claude_config_dir: Some(claude),
+            pi_agent_dir: Some(dir.join("pi")),
+            ..Default::default()
+        };
+        let locations = location::standard_locations(&roots);
+        let rows = load_rows(&locations);
+        let mut app = App::new(locations, roots, rows, 50);
+        app.harness = app
+            .rows
+            .iter()
+            .position(|row| row.location.harness == HarnessId::ClaudeCode)
+            .unwrap();
+        let parent = "5ab1c0de-0000-4000-8000-000000000001";
+        let nested: Vec<_> = app
+            .visible_sessions()
+            .iter()
+            .zip(app.rows[app.harness].directories.depths(0))
+            .map(|(&index, &depth)| (app.rows[app.harness].sessions[index].id.clone(), depth))
+            .collect();
+        let at = nested.iter().position(|(id, _)| id == parent).unwrap();
+        assert!(
+            nested[at + 1..]
+                .iter()
+                .take_while(|(_, depth)| *depth > 0)
+                .count()
+                >= 4,
+            "the listing nests the subagents under their parent: {nested:?}"
+        );
+
+        let details = |_: &Location, _: Option<&str>| WriteDetails {
+            dest_version: Some("1.4.0".into()),
+            dest_protocol: mukade::policy::destination_protocol(HarnessId::Pi),
+            ..Default::default()
+        };
+        let hop_with = |app: &mut App, children: bool| {
+            app.focus = Focus::Sessions;
+            app.session = at;
+            open_hop(app);
+            let Mode::Hop(hop) = &mut app.mode else {
+                panic!("the hop dialog opens");
+            };
+            hop.dest = hop
+                .destinations
+                .iter()
+                .position(|l| l.harness == HarnessId::Pi)
+                .unwrap();
+            assert!(hop.fields.contains(&HopField::Children));
+            hop.children = children;
+            let lines = execute_hop_with(hop, details);
+            app.mode = Mode::Normal;
+            lines
+        };
+
+        let alone = hop_with(&mut app, false);
+        assert!(
+            alone.iter().any(|line| line.starts_with("destination")),
+            "{alone:?}"
+        );
+        assert!(
+            alone.iter().all(|line| !line.starts_with("children")),
+            "no children unless asked: {alone:?}"
+        );
+
+        let together = hop_with(&mut app, true);
+        assert!(
+            together
+                .iter()
+                .any(|line| line.starts_with("children     4")),
+            "{together:?}"
+        );
+        assert!(
+            together
+                .iter()
+                .any(|line| line.contains("a1111111111111111 ->")),
+            "{together:?}"
+        );
     }
 
     #[test]
