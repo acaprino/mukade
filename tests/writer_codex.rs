@@ -160,10 +160,7 @@ fn message_ids_are_in_codex_own_local_shape() {
     // thread cannot be resumed.
     let (_, rows) = support::write_fixture(HarnessId::Codex, "writer-codex-items");
     let messages = payloads(&rows, "message");
-    let ids: Vec<&str> = messages
-        .iter()
-        .filter_map(|p| p["id"].as_str())
-        .collect();
+    let ids: Vec<&str> = messages.iter().filter_map(|p| p["id"].as_str()).collect();
     assert!(!ids.is_empty(), "the fixture writes message ids");
     for id in ids {
         let Some(rest) = id.strip_prefix("msg_") else {
@@ -220,13 +217,22 @@ fn calls_and_results_are_paired_by_call_id() {
 #[test]
 fn a_native_budget_appends_a_codex_compacted_record_without_dropping_history() {
     let source = support::read_source(HarnessId::Codex);
-    let first_user = support::user_texts(&source).into_iter().next().expect("a user turn");
+    let first_user = support::user_texts(&source)
+        .into_iter()
+        .next()
+        .expect("a user turn");
     let (_, baseline) = support::write_fixture(HarnessId::Codex, "writer-codex-native-baseline");
 
     let scratch = support::scratch(HarnessId::Codex, "writer-codex-native-boundary");
     let mut opts = support::opts(HarnessId::Codex, &scratch);
-    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
-    let written = for_harness(HarnessId::Codex).write(&source, &opts).expect("write");
+    opts.native_budget = Some(NativeBudget {
+        context: 40_000,
+        max_output_tokens: Some(32_000),
+        text_token_factor: None,
+    });
+    let written = for_harness(HarnessId::Codex)
+        .write(&source, &opts)
+        .expect("write");
     let rows = support::read_jsonl(Path::new(&written.location));
 
     let boundary = rows.last().expect("a compacted record");
@@ -235,9 +241,19 @@ fn a_native_budget_appends_a_codex_compacted_record_without_dropping_history() {
     assert!(message.contains("mukade native compaction"));
     assert!(message.contains(&first_user.chars().take(40).collect::<String>()));
 
-    let replacement = boundary["payload"]["replacement_history"].as_array().expect("the retained tail");
-    let response_items: Vec<&Value> = rows[..rows.len() - 1].iter().filter(|row| row["type"] == "response_item").map(|row| &row["payload"]).collect();
-    assert_eq!(replacement.len(), 2, "the summary travels in replacement_history, then the retained item");
+    let replacement = boundary["payload"]["replacement_history"]
+        .as_array()
+        .expect("the retained tail");
+    let response_items: Vec<&Value> = rows[..rows.len() - 1]
+        .iter()
+        .filter(|row| row["type"] == "response_item")
+        .map(|row| &row["payload"])
+        .collect();
+    assert_eq!(
+        replacement.len(),
+        2,
+        "the summary travels in replacement_history, then the retained item"
+    );
     let summary_item = &replacement[0];
     assert_eq!(summary_item["type"], "message");
     assert_eq!(summary_item["role"], "user");
@@ -254,10 +270,17 @@ fn a_native_budget_appends_a_codex_compacted_record_without_dropping_history() {
 
     assert_eq!(rows.len(), baseline.len() + 1, "only the boundary is added");
     assert_eq!(
-        rows[..baseline.len()].iter().map(|row| row["type"].as_str()).collect::<Vec<_>>(),
-        baseline.iter().map(|row| row["type"].as_str()).collect::<Vec<_>>()
+        rows[..baseline.len()]
+            .iter()
+            .map(|row| row["type"].as_str())
+            .collect::<Vec<_>>(),
+        baseline
+            .iter()
+            .map(|row| row["type"].as_str())
+            .collect::<Vec<_>>()
     );
 
-    let read_back = mukade::reader::codex::read_file(Path::new(&written.location)).expect("Codex reads its own compacted record");
+    let read_back = mukade::reader::codex::read_file(Path::new(&written.location))
+        .expect("Codex reads its own compacted record");
     assert!(read_back.entries.iter().any(|entry| matches!(&entry.kind, Kind::Compaction { summary, .. } if summary.contains("mukade native compaction"))));
 }

@@ -189,7 +189,10 @@ mod tests {
         };
         assert!(matches!(
             lineage("s-1", Some(&fork)).1,
-            ParentKind::Spawn { inherits_context: true, .. }
+            ParentKind::Spawn {
+                inherits_context: true,
+                ..
+            }
         ));
         let explore = AgentMeta {
             agent_type: Some("Explore".into()),
@@ -197,7 +200,10 @@ mod tests {
         };
         assert!(matches!(
             lineage("s-1", Some(&explore)).1,
-            ParentKind::Spawn { inherits_context: false, .. }
+            ParentKind::Spawn {
+                inherits_context: false,
+                ..
+            }
         ));
     }
 

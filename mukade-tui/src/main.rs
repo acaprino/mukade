@@ -493,7 +493,9 @@ fn run(terminal: &mut Tui, app: &mut App, folders: Vec<std::path::PathBuf>) -> s
             continue;
         }
         if app.busy {
-            if key.code == KeyCode::Char('q') && !matches!(app.job_kind, JobKind::Hop | JobKind::Import) {
+            if key.code == KeyCode::Char('q')
+                && !matches!(app.job_kind, JobKind::Hop | JobKind::Import)
+            {
                 return Ok(());
             }
             continue;
@@ -831,13 +833,23 @@ fn start_export(app: &mut App) {
 fn export_file(dir: &std::path::Path, harness: HarnessId, id: &str) -> std::path::PathBuf {
     let id: String = id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     dir.join(format!("{}-{id}.json", harness.as_str()))
 }
 
 /// Read a session and write its document (the same one `mukade dump` prints) into `dir`.
-fn export_session(location: &Location, id: &str, dir: &std::path::Path) -> Result<Exported, String> {
+fn export_session(
+    location: &Location,
+    id: &str,
+    dir: &std::path::Path,
+) -> Result<Exported, String> {
     let session = mukade::export(&SessionRef::id(location.harness, id), &location.roots)
         .map_err(|error| error.to_string())?;
     let doc = mukade::hop::document(&session, None);
@@ -952,7 +964,8 @@ fn execute_import(path: &std::path::Path, dest: &Location, prompt: Option<String
 
 /// A document file and the session it holds.
 fn read_document_file(path: &std::path::Path) -> Result<(serde_json::Value, Session), String> {
-    let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
     let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map_err(|error| format!("{}: not a JSON document: {error}", path.display()))?;
     let session = mukade::hop::read_document(&doc).map_err(|error| error.to_string())?;
@@ -1419,7 +1432,10 @@ fn draw_import(frame: &mut Frame, area: Rect, state: &ImportState) {
             }),
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled(marker(1), green), Span::styled("2 into", gray)]),
+        Line::from(vec![
+            Span::styled(marker(1), green),
+            Span::styled("2 into", gray),
+        ]),
     ];
     for (index, destination) in state.destinations.iter().enumerate() {
         let selected = index == state.dest;
@@ -1452,7 +1468,12 @@ fn draw_import(frame: &mut Frame, area: Rect, state: &ImportState) {
         gray,
     )));
     let block = Block::default().borders(Borders::ALL).title(" import ");
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        rect,
+    );
 }
 
 /// The folder prompt: a path, scanned for installations on Enter.
@@ -2675,11 +2696,17 @@ mod tests {
             .find(|l| l.harness == HarnessId::ClaudeCode)
             .unwrap();
         let exported = export_session(source, id, &dir.join("exports")).expect("export");
-        assert_eq!(exported.path, dir.join("exports").join(format!("claude_code-{id}.json")));
+        assert_eq!(
+            exported.path,
+            dir.join("exports").join(format!("claude_code-{id}.json"))
+        );
         assert!(exported.messages > 0);
 
         let (doc, session) = read_document_file(&exported.path).expect("the document reads back");
-        let pi = locations.iter().find(|l| l.harness == HarnessId::Pi).unwrap();
+        let pi = locations
+            .iter()
+            .find(|l| l.harness == HarnessId::Pi)
+            .unwrap();
         let write = WriteDetails {
             dest_version: Some("1.4.0".into()),
             dest_protocol: mukade::policy::destination_protocol(HarnessId::Pi),
@@ -2687,8 +2714,11 @@ mod tests {
         };
         let receipt = import_read(pi, &doc, &session, write, None).expect("import");
         assert!(std::path::Path::new(&receipt.location).starts_with(dir.join("pi")));
-        let written = mukade::export(&SessionRef::id(HarnessId::Pi, receipt.dest_id.clone()), &roots)
-            .expect("the written session is a Pi session");
+        let written = mukade::export(
+            &SessionRef::id(HarnessId::Pi, receipt.dest_id.clone()),
+            &roots,
+        )
+        .expect("the written session is a Pi session");
         assert_eq!(
             written.conversation().count(),
             session.conversation().count(),
@@ -2700,10 +2730,18 @@ mod tests {
     fn a_missing_or_broken_document_is_refused_with_its_path() {
         let dir = scratch("broken-document");
         let missing = dir.join("missing.json");
-        assert!(read_document_file(&missing).unwrap_err().contains("missing.json"));
+        assert!(
+            read_document_file(&missing)
+                .unwrap_err()
+                .contains("missing.json")
+        );
         let broken = dir.join("broken.json");
         std::fs::write(&broken, "{not json").unwrap();
-        assert!(read_document_file(&broken).unwrap_err().contains("not a JSON document"));
+        assert!(
+            read_document_file(&broken)
+                .unwrap_err()
+                .contains("not a JSON document")
+        );
         let location = location::standard_locations(&StoreRoots::default()).remove(0);
         let lines = execute_import(&missing, &location, None);
         assert!(lines[0].starts_with("import failed"), "{lines:?}");

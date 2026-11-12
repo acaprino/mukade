@@ -20,4 +20,5 @@ pub use room::{BoundSession, JoinRequest, Member, Role, RoomRow, RoomSummary};
 pub use store::Bus;
 
 pub use chat_domain::ChatError;
+pub(crate) use chat_observe::read_opencode as read_opencode_bound;
 pub use chat_tools::chat_tool_definitions;

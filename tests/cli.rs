@@ -264,13 +264,19 @@ fn scan_reports_every_installation_below_a_folder() {
 fn scan_honours_its_depth() {
     let scratch = support::scratch(HarnessId::OpenCode, "cli-scan-depth");
     let _ = portable_januracode(&scratch.join("apps/JanuraCode"));
-    let (ok, stdout, stderr) = cli(&scratch, &["scan", scratch.to_str().unwrap(), "--depth", "2"]);
+    let (ok, stdout, stderr) = cli(
+        &scratch,
+        &["scan", scratch.to_str().unwrap(), "--depth", "2"],
+    );
     assert!(ok, "{stderr}");
     let doc: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(doc["installations"].as_array().unwrap().len(), 0, "{doc}");
     assert_eq!(doc["truncated"], true, "{doc}");
 
-    let (ok, _, stderr) = cli(&scratch, &["scan", scratch.to_str().unwrap(), "--depth", "x"]);
+    let (ok, _, stderr) = cli(
+        &scratch,
+        &["scan", scratch.to_str().unwrap(), "--depth", "x"],
+    );
     assert!(!ok);
     assert!(stderr.contains("--depth"), "{stderr}");
 }
@@ -293,7 +299,12 @@ fn a_root_holding_several_installations_names_them() {
     let _ = portable_januracode(&scratch.join("apps/two"));
     let (ok, _, stderr) = cli(
         &scratch,
-        &["list", "opencode", "--root", scratch.join("apps").to_str().unwrap()],
+        &[
+            "list",
+            "opencode",
+            "--root",
+            scratch.join("apps").to_str().unwrap(),
+        ],
     );
     assert!(!ok);
     assert!(stderr.contains("more than one"), "{stderr}");
@@ -504,11 +515,20 @@ fn a_dest_path_the_destination_cannot_take_is_refused() {
         );
         assert_eq!(code, Some(2), "{dest}: {stdout}{stderr}");
         assert!(stderr.contains("--dest-path"), "{dest}: {stderr}");
-        assert!(stdout.trim().is_empty(), "{dest}: no session reported: {stdout}");
-        assert!(!path.exists(), "{dest}: nothing written at the reserved file");
+        assert!(
+            stdout.trim().is_empty(),
+            "{dest}: no session reported: {stdout}"
+        );
+        assert!(
+            !path.exists(),
+            "{dest}: nothing written at the reserved file"
+        );
     }
     assert!(!home.join("sessions").exists(), "no Pi session written");
-    assert!(!home.join("opencode.db").exists(), "no OpenCode store written");
+    assert!(
+        !home.join("opencode.db").exists(),
+        "no OpenCode store written"
+    );
 }
 
 #[test]
@@ -822,7 +842,10 @@ fn dump_reads_a_source_from_a_file_without_a_store() {
     assert_eq!(code, Some(0), "{stderr}");
     let doc: Value = serde_json::from_str(&stdout).expect("one document");
     assert_eq!(doc["meta"]["id"], "c45db7bc-542c-4201-89de-b590c6fdb797");
-    assert!(!scratch.join("home").join("projects").exists(), "no store was needed");
+    assert!(
+        !scratch.join("home").join("projects").exists(),
+        "no store was needed"
+    );
 }
 
 /// `--timing` states where the time went, phase by phase, and leaves stdout for the receipt.
@@ -1335,7 +1358,10 @@ fn summary_flags_and_combinations_that_cannot_work_are_refused() {
         &["hop", "pi", &id, "claude_code", "--compaction", "bogus"],
     );
     assert_eq!(code, Some(1), "{stderr}");
-    assert!(stderr.contains("none, portable, summary, native"), "{stderr}");
+    assert!(
+        stderr.contains("none, portable, summary, native"),
+        "{stderr}"
+    );
 
     // An intent is a summary prompt: it implies the summary transport, and cannot be combined
     // with another one. An unknown intent is refused before the source is read.
@@ -1814,11 +1840,7 @@ fn identity_prints_the_name_version_and_target() {
     let identity: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(identity["name"], "mukade");
     assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
-    let expected_target = if cfg!(all(
-        windows,
-        target_arch = "x86_64",
-        target_env = "msvc"
-    )) {
+    let expected_target = if cfg!(all(windows, target_arch = "x86_64", target_env = "msvc")) {
         "x86_64-pc-windows-msvc"
     } else {
         "other"
@@ -1894,13 +1916,7 @@ fn options_are_refused_where_they_cannot_apply() {
             "invalid destination session ID",
         ),
         (
-            vec![
-                "write",
-                "opencode",
-                document,
-                "--dest-id",
-                "../invalid",
-            ],
+            vec!["write", "opencode", document, "--dest-id", "../invalid"],
             "invalid destination session ID",
         ),
         (
@@ -2012,10 +2028,7 @@ fn list_opencode_reads_root_sessions_from_the_selected_store_without_changing_it
         &scratch,
         &["list", "opencode", "--root", database.to_str().unwrap()],
         &[
-            (
-                "OPENCODE_DB",
-                scratch.join("wrong.db").to_str().unwrap(),
-            ),
+            ("OPENCODE_DB", scratch.join("wrong.db").to_str().unwrap()),
             (
                 "MUKADE_OPENCODE_EXE",
                 scratch.join("no-engine").to_str().unwrap(),
@@ -2088,13 +2101,22 @@ fn native_compaction_flags_are_refused_where_they_cannot_work() {
     let absent = scratch.join("absent.json");
     let document = || {
         vec![
-            "document".to_string(), "opencode".into(), "opencode".into(), "fixture".into(),
-            "--from-file".into(), fixture.to_str().unwrap().into(),
-            "--cwd".into(), cwd.into(),
-            "--dest-id".into(), "ses_preview".into(),
-            "--project-id".into(), "global".into(),
-            "--model-provider".into(), "h27".into(),
-            "--model".into(), "m1".into(),
+            "document".to_string(),
+            "opencode".into(),
+            "opencode".into(),
+            "fixture".into(),
+            "--from-file".into(),
+            fixture.to_str().unwrap().into(),
+            "--cwd".into(),
+            cwd.into(),
+            "--dest-id".into(),
+            "ses_preview".into(),
+            "--project-id".into(),
+            "global".into(),
+            "--model-provider".into(),
+            "h27".into(),
+            "--model".into(),
+            "m1".into(),
         ]
     };
     let run = |args: Vec<String>, expected: &str| {
@@ -2104,20 +2126,55 @@ fn native_compaction_flags_are_refused_where_they_cannot_work() {
         assert!(stderr.contains(expected), "{refs:?}: {stderr}");
     };
 
-    run([document(), vec!["--compaction".into(), "native".into()]].concat(), "--context-window is required with --compaction native");
-    run([document(), vec!["--compaction".into(), "native".into(), "--context-window".into(), "40000".into(), "--keep-turns".into(), "2".into()]].concat(), "--keep-turns, --summary-model and --summary-timeout go with --compaction summary or --intent");
-    run([document(), vec!["--context-window".into(), "40000".into()]].concat(), "--context-window, --max-output-tokens and --text-token-factor go with --compaction native");
-    run(vec![
-        "dump".into(), "opencode".into(), "fixture".into(),
-        "--from-file".into(), fixture.to_str().unwrap().into(),
-        "--compaction".into(), "native".into(),
-        "--context-window".into(), "40000".into(),
-    ], "--compaction native needs a destination writer: use document or hop");
-    run(vec![
-        "write".into(), "pi".into(), absent.to_str().unwrap().into(),
-        "--compaction".into(), "native".into(),
-        "--context-window".into(), "40000".into(),
-    ], "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop");
+    run(
+        [document(), vec!["--compaction".into(), "native".into()]].concat(),
+        "--context-window is required with --compaction native",
+    );
+    run(
+        [
+            document(),
+            vec![
+                "--compaction".into(),
+                "native".into(),
+                "--context-window".into(),
+                "40000".into(),
+                "--keep-turns".into(),
+                "2".into(),
+            ],
+        ]
+        .concat(),
+        "--keep-turns, --summary-model and --summary-timeout go with --compaction summary or --intent",
+    );
+    run(
+        [document(), vec!["--context-window".into(), "40000".into()]].concat(),
+        "--context-window, --max-output-tokens and --text-token-factor go with --compaction native",
+    );
+    run(
+        vec![
+            "dump".into(),
+            "opencode".into(),
+            "fixture".into(),
+            "--from-file".into(),
+            fixture.to_str().unwrap().into(),
+            "--compaction".into(),
+            "native".into(),
+            "--context-window".into(),
+            "40000".into(),
+        ],
+        "--compaction native needs a destination writer: use document or hop",
+    );
+    run(
+        vec![
+            "write".into(),
+            "pi".into(),
+            absent.to_str().unwrap().into(),
+            "--compaction".into(),
+            "native".into(),
+            "--context-window".into(),
+            "40000".into(),
+        ],
+        "--compaction, --keep-turns, --summary-model and --summary-timeout are supported only by dump and hop",
+    );
 }
 
 /// A Pi session of two turns, each interrupted after the model had begun to answer.
@@ -2177,14 +2234,18 @@ fn a_session_of_only_interrupted_turns_is_exported_whole() {
         assert!(written.contains(text), "{text} did not travel");
     }
     assert_eq!(printed["manifest"]["options"]["interrupted"], "keep");
-    assert_eq!(printed["manifest"]["counts"]["dropped_interrupted_steps"], 0);
+    assert_eq!(
+        printed["manifest"]["counts"]["dropped_interrupted_steps"],
+        0
+    );
 }
 
 /// `--interrupted drop`, end to end: the prompts are written, the cut-off replies are not, and
 /// the manifest says what was left out.
 #[test]
 fn interrupted_drop_writes_the_prompts_without_the_cut_off_replies() {
-    let (printed, written) = hop_all_interrupted("cli-interrupted-drop", &["--interrupted", "drop"]);
+    let (printed, written) =
+        hop_all_interrupted("cli-interrupted-drop", &["--interrupted", "drop"]);
     for text in ["PROMPT-1", "PROMPT-2"] {
         assert!(written.contains(text), "{text} did not travel");
     }

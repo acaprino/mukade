@@ -317,7 +317,10 @@ fn a_relative_data_directory_is_refused_before_import() {
         ],
     );
     assert_ne!(code, Some(0));
-    assert!(stderr.contains("MUKADE_DATA_DIR must be absolute"), "{stderr}");
+    assert!(
+        stderr.contains("MUKADE_DATA_DIR must be absolute"),
+        "{stderr}"
+    );
     assert!(!scratch.join("relative-data").exists());
     assert!(!scratch.join("destination.db").exists());
 }
@@ -348,6 +351,9 @@ fn a_relative_data_directory_is_refused_even_when_the_destination_needs_no_tempo
         ],
     );
     assert_ne!(code, Some(0));
-    assert!(stderr.contains("MUKADE_DATA_DIR must be absolute"), "{stderr}");
+    assert!(
+        stderr.contains("MUKADE_DATA_DIR must be absolute"),
+        "{stderr}"
+    );
     assert!(!scratch.join("sessions").exists());
 }

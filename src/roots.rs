@@ -131,7 +131,10 @@ mod tests {
     fn a_harness_root_is_set_and_read_back() {
         let mut roots = StoreRoots::default();
         roots.set_root(HarnessId::Pi, Path::new("portable/pi/agent"));
-        assert_eq!(roots.root(HarnessId::Pi), Some(Path::new("portable/pi/agent")));
+        assert_eq!(
+            roots.root(HarnessId::Pi),
+            Some(Path::new("portable/pi/agent"))
+        );
         assert_eq!(roots.root(HarnessId::ClaudeCode), None);
     }
 

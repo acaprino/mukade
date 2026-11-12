@@ -452,13 +452,22 @@ fn a_reserved_destination_outside_the_root_is_refused() {
 #[test]
 fn a_native_budget_appends_a_pi_compaction_entry_without_dropping_history() {
     let source = support::read_source(HarnessId::Pi);
-    let first_user = support::user_texts(&source).into_iter().next().expect("a user turn");
+    let first_user = support::user_texts(&source)
+        .into_iter()
+        .next()
+        .expect("a user turn");
     let (_, baseline) = support::write_fixture(HarnessId::Pi, "writer-pi-native-baseline");
 
     let scratch = support::scratch(HarnessId::Pi, "writer-pi-native-boundary");
     let mut opts = support::opts(HarnessId::Pi, &scratch);
-    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
-    let written = for_harness(HarnessId::Pi).write(&source, &opts).expect("write");
+    opts.native_budget = Some(NativeBudget {
+        context: 40_000,
+        max_output_tokens: Some(32_000),
+        text_token_factor: None,
+    });
+    let written = for_harness(HarnessId::Pi)
+        .write(&source, &opts)
+        .expect("write");
     let rows = support::read_jsonl(Path::new(&written.location));
 
     let boundary = rows.last().expect("a compaction entry");
@@ -471,17 +480,35 @@ fn a_native_budget_appends_a_pi_compaction_entry_without_dropping_history() {
     assert!(summary.contains(&first_user.chars().take(40).collect::<String>()));
 
     let before = &rows[..rows.len() - 1];
-    assert_eq!(before.len(), baseline.len(), "nothing before the boundary is dropped");
     assert_eq!(
-        before.iter().map(|row| row["type"].as_str()).collect::<Vec<_>>(),
-        baseline.iter().map(|row| row["type"].as_str()).collect::<Vec<_>>()
+        before.len(),
+        baseline.len(),
+        "nothing before the boundary is dropped"
+    );
+    assert_eq!(
+        before
+            .iter()
+            .map(|row| row["type"].as_str())
+            .collect::<Vec<_>>(),
+        baseline
+            .iter()
+            .map(|row| row["type"].as_str())
+            .collect::<Vec<_>>()
     );
 
-    let read_back = mukade::reader::pi::read_file(Path::new(&written.location)).expect("Pi reads its own native boundary");
-    let compaction = read_back.entries.iter().rev().find_map(|entry| match &entry.kind {
-        Kind::Compaction { summary, kept_from, .. } => Some((summary.clone(), kept_from.clone())),
-        _ => None,
-    }).expect("the appended entry is a compaction");
+    let read_back = mukade::reader::pi::read_file(Path::new(&written.location))
+        .expect("Pi reads its own native boundary");
+    let compaction = read_back
+        .entries
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.kind {
+            Kind::Compaction {
+                summary, kept_from, ..
+            } => Some((summary.clone(), kept_from.clone())),
+            _ => None,
+        })
+        .expect("the appended entry is a compaction");
     assert_eq!(compaction.1.as_deref(), rows[rows.len() - 2]["id"].as_str());
     assert!(compaction.0.contains("mukade native compaction"));
 }

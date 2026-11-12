@@ -425,7 +425,10 @@ pub fn document_from_plan_report(
         validate_agent(agent)?;
         info.insert("agent".into(), Value::String(agent.clone()));
     }
-    Ok((json!({"info": Value::Object(info), "messages": messages}), native_compaction))
+    Ok((
+        json!({"info": Value::Object(info), "messages": messages}),
+        native_compaction,
+    ))
 }
 
 /// OpenCode's interchange format **requires** a complete model reference — `{id, providerID}` — on

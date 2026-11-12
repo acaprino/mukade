@@ -580,11 +580,7 @@ fn candidate_readable(roots: &StoreRoots, harness: HarnessId, candidate: &Sessio
     let Ok(path) = Path::new(&candidate.path).canonicalize() else {
         return false;
     };
-    if harness == HarnessId::OpenCode {
-        path == root
-    } else {
-        path.starts_with(root)
-    }
+    crate::harnesses::get(harness).store_holds(&root, &path)
 }
 
 pub(super) fn candidate_json(roots: &StoreRoots, harness: HarnessId, row: &SessionInfo) -> Value {

@@ -30,6 +30,31 @@ impl Harness for Pi {
         crate::reader::pi::read_file(path)
     }
 
+    fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
+        use crate::reader::origin::Origin;
+        let Some(raw) = raw else {
+            return Origin::Unknown;
+        };
+        {
+            match raw.get("type").and_then(|v| v.as_str()) {
+                Some("custom_message") => Origin::Injected("custom_message"),
+                Some("branch_summary") => Origin::Injected("branch_summary"),
+                Some("message") => match raw.pointer("/message/role").and_then(|v| v.as_str()) {
+                    Some("bashExecution") => raw
+                        .pointer("/message/command")
+                        .and_then(|v| v.as_str())
+                        .map(|command| Origin::ShellCommand {
+                            command: command.into(),
+                        })
+                        .unwrap_or(Origin::Unknown),
+                    Some("user") => Origin::Typed,
+                    _ => Origin::Unknown,
+                },
+                _ => Origin::Unknown,
+            }
+        }
+    }
+
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
         roots.pi_agent_dir.as_deref()
     }

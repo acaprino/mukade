@@ -1,4 +1,4 @@
-﻿//! The library's command line: `list`, `dump`, `write` and `hop` as a binary, for scripts, CI
+//! The library's command line: `list`, `dump`, `write` and `hop` as a binary, for scripts, CI
 //! and any caller that would rather not write Rust to move a session.
 //!
 //! ```text
@@ -35,6 +35,7 @@ mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
 mukade detect <dir>
 mukade scan  <dir> [--depth <n>]
+mukade chat  start|status|stop|<operation> [options]    (mukade chat --help)
 
 `harnesses` lists every supported harness with the executable and store mukade finds on this
 machine, its version, session/fork counts and lineage support. Store reads are read-only; discovered
@@ -129,12 +130,21 @@ and its --<harness>-exe. A source OpenCode read spawns the binary its own resolu
 ";
 
 /// Parse and run the command line. `args` excludes the program name.
+pub mod chat;
+
 pub fn run(args: &[String]) -> Result<()> {
     let (command, rest) = args.split_first().context(USAGE)?;
+    // Before anything is installed or read: `chat status` creates no file.
+    if command == "chat" {
+        return chat::run(rest);
+    }
     if command == "--identity" {
         anyhow::ensure!(rest.is_empty(), "--identity takes no arguments");
-        println!("{}", json!({ "name":"mukade", "version":env!("CARGO_PKG_VERSION"),
-            "commit":option_env!("MUKADE_SOURCE_COMMIT"), "target": if cfg!(all(windows, target_arch="x86_64", target_env="msvc")) { "x86_64-pc-windows-msvc" } else { "other" } }));
+        println!(
+            "{}",
+            json!({ "name":"mukade", "version":env!("CARGO_PKG_VERSION"),
+            "commit":option_env!("MUKADE_SOURCE_COMMIT"), "target": if cfg!(all(windows, target_arch="x86_64", target_env="msvc")) { "x86_64-pc-windows-msvc" } else { "other" } })
+        );
         return Ok(());
     }
     if matches!(command.as_str(), "-h" | "--help" | "help") {
@@ -267,9 +277,7 @@ pub fn run(args: &[String]) -> Result<()> {
         );
     }
     if flags.compaction.as_deref() == Some("native") && command == "dump" {
-        anyhow::bail!(
-            "--compaction native needs a destination writer: use document or hop"
-        );
+        anyhow::bail!("--compaction native needs a destination writer: use document or hop");
     }
     let native_budget_flags = flags.context_window.is_some()
         || flags.max_output_tokens.is_some()
@@ -303,7 +311,10 @@ pub fn run(args: &[String]) -> Result<()> {
     if flags.tool_map.is_some() && !matches!(command.as_str(), "hop" | "write" | "document") {
         anyhow::bail!("--tool-map is supported only by hop, write and document");
     }
-    if (flags.dest_id.is_some() || flags.dest_path.is_some() || flags.dest_agent.is_some() || flags.metadata_file.is_some())
+    if (flags.dest_id.is_some()
+        || flags.dest_path.is_some()
+        || flags.dest_agent.is_some()
+        || flags.metadata_file.is_some())
         && !matches!(command.as_str(), "hop" | "write" | "document")
     {
         anyhow::bail!(
@@ -503,9 +514,7 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             let compaction = flags.compaction(harness)?;
             let session = match (flags.from_file.as_deref(), flags.all_branches) {
-                (Some(path), false) => {
-                    crate::hop::export_path(harness, std::path::Path::new(path))
-                }
+                (Some(path), false) => crate::hop::export_path(harness, std::path::Path::new(path)),
                 (Some(path), true) => {
                     crate::hop::export_path_all_branches(harness, std::path::Path::new(path))
                 }
@@ -523,7 +532,10 @@ pub fn run(args: &[String]) -> Result<()> {
             // What `dump` exports is what `hop` would write: `write` imports it later.
             let (selection, summary) =
                 crate::hop::compact(&session, &compaction, &roots).map_err(anyhow::Error::new)?;
-            if let Some(command) = summary.as_ref().and_then(|facts| facts.summary.leftover.as_ref()) {
+            if let Some(command) = summary
+                .as_ref()
+                .and_then(|facts| facts.summary.leftover.as_ref())
+            {
                 eprintln!("the summarizing run left a fork in the source store: run {command}");
             }
             // Who wrote the summary travels with it, for the manifest `write` makes later.
@@ -558,52 +570,86 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         "document" => {
             no_more(operands, 2)?;
-            let source_harness: HarnessId = operands.first().context("document needs a source harness")?.parse()?;
+            let source_harness: HarnessId = operands
+                .first()
+                .context("document needs a source harness")?
+                .parse()?;
             let dest = harness;
-            let Some(interchange) = crate::harnesses::destination(dest)?.interchange_document() else {
+            let Some(interchange) = crate::harnesses::destination(dest)?.interchange_document()
+            else {
                 anyhow::bail!("document currently supports only an OpenCode destination");
             };
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
-                (Some(path), false) => crate::hop::export_path(source_harness, std::path::Path::new(path)),
-                (Some(path), true) => crate::hop::export_path_all_branches(source_harness, std::path::Path::new(path)),
+                (Some(path), false) => {
+                    crate::hop::export_path(source_harness, std::path::Path::new(path))
+                }
+                (Some(path), true) => {
+                    crate::hop::export_path_all_branches(source_harness, std::path::Path::new(path))
+                }
                 (None, all) => {
                     let id = operands.get(1).context("document needs a session id")?;
                     let source = SessionRef::id(source_harness, *id);
-                    if all { crate::hop::export_all_branches(&source, &roots) } else { crate::hop::export(&source, &roots) }
+                    if all {
+                        crate::hop::export_all_branches(&source, &roots)
+                    } else {
+                        crate::hop::export(&source, &roots)
+                    }
                 }
-            }.map_err(anyhow::Error::new)?;
-            anyhow::ensure!(source.conversation().any(|entry| matches!(entry.kind, crate::model::Kind::Step { .. })), "noCompleteTurn");
+            }
+            .map_err(anyhow::Error::new)?;
+            anyhow::ensure!(
+                source
+                    .conversation()
+                    .any(|entry| matches!(entry.kind, crate::model::Kind::Step { .. })),
+                "noCompleteTurn"
+            );
             let mut opts = flags.write_opts(dest, &source, &destination_roots, None)?;
-            opts.tool_map.extend(interchange.source_tool_map(source_harness, &source));
+            opts.tool_map
+                .extend(interchange.source_tool_map(source_harness, &source));
             let mut clock = crate::policy::Clock::new(opts.now.as_deref());
             let plan = crate::writer::plan::plan(&source, dest, &opts);
             let violations = crate::strict::check_plan(&plan, opts.dest_protocol.as_ref());
-            anyhow::ensure!(violations.is_empty(), "the document would violate the provider contract: {}", violations.join("; "));
-            let (document, native_compaction) = interchange.document(&source, &plan, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
-            println!("{}", json!({
-                "document": document,
-                "native_compaction": native_compaction.map(|boundary| json!({
-                    "keep_id": boundary.keep_id,
-                    "summary_chars": boundary.summary.chars().count(),
-                    "estimated_tokens": boundary.estimated_tokens,
-                    "projected_tokens": boundary.projected_tokens,
-                    "summarized_messages": boundary.summarized_messages,
-                    "summarized_user_messages": boundary.summarized_user_messages,
-                    "budget": boundary.budget,
-                    "context_window": opts.native_budget.as_ref().map(|budget| budget.context),
-                    "fits": boundary.fits,
-                })),
-                "turns": source.conversation().filter(|entry| matches!(entry.kind, crate::model::Kind::User { .. })).count(),
-                "interrupted_last_turn": source.interrupted_last_turn(),
-                "counts": {
-                    "messages_in": plan.counts.messages_in,
-                    "messages_out": plan.counts.messages_out,
-                    "tools_translated": plan.counts.tools_translated,
-                    "tools_text_form": plan.counts.tools_text_form,
-                    "tools_omitted": plan.counts.tools_omitted,
-                },
-                "losses": crate::manifest::Manifest::losses_for(&plan.counts, source.interrupted_last_turn(), false),
-            }));
+            anyhow::ensure!(
+                violations.is_empty(),
+                "the document would violate the provider contract: {}",
+                violations.join("; ")
+            );
+            let (document, native_compaction) = interchange.document(
+                &source,
+                &plan,
+                opts.cwd
+                    .as_deref()
+                    .context("a working directory is required")?,
+                &opts,
+                &mut clock,
+            )?;
+            println!(
+                "{}",
+                json!({
+                    "document": document,
+                    "native_compaction": native_compaction.map(|boundary| json!({
+                        "keep_id": boundary.keep_id,
+                        "summary_chars": boundary.summary.chars().count(),
+                        "estimated_tokens": boundary.estimated_tokens,
+                        "projected_tokens": boundary.projected_tokens,
+                        "summarized_messages": boundary.summarized_messages,
+                        "summarized_user_messages": boundary.summarized_user_messages,
+                        "budget": boundary.budget,
+                        "context_window": opts.native_budget.as_ref().map(|budget| budget.context),
+                        "fits": boundary.fits,
+                    })),
+                    "turns": source.conversation().filter(|entry| matches!(entry.kind, crate::model::Kind::User { .. })).count(),
+                    "interrupted_last_turn": source.interrupted_last_turn(),
+                    "counts": {
+                        "messages_in": plan.counts.messages_in,
+                        "messages_out": plan.counts.messages_out,
+                        "tools_translated": plan.counts.tools_translated,
+                        "tools_text_form": plan.counts.tools_text_form,
+                        "tools_omitted": plan.counts.tools_omitted,
+                    },
+                    "losses": crate::manifest::Manifest::losses_for(&plan.counts, source.interrupted_last_turn(), false),
+                })
+            );
         }
         "hop" => {
             no_more(operands, 2)?;
@@ -647,8 +693,13 @@ pub fn run(args: &[String]) -> Result<()> {
                     }));
                 }
             }
-            let mut opts =
-                flags.import_opts(harness, dest, &source, &destination_roots, engine.as_deref())?;
+            let mut opts = flags.import_opts(
+                harness,
+                dest,
+                &source,
+                &destination_roots,
+                engine.as_deref(),
+            )?;
             // Compaction (including a source-model summary) uses the source store.
             let (selected, summary) =
                 crate::hop::compact(&source, &selection, &roots).map_err(anyhow::Error::new)?;
@@ -724,8 +775,7 @@ fn lineage_info(harness: HarnessId) -> String {
 fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
     use std::path::Path;
     let path = store_path(harness, roots).map(Path::to_path_buf);
-    let explicit = std::env::var_os(store_env_name(harness))
-        .is_some_and(|value| !value.is_empty());
+    let explicit = std::env::var_os(store_env_name(harness)).is_some_and(|value| !value.is_empty());
     let origin = if explicit { "environment" } else { "default" };
     let missing = || HarnessStoreInfo {
         path: path.clone(),
@@ -754,7 +804,9 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
         return missing();
     }
     let detections = crate::detect::detect_store(&path);
-    let recognized = detections.iter().any(|detection| detection.harness == harness);
+    let recognized = detections
+        .iter()
+        .any(|detection| detection.harness == harness);
     if !recognized && !explicit {
         return HarnessStoreInfo {
             path: Some(path),
@@ -838,7 +890,10 @@ fn print_harnesses() -> Result<()> {
         println!("  sessions: {}", store.sessions);
         println!("  forks:    {}", store.forks);
         println!("  lineage:  {}", lineage_info(harness));
-        println!("  layout:   {}", crate::catalog::layout(harness).join(" | "));
+        println!(
+            "  layout:   {}",
+            crate::catalog::layout(harness).join(" | ")
+        );
     }
     Ok(())
 }
@@ -1063,12 +1118,25 @@ impl Flags {
             None => Vec::new(),
             Some(file) => {
                 let info = std::fs::metadata(file).with_context(|| format!("tool map {file}"))?;
-                anyhow::ensure!(info.is_file() && info.len() <= 1_048_576, "tool map must be a regular file no larger than 1 MiB");
-                let entries: Vec<(String, String, serde_json::Value, serde_json::Value)> = serde_json::from_slice(&std::fs::read(file)?)
-                    .with_context(|| format!("parse tool map {file}"))?;
-                anyhow::ensure!(entries.len() <= 4096 && entries.iter().all(|(source, destination, original, mapped)|
-                    !source.is_empty() && !destination.is_empty() && source.len() <= 256 && destination.len() <= 256
-                    && original.is_object() && mapped.is_object()), "invalid tool map");
+                anyhow::ensure!(
+                    info.is_file() && info.len() <= 1_048_576,
+                    "tool map must be a regular file no larger than 1 MiB"
+                );
+                let entries: Vec<(String, String, serde_json::Value, serde_json::Value)> =
+                    serde_json::from_slice(&std::fs::read(file)?)
+                        .with_context(|| format!("parse tool map {file}"))?;
+                anyhow::ensure!(
+                    entries.len() <= 4096
+                        && entries
+                            .iter()
+                            .all(|(source, destination, original, mapped)| !source.is_empty()
+                                && !destination.is_empty()
+                                && source.len() <= 256
+                                && destination.len() <= 256
+                                && original.is_object()
+                                && mapped.is_object()),
+                    "invalid tool map"
+                );
                 entries
             }
         };
@@ -1115,13 +1183,11 @@ impl Flags {
         // chain â€” PATH, then the well-known install locations â€” so a default install is found
         // with no flag at all.
         let stated_exe = self.exe_flag(harness).filter(|v| !v.is_empty()).or(engine);
-        let exe_override = stated_exe
-            .map(str::to_string)
-            .or_else(|| {
-                std::env::var(crate::exe::env_var_name(harness))
-                    .ok()
-                    .filter(|v| !v.is_empty())
-            });
+        let exe_override = stated_exe.map(str::to_string).or_else(|| {
+            std::env::var(crate::exe::env_var_name(harness))
+                .ok()
+                .filter(|v| !v.is_empty())
+        });
         let resolved_exe = crate::exe::resolve(harness, stated_exe);
         // The destination's own version stamp, when the caller did not state it: L7 wants the
         // destination's `cli_version`, and Codex refuses a rollout without one.
@@ -1213,7 +1279,8 @@ impl Flags {
                     )
                     .into());
                 }
-                if self.from_file.is_some() && !crate::harnesses::get(source).summarizes_from_file() {
+                if self.from_file.is_some() && !crate::harnesses::get(source).summarizes_from_file()
+                {
                     return Err(HopError::Unsupported(format!(
                         "--compaction summary with --from-file: {} summarizes a session from its own \
                          store, by id; only Pi forks one from a file",
@@ -1235,7 +1302,9 @@ impl Flags {
                     keep_from: KeepFrom::LastTurns(keep_turns),
                 })
             }
-            Some(other) => anyhow::bail!("unknown --compaction {other} (none, portable, summary, native)"),
+            Some(other) => {
+                anyhow::bail!("unknown --compaction {other} (none, portable, summary, native)")
+            }
         }
     }
 
@@ -1249,24 +1318,30 @@ impl Flags {
             None => anyhow::bail!("--context-window is required with --compaction native"),
         };
         anyhow::ensure!(context > 0, "--context-window must be greater than zero");
-        let max_output_tokens = match self.max_output_tokens.as_deref() {
-            Some(value) => Some(
-                value
-                    .parse::<u64>()
-                    .with_context(|| format!("--max-output-tokens {value}: not a number of tokens"))?,
-            ),
-            None => None,
-        };
+        let max_output_tokens =
+            match self.max_output_tokens.as_deref() {
+                Some(value) => Some(value.parse::<u64>().with_context(|| {
+                    format!("--max-output-tokens {value}: not a number of tokens")
+                })?),
+                None => None,
+            };
         let text_token_factor = match self.text_token_factor.as_deref() {
             Some(value) => {
                 let factor = value
                     .parse::<f64>()
                     .with_context(|| format!("--text-token-factor {value}: not a number"))?;
-                Some(crate::native_compaction::TokenFactor::new(factor).map_err(anyhow::Error::msg)?)
+                Some(
+                    crate::native_compaction::TokenFactor::new(factor)
+                        .map_err(anyhow::Error::msg)?,
+                )
             }
             None => None,
         };
-        Ok(NativeBudget { context, max_output_tokens, text_token_factor })
+        Ok(NativeBudget {
+            context,
+            max_output_tokens,
+            text_token_factor,
+        })
     }
 
     /// The executable override stated for one harness, if any.

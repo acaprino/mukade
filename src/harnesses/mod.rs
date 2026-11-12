@@ -48,6 +48,28 @@ pub trait Harness: Send + Sync {
     /// Read one session from its native file (or, for OpenCode, its interchange document).
     fn read_file(&self, path: &Path) -> anyhow::Result<Session>;
 
+    /// Read the session `id` that a chat member bound, from the place its listing named.
+    fn read_bound(&self, path: &Path, _id: &str) -> anyhow::Result<Session> {
+        self.read_file(path)
+    }
+
+    /// Who produced a user entry, from its first native record (`None`: it has none). An
+    /// unrecognized shape is `Unknown`, never `Typed`: the chat observer shows only what a
+    /// person typed.
+    fn user_origin(&self, _raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
+        crate::reader::origin::Origin::Unknown
+    }
+
+    /// The folder that holds the store, when the root names a file inside it.
+    fn store_folder(&self, root: &Path) -> PathBuf {
+        root.to_path_buf()
+    }
+
+    /// Whether `path`, a session's listed location, belongs to the store at `root`.
+    fn store_holds(&self, root: &Path, path: &Path) -> bool {
+        path.starts_with(root)
+    }
+
     /// This harness's store in `roots`.
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path>;
 

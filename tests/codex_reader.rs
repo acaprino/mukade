@@ -1020,7 +1020,11 @@ fn a_reply_cut_by_an_abort_is_an_aborted_step() {
 /// An abort names its turn: a reply that an earlier turn finished is not the one it cut.
 #[test]
 fn an_abort_of_another_turn_leaves_a_finished_reply_alone() {
-    let mut rows = vec![header(), prompt(1, "PROMPT-1"), answer(2, "turn-A", "DONE-1")];
+    let mut rows = vec![
+        header(),
+        prompt(1, "PROMPT-1"),
+        answer(2, "turn-A", "DONE-1"),
+    ];
     rows.extend(abort(3, "turn-B"));
     let s = codex::parse(&rows, None).unwrap();
     let conv = conversation(&s);
@@ -1044,26 +1048,37 @@ fn a_one_call_code_mode_script_reads_as_the_call_it_wraps() {
     let one = r#"text(await tools.exec_command({cmd: "git status", yield_time_ms: 1000}));"#;
     let many = r#"const r = await Promise.allSettled([tools.exec_command({cmd: "a"}), tools.exec_command({cmd: "b"})]); text(r);"#;
     let exec = |ordinal, id: &str, script: &str| {
-        record(ordinal, "response_item", serde_json::json!({
-            "type": "custom_tool_call", "call_id": id, "name": "exec", "input": script,
-        }))
+        record(
+            ordinal,
+            "response_item",
+            serde_json::json!({
+                "type": "custom_tool_call", "call_id": id, "name": "exec", "input": script,
+            }),
+        )
     };
     let output = |ordinal, id: &str| {
-        record(ordinal, "response_item", serde_json::json!({
-            "type": "custom_tool_call_output", "call_id": id,
-            "output": [
-                {"type": "input_text", "text": "Script completed
+        record(
+            ordinal,
+            "response_item",
+            serde_json::json!({
+                "type": "custom_tool_call_output", "call_id": id,
+                "output": [
+                    {"type": "input_text", "text": "Script completed
 Wall time 0.1 seconds
 Output:
 "},
-                {"type": "input_text", "text": "On branch main"},
-            ],
-        }))
+                    {"type": "input_text", "text": "On branch main"},
+                ],
+            }),
+        )
     };
-    let text = record(0, "session_meta", serde_json::json!({
+    let text = record(
+        0,
+        "session_meta",
+        serde_json::json!({
             "id": THREAD, "cwd": "/work", "cli_version": "0.166.0", "originator": "codex_work_desktop",
-        }))
-        + &say(1, "user", "status?")
+        }),
+    ) + &say(1, "user", "status?")
         + &exec(2, "call_one", one)
         + &output(3, "call_one")
         + &exec(4, "call_many", many)
@@ -1088,8 +1103,18 @@ Output:
     assert_eq!(calls[0].canonical, Some(CanonicalTool::Bash));
     assert_eq!(calls[1].source_name, "exec");
     assert_eq!(calls[1].input, Value::String(many.into()));
-    let raw = serde_json::to_string(&session.entries.iter().flat_map(|e| e.raw.iter()).collect::<Vec<_>>()).unwrap();
-    assert!(raw.contains("tools.exec_command"), "the scripts stay in the raw records");
+    let raw = serde_json::to_string(
+        &session
+            .entries
+            .iter()
+            .flat_map(|e| e.raw.iter())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert!(
+        raw.contains("tools.exec_command"),
+        "the scripts stay in the raw records"
+    );
 
     let scratch = support::scratch(HarnessId::ClaudeCode, "codex-code-mode");
     let opts = support::opts(HarnessId::ClaudeCode, &scratch);
@@ -1106,9 +1131,16 @@ Output:
         .iter()
         .flat_map(|step| step.calls.iter().map(|call| call.name.as_str()))
         .collect();
-    assert_eq!(names, ["Bash"], "the one-call script is a Bash call; the other is text");
+    assert_eq!(
+        names,
+        ["Bash"],
+        "the one-call script is a Bash call; the other is text"
+    );
     assert!(
-        planned.iter().flat_map(|step| step.text.iter()).any(|t| t.contains("Promise.allSettled")),
+        planned
+            .iter()
+            .flat_map(|step| step.text.iter())
+            .any(|t| t.contains("Promise.allSettled")),
         "the several-call script travels as text"
     );
 }
@@ -1125,10 +1157,13 @@ fn a_subagent_rollout_names_its_parent_thread() {
     std::fs::create_dir_all(&dir).unwrap();
     let parent = "01a181df-0000-7000-8000-000000000001";
     let write = |name: &str, session_id: &str| {
-        let text = record(0, "session_meta", serde_json::json!({
+        let text = record(
+            0,
+            "session_meta",
+            serde_json::json!({
                 "id": THREAD, "session_id": session_id, "cwd": "/work", "cli_version": "0.166.0",
-            }))
-            + &say(1, "user", "go")
+            }),
+        ) + &say(1, "user", "go")
             + &say(2, "assistant", "done");
         let file = dir.join(format!("rollout-2026-10-28T10-38-11-{name}.jsonl"));
         std::fs::write(&file, text).unwrap();
@@ -1211,7 +1246,10 @@ fn a_subagent_spawned_with_its_parents_turns_inherits_its_context() {
     );
     assert!(matches!(
         forked.parent_kind,
-        Some(ParentKind::Spawn { inherits_context: true, .. })
+        Some(ParentKind::Spawn {
+            inherits_context: true,
+            ..
+        })
     ));
 
     let scratch = support::scratch(HarnessId::Codex, "codex-spawned-plain-then-parent");
@@ -1228,7 +1266,10 @@ fn a_subagent_spawned_with_its_parents_turns_inherits_its_context() {
     let plain = codex::read_file(&file).expect("the rollout reads").meta;
     assert!(matches!(
         plain.parent_kind,
-        Some(ParentKind::Spawn { inherits_context: false, .. })
+        Some(ParentKind::Spawn {
+            inherits_context: false,
+            ..
+        })
     ));
 }
 

@@ -224,7 +224,12 @@ pub fn resume(harness: HarnessId, exe: &str, id: &str, file: Option<&Path>) -> V
 }
 
 /// The command that opens a session interactively in the harness's own terminal UI.
-pub fn interactive_resume(harness: HarnessId, exe: &str, id: &str, file: Option<&Path>) -> Vec<String> {
+pub fn interactive_resume(
+    harness: HarnessId,
+    exe: &str,
+    id: &str,
+    file: Option<&Path>,
+) -> Vec<String> {
     let template = if entry(harness).interactive_resume.is_empty() {
         &entry(harness).resume
     } else {

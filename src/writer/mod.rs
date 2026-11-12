@@ -1,4 +1,4 @@
-﻿//! Writers: [`Session`] â†’ a new native session in a destination's store
+//! Writers: [`Session`] â†’ a new native session in a destination's store
 //! (docs/session-interchange-spec.md Â§1.2, Â§8.2).
 
 pub mod claude_code;
@@ -229,7 +229,11 @@ impl Writer for Refused {
 /// Write a session's rows to a file, as JSON Lines with a trailing newline.
 pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) -> Result<()> {
     use anyhow::Context;
-    anyhow::ensure!(!path.exists(), "destination already exists: {}", path.display());
+    anyhow::ensure!(
+        !path.exists(),
+        "destination already exists: {}",
+        path.display()
+    );
     let _span = crate::timing::span("serialize + write file");
     let mut text = String::new();
     for row in rows {
@@ -255,7 +259,8 @@ pub(crate) fn write_jsonl(path: &std::path::Path, rows: &[serde_json::Value]) ->
             file.sync_all()
                 .with_context(|| format!("flush {}", temporary.display()))?;
         }
-        std::fs::hard_link(&temporary, path).with_context(|| format!("publish {} without overwriting", path.display()))?;
+        std::fs::hard_link(&temporary, path)
+            .with_context(|| format!("publish {} without overwriting", path.display()))?;
         let _ = std::fs::remove_file(&temporary);
         Ok(())
     })();

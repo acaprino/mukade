@@ -854,7 +854,10 @@ fn an_added_file_is_a_write() {
     );
     let pi = translate(&c, HarnessId::Pi, None);
     assert_eq!(name_of(&pi), "write");
-    assert_eq!(input_of(&pi), &json!({"path": "D:/w/a.txt", "content": "L1\nL2\n"}));
+    assert_eq!(
+        input_of(&pi),
+        &json!({"path": "D:/w/a.txt", "content": "L1\nL2\n"})
+    );
 }
 
 /// One hunk is an ordinary edit; the `@@` anchor line is not part of the texts.
@@ -892,7 +895,10 @@ fn several_hunks_are_a_multi_edit() {
 #[test]
 fn the_object_shape_of_a_patch_reads_too() {
     let c = apply_patch(json!({"input": patch("*** Add File: D:/w/a.txt\n+L1")}));
-    assert_eq!(name_of(&translate(&c, HarnessId::ClaudeCode, None)), "Write");
+    assert_eq!(
+        name_of(&translate(&c, HarnessId::ClaudeCode, None)),
+        "Write"
+    );
 }
 
 /// A patch that is not one plain file stays text form, its patch intact.
@@ -905,7 +911,10 @@ fn a_patch_that_is_not_one_plain_file_stays_text() {
     ] {
         let c = apply_patch(json!(patch(body)));
         assert!(
-            matches!(translate(&c, HarnessId::ClaudeCode, None), Translation::Text { .. }),
+            matches!(
+                translate(&c, HarnessId::ClaudeCode, None),
+                Translation::Text { .. }
+            ),
             "{body}"
         );
     }
@@ -924,20 +933,43 @@ fn a_grep_toward_claude_keeps_every_argument_or_becomes_text() {
         json!({"-n": false}),
     ] {
         let mut input = json!({"pattern": "x", "path": "src"});
-        input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-        let out = translate(&call(CanonicalTool::Grep, "grep", input.clone()), HarnessId::ClaudeCode, None);
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let out = translate(
+            &call(CanonicalTool::Grep, "grep", input.clone()),
+            HarnessId::ClaudeCode,
+            None,
+        );
         assert!(
-            matches!(out, Translation::Text { why: "an argument has no counterpart" }),
+            matches!(
+                out,
+                Translation::Text {
+                    why: "an argument has no counterpart"
+                }
+            ),
             "{input} → {out:?}"
         );
-        let own = translate(&call(CanonicalTool::Grep, "Grep", input.clone()), HarnessId::ClaudeCode, None);
+        let own = translate(
+            &call(CanonicalTool::Grep, "Grep", input.clone()),
+            HarnessId::ClaudeCode,
+            None,
+        );
         assert!(own.is_call(), "Claude's own Grep {input} → {own:?}");
     }
     // What the translation writes anyway still translates.
     for same in [json!({"multiline": false}), json!({"-n": true})] {
         let mut input = json!({"pattern": "x", "path": "src"});
-        input.as_object_mut().unwrap().extend(same.as_object().unwrap().clone());
-        let out = translate(&call(CanonicalTool::Grep, "grep", input.clone()), HarnessId::ClaudeCode, None);
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(same.as_object().unwrap().clone());
+        let out = translate(
+            &call(CanonicalTool::Grep, "grep", input.clone()),
+            HarnessId::ClaudeCode,
+            None,
+        );
         assert!(out.is_call(), "{input} → {out:?}");
     }
 }
@@ -1095,7 +1127,11 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
         ),
         (
             "edit without old text",
-            call(C::Edit, "Edit", json!({"file_path": "a.txt", "new_string": "b"})),
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "new_string": "b"}),
+            ),
             None,
         ),
         (
@@ -1257,7 +1293,11 @@ fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
         ),
         (
             "web search without a query",
-            call(C::WebSearch, "websearch", json!({"allowed_domains": ["a.org"]})),
+            call(
+                C::WebSearch,
+                "websearch",
+                json!({"allowed_domains": ["a.org"]}),
+            ),
             None,
         ),
         (
@@ -1807,4 +1847,3 @@ fn translation_is_unchanged_for_every_destination() {
         r#"PowerShell {"command":"Get-ChildItem","timeout":1000,"run_in_background":true}"#
     );
 }
-

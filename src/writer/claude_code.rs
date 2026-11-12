@@ -46,12 +46,18 @@ impl Writer for ClaudeCode {
             .clone()
             .or_else(|| session.meta.cwd.clone())
             .context("a working directory is required")?;
-        let id = opts.dest_id.clone().unwrap_or_else(crate::policy::new_session_id);
+        let id = opts
+            .dest_id
+            .clone()
+            .unwrap_or_else(crate::policy::new_session_id);
         let dir = root
             .join("projects")
             .join(claude_project_dir_name(Path::new(&cwd)));
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let file = opts.dest_path.clone().unwrap_or_else(|| dir.join(format!("{id}.jsonl")));
+        let file = opts
+            .dest_path
+            .clone()
+            .unwrap_or_else(|| dir.join(format!("{id}.jsonl")));
 
         let mut clock = Clock::new(opts.now.as_deref());
         let rows = rows(plan, session, &id, &cwd, opts, &mut clock);
@@ -244,9 +250,13 @@ fn rows(
         let conversation: Vec<&Value> = w
             .out
             .iter()
-            .filter(|row| row.get("uuid").is_some() && matches!(row["type"].as_str(), Some("user" | "assistant")))
+            .filter(|row| {
+                row.get("uuid").is_some()
+                    && matches!(row["type"].as_str(), Some("user" | "assistant"))
+            })
             .collect();
-        let user_texts: Vec<Option<String>> = conversation.iter().map(|row| user_text(row)).collect();
+        let user_texts: Vec<Option<String>> =
+            conversation.iter().map(|row| user_text(row)).collect();
         let items: Vec<NativeItem> = conversation
             .iter()
             .zip(&user_texts)

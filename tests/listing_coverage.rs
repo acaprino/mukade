@@ -850,7 +850,11 @@ fn a_process_id_taken_by_another_process_is_not_the_session() {
     };
 
     if cfg!(windows) {
-        assert_eq!(live(started + 5_000_000), true, "half a second apart is the same process");
+        assert_eq!(
+            live(started + 5_000_000),
+            true,
+            "half a second apart is the same process"
+        );
         let an_hour = 3_600 * 10_000_000;
         assert_eq!(
             live(started - an_hour),
@@ -860,7 +864,11 @@ fn a_process_id_taken_by_another_process_is_not_the_session() {
         // A creation time in some other unit says nothing about the process.
         assert_eq!(live(1_794_143_992_646), true);
     } else {
-        assert_eq!(live(started), true, "the kernel's own count, read the same way");
+        assert_eq!(
+            live(started),
+            true,
+            "the kernel's own count, read the same way"
+        );
         assert_eq!(
             live(started + 1),
             false,

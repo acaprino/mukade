@@ -168,10 +168,8 @@ pub(crate) fn ensure_outside_stores(
             .root(h)
             .map(Path::to_path_buf)
             .or_else(|| crate::catalog::store_default_with(h, &vars));
-        if let Some(mut root) = root {
-            if h == crate::HarnessId::OpenCode && root.extension().is_some() {
-                root.pop();
-            }
+        if let Some(root) = root {
+            let root = crate::harnesses::get(h).store_folder(&root);
             if let Ok(native) = resolve_path(&root) {
                 if resolved.starts_with(&native) {
                     return Err(BusError::Refused(format!(

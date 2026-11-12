@@ -61,7 +61,10 @@ fn a_hop_between_two_installations_of_one_harness_keeps_their_stores_apart() {
         .flatten()
         .flat_map(|project| std::fs::read_dir(project.path()).unwrap().flatten())
         .count();
-    assert_eq!(source_sessions, 1, "nothing was written into the source store");
+    assert_eq!(
+        source_sessions, 1,
+        "nothing was written into the source store"
+    );
 }
 
 #[test]
@@ -71,7 +74,10 @@ fn a_hop_reads_the_source_writes_the_destination_and_reports_a_manifest() {
 
     let manifest: &Value = &receipt.manifest;
     assert_eq!(manifest["source"]["harness"], "claude_code");
-    assert_eq!(manifest["source"]["session_id"], source_id(HarnessId::ClaudeCode));
+    assert_eq!(
+        manifest["source"]["session_id"],
+        source_id(HarnessId::ClaudeCode)
+    );
     assert_eq!(manifest["source"]["version"], "2.1.311");
     assert_eq!(
         manifest["source"]["content_sha256"].as_str().unwrap().len(),
@@ -659,7 +665,9 @@ fn file_compaction_uses_the_same_selection_and_accurate_manifest() {
 #[test]
 fn an_ambiguous_compaction_boundary_is_refused() {
     let mut source = support::read_source(HarnessId::ClaudeCode);
-    source.entries.retain(|entry| matches!(entry.kind, Kind::Meta { .. }));
+    source
+        .entries
+        .retain(|entry| matches!(entry.kind, Kind::Meta { .. }));
     source.entries.push(mukade::model::Entry {
         id: "compact".into(),
         kind: Kind::Compaction {
@@ -849,10 +857,7 @@ fn a_changed_source_is_refused_before_the_destination_is_written() {
             ],
             &[
                 ("PI_CODING_AGENT_DIR", scratch.to_str().unwrap()),
-                (
-                    "MUKADE_DATA_DIR",
-                    scratch.join("data").to_str().unwrap(),
-                ),
+                ("MUKADE_DATA_DIR", scratch.join("data").to_str().unwrap()),
             ],
         )
     };
@@ -871,17 +876,29 @@ fn native_compaction_and_its_budget_must_be_supplied_together() {
     let scratch = support::scratch(HarnessId::Pi, "hop-native-mismatch");
     let source = support::read_source(HarnessId::Pi);
     let write_opts = support::opts(HarnessId::Pi, &scratch);
-    let budget = NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None };
+    let budget = NativeBudget {
+        context: 40_000,
+        max_output_tokens: Some(32_000),
+        text_token_factor: None,
+    };
 
     let mut budget_without_mode = support::import_opts(&write_opts, &source, None);
     budget_without_mode.native_budget = Some(budget.clone());
-    let error = hop::import(HarnessId::Pi, &source, &budget_without_mode).expect_err("the manifest would say none");
-    assert!(matches!(&error, HopError::Unsupported(reason) if reason.contains("compaction native")), "{error}");
+    let error = hop::import(HarnessId::Pi, &source, &budget_without_mode)
+        .expect_err("the manifest would say none");
+    assert!(
+        matches!(&error, HopError::Unsupported(reason) if reason.contains("compaction native")),
+        "{error}"
+    );
 
     let mut mode_without_budget = support::import_opts(&write_opts, &source, None);
     mode_without_budget.compaction = "native".into();
-    let error = hop::import(HarnessId::Pi, &source, &mode_without_budget).expect_err("native needs the destination window");
-    assert!(matches!(&error, HopError::Unsupported(reason) if reason.contains("--context-window")), "{error}");
+    let error = hop::import(HarnessId::Pi, &source, &mode_without_budget)
+        .expect_err("native needs the destination window");
+    assert!(
+        matches!(&error, HopError::Unsupported(reason) if reason.contains("--context-window")),
+        "{error}"
+    );
 }
 
 #[test]
@@ -891,10 +908,16 @@ fn hop_to_claude_with_native_compaction_keeps_the_history_and_appends_the_native
     let write_opts = support::opts(HarnessId::ClaudeCode, &scratch);
     let mut opts = support::import_opts(&write_opts, &source, None);
     opts.compaction = "native".into();
-    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
-    let receipt = hop::import(HarnessId::ClaudeCode, &source, &opts).expect("Claude Code accepts its native record");
+    opts.native_budget = Some(NativeBudget {
+        context: 40_000,
+        max_output_tokens: Some(32_000),
+        text_token_factor: None,
+    });
+    let receipt = hop::import(HarnessId::ClaudeCode, &source, &opts)
+        .expect("Claude Code accepts its native record");
     assert_eq!(receipt.manifest["options"]["compaction"], "native");
-    let written = mukade::reader::claude_code::read_file(std::path::Path::new(&receipt.location)).expect("Claude reads the written session");
+    let written = mukade::reader::claude_code::read_file(std::path::Path::new(&receipt.location))
+        .expect("Claude reads the written session");
     assert!(written.entries.iter().any(|entry| matches!(&entry.kind, Kind::Compaction { summary, kept_from: Some(_), .. } if summary.contains("mukade native compaction"))));
 }
 
@@ -905,16 +928,31 @@ fn hop_to_pi_with_native_compaction_keeps_the_history_and_appends_pi_entry() {
     let write_opts = support::opts(HarnessId::Pi, &scratch);
     let mut opts = support::import_opts(&write_opts, &source, None);
     opts.compaction = "native".into();
-    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    opts.native_budget = Some(NativeBudget {
+        context: 40_000,
+        max_output_tokens: Some(32_000),
+        text_token_factor: None,
+    });
     let receipt = hop::import(HarnessId::Pi, &source, &opts).expect("Pi accepts its native record");
     assert_eq!(receipt.manifest["options"]["compaction"], "native");
-    let written = mukade::reader::pi::read_file(std::path::Path::new(&receipt.location)).expect("Pi reads the written session");
-    let compaction = written.entries.iter().rev().find_map(|entry| match &entry.kind {
-        Kind::Compaction { summary, kept_from, .. } => Some((summary.clone(), kept_from.clone())),
-        _ => None,
-    }).expect("the appended entry is a Pi compaction");
+    let written = mukade::reader::pi::read_file(std::path::Path::new(&receipt.location))
+        .expect("Pi reads the written session");
+    let compaction = written
+        .entries
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.kind {
+            Kind::Compaction {
+                summary, kept_from, ..
+            } => Some((summary.clone(), kept_from.clone())),
+            _ => None,
+        })
+        .expect("the appended entry is a Pi compaction");
     assert!(compaction.0.contains("mukade native compaction"));
-    assert!(compaction.1.is_some(), "Pi's native record names the retained tail");
+    assert!(
+        compaction.1.is_some(),
+        "Pi's native record names the retained tail"
+    );
 }
 
 /// L10: a Codex Desktop session whose calls are code-mode scripts reaches Claude Code and Pi with
@@ -922,14 +960,13 @@ fn hop_to_pi_with_native_compaction_keeps_the_history_and_appends_pi_entry() {
 /// for them.
 #[test]
 fn a_code_mode_rollout_reaches_claude_and_pi_with_native_calls() {
-    let mut rows: Vec<Value> =
-        std::fs::read_to_string(support::source_path(HarnessId::Codex))
-            .unwrap()
-            .replace("<shell>powershell</shell>", "<shell>bash</shell>")
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+    let mut rows: Vec<Value> = std::fs::read_to_string(support::source_path(HarnessId::Codex))
+        .unwrap()
+        .replace("<shell>powershell</shell>", "<shell>bash</shell>")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
     let script = "text(await tools.exec_command({cmd:\"ls CMD-1\"}));\n\
         text(await tools.apply_patch(\"*** Begin Patch\\n*** Update File: D:/w/a.txt\\n@@\\n-a\\n+b\\n*** End Patch\"));";
     for payload in [

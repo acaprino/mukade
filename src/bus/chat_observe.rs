@@ -5,7 +5,7 @@ use super::{
     chat_mutation,
     view::{self, ViewItem, ViewKind},
 };
-use crate::{HarnessId, Session, reader, roots::StoreRoots};
+use crate::{Session, reader, roots::StoreRoots};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -384,12 +384,7 @@ fn read_source(
             let binding =
                 chat_mutation::resolve_binding(roots, &c.harness, &c.session_id, source_fence)?;
             let path = Path::new(&binding.candidate.path);
-            let session = match binding.harness {
-                HarnessId::Pi => reader::pi::read_file(path)?,
-                HarnessId::Codex => reader::codex::read_file(path)?,
-                HarnessId::ClaudeCode => reader::claude_code::read_file(path)?,
-                HarnessId::OpenCode => read_opencode(path, &c.session_id)?,
-            };
+            let session = crate::harnesses::get(binding.harness).read_bound(path, &c.session_id)?;
             anyhow::ensure!(session.meta.id == c.session_id, "native identity changed");
             Ok((binding.source_ref, view::build(&session)))
         };
@@ -404,7 +399,7 @@ fn read_source(
 }
 
 /// Snapshot only the verified selected database; never launch OpenCode (which may migrate it).
-fn read_opencode(path: &Path, id: &str) -> anyhow::Result<Session> {
+pub(crate) fn read_opencode(path: &Path, id: &str) -> anyhow::Result<Session> {
     let mut conn = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,

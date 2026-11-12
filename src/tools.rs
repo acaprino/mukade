@@ -105,7 +105,10 @@ pub fn translate_with_map(
     call: &ToolCall,
     map: &[(String, String, Value, Value)],
 ) -> Option<(String, Value)> {
-    if let Some((_, name, _, input)) = map.iter().find(|(source, _, original, _)| source == &call.source_name && original == &call.input) {
+    if let Some((_, name, _, input)) = map
+        .iter()
+        .find(|(source, _, original, _)| source == &call.source_name && original == &call.input)
+    {
         return Some((name.clone(), input.clone()));
     }
     None

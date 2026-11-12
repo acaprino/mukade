@@ -33,6 +33,45 @@ impl Harness for OpenCode {
         crate::reader::opencode::read_file(path)
     }
 
+    fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
+        use crate::reader::origin::Origin;
+        let Some(raw) = raw else {
+            return Origin::Unknown;
+        };
+        {
+            let data = raw.get("data").unwrap_or(raw);
+            let decoded = data
+                .as_str()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            let data = decoded.as_ref().unwrap_or(data);
+            if raw
+                .get("type")
+                .or_else(|| data.get("type"))
+                .and_then(|v| v.as_str())
+                == Some("user")
+            {
+                Origin::Typed
+            } else {
+                Origin::Unknown
+            }
+        }
+    }
+
+    fn read_bound(&self, path: &Path, id: &str) -> anyhow::Result<Session> {
+        crate::bus::read_opencode_bound(path, id)
+    }
+
+    fn store_folder(&self, root: &Path) -> PathBuf {
+        match root.extension() {
+            Some(_) => root.parent().unwrap_or(root).to_path_buf(),
+            None => root.to_path_buf(),
+        }
+    }
+
+    fn store_holds(&self, root: &Path, path: &Path) -> bool {
+        path == root
+    }
+
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
         roots.opencode_db.as_deref()
     }
@@ -274,7 +313,9 @@ impl Destination for OpenCode {
         cache: Option<&Path>,
     ) -> anyhow::Result<Option<String>> {
         let _span = crate::timing::span("probe opencode project");
-        Ok(crate::reader::opencode::project_id_for(exe, cwd, roots, cache))
+        Ok(crate::reader::opencode::project_id_for(
+            exe, cwd, roots, cache,
+        ))
     }
 
     /// The configuration's `shell`, then `$SHELL`, then PowerShell on Windows (OpenCode tries
@@ -759,7 +800,10 @@ mod tests {
             opencode_config_beside(&root.join("data/share/opencode/opencode.db")),
             Some(root.join("data/config/opencode/opencode.json"))
         );
-        assert_eq!(opencode_config_beside(&root.join("store/opencode.db")), None);
+        assert_eq!(
+            opencode_config_beside(&root.join("store/opencode.db")),
+            None
+        );
     }
 
     #[test]

@@ -30,6 +30,36 @@ impl Harness for Codex {
         crate::reader::codex::read_file(path)
     }
 
+    fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
+        use crate::reader::origin::Origin;
+        let Some(raw) = raw else {
+            return Origin::Unknown;
+        };
+        {
+            let Some(payload) = raw.get("payload") else {
+                return Origin::Unknown;
+            };
+            if payload
+                .pointer("/internal_chat_message_metadata_passthrough/content_item_metadata")
+                .and_then(|v| v.as_array())
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.pointer("/provenance/type").and_then(|v| v.as_str()) == Some("harness")
+                    })
+                })
+            {
+                return Origin::Injected("harness_context");
+            }
+            if payload.get("role").and_then(|v| v.as_str()) == Some("user")
+                || payload.get("type").and_then(|v| v.as_str()) == Some("user_message")
+            {
+                Origin::Typed
+            } else {
+                Origin::Unknown
+            }
+        }
+    }
+
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
         roots.codex_home.as_deref()
     }

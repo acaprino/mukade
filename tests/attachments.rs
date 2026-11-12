@@ -163,7 +163,11 @@ fn an_image_in_a_tool_result_reaches_pi_in_pis_shape() {
         raw: Vec::new(),
     });
     let scratch = support::scratch(HarnessId::Pi, "attachments-result-image");
-    let plan = plan::plan(&source, HarnessId::Pi, &support::opts(HarnessId::Pi, &scratch));
+    let plan = plan::plan(
+        &source,
+        HarnessId::Pi,
+        &support::opts(HarnessId::Pi, &scratch),
+    );
     let Some(plan::PlannedBlock::Results { results }) = plan.blocks.last() else {
         panic!("{:?}", plan.blocks)
     };

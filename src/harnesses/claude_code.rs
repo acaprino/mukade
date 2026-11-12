@@ -30,6 +30,22 @@ impl Harness for ClaudeCode {
         crate::reader::claude_code::read_file(path)
     }
 
+    fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
+        use crate::reader::origin::Origin;
+        let Some(raw) = raw else {
+            return Origin::Typed;
+        };
+        {
+            if raw.get("isMeta").and_then(|v| v.as_bool()) == Some(true) {
+                Origin::Injected("expanded_command")
+            } else if raw.get("type").and_then(|v| v.as_str()) == Some("user") {
+                Origin::Typed
+            } else {
+                Origin::Unknown
+            }
+        }
+    }
+
     fn store_root<'a>(&self, roots: &'a StoreRoots) -> Option<&'a Path> {
         roots.claude_config_dir.as_deref()
     }
@@ -651,8 +667,9 @@ fn web_search(input: &Value) -> Translation {
 
 /// The refusal for a Claude Code subagent: Claude Code resumes sessions, not their subagents.
 fn subagent_not_resumed(id: &str, parent: Option<&str>) -> String {
-    let refusal =
-        format!("Claude Code subagent session {id}: Claude Code resumes sessions, not their subagents");
+    let refusal = format!(
+        "Claude Code subagent session {id}: Claude Code resumes sessions, not their subagents"
+    );
     match parent {
         Some(parent) => format!("{refusal}; resume {parent}"),
         None => refusal,

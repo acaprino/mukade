@@ -49,7 +49,10 @@ impl Writer for Codex {
             .clone()
             .or_else(|| session.meta.cwd.clone())
             .context("a working directory is required")?;
-        let id = opts.dest_id.clone().unwrap_or_else(crate::policy::new_session_id);
+        let id = opts
+            .dest_id
+            .clone()
+            .unwrap_or_else(crate::policy::new_session_id);
         let mut clock = Clock::new(opts.now.as_deref());
         let stamp = clock.base_millis();
         let (date, file_stamp) = rollout_stamp(stamp);
@@ -63,7 +66,10 @@ impl Writer for Codex {
 
         let dir = root.join("sessions").join(date);
         std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let file = opts.dest_path.clone().unwrap_or_else(|| dir.join(format!("rollout-{file_stamp}-{id}.jsonl")));
+        let file = opts
+            .dest_path
+            .clone()
+            .unwrap_or_else(|| dir.join(format!("rollout-{file_stamp}-{id}.jsonl")));
 
         let rows = rows(plan, session, &id, &cwd, opts, &version, &mut clock);
         write_jsonl(&file, &rows)?;
@@ -171,7 +177,13 @@ fn rows(
         match block {
             PlannedBlock::User { text, attachments } => {
                 turn += 1;
-                push(&mut out, &mut ordinal, "event_msg", json!({"type":"task_started", "turn_id":format!("turn-{turn}")}), clock);
+                push(
+                    &mut out,
+                    &mut ordinal,
+                    "event_msg",
+                    json!({"type":"task_started", "turn_id":format!("turn-{turn}")}),
+                    clock,
+                );
                 let mut content = vec![json!({"type": "input_text", "text": text})];
                 content.extend(
                     attachments
@@ -257,7 +269,13 @@ fn rows(
                     );
                 }
                 if matches!(step.end, crate::model::StepEnd::Completed) {
-                    push(&mut out, &mut ordinal, "event_msg", json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":step.text.join("\n")}), clock);
+                    push(
+                        &mut out,
+                        &mut ordinal,
+                        "event_msg",
+                        json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":step.text.join("\n")}),
+                        clock,
+                    );
                 }
             }
             PlannedBlock::Results { results } => {
@@ -294,7 +312,10 @@ fn rows(
             .filter(|row| row["type"] == "response_item")
             .map(|row| &row["payload"])
             .collect();
-        let user_texts: Vec<Option<String>> = response_items.iter().map(|payload| user_text(payload)).collect();
+        let user_texts: Vec<Option<String>> = response_items
+            .iter()
+            .map(|payload| user_text(payload))
+            .collect();
         let items: Vec<NativeItem> = response_items
             .iter()
             .zip(&user_texts)
@@ -312,7 +333,11 @@ fn rows(
             "role": "user",
             "content": [{"type": "input_text", "text": report.summary}],
         })];
-        replacement_history.extend(response_items[report.start..].iter().map(|item| without_input_id(item)));
+        replacement_history.extend(
+            response_items[report.start..]
+                .iter()
+                .map(|item| without_input_id(item)),
+        );
         Some(json!({
             "message": report.summary,
             "replacement_history": replacement_history,

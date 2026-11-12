@@ -483,13 +483,20 @@ fn a_subagents_report_is_a_user_turn_in_its_parent() {
 #[test]
 fn an_empty_subagent_report_stays_a_record() {
     let mut doc = export_doc();
-    doc["messages"].as_array_mut().unwrap().push(serde_json::json!({
-        "id": "msg_empty_report", "type": "synthetic", "time": {"created": 1793115157000_i64},
-        "metadata": {"source": "subagent", "childID": "ses_child", "state": "completed"},
-    }));
+    doc["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": "msg_empty_report", "type": "synthetic", "time": {"created": 1793115157000_i64},
+            "metadata": {"source": "subagent", "childID": "ses_child", "state": "completed"},
+        }));
     let session = opencode::parse(&doc, None).unwrap();
     let report = session.entry("msg_empty_report").unwrap();
-    assert!(matches!(report.kind, Kind::Meta { .. }), "{:?}", report.kind);
+    assert!(
+        matches!(report.kind, Kind::Meta { .. }),
+        "{:?}",
+        report.kind
+    );
 }
 
 /// A parent whose subagent reported into it hops into every file destination with the report.

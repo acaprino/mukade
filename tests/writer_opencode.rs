@@ -206,24 +206,56 @@ fn a_native_budget_appends_an_opencode_compaction_record_without_dropping_histor
     let session = support::read_source(HarnessId::OpenCode);
     let mut opts = support::opts(HarnessId::OpenCode, &scratch);
     opts.project_id = Some("project-under-test".into());
-    opts.native_budget = Some(NativeBudget { context: 40_000, max_output_tokens: Some(32_000), text_token_factor: None });
+    opts.native_budget = Some(NativeBudget {
+        context: 40_000,
+        max_output_tokens: Some(32_000),
+        text_token_factor: None,
+    });
     let mut clock = Clock::new(opts.now.as_deref());
-    let document = document_for(&session, "ses_test", &support::cwd_for(HarnessId::OpenCode), &opts, &mut clock).expect("document");
+    let document = document_for(
+        &session,
+        "ses_test",
+        &support::cwd_for(HarnessId::OpenCode),
+        &opts,
+        &mut clock,
+    )
+    .expect("document");
 
     let compacted = messages(&document);
     let boundary = compacted.last().expect("a native compaction boundary");
     assert_eq!(boundary["type"], "compaction");
     assert_eq!(boundary["status"], "completed");
     assert_eq!(boundary["reason"], "manual");
-    assert!(boundary["native"].is_null(), "the deterministic summary is textual, never provider state");
-    assert_eq!(boundary["metadata"]["keepID"], compacted[compacted.len() - 2]["id"]);
-    assert!(boundary["summary"].as_str().unwrap().contains("mukade native compaction"));
+    assert!(
+        boundary["native"].is_null(),
+        "the deterministic summary is textual, never provider state"
+    );
+    assert_eq!(
+        boundary["metadata"]["keepID"],
+        compacted[compacted.len() - 2]["id"]
+    );
+    assert!(
+        boundary["summary"]
+            .as_str()
+            .unwrap()
+            .contains("mukade native compaction")
+    );
 
     let before = &compacted[..compacted.len() - 1];
-    assert_eq!(before.len(), messages(&baseline).len(), "nothing before the boundary is dropped");
     assert_eq!(
-        before.iter().map(|message| message["type"].as_str()).collect::<Vec<_>>(),
-        messages(&baseline).iter().map(|message| message["type"].as_str()).collect::<Vec<_>>()
+        before.len(),
+        messages(&baseline).len(),
+        "nothing before the boundary is dropped"
+    );
+    assert_eq!(
+        before
+            .iter()
+            .map(|message| message["type"].as_str())
+            .collect::<Vec<_>>(),
+        messages(&baseline)
+            .iter()
+            .map(|message| message["type"].as_str())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -236,16 +268,28 @@ fn document_opencode_reports_the_native_compaction_it_appended() {
     let (code, stdout, stderr) = support::cli(
         &scratch,
         &[
-            "document", "opencode", "opencode", "fixture",
-            "--from-file", fixture.to_str().unwrap(),
-            "--cwd", scratch.to_str().unwrap(),
-            "--dest-id", "ses_preview",
-            "--project-id", "global",
-            "--model-provider", "h27",
-            "--model", "m1",
-            "--compaction", "native",
-            "--context-window", "40000",
-            "--max-output-tokens", "32000",
+            "document",
+            "opencode",
+            "opencode",
+            "fixture",
+            "--from-file",
+            fixture.to_str().unwrap(),
+            "--cwd",
+            scratch.to_str().unwrap(),
+            "--dest-id",
+            "ses_preview",
+            "--project-id",
+            "global",
+            "--model-provider",
+            "h27",
+            "--model",
+            "m1",
+            "--compaction",
+            "native",
+            "--context-window",
+            "40000",
+            "--max-output-tokens",
+            "32000",
         ],
     );
     assert!(code, "{stderr}");
@@ -257,7 +301,9 @@ fn document_opencode_reports_the_native_compaction_it_appended() {
     assert_eq!(boundary["status"], "completed");
     assert_eq!(report["keep_id"], boundary["metadata"]["keepID"]);
     assert!(report["summarized_user_messages"].as_u64().unwrap() > 0);
-    assert!(report["estimated_tokens"].as_u64().unwrap() > report["projected_tokens"].as_u64().unwrap());
+    assert!(
+        report["estimated_tokens"].as_u64().unwrap() > report["projected_tokens"].as_u64().unwrap()
+    );
     assert_eq!(report["fits"], false);
 }
 

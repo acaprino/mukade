@@ -544,7 +544,11 @@ pub fn assert_hops_keeping(source: &Session, text: &str, tag: &str) {
         assert_eq!(receipt.manifest["strict"]["checked"], true, "{dest:?}");
         // Strict passing is not enough: the plan repairs a broken pairing quietly, so nothing
         // may have been repaired either.
-        for repair in ["dropped_orphan_results", "dropped_duplicate_results", "unanswered_calls"] {
+        for repair in [
+            "dropped_orphan_results",
+            "dropped_duplicate_results",
+            "unanswered_calls",
+        ] {
             assert_eq!(
                 receipt.manifest["counts"][repair], 0,
                 "{dest:?}: {repair} in {:#}",

@@ -72,13 +72,20 @@ pub fn estimate_tokens(text: &str, text_token_factor: Option<TokenFactor>) -> u6
         return 0;
     }
     let base = chars.div_ceil(3);
-    let factor = text_token_factor.map(TokenFactor::value).filter(|factor| *factor >= 1.0).unwrap_or(1.0);
+    let factor = text_token_factor
+        .map(TokenFactor::value)
+        .filter(|factor| *factor >= 1.0)
+        .unwrap_or(1.0);
     (base as f64 * factor).ceil() as u64
 }
 
 /// OpenCode's automatic compaction ceiling: window minus max(15%, 16k for windows >= 32k).
 pub fn native_compaction_ceiling(window: u64) -> u64 {
-    let reserve = (window * RESERVE_SHARE_NUM / 100).max(if window >= 2 * RESERVE_MIN { RESERVE_MIN } else { 0 });
+    let reserve = (window * RESERVE_SHARE_NUM / 100).max(if window >= 2 * RESERVE_MIN {
+        RESERVE_MIN
+    } else {
+        0
+    });
     window.saturating_sub(reserve)
 }
 
@@ -95,7 +102,10 @@ fn message_tokens(message: &Value, limits: &NativeBudget) -> u64 {
 }
 
 fn summary_reserve(limits: &NativeBudget) -> u64 {
-    estimate_tokens(&format!("{SUMMARY_HEADER}{}", "x".repeat(SUMMARY_BODY_LIMIT + 256)), limits.text_token_factor)
+    estimate_tokens(
+        &format!("{SUMMARY_HEADER}{}", "x".repeat(SUMMARY_BODY_LIMIT + 256)),
+        limits.text_token_factor,
+    )
 }
 
 /// Index of the first retained message, or None when all fit or no earlier message can be summarized.
@@ -150,23 +160,36 @@ fn deterministic_summary(users: &[&str]) -> (String, usize) {
     if users.is_empty() {
         lines.push("No user messages in the superseded history; its full contents remain in the imported history.".into());
     }
-    (format!("{SUMMARY_HEADER}\n{}", lines.join("\n")), users.len())
+    (
+        format!("{SUMMARY_HEADER}\n{}", lines.join("\n")),
+        users.len(),
+    )
 }
 
 /// Plan the boundary against the writer's final native items. No source message is removed; each
 /// writer renders the returned plan in its own native record.
-pub fn plan_native_items(items: &[NativeItem<'_>], limits: &NativeBudget) -> Option<NativeCompaction> {
+pub fn plan_native_items(
+    items: &[NativeItem<'_>],
+    limits: &NativeBudget,
+) -> Option<NativeCompaction> {
     let budget = import_budget(limits);
-    let weights: Vec<u64> = items.iter().map(|item| message_tokens(item.json, limits)).collect();
+    let weights: Vec<u64> = items
+        .iter()
+        .map(|item| message_tokens(item.json, limits))
+        .collect();
     let estimated_tokens = weights.iter().sum();
     if estimated_tokens <= budget {
         return None;
     }
     let start = select_start(&weights, summary_reserve(limits), budget)?;
-    let users: Vec<&str> = items[..start].iter().filter_map(|item| item.user_text).collect();
+    let users: Vec<&str> = items[..start]
+        .iter()
+        .filter_map(|item| item.user_text)
+        .collect();
     let (summary, summarized_user_messages) = deterministic_summary(&users);
     let tail_tokens: u64 = weights[start..].iter().sum();
-    let projected_tokens = estimate_tokens(&summary, limits.text_token_factor).saturating_add(tail_tokens);
+    let projected_tokens =
+        estimate_tokens(&summary, limits.text_token_factor).saturating_add(tail_tokens);
     Some(NativeCompaction {
         summary,
         start,
@@ -182,13 +205,18 @@ pub fn plan_native_items(items: &[NativeItem<'_>], limits: &NativeBudget) -> Opt
 
 /// Plan the boundary against final OpenCode messages. The caller appends the returned summary as a
 /// native `compaction` record with `metadata.keepID = keep_id`.
-pub fn plan_native_compaction(messages: &[Value], limits: &NativeBudget) -> Option<NativeCompaction> {
+pub fn plan_native_compaction(
+    messages: &[Value],
+    limits: &NativeBudget,
+) -> Option<NativeCompaction> {
     let items: Vec<NativeItem> = messages
         .iter()
         .map(|message| NativeItem {
             id: message["id"].as_str(),
             json: message,
-            user_text: (message["type"] == "user").then(|| message["text"].as_str()).flatten(),
+            user_text: (message["type"] == "user")
+                .then(|| message["text"].as_str())
+                .flatten(),
         })
         .collect();
     plan_native_items(&items, limits)

@@ -107,7 +107,11 @@ fn dest_root_imports_with_the_engine_kept_beside_the_destination_store() {
     );
     let fixture = fixture();
     let portable = scratch.join("portable");
-    let mut args = import_args(fixture.to_str().unwrap(), scratch.to_str().unwrap(), "unused");
+    let mut args = import_args(
+        fixture.to_str().unwrap(),
+        scratch.to_str().unwrap(),
+        "unused",
+    );
     // No --opencode-exe: the engine beside the installation is the one to use.
     args.truncate(args.len() - 2);
     args.extend(["--dest-root", portable.to_str().unwrap()]);
@@ -115,7 +119,10 @@ fn dest_root_imports_with_the_engine_kept_beside_the_destination_store() {
         &scratch,
         &scratch,
         &args,
-        &[("OPENCODE_DB", scratch.join("elsewhere.db").to_str().unwrap())],
+        &[(
+            "OPENCODE_DB",
+            scratch.join("elsewhere.db").to_str().unwrap(),
+        )],
     );
     assert_eq!(code, Some(0), "{stderr}");
     assert_eq!(
@@ -194,8 +201,14 @@ fn hop_with_native_compaction_keeps_the_whole_history_and_appends_the_boundary()
         support::launcher(
             dir,
             "engine",
-            &format!("copy /y %3 \"{0}\" >nul\r\necho Imported session: ses_test\r\n", copy.display()),
-            &format!("cp \"$3\" '{0}'\necho 'Imported session: ses_test'\n", copy.display()),
+            &format!(
+                "copy /y %3 \"{0}\" >nul\r\necho Imported session: ses_test\r\n",
+                copy.display()
+            ),
+            &format!(
+                "cp \"$3\" '{0}'\necho 'Imported session: ses_test'\n",
+                copy.display()
+            ),
         )
     }
     let fixture = fixture();
@@ -203,8 +216,19 @@ fn hop_with_native_compaction_keeps_the_whole_history_and_appends_the_boundary()
         let scratch = support::scratch(mukade::model::HarnessId::OpenCode, tag);
         let copy = scratch.join("imported.json");
         let engine = copied_engine(&scratch.join("bin"), &copy);
-        let mut args = import_args(fixture.to_str().unwrap(), scratch.to_str().unwrap(), engine.to_str().unwrap());
-        let native_args = ["--compaction", "native", "--context-window", "40000", "--max-output-tokens", "32000"];
+        let mut args = import_args(
+            fixture.to_str().unwrap(),
+            scratch.to_str().unwrap(),
+            engine.to_str().unwrap(),
+        );
+        let native_args = [
+            "--compaction",
+            "native",
+            "--context-window",
+            "40000",
+            "--max-output-tokens",
+            "32000",
+        ];
         if native {
             args.extend(native_args);
         }
@@ -219,15 +243,28 @@ fn hop_with_native_compaction_keeps_the_whole_history_and_appends_the_boundary()
     let (document, receipt) = run("import-native-boundary", true);
     let baseline = baseline["messages"].as_array().unwrap();
     let messages = document["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), baseline.len() + 1, "the boundary is appended, nothing is dropped");
     assert_eq!(
-        messages[..baseline.len()].iter().map(|message| message["type"].as_str()).collect::<Vec<_>>(),
-        baseline.iter().map(|message| message["type"].as_str()).collect::<Vec<_>>()
+        messages.len(),
+        baseline.len() + 1,
+        "the boundary is appended, nothing is dropped"
+    );
+    assert_eq!(
+        messages[..baseline.len()]
+            .iter()
+            .map(|message| message["type"].as_str())
+            .collect::<Vec<_>>(),
+        baseline
+            .iter()
+            .map(|message| message["type"].as_str())
+            .collect::<Vec<_>>()
     );
     let boundary = messages.last().unwrap();
     assert_eq!(boundary["type"], "compaction");
     assert_eq!(boundary["status"], "completed");
-    assert_eq!(boundary["metadata"]["keepID"], messages[messages.len() - 2]["id"]);
+    assert_eq!(
+        boundary["metadata"]["keepID"],
+        messages[messages.len() - 2]["id"]
+    );
     assert_eq!(receipt["manifest"]["options"]["compaction"], "native");
 }
 
@@ -347,10 +384,7 @@ fn import_uses_the_reserved_session_id_and_provenance() {
         &args,
         &[
             ("OPENCODE_DB", database.to_str().unwrap()),
-            (
-                "MUKADE_DATA_DIR",
-                scratch.join("data").to_str().unwrap(),
-            ),
+            ("MUKADE_DATA_DIR", scratch.join("data").to_str().unwrap()),
         ],
     );
     assert!(
@@ -400,10 +434,7 @@ fn a_failed_import_with_the_reserved_id_present_reports_an_unknown_outcome() {
         &args,
         &[
             ("OPENCODE_DB", database.to_str().unwrap()),
-            (
-                "MUKADE_DATA_DIR",
-                scratch.join("data").to_str().unwrap(),
-            ),
+            ("MUKADE_DATA_DIR", scratch.join("data").to_str().unwrap()),
         ],
     );
     assert_eq!(code, Some(5), "{stderr}");
@@ -443,10 +474,7 @@ fn without_tools_excludes_calls_and_results_and_reports_the_omission() {
                 "OPENCODE_DB",
                 scratch.join("destination.db").to_str().unwrap(),
             ),
-            (
-                "MUKADE_DATA_DIR",
-                scratch.join("data").to_str().unwrap(),
-            ),
+            ("MUKADE_DATA_DIR", scratch.join("data").to_str().unwrap()),
         ],
     );
     assert_eq!(code, Some(0), "{stderr}");
@@ -476,7 +504,10 @@ fn invalid_reserved_id_is_rejected_before_starting_the_source_engine() {
             "@echo off\r\necho started>\"{}\"\r\nexit /b 1\r\n",
             observed.display()
         ),
-        &format!("#!/bin/sh\necho started > '{}'\nexit 1\n", observed.display()),
+        &format!(
+            "#!/bin/sh\necho started > '{}'\nexit 1\n",
+            observed.display()
+        ),
     );
     let (code, _, stderr) = support::cli_in(
         &scratch,
@@ -491,10 +522,7 @@ fn invalid_reserved_id_is_rejected_before_starting_the_source_engine() {
         ],
         &[
             ("MUKADE_OPENCODE_EXE", engine.to_str().unwrap()),
-            (
-                "MUKADE_DATA_DIR",
-                scratch.join("data").to_str().unwrap(),
-            ),
+            ("MUKADE_DATA_DIR", scratch.join("data").to_str().unwrap()),
         ],
     );
     assert_ne!(code, Some(0), "{stderr}");
@@ -534,10 +562,7 @@ fn a_successful_process_without_the_reserved_session_is_not_reported_as_success(
                 "OPENCODE_DB",
                 scratch.join("destination.db").to_str().unwrap(),
             ),
-            (
-                "MUKADE_DATA_DIR",
-                scratch.join("data").to_str().unwrap(),
-            ),
+            ("MUKADE_DATA_DIR", scratch.join("data").to_str().unwrap()),
         ],
     );
     assert_eq!(code, Some(5), "{stderr}");
