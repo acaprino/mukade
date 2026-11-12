@@ -11,12 +11,24 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "Mukade", "width": 1360, "height": 860, "minWidth": 900, "minHeight": 560 }
+      {
+        "label": "main",
+        "title": "Mukade",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 560,
+        "backgroundColor": "#060507"
+      }
     ],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": false
+  }
 }

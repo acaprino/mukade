@@ -2,7 +2,7 @@
 // and the keyboard (spec §2, §4).
 
 import './styles.css';
-import { api, errorText, onCloseBlocked } from './api.ts';
+import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
 import { renderDetail } from './detail.ts';
 import { button, fill, h, kbd } from './dom.ts';
@@ -480,7 +480,31 @@ function showHelp(): void {
   fill(modal.body, h('dl', { class: 'kv keys' }, ...rows.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
 }
 
+/** The WebView's own page commands, which a desktop window does not have (tauri-native-desktop):
+ *  F5 and ctrl+R would reload the page and drop the window's state mid-hop, so they read the
+ *  stores again instead, as `r` does; ctrl+P would print the page. Zoom (ctrl +/−) stays. */
+function pageCommand(event: KeyboardEvent): boolean {
+  const ctrl = event.ctrlKey || event.metaKey;
+  const key = event.key.toLowerCase();
+  if (event.key === 'F5' || (ctrl && key === 'r')) {
+    if (!modalOpen()) void loadInventory([]);
+    return true;
+  }
+  if (ctrl && (key === 'p' || key === 's' || key === 'o' || key === 'u' || key === 'j')) return true;
+  if (!import.meta.env.DEV && (event.key === 'F12' || (ctrl && event.shiftKey && (key === 'i' || key === 'c')))) return true;
+  return false;
+}
+
+/** The browser's context menu (Back, Reload, Print, Inspect) only where it edits or copies text. */
+document.addEventListener('contextmenu', (event) => {
+  const target = event.target as HTMLElement;
+  const editable = target.closest('input, textarea, [contenteditable="true"]');
+  const selected = (document.getSelection()?.toString() ?? '').length > 0;
+  if (!editable && !selected && !import.meta.env.DEV) event.preventDefault();
+});
+
 document.addEventListener('keydown', (event) => {
+  if (pageCommand(event)) { event.preventDefault(); return; }
   const target = event.target as HTMLElement;
   const inField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
   // Inside a dialog only Escape is the window's; its own controls take the rest.
@@ -514,6 +538,13 @@ function wire(): void {
   makeResizer($('resize-installations'), 'installations');
   makeResizer($('resize-sessions'), 'sessions');
   for (const back of document.querySelectorAll<HTMLElement>('[data-back]')) back.addEventListener('click', () => column(-1));
+  // A document dropped on the window opens the import dialog with it.
+  onFilesDropped((paths) => {
+    const document = paths.find((path) => path.toLowerCase().endsWith('.json'));
+    if (!document) { setStatus('drop a mukade document (.json) to import it', true); return; }
+    if (state.job) { setStatus('a job is running: drop the document again when it ends', true); return; }
+    openImport(state.installations, state.installation, document, hooks);
+  });
   onCloseBlocked(async () => {
     if (await confirmModal('A hop is still running', 'Closing now stops the window while it writes. The destination may be left with a session the receipt never reports.', 'Close anyway')) void api.quit();
   });

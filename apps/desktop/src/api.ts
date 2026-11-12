@@ -53,6 +53,15 @@ export const api = {
   quit: () => invoke<void>('quit'),
 };
 
+/** Files dropped on the window (paths), in Tauri only: the WebView keeps them from the page. */
+export function onFilesDropped(handler: (paths: string[]) => void): void {
+  if (!inTauri) return;
+  void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === 'drop') handler(event.payload.paths);
+    }));
+}
+
 /** The window refused to close while a hop or import ran. */
 export function onCloseBlocked(handler: () => void): void {
   if (inTauri) void listen('close-blocked', handler);

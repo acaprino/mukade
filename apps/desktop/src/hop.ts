@@ -114,7 +114,8 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
   const focused = document.activeElement;
   fill(modal.foot, h('span', { class: 'mono muted' }, 'A hop cannot be stopped once it starts.'), h('span', { class: 'spring' }),
     button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), go);
-  if (!focused || !modal.root.contains(focused) || !focused.isConnected) go.focus({ preventScroll: true });
+  // The first draw starts on the primary action; a redraw keeps the control the person was on.
+  if (!focused || !focused.isConnected || !modal.body.contains(focused)) go.focus({ preventScroll: true });
   modal.root.onkeydown = (event) => {
     if (event.key === 'Enter' && !(event.target instanceof HTMLTextAreaElement) && !(event.target instanceof HTMLSelectElement)) { event.preventDefault(); run(); }
   };

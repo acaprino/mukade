@@ -54,6 +54,33 @@ Harness) shows its headless command with a copy button instead.
 
 The window refuses to close while a hop or import runs, and asks first.
 
+## Look and desktop behaviour
+
+The skin is Mukade's palette on Shinatama's structure, including its glass: the bars and the
+columns are translucent over a still ambient field, dialogs and their scrim blur what is under
+them, and a dialog opens by drawing its top edge. As in Shinatama, this is CSS. Shinatama's
+acrylic window effect sits under an opaque stage, so it is almost never seen; Mukade keeps the
+operating system's window frame instead (snap layouts, the system menu, double-click to
+maximize), following `.claude/skills/tauri-native-desktop`.
+
+From that skill's audit:
+
+| surface | state | how |
+|---|---|---|
+| Open, save, folder | OS dialogs | `tauri-plugin-dialog`, from the backend |
+| Hop, import, receipt, export, keys, close confirmation | surfaces inside the main window | they belong to it; long content scrolls and the actions stay in reach at the minimum window size |
+| Window close | refused while a hop or import runs, with a confirmation | `CloseRequested` in `main.rs`; covers the X button and Alt+F4 |
+| F5, ctrl+R | read the stores again (as `r`) | a page reload would drop the window's state mid-hop |
+| ctrl+P, ctrl+S, ctrl+O, ctrl+U, ctrl+J, and devtools in a release build | do nothing | page commands a desktop window does not have; zoom (ctrl +/−) stays |
+| Context menu | the WebView's only where text is edited or selected | the page menu (Back, Reload, Print) has no meaning here |
+| Overscroll | no rubber-band on the window; each pane keeps its own scroll | `overscroll-behavior` |
+| Selection | the chrome is not selectable; the reader, the details, code and fields are | `user-select` |
+| A `.json` dropped on the window | opens Import with it | the WebView's drop event |
+| Startup | no white flash | the window's `backgroundColor` is the dark stage |
+
+Still to try on Windows and macOS: the drop, the close confirmation and the terminal opened by
+Resume.
+
 ## Keys
 
 | key | does |

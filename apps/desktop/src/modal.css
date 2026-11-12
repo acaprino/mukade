@@ -1,15 +1,22 @@
-.scrim { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 56px 16px 16px; background: var(--scrim); overflow: auto; }
-.dialog { width: 100%; max-width: 720px; border: 1px solid var(--line-strong); border-top: 2px solid var(--accent); background: var(--chrome); box-shadow: 0 24px 60px var(--shadow); }
+.scrim { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 56px 16px 16px; background: color-mix(in srgb, var(--stage) 58%, transparent); backdrop-filter: blur(5px) saturate(120%); overflow: auto; animation: scrim-in var(--base) var(--ease-out) both; }
+/* Glass with one drawn top edge (accent into ice), drawn in as the dialog opens. */
+.dialog { --edge: var(--accent); width: 100%; max-width: 720px; border: 1px solid color-mix(in srgb, var(--line-strong) 62%, transparent); border-top: 0;
+  background: linear-gradient(90deg, var(--edge), var(--ice) 46%, transparent 92%) top left / 100% 2px no-repeat, var(--glass);
+  backdrop-filter: var(--glass-blur); box-shadow: 0 24px 80px var(--shadow); padding-top: 2px;
+  animation: dialog-in var(--base) var(--ease-out) both, edge-draw var(--slow) var(--ease-out) both; }
+@keyframes scrim-in { from { opacity: 0; } }
+@keyframes dialog-in { from { opacity: 0; translate: 0 -10px; scale: .985; } }
+@keyframes edge-draw { from { background-size: 0% 2px, auto; } }
 .dialog.wide { max-width: 960px; }
-.dialog.tone-live { border-top-color: var(--live); }
-.dialog.tone-error { border-top-color: var(--error); }
-.dialog-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
+.dialog.tone-live { --edge: var(--live); }
+.dialog.tone-error { --edge: var(--error); }
+.dialog-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); background: transparent; }
 .dialog-head h2 { margin: 0; font: 600 14px var(--display); letter-spacing: .1em; text-transform: uppercase; }
 .dialog-head .icon.accent { color: var(--accent); }
 .modal-subtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dialog-body { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px; max-height: calc(100vh - 190px); overflow: auto; }
 .dialog-body > .col { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
-.dialog-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.dialog-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--glass-strong); }
 .dialog.locked .dialog-body { opacity: .65; pointer-events: none; }
 .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .field > label, .field > .lab { font: 500 11px var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
@@ -28,3 +35,6 @@
 .plan .sub { padding-left: 16px; color: var(--spawn); }
 .cmd { display: flex; gap: 6px; }
 .cmd pre { flex: 1; min-width: 0; margin: 0; }
+.dialog input, .dialog select, .dialog textarea { background: color-mix(in srgb, var(--pane) 72%, transparent); }
+.dialog input:focus-visible, .dialog select:focus-visible, .dialog textarea:focus-visible { border-color: var(--accent); outline-offset: 0; }
+.choices, .plan, .dialog .box, .dialog .code { background: color-mix(in srgb, var(--surface) 70%, transparent); }
