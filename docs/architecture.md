@@ -1,7 +1,16 @@
 # Architecture: one adapter per harness
 
 Every decision that depends on which harness a session comes from or goes to is made in that
-harness's **adapter**. Nothing else names a harness: `tests/architecture.rs` enforces it.
+harness's **adapter**. Nothing else branches on `HarnessId`: `tests/architecture.rs` enforces it.
+
+Outside the adapters, these name one harness without branching on `HarnessId` (public API or
+parse-time checks):
+
+| where | what |
+|---|---|
+| `src/roots.rs` | `StoreRoots::{claude_projects, codex_sessions, codex_archived_sessions, pi_sessions}`, `claude_project_dir_name` |
+| `src/detect/layout.rs` | `layouts`: one entry per detector, listed by hand |
+| `src/cli.rs` | `writer::opencode::validate_agent` on `--dest-agent`, while the flags are parsed |
 
 ## The adapter
 
@@ -69,7 +78,8 @@ The public entry points keep their signatures and call the adapter: `reader::for
 5. The detector, `src/detect/<harness>.rs` (`impl StoreLayout`), its `mod` line in
    `src/detect.rs` and its place in `detect::layout::layouts`.
 6. The adapter, `src/harnesses/<harness>.rs` (`impl Harness`), and its `mod` line.
-7. The registry arm in `harnesses::get`; the length of `harnesses::all` and `layouts` follows `ALL`.
+7. The registry arm in `harnesses::get`; the array length in the signatures of `harnesses::all`
+   and `detect::layout::layouts` (both state `4`).
 8. The catalog entry in `catalog/harnesses.json`.
 9. Tests: fixtures under `fixtures/<harness>/`, reader and writer tests, the adapter's rows in
    `tests/harnesses.rs`, and its reader, writer and detector files in `ADAPTER_FILES` of
@@ -78,20 +88,26 @@ The public entry points keep their signatures and call the adapter: `reader::for
 ## Changing a harness
 
 Edit its adapter files (`src/harnesses/<harness>.rs` and its reader, writer and detector) and its
-catalog entry. Nothing else names it.
+catalog entry. Nothing else branches on it.
 
 ## The architecture test
 
 `tests/architecture.rs`, `no_harness_branch_outside_its_adapter`:
 
 1. Walks every `.rs` file under `src/` and `mukade-tui/src/`.
-2. Skips the adapter files (`ADAPTER_FILES`): `src/harnesses/`, the readers, writers and
-   detectors of one harness, `src/model/harness.rs`.
-3. Skips test code: the item after a `#[cfg(test)]` line.
+2. Skips the adapter files (`ADAPTER_FILES`, exact files and folders): `src/harnesses/`, the
+   readers, writers and detectors of one harness, `src/model/harness.rs`.
+3. Skips test code: the item after a `#[cfg(test)]` line, brackets counted outside strings and
+   comments. It ends at its own last line, or before a line indented less than the attribute;
+   where unsure it ends early, so production code is read, never hidden.
 4. Fails on any other line naming `HarnessId::ClaudeCode`, `Codex`, `OpenCode` or `Pi`, listing
    each `file:line`.
-5. Guards against passing on nothing: more than 50 files walked, more than 30 checked, and hits
-   found inside the adapters.
+5. Guards against passing on nothing: more than 50 files walked, more than 30 checked, hits found
+   inside the adapters, and every `ADAPTER_FILES` entry still present.
+
+The scanner has its own tests in the same file: test items of every shape (a multi-line `use`, a
+field, a `const`, a match arm, a parameter, a string spanning lines, a module), each followed by a
+production line that must be reported.
 
 `ALLOWED` lists files exempted, each with its reason. It is empty; an entry whose file no longer
 names a harness fails the test.
