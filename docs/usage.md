@@ -1,5 +1,18 @@
 # Using Mukade — harness sessions manager
 
+## Local MCP chat (planned)
+
+The [chat specification](superpowers/specs/2026-11-11-mcp-chat-design.md) defines a
+shared background server with `mukade chat start`, `status` and `stop`, MCP tools for agents,
+and a CLI client for people and scripts. Chat clients will use the running service; persistent
+rooms and messages survive its restart.
+
+These commands are not available in the current build. The library foundations do not yet
+provide an MCP service. Setup instructions will accompany the working server and verified
+harness integrations.
+
+## Session interchange
+
 Mukade moves a coding-agent session from one harness to another — Claude Code, Codex CLI,
 OpenCode, Pi — and the destination continues it **as one of its own sessions**. This guide is the
 command-line manual: how to get it, the use cases it is made for, how to read what it prints, and

@@ -209,6 +209,18 @@ cargo run -p mukade-tui -- --check
 The full command list, keys, hop dialog and examples are in
 [mukade-tui/README.md](mukade-tui/README.md).
 
+## Local MCP chat (design)
+
+Mukade's chat design uses one shared local MCP server, controlled with
+`mukade chat start`, `mukade chat status` and `mukade chat stop`. It will provide
+rooms, dialogue, worker supervision and reduced observation of explicitly bound sessions.
+The server and these commands are **not implemented yet**; the repository contains reusable
+library foundations and tests.
+
+See the [complete specification](docs/superpowers/specs/2026-11-11-mcp-chat-design.md)
+and [ADR-0003](docs/adr/ADR-0003-local-mcp-chat.md), Proposed. MCP notifications do not
+by themselves ensure that a harness inserts a message into the model's context.
+
 ## One executable, nothing to install, and speed
 
 mukade is a single command-line executable: run `build.bat` on Windows or `sh build.sh` on Linux

@@ -44,6 +44,14 @@ pub fn cache_dir() -> Option<PathBuf> {
     cache_dir_in(data_dir().as_deref())
 }
 
+/// Internal storage directory for local chat, under the selected data directory.
+pub fn bus_dir() -> Option<PathBuf> {
+    bus_dir_in(data_dir().as_deref())
+}
+pub fn bus_dir_in(data: Option<&Path>) -> Option<PathBuf> {
+    data.map(|dir| dir.join("bus"))
+}
+
 pub fn cache_dir_in(data: Option<&Path>) -> Option<PathBuf> {
     data.map(|dir| dir.join("cache"))
 }

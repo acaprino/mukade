@@ -10,8 +10,10 @@
 //! reader and writer here was built against that bench's fixtures, which the tests under
 //! `fixtures/` carry.
 
+pub mod bus;
 pub mod cache;
 pub mod catalog;
+pub mod chat;
 pub mod cli;
 pub mod dest;
 pub mod detect;

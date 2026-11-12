@@ -22,6 +22,7 @@ run `index`; do not edit this block by hand.
 | ADR | Title | Governs | From task |
 |---|---|---|---|
 | [ADR-0002](<ADR-0002-hermes-and-deepseek-harness-read-first.md>) | Hermes and DeepSeek Harness enter read-first; Hermes stays source-only | `src/model/harness.rs`, `catalog/harnesses.json`, `src/reader/**`, `src/writer/**`, `src/hop.rs`, `src/cli.rs`, `src/dest.rs`, `mukade::model`, `mukade::reader`, `mukade::writer`, `mukade::hop`, `harness-support` | `brainstorm-hermes-deepseek-harness` |
+| [ADR-0003](<ADR-0003-local-mcp-chat.md>) | Shared local MCP chat service with a reusable library core | `src/bus/**`, `src/chat/**`, `src/cli/chat.rs`, `src/reader/origin.rs`, `mukade::bus`, `mukade::chat`, `mukade::reader::origin`, `local-mcp-chat` | `local-mcp-chat` |
 
 ## Superseded
 

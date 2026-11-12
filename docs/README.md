@@ -10,6 +10,7 @@
 
 - [Session interchange specification](session-interchange-spec.md): data model, conversion rules and contracts.
 - [Tool conversion tables](tool-conversion-tables.md): tool mappings between harnesses.
+- [Local MCP chat specification](superpowers/specs/2026-11-11-mcp-chat-design.md): shared background service, lifecycle, dialogue, supervision, reduced observation and delivery receipts; [ADR-0003](adr/ADR-0003-local-mcp-chat.md), Proposed.
 - Harness guides: [Claude Code](harnesses/claude-code.md), [Codex](harnesses/codex.md), [OpenCode](harnesses/opencode.md) and [Pi](harnesses/pi.md); and, with no mukade support yet, [Hermes Agent](harnesses/hermes-agent.md) and [DeepSeek Harness](harnesses/deepseek-harness.md) (read-first plan: [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md), Proposed).
 - [Harness session persistence reference](reference/harness-session-persistence-reference.md): secondary research with its original provenance and limitations.
 - [Harness catalog](reference/harness-catalog.md): the four harnesses, their own install and store locations on Windows, macOS and Linux, their store layouts and the lineage each records (`catalog/harnesses.json`).
@@ -17,6 +18,7 @@
 ## Verification records
 
 These are records of particular runs, not guarantees for later harness versions. Dates, environments and limitations remain in each record.
+
 
 - [Live hops and provider reasoning](verification/live-hops-and-provider-reasoning.md): Claude Code, Codex and OpenCode.
 - [Codex encrypted reasoning live](verification/codex-encrypted-reasoning-live.md): the Codex → Codex hop of 2026-11-04, with the discriminating negative control.

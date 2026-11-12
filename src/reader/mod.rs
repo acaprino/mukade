@@ -7,6 +7,7 @@ pub mod codex;
 mod codex_state;
 pub mod json;
 pub mod opencode;
+pub mod origin;
 pub mod pi;
 
 use crate::model::{HarnessId, Session};
