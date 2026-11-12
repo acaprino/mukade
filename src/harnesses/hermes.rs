@@ -11,6 +11,9 @@ use crate::writer::{WriteOpts, Writer, media::Image};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+/// Why `--compaction summary` is refused for a Hermes session.
+const NO_SUMMARY: &str = "--compaction summary is not available from a Hermes Agent session: Hermes has no run that saves nothing. `hermes chat --resume <id>` is the only way to put the session in front of its model and it appends the question and the answer to that session; without `--resume` the model cannot see the session, and no flag turns the store off. Use --compaction native or --compaction portable instead";
+
 pub(super) struct Hermes;
 
 impl Harness for Hermes {
@@ -76,15 +79,16 @@ impl Harness for Hermes {
         }
     }
 
+    /// Refused: Hermes has no run that saves nothing. `hermes chat --resume <id>` is the only way
+    /// to put the session in front of its model, and the turn is appended to that session; a run
+    /// without `--resume` cannot see it, and no flag turns the store off.
     fn summary_command(
         &self,
         _session: &Session,
         _opts: &SummarizeOpts,
         _scratch: &Path,
     ) -> Result<SummaryCommand, HopError> {
-        Err(HopError::Unsupported(
-            "a summary from a Hermes Agent session is not implemented yet".into(),
-        ))
+        Err(HopError::Unsupported(NO_SUMMARY.into()))
     }
 
     fn parse_summary_reply(
@@ -92,7 +96,7 @@ impl Harness for Hermes {
         _stdout: &str,
         _output_file: Option<&str>,
     ) -> Result<Reply, String> {
-        Err("a summary from a Hermes Agent session is not implemented yet".into())
+        Err("Hermes Agent has no summary run".into())
     }
 }
 

@@ -81,9 +81,8 @@ fn the_fixture_hops_into_the_real_store_and_reads_back() {
         eprintln!("no Hermes state.db: nothing to write into");
         return;
     };
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-        "fixtures/claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl",
-    );
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_mukade"))
         .args(["hop", "claude_code", "c45db7bc", "hermes", "--from-file"])
         .arg(&fixture)
@@ -92,7 +91,10 @@ fn the_fixture_hops_into_the_real_store_and_reads_back() {
         .expect("mukade runs");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    eprintln!("exit {:?}\nstdout: {stdout}\nstderr: {stderr}", output.status.code());
+    eprintln!(
+        "exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        output.status.code()
+    );
     assert!(output.status.success(), "the hop failed");
     let receipt: serde_json::Value =
         serde_json::from_str(stdout.lines().last().expect("a receipt line")).expect("JSON receipt");
@@ -121,23 +123,35 @@ fn the_fixture_hops_into_the_real_store_and_reads_back() {
         }
     }
     let (users, assistants) = (users.join("\n"), assistants.join("\n"));
-    eprintln!("{id}: {} user chars, {} assistant chars", users.len(), assistants.len());
+    eprintln!(
+        "{id}: {} user chars, {} assistant chars",
+        users.len(),
+        assistants.len()
+    );
     let mut checked = 0;
     for entry in source.conversation() {
         match &entry.kind {
-            Kind::User { text, .. } if !text.trim().is_empty() && !text.trim_start().starts_with('<') => {
+            Kind::User { text, .. }
+                if !text.trim().is_empty() && !text.trim_start().starts_with('<') =>
+            {
                 assert!(users.contains(text.trim()), "user text lost: {text:?}");
                 checked += 1;
             }
             Kind::Step { text, .. } => {
                 for part in text.iter().filter(|part| !part.trim().is_empty()) {
-                    assert!(assistants.contains(part.trim()), "assistant text lost: {part:?}");
+                    assert!(
+                        assistants.contains(part.trim()),
+                        "assistant text lost: {part:?}"
+                    );
                     checked += 1;
                 }
             }
             _ => {}
         }
     }
-    assert!(checked >= 2, "the fixture gave only {checked} texts to compare");
+    assert!(
+        checked >= 2,
+        "the fixture gave only {checked} texts to compare"
+    );
     eprintln!("{checked} texts of the fixture found in {id}");
 }

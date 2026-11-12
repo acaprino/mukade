@@ -318,6 +318,44 @@ fn a_claude_subagent_session_is_not_summarized_by_claude() {
     );
 }
 
+/// Neither Hermes nor DeepSeek Harness has a run that saves nothing: continuing a session appends
+/// to it, and a run that does not continue it cannot see it. So no summary is asked of them, and
+/// the refusal says why and what to use (exit 2, before any process starts).
+#[test]
+fn a_hermes_or_deepseek_session_is_refused_a_summary_with_the_reason() {
+    for (harness, binary, appends) in [
+        (HarnessId::Hermes, "hermes", "--resume"),
+        (HarnessId::DeepSeekHarness, "dsh", "--session-id"),
+    ] {
+        let session = support::read_source(harness);
+        // A launcher that is no program: if the command were built and run, the error would be a
+        // failed process, not this refusal.
+        let opts = SummarizeOpts {
+            exe: Some("mukade-no-such-launcher".into()),
+            ..SummarizeOpts::default()
+        };
+        let error = summary::summary_command(&session, &opts, &scratch(binary)).unwrap_err();
+        let HopError::Unsupported(why) = &error else {
+            panic!("{harness}: {error:?}");
+        };
+        assert_eq!(error.exit_code(), 2, "{harness}");
+        for part in [
+            appends,
+            "appends",
+            "--compaction native",
+            "--compaction portable",
+        ] {
+            assert!(why.contains(part), "{harness}: {part:?} not in {why:?}");
+        }
+        assert!(
+            !why.contains("not implemented"),
+            "{harness}: a reason, not a promise: {why:?}"
+        );
+        let reply = summary::parse_reply(harness, "text", None).unwrap_err();
+        assert!(reply.contains("no summary run"), "{harness}: {reply}");
+    }
+}
+
 #[test]
 fn a_pi_session_without_its_file_is_refused() {
     let mut session = support::read_source(HarnessId::Pi);

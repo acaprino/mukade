@@ -11,6 +11,9 @@ use crate::writer::{WriteOpts, Writer, media::Image};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+/// Why `--compaction summary` is refused for a DeepSeek Harness session.
+const NO_SUMMARY: &str = "--compaction summary is not available from a DeepSeek Harness session: dsh has no run that saves nothing. `dsh --profile headless --session-id <id>` adopts the session and appends the question and the answer to its log; without `--session-id` the model cannot see the session, and no flag turns the log off or the tools away. Use --compaction native or --compaction portable instead";
+
 pub(super) struct DeepSeekHarness;
 
 impl Harness for DeepSeekHarness {
@@ -73,15 +76,16 @@ impl Harness for DeepSeekHarness {
         }
     }
 
+    /// Refused: dsh has no run that saves nothing. `--session-id <id>` adopts the session and
+    /// appends to its log; a run without it cannot see the session; the shipped profiles all keep
+    /// their log, and `dsh` has no flag that turns the tools off or the log away.
     fn summary_command(
         &self,
         _session: &Session,
         _opts: &SummarizeOpts,
         _scratch: &Path,
     ) -> Result<SummaryCommand, HopError> {
-        Err(HopError::Unsupported(
-            "a summary from a DeepSeek Harness session is not implemented yet".into(),
-        ))
+        Err(HopError::Unsupported(NO_SUMMARY.into()))
     }
 
     fn parse_summary_reply(
@@ -89,7 +93,7 @@ impl Harness for DeepSeekHarness {
         _stdout: &str,
         _output_file: Option<&str>,
     ) -> Result<Reply, String> {
-        Err("a summary from a DeepSeek Harness session is not implemented yet".into())
+        Err("DeepSeek Harness has no summary run".into())
     }
 }
 
