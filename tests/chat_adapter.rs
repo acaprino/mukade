@@ -293,11 +293,7 @@ async fn a_prompt_hands_over_messages_and_the_next_call_acknowledges_them() {
     assert!(!cont);
     assert!(news.contains("(to you): @"), "{news}");
     assert!(news.contains("what is 2+3?"), "{news}");
-    assert_eq!(
-        f.unread("s1").await,
-        1,
-        "handed over, not yet acknowledged"
-    );
+    assert_eq!(f.unread("s1").await, 1, "handed over, not yet acknowledged");
 
     assert_eq!(f.hook(&settings, Event::Prompt, "s1").await, None);
     assert_eq!(f.unread("s1").await, 0, "the next call acknowledged it");
@@ -480,11 +476,15 @@ fn claude_code_reads_the_hook_answers_in_its_own_format() {
     )
     .unwrap();
     assert_eq!(stop, json!({"decision": "block", "reason": "go on"}));
-    for other in [
-        mukade::HarnessId::Codex,
-        mukade::HarnessId::OpenCode,
-        mukade::HarnessId::Pi,
-    ] {
+    let codex = mukade::harnesses::get(mukade::HarnessId::Codex)
+        .chat_hook_output(Event::Stop, &Delivery::Continue("go on".into()))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&codex).unwrap(),
+        stop,
+        "Codex reads the same"
+    );
+    for other in [mukade::HarnessId::OpenCode, mukade::HarnessId::Pi] {
         assert!(
             mukade::harnesses::get(other)
                 .chat_hook_output(Event::Stop, &Delivery::Continue("x".into()))
@@ -606,4 +606,78 @@ async fn a_message_to_the_room_does_not_wake_a_listening_instance() {
     let (_, news) = text(f.hook(&settings, Event::Prompt, "s1").await);
     assert!(news.contains("hello everybody"), "not lost: {news}");
     f.done().await;
+}
+
+#[test]
+fn the_codex_launch_is_configuration_overrides_and_keeps_the_credential_off_the_command_line() {
+    let kit = adapter::Kit {
+        exe: PathBuf::from(r"C:\Program Files\it's\mukade.exe"),
+        folder: scratch("codex-kit").join("launch"),
+        server: mukade::chat::connect::Server {
+            endpoint: "http://127.0.0.1:4000/mcp".into(),
+            token: "s3cr3t-t0k3n".into(),
+            service_id: "svc".into(),
+        },
+        stop_timeout: adapter::STOP_HOOK_TIMEOUT,
+    };
+    let command = mukade::harnesses::get(mukade::HarnessId::Codex)
+        .chat_launch(&kit)
+        .unwrap()
+        .unwrap();
+    let args: Vec<String> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    assert!(args.iter().all(|a| !a.contains("s3cr3t")), "{args:?}");
+    assert!(args.iter().step_by(2).all(|a| a == "-c"), "{args:?}");
+    let overrides: Vec<&String> = args.iter().skip(1).step_by(2).collect();
+    let get = |key: &str| {
+        overrides
+            .iter()
+            .find_map(|o| o.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("no {key} in {overrides:?}"))
+            .to_string()
+    };
+    assert_eq!(
+        get("mcp_servers.mukade.url"),
+        "\"http://127.0.0.1:4000/mcp\""
+    );
+    assert!(get("mcp_servers.mukade.env_http_headers").contains("MUKADE_CHAT_AUTHORIZATION"));
+    let stop: toml_edit::Value = get("hooks.Stop").parse().unwrap();
+    let group = stop
+        .as_array()
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .as_inline_table()
+        .unwrap();
+    let hook = group["hooks"].as_array().unwrap().get(0).unwrap();
+    let hook = hook.as_inline_table().unwrap();
+    let line = hook["command"].as_str().unwrap();
+    if cfg!(windows) {
+        assert_eq!(
+            line,
+            "& 'C:/Program Files/it''s/mukade.exe' chat hook codex stop"
+        );
+    } else {
+        assert!(line.ends_with(" chat hook codex stop"), "{line}");
+    }
+    assert_eq!(
+        hook["timeout"].as_integer(),
+        Some(adapter::STOP_HOOK_TIMEOUT as i64)
+    );
+    let envs: Vec<(String, String)> = command
+        .get_envs()
+        .filter_map(|(k, v)| {
+            Some((
+                k.to_string_lossy().into_owned(),
+                v?.to_string_lossy().into_owned(),
+            ))
+        })
+        .collect();
+    assert!(envs.contains(&(
+        "MUKADE_CHAT_AUTHORIZATION".into(),
+        "Bearer s3cr3t-t0k3n".into()
+    )));
+    assert!(envs.contains(&("MUKADE_CHAT_SERVICE_ID".into(), "svc".into())));
 }

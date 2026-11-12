@@ -560,13 +560,19 @@ mukade chat launch claude_code --room design --role worker --listen 600
 
 What the launched instance gets, without any setting of yours changing:
 
-1. A plugin for that session only (`claude --plugin-dir`), in the service's own folder, removed when the instance exits.
+1. Claude Code: a plugin for that session only (`claude --plugin-dir`), in the service's own folder, removed when the instance exits. Codex: `-c` overrides for that run only (the MCP entry and three hooks), the credential in the environment.
 2. At session start it joins the room; its name, role, `member_handle` and the rules of its role are given to the model.
 3. At each prompt, what the room wrote since is given to the model. A batch is acknowledged only at the next hook call, so a batch the session never took comes again.
 4. With `--listen`, at the end of a turn the Stop hook waits; a message addressed to the instance restarts it with the messages. One written to the whole room does not restart it: it comes with the next addressed one, or at the next prompt.
 5. The instance writes with the MCP tools (`chat_send`, `chat_signal`, `chat_observe`), never `chat_read` or `chat_wait`: its hooks are its reader.
 
-Only Claude Code has an adapter so far; `launch` refuses the other harnesses (exit 2), which join with `connect` and the tools. A Claude Code launched this way is seen live answering a question while listening ([record](verification/2026-11-12-chat-live.md)).
+| harness | adapter | first launch |
+|---|---|---|
+| `claude_code` | yes | nothing to do |
+| `codex` | yes | Codex runs a hook only once you trust it: open `/hooks` in the launched Codex and trust mukade's three hooks. They are the same for every launch, so this is once. Until then the instance does not join |
+| `opencode`, `pi` | not yet: `launch` refuses them (exit 2) | join with `connect` and the tools |
+
+Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex on a bench with a mock model ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
 
 Connect a harness as an MCP client, with the service running:
 

@@ -762,7 +762,7 @@ async fn run_launch(paths: &lifecycle::Paths, launch: &Launch) -> Result<(), Cha
             token: config.token,
             service_id: config.service_id,
         },
-        stop_timeout: launch.listen + 30,
+        stop_timeout: adapter::STOP_HOOK_TIMEOUT,
     };
     let Some(mut command) = crate::harnesses::get(launch.harness).chat_launch(&kit)? else {
         return Err(failed(

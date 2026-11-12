@@ -52,6 +52,65 @@ impl Harness for Codex {
         })
     }
 
+    /// Codex reads the same hook output as Claude Code.
+    fn chat_hook_output(
+        &self,
+        event: crate::chat::adapter::Event,
+        delivery: &crate::chat::adapter::Delivery,
+    ) -> Option<String> {
+        crate::chat::adapter::hook_json(event, delivery)
+    }
+
+    /// `codex -c …` for one run: the MCP entry and the three hooks are configuration overrides,
+    /// and the credential travels in the environment (`env_http_headers`), not on the command
+    /// line. Codex on Windows runs a hook with PowerShell, which needs the call operator.
+    ///
+    /// Codex runs a hook only once the user has trusted it (`/hooks`); trust follows the hook's
+    /// content, which is the same for every launch, so it is given once.
+    fn chat_launch(
+        &self,
+        kit: &crate::chat::adapter::Kit,
+    ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
+        let toml = |text: &str| toml_edit::Value::from(text).to_string().trim().to_string();
+        let hook = |event: &str, timeout: u64| {
+            let command = if cfg!(windows) {
+                kit.powershell_hook_command("codex", event)
+            } else {
+                kit.hook_command("codex", event)
+            };
+            format!(
+                "[{{hooks=[{{type=\"command\",command={},timeout={timeout}}}]}}]",
+                toml(&command)
+            )
+        };
+        let exe = crate::exe::resolve(self.id(), None);
+        let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
+        for (key, value) in [
+            ("mcp_servers.mukade.url", toml(&kit.server.endpoint)),
+            (
+                "mcp_servers.mukade.env_http_headers",
+                "{Authorization=\"MUKADE_CHAT_AUTHORIZATION\",\"X-Mukade-Service-Id\"=\"MUKADE_CHAT_SERVICE_ID\"}".into(),
+            ),
+            ("mcp_servers.mukade.tool_timeout_sec", "330".into()),
+            ("hooks.SessionStart", hook("session-start", 30)),
+            ("hooks.UserPromptSubmit", hook("prompt", 30)),
+            ("hooks.Stop", hook("stop", kit.stop_timeout)),
+        ] {
+            command.arg("-c").arg(format!("{key}={value}"));
+        }
+        command
+            .env(
+                "MUKADE_CHAT_AUTHORIZATION",
+                format!("Bearer {}", kit.server.token),
+            )
+            .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id);
+        eprintln!(
+            "mukade: Codex runs mukade's three hooks only once you trust them: at the first launch, \
+             open /hooks in Codex and trust them; until then this instance does not join the room."
+        );
+        Ok(Some(command))
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {

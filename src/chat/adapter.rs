@@ -393,13 +393,46 @@ pub struct Kit {
     pub stop_timeout: u64,
 }
 
+/// The time a Stop hook is given: the longest listening plus a margin. It is the same for every
+/// launch, so a harness that trusts hooks by their content (Codex) trusts them once.
+pub const STOP_HOOK_TIMEOUT: u64 = MAX_LISTEN.as_secs() + 30;
+
+/// The hook output Claude Code and Codex both read: extra context at session start and at each
+/// prompt (`hookSpecificOutput.additionalContext`); at a stop, `decision: block` with the reason,
+/// which the harness takes as what to do next.
+pub fn hook_json(event: Event, delivery: &Delivery) -> Option<String> {
+    let value = match (event, delivery) {
+        (Event::Stop, Delivery::Continue(text)) => json!({"decision": "block", "reason": text}),
+        (Event::SessionStart | Event::Prompt, Delivery::Context(text)) => json!({
+            "hookSpecificOutput": {
+                "hookEventName": if event == Event::SessionStart { "SessionStart" } else { "UserPromptSubmit" },
+                "additionalContext": text,
+            }
+        }),
+        _ => return None,
+    };
+    Some(value.to_string())
+}
+
 impl Kit {
-    /// The command line a hook runs: `"<exe>" chat hook <harness> <event>`. The path uses forward
-    /// slashes, which every shell a harness may use on Windows reads as they are.
-    pub fn hook_command(&self, harness: &str, event: &str) -> String {
+    fn exe_path(&self) -> String {
         let exe = self.exe.to_string_lossy().replace('\\', "/");
-        let exe = exe.strip_prefix("//?/").unwrap_or(&exe);
-        format!("\"{exe}\" chat hook {harness} {event}")
+        exe.strip_prefix("//?/").unwrap_or(&exe).to_string()
+    }
+
+    /// The command line a hook runs in a POSIX shell, Git Bash included:
+    /// `"<exe>" chat hook <harness> <event>`. The path uses forward slashes.
+    pub fn hook_command(&self, harness: &str, event: &str) -> String {
+        format!("\"{}\" chat hook {harness} {event}", self.exe_path())
+    }
+
+    /// The same command for PowerShell, which needs the call operator before a quoted path:
+    /// `& '<exe>' chat hook <harness> <event>`.
+    pub fn powershell_hook_command(&self, harness: &str, event: &str) -> String {
+        format!(
+            "& '{}' chat hook {harness} {event}",
+            self.exe_path().replace('\'', "''")
+        )
     }
 
     /// Write one launch file, private like the service's own files.

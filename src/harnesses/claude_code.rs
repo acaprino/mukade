@@ -59,20 +59,7 @@ impl Harness for ClaudeCode {
         event: crate::chat::adapter::Event,
         delivery: &crate::chat::adapter::Delivery,
     ) -> Option<String> {
-        use crate::chat::adapter::{Delivery, Event};
-        let value = match (event, delivery) {
-            (Event::Stop, Delivery::Continue(text)) => {
-                serde_json::json!({"decision": "block", "reason": text})
-            }
-            (Event::SessionStart | Event::Prompt, Delivery::Context(text)) => serde_json::json!({
-                "hookSpecificOutput": {
-                    "hookEventName": if event == Event::SessionStart { "SessionStart" } else { "UserPromptSubmit" },
-                    "additionalContext": text,
-                }
-            }),
-            _ => return None,
-        };
-        Some(value.to_string())
+        crate::chat::adapter::hook_json(event, delivery)
     }
 
     /// A plugin for one session (`claude --plugin-dir`): its hooks call `mukade chat hook` and
