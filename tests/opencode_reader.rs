@@ -448,7 +448,8 @@ fn a_child_names_its_parent_in_either_form_and_a_fork_its_source() {
 }
 
 /// `at` is the parent's last message the fork holds: a `through` boundary names it, a `before`
-/// boundary names the message after it, which is not one the fork holds.
+/// boundary names the message after it, which is not one the fork holds. A document read without
+/// its store cannot say which message comes before it (`tests/fork_lineage.rs` reads one with it).
 #[test]
 fn a_fork_before_a_message_does_not_name_that_message_as_its_last() {
     use mukade::model::ParentKind;

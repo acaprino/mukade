@@ -43,6 +43,16 @@ pub fn read_file(path: &Path) -> Result<Session> {
 
 /// Read a decoded OpenCode document.
 pub fn parse(doc: &Value, source_path: Option<&Path>) -> Result<Session> {
+    parse_with(doc, source_path, &|_, _| None)
+}
+
+/// [`parse`], with the store at hand: `held_before(parent, message)` is the parent's message just
+/// before `message` ([`message_before`]), which a fork's `before` boundary ends at.
+fn parse_with(
+    doc: &Value,
+    source_path: Option<&Path>,
+    held_before: HeldBefore<'_>,
+) -> Result<Session> {
     // Each message is kept twice: the flattened form the reader interprets, and the record
     // exactly as the store wrote it (`Entry::raw`).
     let mut messages: Vec<(Value, Value)> = match doc {
@@ -78,8 +88,11 @@ pub fn parse(doc: &Value, source_path: Option<&Path>) -> Result<Session> {
     for (i, (m, raw)) in messages.iter().enumerate() {
         b.push(i, m, raw);
     }
-    b.finish(session, source_path)
+    b.finish(session, source_path, held_before)
 }
+
+/// The parent's message just before a message, by `(parent, message)`, where a store is at hand.
+type HeldBefore<'a> = &'a dyn Fn(&str, &str) -> Option<String>;
 
 /// A `session_message` row carries its payload under `data`; a `session export` message is already
 /// flattened. Normalise both into the flattened form.
@@ -326,7 +339,12 @@ impl Builder {
         }
     }
 
-    fn finish(self, session: Value, source_path: Option<&Path>) -> Result<Session> {
+    fn finish(
+        self,
+        session: Value,
+        source_path: Option<&Path>,
+        held_before: HeldBefore<'_>,
+    ) -> Result<Session> {
         let models = self.models.clone();
         let epoch = |ptr: &str| {
             session
@@ -335,7 +353,7 @@ impl Builder {
                 .and_then(chrono::DateTime::from_timestamp_millis)
                 .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         };
-        let (parent, parent_kind) = lineage(&session).unzip();
+        let (parent, parent_kind) = lineage(&session, held_before).unzip();
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::OpenCode,
@@ -363,7 +381,7 @@ impl Builder {
 /// `parentID` in an export (`info`), `parent_id` in a store row. A fork names its source in
 /// `fork.sessionID` (export) or `fork_session_id` (row), which OpenCode reads as a fork only with
 /// its boundary beside it.
-fn lineage(session: &Value) -> Option<(String, ParentKind)> {
+fn lineage(session: &Value, held_before: HeldBefore<'_>) -> Option<(String, ParentKind)> {
     let spawner = str_at(session, "/parentID").or_else(|| str_at(session, "/parent_id"));
     if let Some(parent) = spawner.filter(|p| !p.is_empty()) {
         return Some((parent, ParentKind::spawn()));
@@ -371,7 +389,8 @@ fn lineage(session: &Value) -> Option<(String, ParentKind)> {
     let bounded = |id: &str, boundary: &str| {
         let source = str_at(session, id).filter(|p| !p.is_empty())?;
         let boundary = session.pointer(boundary).filter(|b| !b.is_null())?;
-        Some((source, boundary_message(boundary)))
+        let at = fork_at(boundary, |message| held_before(&source, message));
+        Some((source, at))
     };
     bounded("/fork/sessionID", "/fork/boundary")
         .or_else(|| bounded("/fork_session_id", "/fork_boundary"))
@@ -380,8 +399,9 @@ fn lineage(session: &Value) -> Option<(String, ParentKind)> {
 
 /// The parent's last message a fork holds, from its boundary `{type: "before" | "through",
 /// messageID}` (an object, or the JSON text a store row keeps). `through` holds `messageID`;
-/// `before` ends at the message before it, which the boundary does not name, so it is `None`.
-fn boundary_message(boundary: &Value) -> Option<String> {
+/// `before` holds up to the parent's message before it, which the boundary does not name:
+/// `held_before(messageID)` finds it in the store, and without one it is `None`.
+fn fork_at(boundary: &Value, held_before: impl FnOnce(&str) -> Option<String>) -> Option<String> {
     let parsed;
     let boundary = match boundary {
         Value::String(text) => {
@@ -390,10 +410,25 @@ fn boundary_message(boundary: &Value) -> Option<String> {
         }
         other => other,
     };
-    if str_at(boundary, "/type").as_deref() != Some("through") {
-        return None;
+    let message = str_at(boundary, "/messageID").filter(|id| !id.is_empty())?;
+    match str_at(boundary, "/type").as_deref() {
+        Some("through") => Some(message),
+        Some("before") => held_before(&message),
+        _ => None,
     }
-    str_at(boundary, "/messageID").filter(|id| !id.is_empty())
+}
+
+/// The message of `parent` just before `message` in `seq` order: where a fork with a `before`
+/// boundary at `message` ends. OpenCode 2.2.5 copies the parent's messages through the greatest
+/// `seq` below the boundary's (`SessionProjector.projectFork`). `None` when the boundary message is
+/// not in the store or nothing comes before it.
+fn message_before(db: &rusqlite::Connection, parent: &str, message: &str) -> Option<String> {
+    db.query_row(
+        "SELECT id FROM session_message WHERE session_id = ?1 AND seq <          (SELECT seq FROM session_message WHERE session_id = ?1 AND id = ?2)          ORDER BY seq DESC LIMIT 1",
+        [parent, message],
+        |row| row.get(0),
+    )
+    .ok()
 }
 
 fn id_of(m: &Value, index: usize) -> String {
@@ -446,7 +481,19 @@ impl Reader for Opencode {
         let text = String::from_utf8_lossy(&output.stdout);
         let doc: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
             .context("opencode session export did not print an interchange document")?;
-        let mut session = parse(&doc, None)?;
+        // A `before` boundary's end is found in the store the export came from, opened once and
+        // only when a fork asks.
+        let store = std::cell::OnceCell::new();
+        let held_before = |parent: &str, message: &str| {
+            let db = store.get_or_init(|| {
+                roots
+                    .opencode_db
+                    .as_deref()
+                    .and_then(|path| open_read_only(path).ok())
+            });
+            message_before(db.as_ref()?, parent, message)
+        };
+        let mut session = parse_with(&doc, None, &held_before)?;
         session.meta.source_sha256 = Some(crate::sha256::sha256_hex(text.as_bytes()));
         Ok(session)
     }
@@ -646,12 +693,12 @@ fn session_rows(
         };
         let (parent, parent_kind) = match (spawner, fork_source, boundary) {
             (Some(parent), _, _) => (Some(parent), Some(ParentKind::spawn())),
-            (None, Some(source), Some(boundary)) => (
-                Some(source),
-                Some(ParentKind::Fork {
-                    at: boundary_message(&Value::String(boundary)),
-                }),
-            ),
+            (None, Some(source), Some(boundary)) => {
+                let at = fork_at(&Value::String(boundary), |message| {
+                    message_before(db, &source, message)
+                });
+                (Some(source), Some(ParentKind::Fork { at }))
+            }
             _ => (None, None),
         };
         Ok((

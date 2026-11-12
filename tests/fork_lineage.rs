@@ -417,6 +417,105 @@ fn an_opencode_fork_in_the_listing_names_the_message_it_ends_at() {
     );
 }
 
+/// An OpenCode store whose `root` session has three messages, in `seq` order `msg_b`, `msg_a`,
+/// `msg_c` (not the order of their ids), another session's message between them, and forks of
+/// `root` with a `before` boundary at each message, at one not in the store, and through one.
+fn opencode_before_forks(db_path: &Path) {
+    let db = rusqlite::Connection::open(db_path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2 (
+             id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT, fork_boundary TEXT
+         );
+         CREATE TABLE session_message (
+             id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, data TEXT
+         );
+         INSERT INTO session_v2 VALUES ('root', 'Root', '/work', 1, NULL, NULL, NULL, NULL);
+         INSERT INTO session_v2 VALUES ('other', 'Other', '/work', 2, NULL, NULL, NULL, NULL);
+         INSERT INTO session_message VALUES ('msg_b', 'root', 'user', 1, '{}');
+         INSERT INTO session_message VALUES ('msg_x', 'other', 'user', 2, '{}');
+         INSERT INTO session_message VALUES ('msg_a', 'root', 'assistant', 3, '{}');
+         INSERT INTO session_message VALUES ('msg_c', 'root', 'user', 5, '{}');
+         INSERT INTO session_v2 VALUES ('before_c', 'F', '/work', 3, NULL, NULL, 'root',
+             '{\"type\":\"before\",\"messageID\":\"msg_c\"}');
+         INSERT INTO session_v2 VALUES ('before_a', 'F', '/work', 4, NULL, NULL, 'root',
+             '{\"type\":\"before\",\"messageID\":\"msg_a\"}');
+         INSERT INTO session_v2 VALUES ('before_b', 'F', '/work', 5, NULL, NULL, 'root',
+             '{\"type\":\"before\",\"messageID\":\"msg_b\"}');
+         INSERT INTO session_v2 VALUES ('before_gone', 'F', '/work', 6, NULL, NULL, 'root',
+             '{\"type\":\"before\",\"messageID\":\"msg_gone\"}');
+         INSERT INTO session_v2 VALUES ('through_a', 'F', '/work', 7, NULL, NULL, 'root',
+             '{\"type\":\"through\",\"messageID\":\"msg_a\"}');",
+    )
+    .unwrap();
+}
+
+/// A `before` boundary names the message after the fork's last: the fork ends at the parent's
+/// message just before it in `seq` order, as OpenCode 2.2.5 copies it. Before the first message,
+/// or at a message the store does not hold, nothing is named.
+#[test]
+fn an_opencode_fork_before_a_message_ends_at_the_parents_message_before_it() {
+    use mukade::reader::opencode::Opencode;
+    let scratch = support::scratch(HarnessId::OpenCode, "opencode-fork-before");
+    let roots = support::roots(&scratch);
+    opencode_before_forks(roots.opencode_db.as_deref().unwrap());
+    let listed = Opencode.list_all(&roots).unwrap();
+    let at = |id: &str| match &by_id(&listed, id).parent_kind {
+        Some(ParentKind::Fork { at }) => at.clone(),
+        other => panic!("{id} is not a fork: {other:?}"),
+    };
+    assert_eq!(at("before_c").as_deref(), Some("msg_a"));
+    assert_eq!(at("before_a").as_deref(), Some("msg_b"));
+    assert_eq!(at("before_b"), None);
+    assert_eq!(at("before_gone"), None);
+    assert_eq!(at("through_a").as_deref(), Some("msg_a"));
+}
+
+/// The same when the fork is read through `opencode session export`: its `info.fork.boundary`
+/// is looked up in the store the export came from, and the dump says where the fork ends.
+#[test]
+fn an_exported_opencode_fork_before_a_message_ends_at_the_parents_message_before_it() {
+    let scratch = support::scratch(HarnessId::OpenCode, "opencode-fork-before-export");
+    let database = scratch.join("opencode.db");
+    opencode_before_forks(&database);
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("opencode")
+        .join("source")
+        .join("session-export.json");
+    let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+    doc["info"]["id"] = "before_c".into();
+    doc["info"]["fork"] = json!({"sessionID": "root",
+        "boundary": {"type": "before", "messageID": "msg_c"}});
+    let export = scratch.join("export.json");
+    std::fs::write(&export, doc.to_string()).unwrap();
+    let opencode = support::launcher(
+        &scratch.join("bin"),
+        "opencode",
+        &format!("type \"{}\"\r\nexit /b 0", export.display()),
+        &format!("cat \"{}\"", export.display()),
+    );
+    let (code, stdout, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &[
+            "dump",
+            "opencode",
+            "before_c",
+            "--root",
+            database.to_str().unwrap(),
+        ],
+        &[("MUKADE_OPENCODE_EXE", opencode.to_str().unwrap())],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    let dumped: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(dumped["meta"]["parent"], "root");
+    assert_eq!(
+        dumped["meta"]["parent_kind"],
+        json!({"kind": "fork", "at": "msg_a"})
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Pi: `parentSession` is a file path; the parent is the id in that file's header
 
