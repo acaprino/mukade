@@ -1,14 +1,28 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-#[tauri::command]
-fn app_info() -> serde_json::Value {
-    serde_json::json!({ "name": "mukade", "version": env!("CARGO_PKG_VERSION") })
-}
+mod commands;
+mod error;
+mod locations;
+mod sessions;
+mod state;
+
+#[cfg(test)]
+mod scratch;
+#[cfg(test)]
+mod testing;
 
 fn main() {
+    let state = state::AppState::new(locations::standard_roots());
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![app_info])
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![
+            commands::startup,
+            commands::installations,
+            commands::sessions,
+            commands::transcript,
+            commands::raw,
+        ])
         .run(tauri::generate_context!())
         .expect("the Mukade window failed to start");
 }
