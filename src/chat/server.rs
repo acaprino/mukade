@@ -628,15 +628,14 @@ async fn boundary(State(service): State<ChatService>, request: Request, next: Ne
     {
         return (StatusCode::CONFLICT, "Service identity mismatch").into_response();
     }
-    if let Some(version) = headers.get("mcp-protocol-version") {
-        if !single("mcp-protocol-version")
+    if let Some(version) = headers.get("mcp-protocol-version")
+        && (!single("mcp-protocol-version")
             || !matches!(
                 version.to_str().unwrap_or(""),
                 "2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25"
-            )
-        {
-            return (StatusCode::BAD_REQUEST, "Unsupported MCP protocol version").into_response();
-        }
+            ))
+    {
+        return (StatusCode::BAD_REQUEST, "Unsupported MCP protocol version").into_response();
     }
     let http_permit = match service.0.http.clone().try_acquire_owned() {
         Ok(permit) => permit,

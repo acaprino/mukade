@@ -247,95 +247,6 @@ struct Mutation<'a> {
     hash: String,
 }
 
-#[cfg(test)]
-mod phase_tests {
-    use super::*;
-    #[test]
-    fn native_mutation_replay_precedes_lookup_and_finalize_rechecks_generation() {
-        let base = std::env::var_os("MUKADE_TEST_SCRATCH_ROOT")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        let dir = base.join(format!("native-{}", Uuid::new_v4().simple()));
-        let home = dir.join("home");
-        let id = "01a17e17-9f07-743d-8072-8b3b13d65ab5";
-        let source = home
-            .join("sessions/project")
-            .join(format!("source_{id}.jsonl"));
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        let fixture=Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl");
-        std::fs::copy(&fixture, &source).unwrap();
-        let roots = StoreRoots {
-            pi_agent_dir: Some(home),
-            ..Default::default()
-        };
-        let mut bus = Bus::open_in(&dir.join("bus")).unwrap();
-        let request = |mut args: Value| {
-            args["request_id"] = json!(Uuid::new_v4().to_string());
-            args
-        };
-        let room = bus
-            .chat_call("open", request(json!({"name":"native"})), &roots)
-            .unwrap();
-        let join = request(
-            json!({"room_id":room["room_id"],"harness":"pi","role":"peer","session_id":id}),
-        );
-        let mut member = bus.chat_call("join", join.clone(), &roots).unwrap();
-        for (op, args) in [
-            ("join", join),
-            (
-                "bind",
-                request(
-                    json!({"room_id":room["room_id"],"member_handle":member["member_handle"],"harness":"pi","session_id":id}),
-                ),
-            ),
-            (
-                "rejoin",
-                request(
-                    json!({"room_id":room["room_id"],"member_id":member["member_id"],"session_id":id}),
-                ),
-            ),
-        ] {
-            let value = bus.chat_call(op, args.clone(), &roots).unwrap();
-            std::fs::remove_file(&source).unwrap();
-            let Prepared::Replay(replayed) = prepare(&mut bus, op, args).unwrap() else {
-                panic!("Committed request must replay before native discovery")
-            };
-            assert_eq!(replayed, value);
-            std::fs::copy(&fixture, &source).unwrap();
-            if op == "rejoin" {
-                member = value;
-            }
-        }
-        let bind = request(
-            json!({"room_id":room["room_id"],"member_handle":member["member_handle"],"harness":"pi","session_id":id}),
-        );
-        let Prepared::Native(work) = prepare(&mut bus, "bind", bind).unwrap() else {
-            panic!()
-        };
-        let loaded = work.load(&roots).unwrap();
-        bus.chat_call(
-            "unbind",
-            request(json!({"room_id":room["room_id"],"member_handle":member["member_handle"]})),
-            &roots,
-        )
-        .unwrap();
-        assert_eq!(finish(&mut bus, loaded).unwrap_err().code, "stream_busy");
-        let bind = request(
-            json!({"room_id":room["room_id"],"member_handle":member["member_handle"],"harness":"pi","session_id":id}),
-        );
-        let Prepared::Native(a) = prepare(&mut bus, "bind", bind.clone()).unwrap() else {
-            panic!()
-        };
-        let Prepared::Native(b) = prepare(&mut bus, "bind", bind).unwrap() else {
-            panic!()
-        };
-        let a = a.load(&roots).unwrap();
-        let b = b.load(&roots).unwrap();
-        let committed = finish(&mut bus, a).unwrap();
-        assert_eq!(finish(&mut bus, b).unwrap(), committed);
-    }
-}
-
 struct Authority {
     room: Option<Room>,
     member: Option<Member>,
@@ -962,5 +873,94 @@ fn storage_low() -> ChatError {
     ChatError {
         retryable: true,
         ..ChatError::new("storage_low", "The bus folder has less than 1 GiB free")
+    }
+}
+
+#[cfg(test)]
+mod phase_tests {
+    use super::*;
+    #[test]
+    fn native_mutation_replay_precedes_lookup_and_finalize_rechecks_generation() {
+        let base = std::env::var_os("MUKADE_TEST_SCRATCH_ROOT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let dir = base.join(format!("native-{}", Uuid::new_v4().simple()));
+        let home = dir.join("home");
+        let id = "01a17e17-9f07-743d-8072-8b3b13d65ab5";
+        let source = home
+            .join("sessions/project")
+            .join(format!("source_{id}.jsonl"));
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        let fixture=Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl");
+        std::fs::copy(&fixture, &source).unwrap();
+        let roots = StoreRoots {
+            pi_agent_dir: Some(home),
+            ..Default::default()
+        };
+        let mut bus = Bus::open_in(&dir.join("bus")).unwrap();
+        let request = |mut args: Value| {
+            args["request_id"] = json!(Uuid::new_v4().to_string());
+            args
+        };
+        let room = bus
+            .chat_call("open", request(json!({"name":"native"})), &roots)
+            .unwrap();
+        let join = request(
+            json!({"room_id":room["room_id"],"harness":"pi","role":"peer","session_id":id}),
+        );
+        let mut member = bus.chat_call("join", join.clone(), &roots).unwrap();
+        for (op, args) in [
+            ("join", join),
+            (
+                "bind",
+                request(
+                    json!({"room_id":room["room_id"],"member_handle":member["member_handle"],"harness":"pi","session_id":id}),
+                ),
+            ),
+            (
+                "rejoin",
+                request(
+                    json!({"room_id":room["room_id"],"member_id":member["member_id"],"session_id":id}),
+                ),
+            ),
+        ] {
+            let value = bus.chat_call(op, args.clone(), &roots).unwrap();
+            std::fs::remove_file(&source).unwrap();
+            let Prepared::Replay(replayed) = prepare(&mut bus, op, args).unwrap() else {
+                panic!("Committed request must replay before native discovery")
+            };
+            assert_eq!(replayed, value);
+            std::fs::copy(&fixture, &source).unwrap();
+            if op == "rejoin" {
+                member = value;
+            }
+        }
+        let bind = request(
+            json!({"room_id":room["room_id"],"member_handle":member["member_handle"],"harness":"pi","session_id":id}),
+        );
+        let Prepared::Native(work) = prepare(&mut bus, "bind", bind).unwrap() else {
+            panic!()
+        };
+        let loaded = work.load(&roots).unwrap();
+        bus.chat_call(
+            "unbind",
+            request(json!({"room_id":room["room_id"],"member_handle":member["member_handle"]})),
+            &roots,
+        )
+        .unwrap();
+        assert_eq!(finish(&mut bus, loaded).unwrap_err().code, "stream_busy");
+        let bind = request(
+            json!({"room_id":room["room_id"],"member_handle":member["member_handle"],"harness":"pi","session_id":id}),
+        );
+        let Prepared::Native(a) = prepare(&mut bus, "bind", bind.clone()).unwrap() else {
+            panic!()
+        };
+        let Prepared::Native(b) = prepare(&mut bus, "bind", bind).unwrap() else {
+            panic!()
+        };
+        let a = a.load(&roots).unwrap();
+        let b = b.load(&roots).unwrap();
+        let committed = finish(&mut bus, a).unwrap();
+        assert_eq!(finish(&mut bus, b).unwrap(), committed);
     }
 }

@@ -161,23 +161,21 @@ impl Bus {
                 }
             }
         }
-        if first {
-            if let Some(n) = opts.last_turns {
-                let prompts: Vec<usize> = items
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, v)| v.kind == ViewKind::Prompt)
-                    .map(|(i, _)| i)
-                    .collect();
-                let start = prompts
-                    .get(prompts.len().saturating_sub(n))
-                    .copied()
-                    .unwrap_or(0);
-                for v in &items[..start] {
-                    seen.insert(v.id.clone(), v.fingerprint.clone());
-                }
-                output.left_out = start;
+        if first && let Some(n) = opts.last_turns {
+            let prompts: Vec<usize> = items
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.kind == ViewKind::Prompt)
+                .map(|(i, _)| i)
+                .collect();
+            let start = prompts
+                .get(prompts.len().saturating_sub(n))
+                .copied()
+                .unwrap_or(0);
+            for v in &items[..start] {
+                seen.insert(v.id.clone(), v.fingerprint.clone());
             }
+            output.left_out = start;
         }
         let pending: Vec<_> = items
             .iter()
@@ -193,19 +191,19 @@ impl Bus {
                 }),
             })
             .collect();
-        if !first && pending.is_empty() {
-            if let Ok(candidates) = Bus::candidates(binding.harness, binding.cwd.as_deref(), roots)
+        if !first
+            && pending.is_empty()
+            && let Ok(candidates) = Bus::candidates(binding.harness, binding.cwd.as_deref(), roots)
+        {
+            let updated = candidates
+                .iter()
+                .find(|c| c.id == binding.id)
+                .and_then(|c| c.updated.as_ref());
+            if candidates
+                .iter()
+                .any(|c| c.id != binding.id && c.updated.as_ref() > updated)
             {
-                let updated = candidates
-                    .iter()
-                    .find(|c| c.id == binding.id)
-                    .and_then(|c| c.updated.as_ref());
-                if candidates
-                    .iter()
-                    .any(|c| c.id != binding.id && c.updated.as_ref() > updated)
-                {
-                    output.notices.push("this session has stopped growing; a newer one exists in the same folder (binding unchanged)".into());
-                }
+                output.notices.push("this session has stopped growing; a newer one exists in the same folder (binding unchanged)".into());
             }
         }
         let mut used = 0usize;

@@ -170,13 +170,13 @@ pub(crate) fn ensure_outside_stores(
             .or_else(|| crate::catalog::store_default_with(h, &vars));
         if let Some(root) = root {
             let root = crate::harnesses::get(h).store_folder(&root);
-            if let Ok(native) = resolve_path(&root) {
-                if resolved.starts_with(&native) {
-                    return Err(BusError::Refused(format!(
-                        "destination {} is inside the {h} native store; choose another folder",
-                        path.display()
-                    )));
-                }
+            if let Ok(native) = resolve_path(&root)
+                && resolved.starts_with(&native)
+            {
+                return Err(BusError::Refused(format!(
+                    "destination {} is inside the {h} native store; choose another folder",
+                    path.display()
+                )));
             }
         }
     }

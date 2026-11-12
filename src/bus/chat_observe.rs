@@ -296,7 +296,8 @@ pub(super) fn call(bus: &mut Bus, args: &Value, roots: &StoreRoots) -> Result<Va
 /// Owned preparation permits native source I/O without borrowing the shared database.
 pub(crate) enum Prepared {
     Cached(Value),
-    Read(ReadWork),
+    /// Boxed: the work carries the whole cursor, the cached value is small.
+    Read(Box<ReadWork>),
 }
 pub(crate) struct ReadWork {
     args: Value,
@@ -477,17 +478,17 @@ fn prepare_read(bus: &mut Bus, args: &Value) -> Result<Prepared> {
     let c = context(&bus.conn, room, handle, target)?;
     let old = cursor(&bus.conn, &c)?;
     let pending = pending(&bus.conn, &c)?;
-    if let Some(batch) = &pending {
-        if let Some(cached) = bus.observation_cache.get(&batch.id) {
-            return Ok(Prepared::Cached(cached));
-        }
+    if let Some(batch) = &pending
+        && let Some(cached) = bus.observation_cache.get(&batch.id)
+    {
+        return Ok(Prepared::Cached(cached));
     }
-    Ok(Prepared::Read(ReadWork {
+    Ok(Prepared::Read(Box::new(ReadWork {
         args: args.clone(),
         c,
         old,
         pending,
-    }))
+    })))
 }
 fn stage_loaded(bus: &mut Bus, loaded: Loaded) -> Result<Value> {
     let Loaded {
@@ -598,25 +599,25 @@ fn stage_loaded(bus: &mut Bus, loaded: Loaded) -> Result<Value> {
         ));
     }
     let mut skipped_items = Vec::new();
-    if !old.exists {
-        if let Some(turns) = turns {
-            let prompts: Vec<usize> = items
-                .iter()
-                .enumerate()
-                .filter(|(_, v)| v.kind == ViewKind::Prompt)
-                .map(|(i, _)| i)
-                .collect();
-            if prompts.is_empty() {
-                return Err(ChatError::new(
-                    "turn_boundaries_unknown",
-                    "No positively identified human prompt defines a turn boundary",
-                ));
-            }
-            let start = prompts[prompts.len().saturating_sub(turns as usize)];
-            for item in &items[..start] {
-                skipped_items.push(pick(item, &seen));
-                seen.insert(item.id.clone(), item.fingerprint.clone());
-            }
+    if !old.exists
+        && let Some(turns) = turns
+    {
+        let prompts: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.kind == ViewKind::Prompt)
+            .map(|(i, _)| i)
+            .collect();
+        if prompts.is_empty() {
+            return Err(ChatError::new(
+                "turn_boundaries_unknown",
+                "No positively identified human prompt defines a turn boundary",
+            ));
+        }
+        let start = prompts[prompts.len().saturating_sub(turns as usize)];
+        for item in &items[..start] {
+            skipped_items.push(pick(item, &seen));
+            seen.insert(item.id.clone(), item.fingerprint.clone());
         }
     }
     let changed: Vec<&ViewItem> = items

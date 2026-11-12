@@ -272,13 +272,13 @@ impl Bus {
         if !valid(harness, 24) {
             return Err(BusError::Refused("invalid harness label".into()));
         }
-        if let Some(name) = &req.name {
-            if !valid(name, 32) || name == "all" {
-                return Err(BusError::Refused(
-                    "invalid member name (1-32 lowercase letters, digits, '_' or '-', never 'all')"
-                        .into(),
-                ));
-            }
+        if let Some(name) = &req.name
+            && (!valid(name, 32) || name == "all")
+        {
+            return Err(BusError::Refused(
+                "invalid member name (1-32 lowercase letters, digits, '_' or '-', never 'all')"
+                    .into(),
+            ));
         }
         if req.name.is_some() && req.rejoin.is_some() {
             return Err(BusError::Refused("choose either a name or rejoin".into()));

@@ -138,23 +138,22 @@ pub fn find(text: &str) -> Vec<Finding> {
                 .char_indices()
                 .find(|(_, c)| c.is_whitespace() || "/?#".contains(*c))
                 .map_or(line.len(), |(n, _)| at + n);
-            if let Some(mark) = line[at..end].rfind('@') {
-                if line[at..at + mark].contains(':') {
-                    add(SecretKind::UrlCredentials, at, at + mark);
-                }
+            if let Some(mark) = line[at..end].rfind('@')
+                && line[at..at + mark].contains(':')
+            {
+                add(SecretKind::UrlCredentials, at, at + mark);
             }
         }
-        if let Some((key, val)) = line.split_once('=') {
-            if key.len() >= 3
-                && key.as_bytes()[0].is_ascii_uppercase()
-                && key
-                    .bytes()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
-                && val.len() >= 8
-                && !val.chars().any(char::is_whitespace)
-            {
-                add(SecretKind::EnvLine, key.len() + 1, line.len());
-            }
+        if let Some((key, val)) = line.split_once('=')
+            && key.len() >= 3
+            && key.as_bytes()[0].is_ascii_uppercase()
+            && key
+                .bytes()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+            && val.len() >= 8
+            && !val.chars().any(char::is_whitespace)
+        {
+            add(SecretKind::EnvLine, key.len() + 1, line.len());
         }
         // JWTs are three nonempty base64url segments; punctuation outside the token is ignored.
         let mut at = 0;
@@ -214,11 +213,12 @@ pub fn find(text: &str) -> Vec<Finding> {
     out.sort_by_key(|f| (f.line, f.start, std::cmp::Reverse(f.end)));
     let mut merged: Vec<Finding> = Vec::new();
     for f in out {
-        if let Some(last) = merged.last_mut() {
-            if last.line == f.line && f.start < last.end {
-                last.end = last.end.max(f.end);
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && last.line == f.line
+            && f.start < last.end
+        {
+            last.end = last.end.max(f.end);
+            continue;
         }
         merged.push(f);
     }

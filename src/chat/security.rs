@@ -78,10 +78,10 @@ pub fn create_private_directory(path: &Path) -> io::Result<()> {
             platform::validate(&f, true, true)
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = path.parent() {
-                if !parent.exists() {
-                    create_private_directory(parent)?;
-                }
+            if let Some(parent) = path.parent()
+                && !parent.exists()
+            {
+                create_private_directory(parent)?;
             }
             match platform::mkdir(path) {
                 Ok(()) => {}

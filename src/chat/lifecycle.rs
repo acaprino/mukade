@@ -181,10 +181,10 @@ impl Owner {
         })
     }
     pub fn clear_instance(&self, id: &str) -> Result<(), ChatError> {
-        if let Some(state) = read_state(&self.paths)? {
-            if state.instance_id == id {
-                fs::remove_file(self.paths.state_path()).map_err(storage)?;
-            }
+        if let Some(state) = read_state(&self.paths)?
+            && state.instance_id == id
+        {
+            fs::remove_file(self.paths.state_path()).map_err(storage)?;
         }
         Ok(())
     }
@@ -331,19 +331,17 @@ pub async fn start_with_executable(
         if owner_active(paths)? {
             if let Some(state) = read_state(paths)? {
                 check_port(&state, port)?;
-                if let Ok(config) = client_config(paths) {
-                    if let Ok(Ok(health)) = tokio::time::timeout(
+                if let Ok(config) = client_config(paths)
+                    && let Ok(Ok(health)) = tokio::time::timeout(
                         deadline.saturating_duration_since(Instant::now()),
                         config.health(),
                     )
                     .await
-                    {
-                        if health.status == "running" {
-                            let mut v = serde_json::to_value(state).unwrap();
-                            v["status"] = json!("running");
-                            return Ok(v);
-                        }
-                    }
+                    && health.status == "running"
+                {
+                    let mut v = serde_json::to_value(state).unwrap();
+                    v["status"] = json!("running");
+                    return Ok(v);
                 }
             }
             if Instant::now() >= deadline {
@@ -445,10 +443,10 @@ pub async fn start_with_executable(
                 let _ = child.kill();
                 let _ = child.wait();
                 // The only PID ever terminated is our still-owned Child handle.
-                if !owner_active(paths).unwrap_or(true) {
-                    if let Ok(owner) = Owner::acquire(paths) {
-                        let _ = owner.clear_instance(&spawn);
-                    }
+                if !owner_active(paths).unwrap_or(true)
+                    && let Ok(owner) = Owner::acquire(paths)
+                {
+                    let _ = owner.clear_instance(&spawn);
                 }
                 if owner_active(paths).unwrap_or(false) && Instant::now() < deadline {
                     continue;
