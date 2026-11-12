@@ -986,6 +986,7 @@ fn write_details_for(dest: &Location, cwd: Option<&str>) -> WriteDetails {
     let configured = dest::configured_model_in(dest.harness, &dest.roots);
     let project_id = cwd.and_then(|cwd| {
         mukade::harnesses::get(dest.harness)
+            .destination()?
             .project_id(&exe, cwd, &dest.roots, mukade::cache::dir().as_deref())
             .ok()
             .flatten()

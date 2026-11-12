@@ -519,7 +519,7 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         "write" => {
             no_more(operands, 1)?;
-            crate::harnesses::require_writer(crate::harnesses::get(harness))?;
+            crate::harnesses::destination(harness)?;
             let path = operands.first().context("write needs a document file")?;
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
@@ -541,9 +541,7 @@ pub fn run(args: &[String]) -> Result<()> {
             no_more(operands, 2)?;
             let source_harness: HarnessId = operands.first().context("document needs a source harness")?.parse()?;
             let dest = harness;
-            let adapter = crate::harnesses::get(dest);
-            crate::harnesses::require_writer(adapter)?;
-            let Some(interchange) = adapter.interchange_document() else {
+            let Some(interchange) = crate::harnesses::destination(dest)?.interchange_document() else {
                 anyhow::bail!("document currently supports only an OpenCode destination");
             };
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
@@ -594,7 +592,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 .get(1)
                 .context("hop needs a destination harness")?
                 .parse()?;
-            crate::harnesses::require_writer(crate::harnesses::get(dest))?;
+            crate::harnesses::destination(dest)?;
             flags.check_write_flags(dest)?;
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
@@ -983,11 +981,11 @@ impl Flags {
         })
     }
 
-    /// The destination's own rules ([`crate::harnesses::Harness::validate_write`]) on the reserved
+    /// The destination's own rules ([`crate::harnesses::Destination::validate_write`]) on the reserved
     /// id, the agent and the metadata the flags ask for, before a store is read or a process
     /// started. The metadata file is read later: here only its presence counts.
     fn check_write_flags(&self, harness: HarnessId) -> Result<()> {
-        crate::harnesses::get(harness).validate_write(&WriteOpts {
+        crate::harnesses::destination(harness)?.validate_write(&WriteOpts {
             dest_id: self.dest_id.clone(),
             dest_agent: self.dest_agent.clone(),
             metadata: self
@@ -1309,7 +1307,12 @@ fn destination_project_id(
     cwd: &str,
     roots: &StoreRoots,
 ) -> Result<Option<String>> {
-    crate::harnesses::get(harness).project_id(exe, cwd, roots, crate::cache::dir().as_deref())
+    crate::harnesses::destination(harness)?.project_id(
+        exe,
+        cwd,
+        roots,
+        crate::cache::dir().as_deref(),
+    )
 }
 
 #[cfg(test)]
@@ -1324,7 +1327,8 @@ mod tests {
         roots: &StoreRoots,
         cache: Option<&std::path::Path>,
     ) -> Option<String> {
-        crate::harnesses::get(HarnessId::OpenCode)
+        crate::harnesses::destination(HarnessId::OpenCode)
+            .unwrap()
             .project_id(exe, cwd, roots, cache)
             .unwrap()
     }

@@ -64,7 +64,7 @@ impl Writer for Opencode {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
-        crate::harnesses::get(HarnessId::OpenCode).validate_write(opts)?;
+        crate::harnesses::destination(HarnessId::OpenCode)?.validate_write(opts)?;
         let id = match opts.dest_id.as_deref() {
             Some(id) => {
                 validate_session_id(id)?;

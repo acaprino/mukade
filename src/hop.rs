@@ -307,8 +307,8 @@ pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopErr
 
 /// Write a session we hold into a destination.
 pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
-    let adapter = crate::harnesses::get(dest);
-    let dest_writer = crate::harnesses::require_writer(adapter)?;
+    let destination = crate::harnesses::destination(dest)?;
+    let dest_writer = destination.writer();
     let write_opts = WriteOpts {
         roots: opts.roots.clone(),
         cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
@@ -333,7 +333,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         native_budget: opts.native_budget.clone(),
     };
     // What the destination does not take is refused before anything is planned.
-    adapter
+    destination
         .validate_write(&write_opts)
         .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
     if opts.compaction == "native" && opts.native_budget.is_none() {
@@ -432,7 +432,7 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
 /// destination written with `destination`. Two installations of one harness (an OpenCode and a
 /// portable JanuraCode, say) cannot share one [`StoreRoots`].
 pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
-    crate::harnesses::require_writer(crate::harnesses::get(req.dest))?;
+    crate::harnesses::destination(req.dest)?;
     let source = export(&req.source, &req.roots)?;
     let facts = SourceFacts::of(&source);
     let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
@@ -504,7 +504,7 @@ pub fn hop_session(
     compaction: &Compaction,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
-    crate::harnesses::require_writer(crate::harnesses::get(dest))?;
+    crate::harnesses::destination(dest)?;
     let (selection, summary) = compact(source, compaction, &opts.roots)?;
     let opts = ImportOpts {
         native_budget: match compaction {

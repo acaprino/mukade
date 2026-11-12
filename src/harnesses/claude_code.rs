@@ -1,6 +1,6 @@
 //! Claude Code: sessions under `CLAUDE_CONFIG_DIR/projects/`.
 
-use super::{Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
@@ -22,8 +22,8 @@ impl Harness for ClaudeCode {
         &crate::reader::claude_code::ClaudeCode
     }
 
-    fn writer(&self) -> Option<&'static dyn Writer> {
-        Some(&crate::writer::claude_code::ClaudeCode)
+    fn destination(&self) -> Option<&dyn Destination> {
+        Some(self)
     }
 
     fn read_file(&self, path: &Path) -> anyhow::Result<Session> {
@@ -41,25 +41,6 @@ impl Harness for ClaudeCode {
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
         let variable = crate::catalog::store_env(self.id());
         super::set_store_env(command, variable, self.store_root(roots));
-    }
-
-    fn destination_protocol(&self) -> Option<Protocol> {
-        Some(Protocol::AnthropicMessages)
-    }
-
-    /// A signature is written as `thinking`, an encrypted payload as `redacted_thinking`. A Chat
-    /// envelope is not kept: only one with a scalar conversion fits.
-    fn payload_has_place(&self, opaque: &Opaque) -> bool {
-        crate::policy::scalar_chat_payload(opaque)
-            && (opaque.signature.is_some() || opaque.encrypted.is_some())
-    }
-
-    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
-        super::validate_file_write(self, opts)
-    }
-
-    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
-        None
     }
 
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
@@ -129,6 +110,31 @@ impl Harness for ClaudeCode {
             usage: Some(usage.to_string()),
             fork: None,
         })
+    }
+}
+
+impl Destination for ClaudeCode {
+    fn writer(&self) -> &'static dyn Writer {
+        &crate::writer::claude_code::ClaudeCode
+    }
+
+    fn protocol(&self) -> Option<Protocol> {
+        Some(Protocol::AnthropicMessages)
+    }
+
+    /// A signature is written as `thinking`, an encrypted payload as `redacted_thinking`. A Chat
+    /// envelope is not kept: only one with a scalar conversion fits.
+    fn payload_has_place(&self, opaque: &Opaque) -> bool {
+        crate::policy::scalar_chat_payload(opaque)
+            && (opaque.signature.is_some() || opaque.encrypted.is_some())
+    }
+
+    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
+        super::validate_file_write(self, opts)
+    }
+
+    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
+        None
     }
 
     fn offered(&self) -> ToolSet {

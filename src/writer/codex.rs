@@ -38,7 +38,7 @@ impl Writer for Codex {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
-        crate::harnesses::get(HarnessId::Codex).validate_write(opts)?;
+        crate::harnesses::destination(HarnessId::Codex)?.validate_write(opts)?;
         let root = opts
             .roots
             .codex_home

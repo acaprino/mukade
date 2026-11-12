@@ -94,7 +94,10 @@ pub fn destinations(locations: &[Location], source: usize) -> Vec<Location> {
         .iter()
         .enumerate()
         .filter(|(index, location)| {
-            *index != source && mukade::harnesses::get(location.harness).writer().is_some()
+            *index != source
+                && mukade::harnesses::get(location.harness)
+                    .destination()
+                    .is_some()
         })
         .map(|(_, location)| location.clone())
         .collect()

@@ -232,6 +232,15 @@ fn carry_attachments(
     carried
 }
 
+/// Whether `dest`'s writer flattens a result's structured blocks to text
+/// ([`Destination::flattens_result_blocks`](crate::harnesses::Destination::flattens_result_blocks)).
+/// A harness that is no destination flattens nothing.
+fn flattens_result_blocks(dest: HarnessId) -> bool {
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.flattens_result_blocks())
+}
+
 /// A result's structured blocks as a destination that keeps them (Pi, OpenCode) holds them: an
 /// image in its own shape, text as text, and anything else dropped and counted. Claude Code and
 /// Codex results are flattened to text by their writers, counted where the plan takes them.
@@ -244,7 +253,7 @@ fn carry_result_content(
     let ResultContent::Blocks(blocks) = content else {
         return content.clone();
     };
-    if source == dest || crate::harnesses::get(dest).flattens_result_blocks() {
+    if source == dest || flattens_result_blocks(dest) {
         return content.clone();
     }
     let mut carried = Vec::new();
@@ -344,7 +353,9 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 end,
             } => {
                 if matches!(end, StepEnd::Aborted | StepEnd::Error)
-                    && crate::harnesses::get(dest).failed_steps_are_replies()
+                    && crate::harnesses::get(dest)
+                        .destination()
+                        .is_some_and(|destination| destination.failed_steps_are_replies())
                 {
                     counts.aborted_steps_as_replies += 1;
                 }
@@ -363,15 +374,15 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         // the block would be written without it and refused.
                         ReasoningPlan::Native(native)
                             if native.opaque.as_ref().is_some_and(|opaque| {
-                                crate::harnesses::get(dest).payload_fits(
-                                    opaque,
-                                    opts.model_provider.as_deref().or_else(|| {
-                                        session
-                                            .meta
-                                            .models
-                                            .first()
-                                            .and_then(|m| m.provider.as_deref())
-                                    }),
+                                let provider = opts.model_provider.as_deref().or_else(|| {
+                                    session
+                                        .meta
+                                        .models
+                                        .first()
+                                        .and_then(|m| m.provider.as_deref())
+                                });
+                                crate::harnesses::get(dest).destination().is_some_and(
+                                    |destination| destination.payload_fits(opaque, provider),
                                 )
                             }) =>
                         {
@@ -452,7 +463,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     }
                     step_answered.push(result.call_id.clone());
                     if last_step_native.contains(&result.call_id) {
-                        if crate::harnesses::get(dest).flattens_result_blocks()
+                        if flattens_result_blocks(dest)
                             && let ResultContent::Blocks(blocks) = &result.content
                         {
                             counts.dropped_result_blocks += blocks

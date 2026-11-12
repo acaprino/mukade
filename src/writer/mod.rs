@@ -125,23 +125,26 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 impl std::error::Error for WriteOutcomeUnknown {}
 
 /// The CLI validates a reserved ID before it knows the source or starts a process: an id some
-/// destination takes ([`Harness::validate_write`](crate::harnesses::Harness::validate_write)).
-/// An id in a harness's own shape ([`Harness::claims_id`](crate::harnesses::Harness::claims_id))
+/// destination takes ([`Destination::validate_write`](crate::harnesses::Destination::validate_write)).
+/// An id in a harness's own shape ([`Destination::claims_id`](crate::harnesses::Destination::claims_id))
 /// gets that harness's verdict.
 pub fn validate_id_syntax(id: &str) -> Result<()> {
     let opts = WriteOpts {
         dest_id: Some(id.to_string()),
         ..WriteOpts::default()
     };
-    let writable = crate::harnesses::all()
+    let destinations = crate::harnesses::all()
         .into_iter()
-        .filter(|harness| harness.writer().is_some());
-    if let Some(owner) = writable.clone().find(|harness| harness.claims_id(id)) {
+        .filter_map(|harness| harness.destination());
+    if let Some(owner) = destinations
+        .clone()
+        .find(|destination| destination.claims_id(id))
+    {
         return owner.validate_write(&opts);
     }
     let mut refusal = None;
-    for harness in writable {
-        match harness.validate_write(&opts) {
+    for destination in destinations {
+        match destination.validate_write(&opts) {
             Ok(()) => return Ok(()),
             Err(error) => {
                 refusal.get_or_insert(error);
@@ -176,13 +179,51 @@ pub trait Writer {
     ) -> Result<Written>;
 }
 
-/// The writer for a harness.
+/// The writer for a harness. A harness that is no destination gets one that refuses every write,
+/// before anything is planned, with the reason [`crate::harnesses::destination`] gives (exit 2):
+/// asking never panics.
 pub fn for_harness(harness: HarnessId) -> Box<dyn Writer> {
-    Box::new(
-        crate::harnesses::get(harness)
-            .writer()
-            .expect("the four harnesses each have a writer"),
-    )
+    match crate::harnesses::destination(harness) {
+        Ok(destination) => Box::new(destination.writer()),
+        Err(refusal) => Box::new(Refused {
+            harness,
+            reason: match refusal {
+                crate::hop::HopError::Unsupported(reason) => reason,
+                other => other.to_string(),
+            },
+        }),
+    }
+}
+
+/// The writer of a harness that is no destination: every write is refused.
+struct Refused {
+    harness: HarnessId,
+    reason: String,
+}
+
+impl Refused {
+    fn refuse(&self) -> Result<Written> {
+        Err(crate::hop::HopError::Unsupported(self.reason.clone()).into())
+    }
+}
+
+impl Writer for Refused {
+    fn harness(&self) -> HarnessId {
+        self.harness
+    }
+
+    fn write(&self, _session: &Session, _opts: &WriteOpts) -> Result<Written> {
+        self.refuse()
+    }
+
+    fn write_planned(
+        &self,
+        _session: &Session,
+        _plan: &plan::Plan,
+        _opts: &WriteOpts,
+    ) -> Result<Written> {
+        self.refuse()
+    }
 }
 
 /// Write a session's rows to a file, as JSON Lines with a trailing newline.

@@ -41,9 +41,12 @@ impl ToolSet {
     }
 }
 
-/// What each destination offers, for the versions the bench pinned.
+/// What each destination offers, for the versions the bench pinned. A harness that is no
+/// destination offers nothing.
 pub fn offered(harness: HarnessId) -> ToolSet {
-    harnesses::get(harness).offered()
+    harnesses::get(harness)
+        .destination()
+        .map_or(ToolSet { names: &[] }, |destination| destination.offered())
 }
 
 /// The outcome of translating one call.
@@ -108,7 +111,11 @@ pub fn translate_with(
         None => (canonical, &call.input),
     };
     // The destination's adapter gives the call its own tool's shape.
-    let adapter = harnesses::get(dest);
+    let Some(adapter) = harnesses::get(dest).destination() else {
+        return Translation::Text {
+            why: "not a destination",
+        };
+    };
     let out = adapter.translate(canonical, &call.source_name, input, dest_shell);
     // Tables §1.2: every argument the call used maps to the destination's tool, or has no effect
     // on the recorded result (§4.1); one with no counterpart makes the call not equivalent.

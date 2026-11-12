@@ -1,5 +1,6 @@
 //! One adapter per harness. Every decision that depends on which harness a session comes from or
-//! goes to is a method of [`Harness`]; the adapter in `<harness>.rs` is the one place it is made.
+//! goes to is a method of [`Harness`], or of [`Destination`] when only a destination answers it;
+//! the adapter in `<harness>.rs` is the one place it is made.
 //! The readers, writers and detectors stay in their own folders; the adapter refers to them.
 
 mod claude_code;
@@ -31,15 +32,18 @@ pub struct StoreStats {
     pub forks: Option<Result<usize, String>>,
 }
 
-/// What mukade knows about one harness.
+/// What mukade knows about one harness: its store, how its sessions are read and summarized.
 pub trait Harness: Send + Sync {
     fn id(&self) -> HarnessId;
 
     /// The reader of this harness's sessions.
     fn reader(&self) -> &'static dyn Reader;
 
-    /// The writer of new sessions in this harness's store. `None` is a harness mukade only reads.
-    fn writer(&self) -> Option<&'static dyn Writer>;
+    /// This harness as a destination. `None` is a harness mukade only reads (ADR-0002): it has
+    /// no writer and answers nothing a destination answers.
+    fn destination(&self) -> Option<&dyn Destination> {
+        None
+    }
 
     /// Read one session from its native file (or, for OpenCode, its interchange document).
     fn read_file(&self, path: &Path) -> anyhow::Result<Session>;
@@ -68,59 +72,6 @@ pub trait Harness: Send + Sync {
 
     /// Point a process of this harness at its store in `roots`, through the variable it reads.
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command);
-
-    /// The wire protocol this harness speaks as a destination. `None` is a harness that speaks
-    /// whatever its configured provider speaks.
-    fn destination_protocol(&self) -> Option<Protocol>;
-
-    /// Whether this harness's own format has a place for an opaque reasoning payload (A4).
-    fn payload_has_place(&self, opaque: &Opaque) -> bool;
-
-    /// Whether the destination's model `provider` reads the provider envelope an opaque payload
-    /// carries. Only a harness that keeps the envelope has a provider to ask.
-    fn provider_reads_envelope(&self, _opaque: &Opaque, _provider: Option<&str>) -> bool {
-        true
-    }
-
-    /// Whether an opaque reasoning payload is replayed here: the format has a place for it, and the
-    /// provider reads the envelope it keeps.
-    fn payload_fits(&self, opaque: &Opaque, provider: Option<&str>) -> bool {
-        self.payload_has_place(opaque) && self.provider_reads_envelope(opaque, provider)
-    }
-
-    /// Check what a write asks of this destination: a reserved id in its own format, a reserved
-    /// file inside its store, an agent and metadata. An option it does not take is refused, never
-    /// silently ignored.
-    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()>;
-
-    /// Whether `id` has this harness's own session id shape, so its verdict on the id is the one
-    /// given before the destination is known.
-    fn claims_id(&self, _id: &str) -> bool {
-        false
-    }
-
-    /// The interchange document the `document` command prints, for a harness whose host imports
-    /// one itself. `None` is a harness without one.
-    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument>;
-
-    /// The provider and model this harness's own configuration names as a destination, in
-    /// `roots`. `None` is a configuration that names none.
-    fn configured_model(&self, _roots: &StoreRoots) -> Option<(String, Option<String>)> {
-        None
-    }
-
-    /// The project this harness already files sessions of `cwd` under, asked of its own binary
-    /// `exe` from inside `cwd`. Only a harness that files sessions under a project has one; the
-    /// others answer `Ok(None)`. `cache` is the caller's `mukade-data/cache` folder.
-    fn project_id(
-        &self,
-        _exe: &str,
-        _cwd: &str,
-        _roots: &StoreRoots,
-        _cache: Option<&Path>,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
 
     /// Count the sessions and forks of this harness's store in `roots`.
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats;
@@ -173,6 +124,66 @@ pub trait Harness: Send + Sync {
     ) -> Option<String> {
         None
     }
+}
+
+/// What a harness answers as a destination: its writer, the protocol and formats it takes, the
+/// tools it offers. A harness mukade only reads has none ([`Harness::destination`]).
+pub trait Destination: Send + Sync {
+    /// The writer of new sessions in this harness's store.
+    fn writer(&self) -> &'static dyn Writer;
+
+    /// The wire protocol this harness speaks as a destination. `None` is a harness that speaks
+    /// whatever its configured provider speaks.
+    fn protocol(&self) -> Option<Protocol>;
+
+    /// Whether this harness's own format has a place for an opaque reasoning payload (A4).
+    fn payload_has_place(&self, opaque: &Opaque) -> bool;
+
+    /// Whether the destination's model `provider` reads the provider envelope an opaque payload
+    /// carries. Only a harness that keeps the envelope has a provider to ask.
+    fn provider_reads_envelope(&self, _opaque: &Opaque, _provider: Option<&str>) -> bool {
+        true
+    }
+
+    /// Whether an opaque reasoning payload is replayed here: the format has a place for it, and the
+    /// provider reads the envelope it keeps.
+    fn payload_fits(&self, opaque: &Opaque, provider: Option<&str>) -> bool {
+        self.payload_has_place(opaque) && self.provider_reads_envelope(opaque, provider)
+    }
+
+    /// Check what a write asks of this destination: a reserved id in its own format, a reserved
+    /// file inside its store, an agent and metadata. An option it does not take is refused, never
+    /// silently ignored.
+    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()>;
+
+    /// Whether `id` has this harness's own session id shape, so its verdict on the id is the one
+    /// given before the destination is known.
+    fn claims_id(&self, _id: &str) -> bool {
+        false
+    }
+
+    /// The interchange document the `document` command prints, for a harness whose host imports
+    /// one itself. `None` is a harness without one.
+    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument>;
+
+    /// The provider and model this harness's own configuration names as a destination, in
+    /// `roots`. `None` is a configuration that names none.
+    fn configured_model(&self, _roots: &StoreRoots) -> Option<(String, Option<String>)> {
+        None
+    }
+
+    /// The project this harness already files sessions of `cwd` under, asked of its own binary
+    /// `exe` from inside `cwd`. Only a harness that files sessions under a project has one; the
+    /// others answer `Ok(None)`. `cache` is the caller's `mukade-data/cache` folder.
+    fn project_id(
+        &self,
+        _exe: &str,
+        _cwd: &str,
+        _roots: &StoreRoots,
+        _cache: Option<&Path>,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
 
     /// The tools this harness offers as a destination, for the version the bench pinned (tables
     /// §2, L11).
@@ -183,7 +194,7 @@ pub trait Harness: Send + Sync {
     /// name the source harness gave it, `dest_shell` the shell this destination runs commands
     /// with, when known. A destination that runs one shell dialect answers a shell call through
     /// `tools::other_dialect` first: a command string is never rewritten (L13). The caller checks
-    /// the keys against [`Harness::accepted_keys`] and the name against the offered set.
+    /// the keys against [`Destination::accepted_keys`] and the name against the offered set.
     fn translate(
         &self,
         canonical: &CanonicalTool,
@@ -241,10 +252,19 @@ pub trait InterchangeDocument: Send + Sync {
     ) -> anyhow::Result<(Value, Option<NativeCompaction>)>;
 }
 
-/// The writer of a destination. A harness mukade only reads is refused (exit 2), before anything
+/// A harness as a destination. A harness mukade only reads is refused (exit 2), before anything
 /// is planned or written.
+pub fn destination(id: HarnessId) -> Result<&'static dyn Destination, HopError> {
+    destination_of(get(id))
+}
+
+/// The writer of a destination, refused as [`destination`] refuses it.
 pub fn require_writer(harness: &dyn Harness) -> Result<&'static dyn Writer, HopError> {
-    harness.writer().ok_or_else(|| {
+    destination_of(harness).map(|destination| destination.writer())
+}
+
+fn destination_of(harness: &dyn Harness) -> Result<&dyn Destination, HopError> {
+    harness.destination().ok_or_else(|| {
         HopError::Unsupported(format!(
             "{} is a source only: mukade does not write its sessions",
             harness.id()
@@ -366,9 +386,8 @@ impl<W: Writer + ?Sized> Writer for &W {
 mod tests {
     use super::*;
     use crate::hop::HopError;
-    use crate::model::{Opaque, Protocol};
 
-    /// A harness mukade only reads, as ADR-0002 makes Hermes.
+    /// A harness mukade only reads, as ADR-0002 makes Hermes: it has no [`Destination`].
     struct SourceOnly;
 
     impl Harness for SourceOnly {
@@ -378,10 +397,6 @@ mod tests {
 
         fn reader(&self) -> &'static dyn Reader {
             &crate::reader::pi::Pi
-        }
-
-        fn writer(&self) -> Option<&'static dyn Writer> {
-            None
         }
 
         fn read_file(&self, path: &Path) -> anyhow::Result<Session> {
@@ -397,22 +412,6 @@ mod tests {
         }
 
         fn apply_store_env(&self, _roots: &StoreRoots, _command: &mut std::process::Command) {}
-
-        fn destination_protocol(&self) -> Option<Protocol> {
-            None
-        }
-
-        fn payload_has_place(&self, _opaque: &Opaque) -> bool {
-            false
-        }
-
-        fn validate_write(&self, _opts: &WriteOpts) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
-            None
-        }
 
         fn store_stats(&self, _roots: &StoreRoots) -> StoreStats {
             StoreStats {
@@ -437,34 +436,22 @@ mod tests {
         ) -> Result<Reply, String> {
             Err("not summarized in this test".into())
         }
-
-        fn offered(&self) -> ToolSet {
-            ToolSet { names: &[] }
-        }
-
-        fn translate(
-            &self,
-            _canonical: &CanonicalTool,
-            _source_name: &str,
-            _input: &Value,
-            _dest_shell: Option<Shell>,
-        ) -> Translation {
-            tools::OTHER_CAPABILITY
-        }
-
-        fn image_in_result(&self, _image: &Image) -> Value {
-            Value::Null
-        }
     }
 
     #[test]
     fn a_destination_without_a_writer_is_refused_before_planning() {
+        assert!(
+            SourceOnly.destination().is_none(),
+            "a source-only harness is no destination"
+        );
         let Err(refusal) = require_writer(&SourceOnly) else {
             panic!("a harness without a writer is not a destination");
         };
         assert!(matches!(refusal, HopError::Unsupported(_)), "{refusal}");
         assert_eq!(refusal.exit_code(), 2, "refused with a reason");
         for adapter in all() {
+            assert!(adapter.destination().is_some(), "{}", adapter.id());
+            assert!(destination(adapter.id()).is_ok(), "{}", adapter.id());
             assert!(require_writer(adapter).is_ok(), "{}", adapter.id());
         }
     }

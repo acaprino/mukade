@@ -2,10 +2,15 @@
 
 mod support;
 
-use mukade::harnesses::{all, get};
+use mukade::harnesses::{Destination, all, get};
 use mukade::model::HarnessId;
 use mukade::roots::StoreRoots;
 use std::path::{Path, PathBuf};
+
+/// The adapter of `id` as a destination: each of the four is one.
+fn destination(id: HarnessId) -> &'static dyn Destination {
+    mukade::harnesses::destination(id).expect("each of the four harnesses is a destination")
+}
 
 #[test]
 fn every_id_has_its_own_adapter() {
@@ -13,7 +18,7 @@ fn every_id_has_its_own_adapter() {
         let adapter = get(id);
         assert_eq!(adapter.id(), id);
         assert_eq!(adapter.reader().harness(), id);
-        assert_eq!(adapter.writer().expect("a writer").harness(), id);
+        assert_eq!(destination(id).writer().harness(), id);
     }
     let order: Vec<HarnessId> = all().iter().map(|adapter| adapter.id()).collect();
     assert_eq!(order, HarnessId::ALL);
@@ -202,7 +207,7 @@ fn only_opencode_takes_an_agent_or_metadata() {
     ];
     for id in HarnessId::ALL {
         for opts in &asks {
-            let checked = get(id).validate_write(opts);
+            let checked = destination(id).validate_write(opts);
             if id == HarnessId::OpenCode {
                 assert!(checked.is_ok(), "{id}: {checked:?}");
             } else {
@@ -228,8 +233,14 @@ fn each_destination_takes_its_own_id_format() {
         } else {
             (uuid, opencode)
         };
-        assert!(get(id).validate_write(&with_id(taken)).is_ok(), "{id} takes {taken}");
-        assert!(get(id).validate_write(&with_id(refused)).is_err(), "{id} refuses {refused}");
+        assert!(
+            destination(id).validate_write(&with_id(taken)).is_ok(),
+            "{id} takes {taken}"
+        );
+        assert!(
+            destination(id).validate_write(&with_id(refused)).is_err(),
+            "{id} refuses {refused}"
+        );
     }
     assert!(mukade::writer::validate_id_syntax(uuid).is_ok());
     assert!(mukade::writer::validate_id_syntax(opencode).is_ok());
@@ -244,7 +255,7 @@ fn each_destination_takes_its_own_id_format() {
 fn only_opencode_exports_an_interchange_document() {
     for id in HarnessId::ALL {
         assert_eq!(
-            get(id).interchange_document().is_some(),
+            destination(id).interchange_document().is_some(),
             id == HarnessId::OpenCode,
             "{id}"
         );
@@ -280,7 +291,7 @@ fn only_pi_summarizes_from_a_file() {
 fn only_pi_keeps_the_end_of_a_failed_step() {
     for id in HarnessId::ALL {
         assert_eq!(
-            get(id).failed_steps_are_replies(),
+            destination(id).failed_steps_are_replies(),
             id != HarnessId::Pi,
             "{id}"
         );
@@ -291,7 +302,7 @@ fn only_pi_keeps_the_end_of_a_failed_step() {
 fn claude_code_and_codex_flatten_result_blocks() {
     for id in HarnessId::ALL {
         assert_eq!(
-            get(id).flattens_result_blocks(),
+            destination(id).flattens_result_blocks(),
             matches!(id, HarnessId::ClaudeCode | HarnessId::Codex),
             "{id}"
         );
@@ -339,7 +350,7 @@ fn a_destination_names_the_model_its_own_configuration_states() {
             HarnessId::OpenCode => Some(("gateway".to_string(), Some("auto".to_string()))),
             _ => None,
         };
-        assert_eq!(get(id).configured_model(&roots), expected, "{id}");
+        assert_eq!(destination(id).configured_model(&roots), expected, "{id}");
         assert_eq!(
             mukade::dest::configured_model_in(id, &roots),
             expected,
@@ -351,7 +362,8 @@ fn a_destination_names_the_model_its_own_configuration_states() {
 #[test]
 fn only_opencode_files_sessions_under_a_project() {
     for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
-        let found = get(id).project_id("no-such-exe", "somewhere", &StoreRoots::default(), None);
+        let found =
+            destination(id).project_id("no-such-exe", "somewhere", &StoreRoots::default(), None);
         assert!(matches!(found, Ok(None)), "{id}");
     }
 }

@@ -1,6 +1,6 @@
 //! OpenCode: one SQLite database, named by `OPENCODE_DB`.
 
-use super::{Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Kind, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
@@ -25,8 +25,8 @@ impl Harness for OpenCode {
         &crate::reader::opencode::Opencode
     }
 
-    fn writer(&self) -> Option<&'static dyn Writer> {
-        Some(&crate::writer::opencode::Opencode)
+    fn destination(&self) -> Option<&dyn Destination> {
+        Some(self)
     }
 
     fn read_file(&self, path: &Path) -> anyhow::Result<Session> {
@@ -74,91 +74,6 @@ impl Harness for OpenCode {
             Some(db) => command.env(variable, db),
             None => command.env_remove(variable),
         };
-    }
-
-    /// OpenCode speaks whatever its configured provider speaks.
-    fn destination_protocol(&self) -> Option<Protocol> {
-        None
-    }
-
-    /// OpenCode keeps a signature, an encrypted payload and the Chat envelope around them.
-    fn payload_has_place(&self, opaque: &Opaque) -> bool {
-        opaque.signature.is_some() || opaque.encrypted.is_some()
-    }
-
-    /// The receiving provider must understand the envelope OpenCode keeps. Native OpenAI
-    /// ciphertext is never relabelled as OpenRouter ciphertext merely because both speak Responses.
-    fn provider_reads_envelope(&self, opaque: &Opaque, provider: Option<&str>) -> bool {
-        let Some(chat) = &opaque.chat else {
-            return true;
-        };
-        if provider == Some("openrouter")
-            && chat.details.iter().any(|d| {
-                d.get("format").and_then(serde_json::Value::as_str)
-                    == Some("openai-native-responses-v1")
-            })
-        {
-            return false;
-        }
-        provider.is_some() && provider == chat.provider.as_deref()
-            || crate::policy::scalar_chat_payload(opaque)
-                && matches!(provider, Some("anthropic" | "openrouter"))
-    }
-
-    /// One database, no reserved file: a session id `ses_…`, an agent name, metadata as an object.
-    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
-        if opts.dest_path.is_some() {
-            anyhow::bail!("--dest-path is supported only for file-based destinations");
-        }
-        if let Some(id) = opts.dest_id.as_deref() {
-            crate::writer::opencode::validate_session_id(id)?;
-        }
-        if let Some(agent) = opts.dest_agent.as_deref() {
-            crate::writer::opencode::validate_agent(agent)?;
-        }
-        if let Some(metadata) = &opts.metadata {
-            anyhow::ensure!(
-                metadata.is_object(),
-                "session metadata must be a JSON object"
-            );
-        }
-        Ok(())
-    }
-
-    /// OpenCode ids are prefixed `ses_`.
-    fn claims_id(&self, id: &str) -> bool {
-        id.starts_with("ses_")
-    }
-
-    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
-        Some(&Document)
-    }
-
-    /// OpenCode's `model` is `<provider>/<model>`.
-    ///
-    /// A self-contained installation keeps its configuration beside its store: a database in an
-    /// XDG data layout (`<root>/share/opencode/opencode.db`, a portable JanuraCode's) is
-    /// configured by `<root>/config/opencode/opencode.json`. When such a file exists it alone
-    /// answers, even without a model: another installation's model is not this one's. Otherwise
-    /// OpenCode's process configuration applies (`OPENCODE_CONFIG`, then `XDG_CONFIG_HOME`).
-    fn configured_model(&self, roots: &StoreRoots) -> Option<(String, Option<String>)> {
-        let own = roots
-            .opencode_db
-            .as_deref()
-            .and_then(opencode_config_beside)
-            .filter(|path| path.is_file());
-        opencode_model(&own.or_else(opencode_process_config)?)
-    }
-
-    fn project_id(
-        &self,
-        exe: &str,
-        cwd: &str,
-        roots: &StoreRoots,
-        cache: Option<&Path>,
-    ) -> anyhow::Result<Option<String>> {
-        let _span = crate::timing::span("probe opencode project");
-        Ok(crate::reader::opencode::project_id_for(exe, cwd, roots, cache))
     }
 
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
@@ -269,6 +184,97 @@ impl Harness for OpenCode {
         stdout: &str,
     ) -> Option<String> {
         fork_of(stdout).and_then(|fork| delete_fork(command, roots, &fork))
+    }
+}
+
+impl Destination for OpenCode {
+    fn writer(&self) -> &'static dyn Writer {
+        &crate::writer::opencode::Opencode
+    }
+
+    /// OpenCode speaks whatever its configured provider speaks.
+    fn protocol(&self) -> Option<Protocol> {
+        None
+    }
+
+    /// OpenCode keeps a signature, an encrypted payload and the Chat envelope around them.
+    fn payload_has_place(&self, opaque: &Opaque) -> bool {
+        opaque.signature.is_some() || opaque.encrypted.is_some()
+    }
+
+    /// The receiving provider must understand the envelope OpenCode keeps. Native OpenAI
+    /// ciphertext is never relabelled as OpenRouter ciphertext merely because both speak Responses.
+    fn provider_reads_envelope(&self, opaque: &Opaque, provider: Option<&str>) -> bool {
+        let Some(chat) = &opaque.chat else {
+            return true;
+        };
+        if provider == Some("openrouter")
+            && chat.details.iter().any(|d| {
+                d.get("format").and_then(serde_json::Value::as_str)
+                    == Some("openai-native-responses-v1")
+            })
+        {
+            return false;
+        }
+        provider.is_some() && provider == chat.provider.as_deref()
+            || crate::policy::scalar_chat_payload(opaque)
+                && matches!(provider, Some("anthropic" | "openrouter"))
+    }
+
+    /// One database, no reserved file: a session id `ses_…`, an agent name, metadata as an object.
+    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
+        if opts.dest_path.is_some() {
+            anyhow::bail!("--dest-path is supported only for file-based destinations");
+        }
+        if let Some(id) = opts.dest_id.as_deref() {
+            crate::writer::opencode::validate_session_id(id)?;
+        }
+        if let Some(agent) = opts.dest_agent.as_deref() {
+            crate::writer::opencode::validate_agent(agent)?;
+        }
+        if let Some(metadata) = &opts.metadata {
+            anyhow::ensure!(
+                metadata.is_object(),
+                "session metadata must be a JSON object"
+            );
+        }
+        Ok(())
+    }
+
+    /// OpenCode ids are prefixed `ses_`.
+    fn claims_id(&self, id: &str) -> bool {
+        id.starts_with("ses_")
+    }
+
+    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
+        Some(&Document)
+    }
+
+    /// OpenCode's `model` is `<provider>/<model>`.
+    ///
+    /// A self-contained installation keeps its configuration beside its store: a database in an
+    /// XDG data layout (`<root>/share/opencode/opencode.db`, a portable JanuraCode's) is
+    /// configured by `<root>/config/opencode/opencode.json`. When such a file exists it alone
+    /// answers, even without a model: another installation's model is not this one's. Otherwise
+    /// OpenCode's process configuration applies (`OPENCODE_CONFIG`, then `XDG_CONFIG_HOME`).
+    fn configured_model(&self, roots: &StoreRoots) -> Option<(String, Option<String>)> {
+        let own = roots
+            .opencode_db
+            .as_deref()
+            .and_then(opencode_config_beside)
+            .filter(|path| path.is_file());
+        opencode_model(&own.or_else(opencode_process_config)?)
+    }
+
+    fn project_id(
+        &self,
+        exe: &str,
+        cwd: &str,
+        roots: &StoreRoots,
+        cache: Option<&Path>,
+    ) -> anyhow::Result<Option<String>> {
+        let _span = crate::timing::span("probe opencode project");
+        Ok(crate::reader::opencode::project_id_for(exe, cwd, roots, cache))
     }
 
     fn offered(&self) -> ToolSet {

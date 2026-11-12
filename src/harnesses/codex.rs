@@ -1,6 +1,6 @@
 //! Codex CLI: rollouts under `CODEX_HOME/sessions/`.
 
-use super::{Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
@@ -22,8 +22,8 @@ impl Harness for Codex {
         &crate::reader::codex::Codex
     }
 
-    fn writer(&self) -> Option<&'static dyn Writer> {
-        Some(&crate::writer::codex::Codex)
+    fn destination(&self) -> Option<&dyn Destination> {
+        Some(self)
     }
 
     fn read_file(&self, path: &Path) -> anyhow::Result<Session> {
@@ -41,31 +41,6 @@ impl Harness for Codex {
     fn apply_store_env(&self, roots: &StoreRoots, command: &mut std::process::Command) {
         let variable = crate::catalog::store_env(self.id());
         super::set_store_env(command, variable, self.store_root(roots));
-    }
-
-    fn destination_protocol(&self) -> Option<Protocol> {
-        Some(Protocol::OpenaiResponses)
-    }
-
-    /// Only `encrypted_content`. A Chat envelope is not kept: only one with a scalar conversion
-    /// fits.
-    fn payload_has_place(&self, opaque: &Opaque) -> bool {
-        crate::policy::scalar_chat_payload(opaque) && opaque.encrypted.is_some()
-    }
-
-    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
-        super::validate_file_write(self, opts)
-    }
-
-    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
-        None
-    }
-
-    /// `model_provider` at the top level of `config.toml`. Codex names no model there.
-    fn configured_model(&self, roots: &StoreRoots) -> Option<(String, Option<String>)> {
-        let home = roots.codex_home.as_deref()?;
-        let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
-        top_level_string(&text, "model_provider").map(|provider| (provider, None))
     }
 
     fn store_stats(&self, roots: &StoreRoots) -> StoreStats {
@@ -132,6 +107,37 @@ impl Harness for Codex {
             usage: None,
             fork: None,
         })
+    }
+}
+
+impl Destination for Codex {
+    fn writer(&self) -> &'static dyn Writer {
+        &crate::writer::codex::Codex
+    }
+
+    fn protocol(&self) -> Option<Protocol> {
+        Some(Protocol::OpenaiResponses)
+    }
+
+    /// Only `encrypted_content`. A Chat envelope is not kept: only one with a scalar conversion
+    /// fits.
+    fn payload_has_place(&self, opaque: &Opaque) -> bool {
+        crate::policy::scalar_chat_payload(opaque) && opaque.encrypted.is_some()
+    }
+
+    fn validate_write(&self, opts: &WriteOpts) -> anyhow::Result<()> {
+        super::validate_file_write(self, opts)
+    }
+
+    fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
+        None
+    }
+
+    /// `model_provider` at the top level of `config.toml`. Codex names no model there.
+    fn configured_model(&self, roots: &StoreRoots) -> Option<(String, Option<String>)> {
+        let home = roots.codex_home.as_deref()?;
+        let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
+        top_level_string(&text, "model_provider").map(|provider| (provider, None))
     }
 
     fn offered(&self) -> ToolSet {

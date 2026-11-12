@@ -26,7 +26,9 @@ pub fn configured_model_in(
     harness: HarnessId,
     roots: &StoreRoots,
 ) -> Option<(String, Option<String>)> {
-    crate::harnesses::get(harness).configured_model(roots)
+    crate::harnesses::get(harness)
+        .destination()
+        .and_then(|destination| destination.configured_model(roots))
 }
 
 #[cfg(test)]

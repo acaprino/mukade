@@ -37,7 +37,7 @@ impl Writer for Pi {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
-        crate::harnesses::get(HarnessId::Pi).validate_write(opts)?;
+        crate::harnesses::destination(HarnessId::Pi)?.validate_write(opts)?;
         let root = opts
             .roots
             .pi_agent_dir

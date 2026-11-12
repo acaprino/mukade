@@ -61,12 +61,22 @@ fn from_data_uri(uri: &str) -> Option<Image> {
     })
 }
 
-/// The image as a user turn of `dest` carries it.
+/// The image as a user turn of `dest` carries it. A harness that is no destination carries none:
+/// `null`.
 pub fn user_block(image: &Image, dest: HarnessId) -> Value {
-    crate::harnesses::get(dest).image_in_user_turn(image)
+    crate::harnesses::get(dest)
+        .destination()
+        .map_or(Value::Null, |destination| {
+            destination.image_in_user_turn(image)
+        })
 }
 
-/// The image as a tool result of `dest` carries it.
+/// The image as a tool result of `dest` carries it. A harness that is no destination carries none:
+/// `null`.
 pub fn result_block(image: &Image, dest: HarnessId) -> Value {
-    crate::harnesses::get(dest).image_in_result(image)
+    crate::harnesses::get(dest)
+        .destination()
+        .map_or(Value::Null, |destination| {
+            destination.image_in_result(image)
+        })
 }

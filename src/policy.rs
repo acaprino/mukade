@@ -21,21 +21,30 @@ pub enum ReasoningPolicy {
 }
 
 /// The wire protocol a destination speaks by default. `None` means the destination's provider is
-/// not known, and a policy that needs to compare protocols must then drop the opaque payload.
+/// not known, and a policy that needs to compare protocols must then drop the opaque payload. A
+/// harness that is no destination has none.
 pub fn destination_protocol(harness: HarnessId) -> Option<Protocol> {
-    crate::harnesses::get(harness).destination_protocol()
+    crate::harnesses::get(harness)
+        .destination()
+        .and_then(|destination| destination.protocol())
 }
 
 /// Whether a destination's own format has a place for this opaque payload
-/// ([`Harness::payload_has_place`](crate::harnesses::Harness::payload_has_place)).
+/// ([`Destination::payload_has_place`](crate::harnesses::Destination::payload_has_place)). A
+/// harness that is no destination has none.
 pub fn payload_fits(opaque: &Opaque, dest: HarnessId) -> bool {
-    crate::harnesses::get(dest).payload_has_place(opaque)
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.payload_has_place(opaque))
 }
 
 /// Whether the destination's provider reads the envelope it keeps
-/// ([`Harness::provider_reads_envelope`](crate::harnesses::Harness::provider_reads_envelope)).
+/// ([`Destination::provider_reads_envelope`](crate::harnesses::Destination::provider_reads_envelope)).
+/// A harness that is no destination has no provider to read it.
 pub fn chat_destination_fits(opaque: &Opaque, dest: HarnessId, provider: Option<&str>) -> bool {
-    crate::harnesses::get(dest).provider_reads_envelope(opaque, provider)
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.provider_reads_envelope(opaque, provider))
 }
 
 /// An opaque payload without a Chat envelope, or with one ordinary Anthropic detail: the envelope
