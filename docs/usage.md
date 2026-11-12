@@ -541,17 +541,32 @@ A first exchange:
 4. `mukade chat send --room-id <id> --member-handle <handle> --text "what do you think? @codex-1"`
 5. The other instance: `mukade chat wait --room-id <id> --member-handle <its handle>`.
 
-Connect a harness as an MCP client: HTTP server at the `endpoint` that `chat start` prints, with
-the headers `Authorization: Bearer <content of <data folder>/bus/credential>` and
-`X-Mukade-Service-Id: <service_id>`. A harness that has no MCP entry can run the same
-operations as shell commands.
+Connect a harness as an MCP client, with the service running:
+
+| command | what it does |
+|---|---|
+| `mukade chat connect <harness> --dry-run` | show the file and the entry, credential hidden; write nothing |
+| `mukade chat connect <harness>` | add the entry `mukade` to the harness's user-scope MCP servers |
+| `mukade chat disconnect <harness>` | take it out again |
+
+| harness | file written |
+|---|---|
+| `claude_code` | `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when set), `mcpServers` |
+| `codex` | `~/.codex/config.toml` (`$CODEX_HOME`), `[mcp_servers.mukade]` |
+| `opencode` | `~/.config/opencode/opencode.json` (`$XDG_CONFIG_HOME`), `mcp.servers` |
+| `pi` | `~/.pi/agent/mcp.json` (`$PI_CODING_AGENT_DIR`), `mcpServers` |
+
+- Everything else in the file stays; the earlier file is kept in `<data folder>/bus/backups/` (five per harness).
+- Refused, with the file untouched: an entry `mukade` that mukade did not write or that was changed since; a JSON file with comments; `--project` (the credential would sit in a file that can be committed).
+- Restart the harness session to load the entry. By hand instead: an HTTP server at the `endpoint`, with the headers `Authorization: Bearer <content of <data folder>/bus/credential>` and `X-Mukade-Service-Id: <service_id>`.
+- Only Claude Code has been seen calling a tool through such an entry ([record](verification/2026-11-12-chat-live.md)); the other three entries follow each harness's documented format and are not yet tried live **[U]**.
+- A harness without an MCP entry can run the same operations as shell commands.
 
 | limit | detail |
 |---|---|
 | idle instance | a message reaches an instance when it calls `read` or `wait`; nothing wakes one that sits at its prompt |
 | security | one user account: any process of that user can read the credential and the harnesses' own session files. Messages and observed text are checked for secrets, which reduces the risk and does not remove it |
 | data | in `<data folder>/bus/`, never in a project or a harness store; nothing expires |
-| not built yet | a `connect` command that writes the harness's MCP configuration for you |
 
 ## 4. Reading the receipt and the manifest
 
