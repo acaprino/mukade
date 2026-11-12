@@ -485,7 +485,7 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
 1. **Only shell calls translate.** Offered set (`src/tools.rs` `offered()`): the [Tools](#tools)
    table less `multi_agent_v1`. A shell call becomes `exec_command {cmd, workdir, justification}`
    only when its dialect matches `--dest-shell`; `timeout` is dropped, `yield_time_ms` not emitted, a
-   background call is text form (`shell()`, `translate_codex_shell()`;
+   background call is text form (`src/harnesses/codex.rs` `translate()`, `other_dialect()` first;
    [tool conversion §4.1](../tool-conversion-tables.md)). **Codex has no read or edit tool in the
    pinned bench**, so `Read`, `Write`, `Edit`, `Grep`, `Glob`, web search and fetch travel as text
    [21 §3]; Codex's patch form is not written (`edit()`).
@@ -505,7 +505,7 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
    blocks are dropped and counted (`dropped_result_blocks`). A prompt's image is written as
    `{type:"input_image", image_url:"data:<mime>;base64,<data>"}`; another attachment is dropped and
    counted (`dropped_attachments`) (`src/writer/plan.rs` `carry_result_content()`,
-   `carry_attachments()`; `src/writer/media.rs` `user_block()`).
+   `carry_attachments()`; `src/writer/codex.rs` `image_block()`).
 5. **Resume:** keep `CODEX_HOME` set for the resume process and run it from the session's cwd
    [19 §5][25]. A written thread gets no `session_index.jsonl` name.
 
@@ -513,7 +513,7 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
 
 | writes | detail |
 |---|---|
-| file | new uuid (or `--dest-id`, a uuid); `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl`, folder and stamp from one UTC instant (`rollout_stamp()`); `--dest-path` names the file instead (absolute, inside `CODEX_HOME`, no `..`: `src/writer/mod.rs` `validate_options()`). Lines `{timestamp, ordinal, type, payload}`, `ordinal` from 0 |
+| file | new uuid (or `--dest-id`, a uuid); `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl`, folder and stamp from one UTC instant (`src/writer/codex.rs` `rollout_stamp()`); `--dest-path` names the file instead (absolute, inside `CODEX_HOME`, no `..`: `src/harnesses/codex.rs` `validate_write()`). Lines `{timestamp, ordinal, type, payload}`, `ordinal` from 0 |
 | `session_meta` | `base_instructions: null`, `id`, `timestamp`, `cwd`, `originator: "codex_cli_rs"`, `source: "cli"`, `cli_version`, `model_provider` (when known), `git.branch`; **no `session_id`** (the key set Codex accepts for a hand-written rollout, re-probed on 0.164.0 on 2026-10-28) |
 | environment | a user message `<environment_context>` with `<cwd>` and, from `--dest-shell`, `<shell>bash</shell>` (`bash`, `sh`, `zsh`) or `<shell>powershell</shell>` (`powershell`, `pwsh`) |
 | each prompt | `event_msg` `task_started {turn_id:"turn-N"}`, then the user `message` (`input_text`) |
@@ -524,7 +524,7 @@ Code: `src/writer/codex.rs` [23]. Without `CODEX_HOME`:
 
 | setting | source |
 |---|---|
-| `model_provider` | `--model-provider`, else the top-level `model_provider = "…"` of the destination's `$CODEX_HOME/config.toml`: only keys before the first `[table]`, the key exactly, the text inside the quotes (a trailing `# comment` dropped when unquoted); `[profiles.x]` and dotted `model_providers.x.*` are ignored (`src/dest.rs` `configured_model_in()`, `top_level_string()`) |
+| `model_provider` | `--model-provider`, else the top-level `model_provider = "…"` of the destination's `$CODEX_HOME/config.toml`: only keys before the first `[table]`, the key exactly, the text inside the quotes (a trailing `# comment` dropped when unquoted); `[profiles.x]` and dotted `model_providers.x.*` are ignored (`src/harnesses/codex.rs` `configured_model()`, `top_level_string()`) |
 | model | `--model`, else the source's |
 | executable in the receipt | `[<exe or "codex">, "exec", "resume", <new id>]` (`src/catalog.rs` `resume()`); interactive `[<exe>, "resume", <id>]` (`interactive_resume()`) |
 | compaction | `none` (default), `portable`, `summary`, `native` (with `--context-window`; [usage §5](../usage.md#make-a-long-session-smaller)); the library's `DestinationNative` is refused (`src/hop.rs` `select()`) |
@@ -602,8 +602,8 @@ All accessed 2026-10-28 unless a source says otherwise.
 20. Repository: [`docs/reference/harness-session-persistence-reference.md`](../reference/harness-session-persistence-reference.md), the *OpenAI Codex* dossier under *Local and open-format harness dossiers*
 21. Repository: [`docs/tool-conversion-tables.md`](../tool-conversion-tables.md) §2–§6
 22. Repository: [`src/reader/codex.rs`](../../src/reader/codex.rs), `src/reader/codex/exec.rs`, `src/reader/codex_state.rs`, `src/reader/json.rs`
-23. Repository: [`src/writer/codex.rs`](../../src/writer/codex.rs), `src/writer/plan.rs`, `src/policy.rs`, `src/tools.rs`, `src/tools/patch.rs`, `src/model/tool.rs`, `src/hop.rs`
-24. Repository: [`src/exe.rs`](../../src/exe.rs), [`src/cli.rs`](../../src/cli.rs) (`write_opts()`), `src/dest.rs` (`configured_model_in()`, `top_level_string()`), `src/detect.rs`, `src/detect/codex.rs`, [`catalog/harnesses.json`](../../catalog/harnesses.json)
+23. Repository: [`src/writer/codex.rs`](../../src/writer/codex.rs), `src/writer/plan.rs`, `src/policy.rs`, `src/tools.rs`, `src/tools/patch.rs`, `src/harnesses/codex.rs` (the adapter), `src/model/tool.rs`, `src/hop.rs`
+24. Repository: [`src/exe.rs`](../../src/exe.rs), [`src/cli.rs`](../../src/cli.rs) (`write_opts()`), `src/harnesses/codex.rs` (`configured_model()`, `top_level_string()`), `src/detect.rs`, `src/detect/codex.rs`, [`catalog/harnesses.json`](../../catalog/harnesses.json)
 25. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md) §2
 26. Two real Codex Desktop 0.165.0-alpha.1.2 threads of the Daodan project, read on 2026-10-28 with their `state_5.sqlite` and `thread_history_1.sqlite` rows (read only), and a scan of the 982 rollouts on that machine (971 subagent rollouts, whose `session_id` is the spawning thread's and whose `state_5.sqlite` row is keyed by their own `id`): thread `01a181e2-…` (17.8 MB, 5 compactions, all with an empty `message`) and thread `01a181df-…` (a base file plus one page, `history_base.end_ordinal_exclusive` 511 of 1064). Not in the repository: the user's own conversations.
 27. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock)

@@ -117,8 +117,8 @@ Resolution order, env vars and `--root`/`--dest-root`: [usage §7](../usage.md#7
 | what | OpenCode specifics |
 |---|---|
 | executable | `--opencode-exe` → the `--dest-root` installation's own (destination) → `MUKADE_OPENCODE_EXE` → `PATH` (`PATHEXT` included) → catalog locations (`%APPDATA%\npm\node_modules\@opencode\cli\bin\opencode.exe`, `%APPDATA%\npm\opencode.cmd`, `$HOME/.opencode/bin/opencode[.exe]`) → `opencode` ([`catalog/harnesses.json`](../../catalog/harnesses.json)). An OpenCode **source** ignores the flag: only `MUKADE_OPENCODE_EXE` applies [31][34][35] |
-| store | `OPENCODE_DB` is passed to every subprocess when set, removed when unset (OpenCode then uses its own configured store). mukade never sets `XDG_*`; the caller sets them, and `OPENCODE_CONFIG`, when isolation matters (`src/reader/opencode.rs` `opencode_environment()`) [31][34][35] |
-| `--root <path>` | a directory means `<path>/opencode.db`, a file is used as given; in a `hop` it names the source store (`src/roots.rs` `StoreRoots::set_root()`). `--dest-root <dir>` names a destination installation [35] |
+| store | `OPENCODE_DB` is passed to every subprocess when set, removed when unset (OpenCode then uses its own configured store). mukade never sets `XDG_*`; the caller sets them, and `OPENCODE_CONFIG`, when isolation matters (`src/harnesses/opencode.rs` `apply_store_env()`) [31][34][35] |
+| `--root <path>` | a directory means `<path>/opencode.db`, a file is used as given; in a `hop` it names the source store (`src/harnesses/opencode.rs` `set_store_root()`). `--dest-root <dir>` names a destination installation [35] |
 | `mukade harnesses` | one resolved executable, not every copy. Store: `OPENCODE_DB`, else `{xdg_data_home}/opencode/opencode.db` (`XDG_DATA_HOME`, else `~/.local/share`); relative `OPENCODE_DB` resolves beneath `$XDG_DATA_HOME/opencode`. Session and fork counts from `session_v2` (`src/reader/opencode.rs` `store_counts()`) |
 | `mukade detect` / `scan` | a folder holding `opencode.db`, or that file when it is SQLite (name compared without case; Codex's `state_*.sqlite` is not OpenCode) (`src/detect/opencode.rs` `OpenCodeLayout`). `scan` also takes the executable beside the store: `opencode.exe`, `bin/opencode.exe`, `resources/opencode-cli/opencode.exe`, `.opencode/bin/opencode.exe`, `opencode.cmd`, `bin/opencode.cmd` (no `.exe`/`.cmd` off Windows) [35]; portable example: [usage §2](../usage.md#mukade-scan). For a nonstandard database name, pass `opencode` and the file path |
 
@@ -569,8 +569,8 @@ a `cwd` starting with `-`; a `--dest-id` other than `ses_` plus letters, digits,
 | reasoning part | `{type:"reasoning", text, native:{…}}`, only when the reasoning policy keeps it native (below) |
 | tool part | `{type:"tool", id, name, executed:false, state:{input, status:"completed"\|"error", content:[…], error?, metadata:{truncated:false}}, time:{created, completed}}` |
 | failed call | `state.error` = `Session.StructuredError` `{"type":"tool.execution", "message":<result text>}`, the type OpenCode records for a failed tool [32][2] |
-| user image | `Prompt.FileAttachment` `{data, mime, source:{type:"inline"}}` in `files` [32 `media.rs`][2] |
-| tool-result image | `Tool.FileContent` `{type:"file", uri:"data:<mime>;base64,<data>", mime}` [32 `media.rs`][2] |
+| user image | `Prompt.FileAttachment` `{data, mime, source:{type:"inline"}}` in `files` [32 `image_attachment`][2] |
+| tool-result image | `Tool.FileContent` `{type:"file", uri:"data:<mime>;base64,<data>", mime}` [32 `image_block`][2] |
 | call without an OpenCode equivalent | the call goes into the assistant text, its result follows as text ([tool conversion §1](../tool-conversion-tables.md)) |
 | source compaction | one user message carrying the summary |
 | `--compaction native` | the whole history, then `{"type":"compaction","status":"completed","reason":"manual","summary":…,"metadata":{"keepID":<first kept message>},"time":{"created":…}}` with a deterministic summary of the earlier user requests; live OpenCode 2.2.5 resumed such a session and answered from the summary (2026-11-04) [27 §4.4][56] |
@@ -682,9 +682,9 @@ All accessed 2026-10-28 unless a source says otherwise.
 28. Repository: [`docs/reference/harness-session-persistence-reference.md`](../reference/harness-session-persistence-reference.md), OpenCode dossier and version table (secondary source).
 30. Repository: [`docs/tool-conversion-tables.md`](../tool-conversion-tables.md) §2, §3.
 31. Repository: [`src/reader/opencode.rs`](../../src/reader/opencode.rs).
-32. Repository: [`src/writer/opencode.rs`](../../src/writer/opencode.rs), [`src/writer/media.rs`](../../src/writer/media.rs).
+32. Repository: [`src/writer/opencode.rs`](../../src/writer/opencode.rs) (`image_attachment`, `image_block`), [`src/writer/media.rs`](../../src/writer/media.rs).
 33. Repository: [`src/exe.rs`](../../src/exe.rs).
-34. Repository: [`src/cli.rs`](../../src/cli.rs) (`opencode_project_id`), [`src/roots.rs`](../../src/roots.rs) (`StoreRoots::set_root`), [`src/dest.rs`](../../src/dest.rs) (`configured_model_in`), [`src/hop.rs`](../../src/hop.rs).
+34. Repository: [`src/harnesses/opencode.rs`](../../src/harnesses/opencode.rs) (`apply_store_env`, `set_store_root`, `project_id`, `configured_model`), [`src/cli.rs`](../../src/cli.rs), [`src/roots.rs`](../../src/roots.rs) (`StoreRoots::set_root`), [`src/hop.rs`](../../src/hop.rs).
 35. Repository: [`README.md`](../../README.md), [`docs/usage.md`](../usage.md), [`src/detect/opencode.rs`](../../src/detect/opencode.rs).
 36. Local npm launcher `C:\Users\alfio\AppData\Roaming\npm\opencode.cmd` (150 bytes, generated by npm for `@opencode/cli`).
 37. [`docs/verification/source-model-summary-live.md`](../verification/source-model-summary-live.md): the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock).

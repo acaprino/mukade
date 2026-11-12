@@ -30,6 +30,7 @@ Install, store, compaction, tools, hooks; read before touching that harness's re
 | document | read it when |
 |---|---|
 | [Session interchange specification](session-interchange-spec.md) | you change a reader, writer or the manifest: data model, conversion rules, contracts, requirement ids (L1…) |
+| [Architecture](architecture.md) | you change mukade's code: one adapter per harness (`Harness`, `Destination`, the registry), adding or changing a harness, the test that keeps it so |
 | [Tool conversion tables](tool-conversion-tables.md) | you need how one harness's tool call becomes another's |
 | [Harness catalog](reference/harness-catalog.md) | you need install and store locations per OS, store layouts, lineage (`catalog/harnesses.json`) |
 | [Harness session persistence reference](reference/harness-session-persistence-reference.md) | you look beyond the four: secondary research (2026-10-27, restructured 2026-11-11) on 24 harnesses, with provenance and limitations. For the four, harness pages and specification come first (their `[V]` facts supersede it) |

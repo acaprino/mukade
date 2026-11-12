@@ -319,7 +319,7 @@ Sources: [30], tool translation [28] ([tool-conversion-tables](../tool-conversio
 
 **What you may lose**
 
-- **Shell calls need `--dest-shell`.** A `bash` call is written as a call only when `--dest-shell` names a POSIX shell (`bash`, `sh`, `zsh`) and the source call is POSIX too; otherwise it travels as text, as does one with a working directory or background execution. The timeout goes back to seconds, rounded up (`src/tools.rs` `translate_pi_shell()`).
+- **Shell calls need `--dest-shell`.** A `bash` call is written as a call only when `--dest-shell` names a POSIX shell (`bash`, `sh`, `zsh`) and the source call is POSIX too; otherwise it travels as text, as does one with a working directory or background execution. The timeout goes back to seconds, rounded up (`src/harnesses/pi.rs` `translate()`).
 - **Reasoning needs `--dest-protocol`.** Pi speaks whatever its provider speaks, so by default every reasoning block toward Pi is dropped [32]. With it, thinking is written with its `thinkingSignature` only when the reasoning policy carries it natively; an Anthropic encrypted payload becomes `{"type":"thinking","thinking":"[Reasoning redacted]","thinkingSignature":<data>,"redacted":true}` (`src/policy.rs` `payload_fits()`).
 - **Offered tools.** Pi's offered set is `read`, `bash`, `edit`, `write` (`src/tools.rs` `offered()`): `grep`, `find` and `ls` calls travel as text unless `--tool-map <path>` binds them. An edit with `replace_all` travels as text; several edits become one `edit` with `edits[]`.
 
@@ -389,10 +389,10 @@ In sources 36 to 52, read on 2026-11-01, `<pkg>` is the same folder holding Pi 1
 25. can1357/oh-my-pi, <https://github.com/can1357/oh-my-pi>, accessed 2026-10-28.
 26. `docs/session-interchange-spec.md` §2.4, §4, §5.
 27. `docs/reference/harness-session-persistence-reference.md`, entries "pi" and "Oh My Pi".
-28. `docs/tool-conversion-tables.md`; `src/tools.rs` (`offered`, `translate_pi_shell`, `multi_edit`).
+28. `docs/tool-conversion-tables.md`; `src/harnesses/pi.rs` (`offered`, `translate`, `multi_edit`); `src/tools.rs`.
 29. `src/reader/pi.rs`; `src/reader/json.rs` (`peek_ends`, `PEEK_HEAD_BYTES`, `PEEK_TAIL_BYTES`, `title_line`); `src/hop.rs` (`export_all_branches`). Checked 2026-11-11.
 30. `src/writer/pi.rs`; `src/writer/plan.rs` (`provider_id`, `model_id`, `protocol_name`); `src/policy.rs` (`payload_fits`, `destination_protocol`); `src/hop.rs` (`Compaction::DestinationNative`, `select`). Checked 2026-11-11.
-31. `src/exe.rs`, `src/roots.rs`, `src/cli.rs` (usage text, `inventory_roots`), `src/detect/pi.rs`, `catalog/harnesses.json`. Checked 2026-11-11.
+31. `src/harnesses/pi.rs` (the adapter), `src/exe.rs`, `src/roots.rs`, `src/cli.rs` (usage text, `inventory_roots`), `src/detect/pi.rs`, `catalog/harnesses.json`. Checked 2026-11-11.
 32. `README.md`, `docs/usage.md`.
 33. `src/model/tool.rs` (`CanonicalTool::from_pi`).
 34. `docs/verification/source-model-summary-live.md`: the live check of 2026-10-28 (throwaway sessions, source hashed before and after; Codex against a local mock); `src/summary.rs` (`summary_command`, `model_args`).

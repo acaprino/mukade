@@ -34,7 +34,8 @@ be expressed without changing what it did; otherwise it travels in **text form**
    Not equivalent, for example: Claude `Edit` with `replace_all: true` into Pi; Claude `Grep` with
    `output_mode` into OpenCode; Codex `exec_command` with `workdir` into Claude or Pi.
    An explicit list of the keys each translation maps or may drop decides
-   (`src/tools.rs` `accepted_keys()`): any other key, even one never seen, makes the call text form.
+   (`Destination::accepted_keys()` in the destination's adapter `src/harnesses/<harness>.rs`, over
+   `common_keys()` in `src/tools.rs`): any other key, even one never seen, makes the call text form.
    Every harness's spelling of a shared argument is accepted: `file_path`/`path`,
    `command`/`cmd`, `workdir`/`cwd`, `description`/`justification`,
    `old_string`/`oldString`/`oldText` (and the `new` forms), `replace_all`/`replaceAll`,
@@ -352,5 +353,5 @@ offered set where enabled ([`next.md`](../next.md), destination shell).
 
 1. Check the offered tool lists and argument schemas for the new version.
 2. Diff against §2 and §4; update the tables, "Verified against", **Last updated** and the changelog.
-3. In the same change update the writers' tables (`src/tools.rs` `offered()`, `accepted_keys()`, the
-   per-tool functions) and their fixtures (`tests/tools_translation.rs`).
+3. In the same change update the writers' tables (in the destination's adapter `src/harnesses/<harness>.rs`:
+   `offered()`, `accepted_keys()`, `translate()`) and their fixtures (`tests/tools_translation.rs`).

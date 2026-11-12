@@ -447,7 +447,7 @@ Local (this repository and this machine):
 4. `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reader/claude_history.rs`, `src/reader/claude_live.rs`, `src/process.rs`.
 5. `src/writer/claude_code.rs`, `src/writer/plan.rs`.
 6. `src/exe.rs`, `src/roots.rs` (`claude_project_dir_name`), `catalog/harnesses.json`.
-7. `src/policy.rs`, `src/detect.rs`, `src/detect/claude_code.rs`, `src/hop.rs`, `src/cli.rs`, `src/summary.rs`, `src/tools.rs`.
+7. `src/harnesses/claude_code.rs` (the adapter), `src/policy.rs`, `src/detect.rs`, `src/detect/claude_code.rs`, `src/hop.rs`, `src/cli.rs`, `src/summary.rs`, `src/tools.rs`.
 8. `README.md`, `docs/usage.md`.
 9. Installed binary `C:\Users\alfio\.local\bin\claude.exe`: `claude --version` (2.1.312), `claude --help`, `claude plugin --help`, `claude mcp --help`, `claude import --help`, `claude install --help`, `claude agents --help`, `claude auth --help`. Also its own JavaScript, embedded in `claude.exe`, read on 2026-10-28: the `/resume` list is built from each session file's head and tail (first prompt, `lastPrompt`, `customTitle`, `aiTitle`), and drops sessions that are sidechains, team or daemon sessions, `/loop` sessions, of some entrypoints, superseded ("continued in"), recorded under another directory with the same project slug, or made of bookkeeping rows only (no `"parentUuid":`).
 

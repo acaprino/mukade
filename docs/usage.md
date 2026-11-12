@@ -805,7 +805,7 @@ See the [README](../README.md#library).
 |---|---|
 | `--expect-sha256 <hash>` | `hop` only; 64 hex digits. Checks the captured source fingerprint before writing or starting a source-model summary; a mismatch is refused (exit 2). It covers the selected source in its entirety: an appended file changes it |
 | `--dest-id <id>` | reserves the destination session ID: `ses_<id>` for OpenCode, a UUID for Claude Code, Codex and Pi |
-| `--dest-path <path>` | reserves the destination file itself, for the file-based destinations (Claude Code, Codex, Pi). Absolute, inside the destination root, free of `..`. OpenCode refuses it (exit 2): its native import allocates the file |
+| `--dest-path <path>` | reserves the destination file itself, for the file-based destinations (Claude Code, Codex, Pi). Absolute, inside the destination root, free of `..`. OpenCode refuses it (exit 2): its native import allocates the file. `hop` checks it before reading the source, so a refused path runs nothing, a summarizing model included |
 | `--dest-agent <name>` | OpenCode only: the primary agent |
 | `--metadata-file <path>` | OpenCode only: a JSON object stored as session metadata; at most 1 MiB; protect it like the session |
 | `--tool-map <path>` | explicit bindings instead of the destination catalog's defaults (below) |
