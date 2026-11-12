@@ -110,13 +110,10 @@ pub fn sweep_stale(dir: &Path, prefix: &str, suffix: &str, older_than: Duration)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scratch::Scratch;
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mukade-portable-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(tag: &str) -> Scratch {
+        Scratch::new(&format!("portable-{tag}"))
     }
 
     /// There is no mode to switch on: the folder next to the executable is where mukade keeps
@@ -127,7 +124,6 @@ mod tests {
         assert_eq!(data_dir_in(Some(&exe)), Some(exe.join(DATA_DIR)));
         assert_eq!(data_dir_in(None), None, "an executable with no folder");
         assert!(!exe.join(DATA_DIR).exists(), "looking does not create");
-        let _ = std::fs::remove_dir_all(&exe);
     }
 
     #[test]
@@ -144,7 +140,6 @@ mod tests {
         let data = exe.join(DATA_DIR);
         assert_eq!(temp_dir_in(Some(&data)).unwrap(), data.join("tmp"));
         assert!(data.join("tmp").is_dir(), "made when asked for");
-        let _ = std::fs::remove_dir_all(&exe);
     }
 
     /// An executable in a place that cannot be written to (a read-only install): the folder cannot
@@ -157,7 +152,6 @@ mod tests {
         std::fs::write(&data, "a file, not a folder").unwrap();
         assert!(temp_dir_in(Some(&data)).is_err());
         assert!(temp_dir_in(None).is_err(), "no executable folder either");
-        let _ = std::fs::remove_dir_all(&exe);
     }
 
     /// Only mukade's own, old temporary files go.
@@ -196,6 +190,5 @@ mod tests {
             "files that are not ours stay"
         );
         sweep_stale(&dir.join("missing"), "x", "y", STALE_AFTER);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

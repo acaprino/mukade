@@ -1,7 +1,8 @@
 //! Images between harnesses. Each harness records an image in its own provider's shape, so a block
 //! copied from one harness into another is a block the destination does not read, and some
 //! providers refuse the request outright. An image is carried by its media type and base64 data,
-//! and written in the destination's own shape:
+//! and written in the destination's own shape, which its writer defines (`image_block` in
+//! `writer/<harness>.rs`):
 //!
 //! - Claude Code: `{type:"image", source:{type:"base64", media_type, data}}` (Anthropic messages);
 //! - Codex: `{type:"input_image", image_url:"data:<mime>;base64,<data>"}` (OpenAI responses);
@@ -13,7 +14,7 @@
 //! Anything else has no counterpart: the caller drops it and counts it.
 
 use crate::model::HarnessId;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// An image, as every harness can hold it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,32 +61,22 @@ fn from_data_uri(uri: &str) -> Option<Image> {
     })
 }
 
-/// The image as a user turn of `dest` carries it.
+/// The image as a user turn of `dest` carries it. A harness that is no destination carries none:
+/// `null`.
 pub fn user_block(image: &Image, dest: HarnessId) -> Value {
-    match dest {
-        HarnessId::OpenCode => {
-            json!({"data": image.data, "mime": image.mime, "source": {"type": "inline"}})
-        }
-        _ => result_block(image, dest),
-    }
+    crate::harnesses::get(dest)
+        .destination()
+        .map_or(Value::Null, |destination| {
+            destination.image_in_user_turn(image)
+        })
 }
 
-/// The image as a tool result of `dest` carries it.
+/// The image as a tool result of `dest` carries it. A harness that is no destination carries none:
+/// `null`.
 pub fn result_block(image: &Image, dest: HarnessId) -> Value {
-    match dest {
-        HarnessId::ClaudeCode => json!({
-            "type": "image",
-            "source": {"type": "base64", "media_type": image.mime, "data": image.data},
-        }),
-        HarnessId::Codex => json!({
-            "type": "input_image",
-            "image_url": format!("data:{};base64,{}", image.mime, image.data),
-        }),
-        HarnessId::Pi => json!({"type": "image", "data": image.data, "mimeType": image.mime}),
-        HarnessId::OpenCode => json!({
-            "type": "file",
-            "uri": format!("data:{};base64,{}", image.mime, image.data),
-            "mime": image.mime,
-        }),
-    }
+    crate::harnesses::get(dest)
+        .destination()
+        .map_or(Value::Null, |destination| {
+            destination.image_in_result(image)
+        })
 }

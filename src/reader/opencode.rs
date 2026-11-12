@@ -18,7 +18,8 @@ use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
     CanonicalTool, ChatReasoning, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque,
-    Protocol, Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+    ParentKind, Protocol, Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult,
+    Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -148,6 +149,20 @@ impl Builder {
                 raw: vec![raw.clone()],
             }),
             "assistant" => self.assistant(index, m, raw),
+            // A subagent's report, which the parent's model received as a message of its own.
+            "synthetic"
+                if str_at(m, "/metadata/source").as_deref() == Some("subagent")
+                    && str_at(m, "/text").is_some_and(|text| !text.is_empty()) =>
+            {
+                self.entries.push(Entry {
+                    id: id_of(m, index),
+                    kind: Kind::User {
+                        text: str_at(m, "/text").unwrap_or_default(),
+                        attachments: Vec::new(),
+                    },
+                    raw: vec![raw.clone()],
+                })
+            }
             // A compaction OpenCode did not complete (`failed`: the summary did not match its
             // template) was never applied; it is not the source's compaction.
             "compaction" if str_at(m, "/status").is_some_and(|status| status != "completed") => {
@@ -320,6 +335,7 @@ impl Builder {
                 .and_then(chrono::DateTime::from_timestamp_millis)
                 .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
         };
+        let (parent, parent_kind) = lineage(&session).unzip();
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::OpenCode,
@@ -332,13 +348,33 @@ impl Builder {
                 updated: epoch("/time_updated").or_else(|| epoch("/time/updated")),
                 models,
                 git_branch: None,
-                parent: str_at(&session, "/parent_id"),
+                parent,
+                parent_kind,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },
             entries: self.entries,
         })
     }
+}
+
+/// The session this one came from, and how. A child names the session that spawned it:
+/// `parentID` in an export (`info`), `parent_id` in a store row. A fork names its source in
+/// `fork.sessionID` (export) or `fork_session_id` (row), which OpenCode reads as a fork only with
+/// its boundary beside it.
+fn lineage(session: &Value) -> Option<(String, ParentKind)> {
+    let spawner = str_at(session, "/parentID").or_else(|| str_at(session, "/parent_id"));
+    if let Some(parent) = spawner.filter(|p| !p.is_empty()) {
+        return Some((parent, ParentKind::spawn()));
+    }
+    let bounded = |id: &str, boundary: &str| {
+        str_at(session, id)
+            .filter(|p| !p.is_empty())
+            .filter(|_| session.pointer(boundary).is_some_and(|b| !b.is_null()))
+    };
+    bounded("/fork/sessionID", "/fork/boundary")
+        .or_else(|| bounded("/fork_session_id", "/fork_boundary"))
+        .map(|source| (source, ParentKind::Fork))
 }
 
 fn id_of(m: &Value, index: usize) -> String {
@@ -373,7 +409,7 @@ impl Reader for Opencode {
         let argv = export_command(&exe, id);
         let mut command = std::process::Command::new(&argv[0]);
         command.args(&argv[1..]);
-        opencode_environment(&mut command, roots);
+        roots.apply_to(HarnessId::OpenCode, &mut command);
         let output = crate::exe::run_within(&mut command, EXPORT_TIMEOUT)
             .with_context(|| format!("run {}", argv.join(" ")))?;
         let Some(status) = output.status else {
@@ -487,6 +523,14 @@ fn open_read_only(path: &Path) -> Result<rusqlite::Connection> {
     Ok(db)
 }
 
+fn has_column(db: &rusqlite::Connection, table: &str, column: &str) -> bool {
+    db.prepare(&format!(
+        "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+    ))
+    .and_then(|mut query| query.exists([column]))
+    .unwrap_or(false)
+}
+
 fn has_table(db: &rusqlite::Connection, table: &str) -> bool {
     db.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -556,13 +600,30 @@ fn session_rows(
     } else {
         format!("WHERE {} ", conditions.join(" AND "))
     };
+    // A fork names its source in `fork_session_id`, read as one with its `fork_boundary`; a table
+    // without the two columns records no fork.
+    let forks = has_column(db, table, "fork_session_id") && has_column(db, table, "fork_boundary");
+    let fork_columns = if forks {
+        "fork_session_id, fork_boundary"
+    } else {
+        "NULL, NULL"
+    };
     let sql = format!(
-        "SELECT id, title, directory, time_updated, time_archived, parent_id FROM {table} \
-         {filter}ORDER BY time_updated DESC, id ASC"
+        "SELECT id, title, directory, time_updated, time_archived, parent_id, {fork_columns} \
+         FROM {table} {filter}ORDER BY time_updated DESC, id ASC"
     );
     let mut query = db.prepare(&sql)?;
     let rows = query.query_map([], |row| {
         let updated: Option<i64> = row.get(3)?;
+        let spawner: Option<String> = row.get::<_, Option<String>>(5)?.filter(|p| !p.is_empty());
+        let fork_source: Option<String> =
+            row.get::<_, Option<String>>(6)?.filter(|p| !p.is_empty());
+        let bounded = row.get_ref(7)?.data_type() != rusqlite::types::Type::Null;
+        let (parent, parent_kind) = match (spawner, fork_source) {
+            (Some(parent), _) => (Some(parent), Some(ParentKind::spawn())),
+            (None, Some(source)) if bounded => (Some(source), Some(ParentKind::Fork)),
+            _ => (None, None),
+        };
         Ok((
             updated.unwrap_or(0),
             SessionInfo {
@@ -574,7 +635,8 @@ fn session_rows(
                     .map(|time| time.to_rfc3339()),
                 archived: row.get::<_, Option<i64>>(4)?.is_some(),
                 path: path.to_string_lossy().into_owned(),
-                parent: row.get(5)?,
+                parent,
+                parent_kind,
                 ..Default::default()
             },
         ))
@@ -662,16 +724,6 @@ pub fn store_counts(db: &Path) -> Result<StoreCounts> {
 /// `PATH`, then the well-known install locations.
 fn opencode_binary() -> String {
     crate::exe::resolve(HarnessId::OpenCode, None)
-}
-
-/// Carry the caller's explicit OpenCode store into the subprocess rather than silently using the
-/// process environment. XDG variables must still be supplied by the caller when OpenCode needs them.
-pub fn opencode_environment(command: &mut std::process::Command, roots: &StoreRoots) {
-    if let Some(db) = &roots.opencode_db {
-        command.env("OPENCODE_DB", db);
-    } else {
-        command.env_remove("OPENCODE_DB");
-    }
 }
 
 /// How long `opencode session export` may take before it is stopped.

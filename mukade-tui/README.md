@@ -1,189 +1,178 @@
 # mukade-tui — harness sessions manager (terminal UI)
 
-A small native terminal browser for Mukade sessions: harnesses on the left, a directory filter,
-the matching sessions, and the selected session's transcript on the right. It can also resume a
-session in its own harness and hop it to another harness.
+One terminal window over the sessions of **Claude Code, Codex, OpenCode and Pi** and any installation a scan finds: browse, read, resume, hop, export, import.
 
-It is a separate crate: the `mukade` CLI and its dependency list do not change. The TUI reads and
-writes through the library (`reader::list_all`, `export`, `hop`) and never parses a harness store
-itself.
+A separate crate: the CLI's dependencies do not change. It goes only through the library (`Reader::list_all`, `export`, `hop_into`, `import_document`), never parsing a store itself.
+
+> **In 20 seconds**
+>
+> 1. `mukade-tui` (or `cargo run -p mukade-tui`)
+> 2. `↑`/`↓` pick a harness · `tab` → pick a folder · `tab` → pick a session · `enter` read it
+> 3. **`h`** hop · **`e`** export · **`i`** import · **`R`** resume · **`q`** quit
+
+## What it can do, per harness
+
+| | Claude Code | Codex | OpenCode | Pi |
+|---|:-:|:-:|:-:|:-:|
+| list sessions, filter by folder | ✅ | ✅ | ✅ | ✅ |
+| read the transcript | ✅ | ✅ | ✅ | ✅ |
+| resume (`R`) | ✅ | ✅ | ✅ | ✅ |
+| hop to / from (`h`) | ✅ | ✅ | ✅ | ✅ |
+| export (`e`) | ✅ | ✅ | ✅ | ✅ |
+| import into (`i`) | ✅ | ✅ | ✅ ¹ | ✅ |
+| `updated` time | ✅ | ✅ | ✅ | ✅ |
+| `live` (running now) | ✅ | — ² | — ² | — ² |
+
+¹ OpenCode needs a project id for the folder. The TUI asks the destination OpenCode for a session already filed under that folder; with none, the first write there needs the CLI's `--project-id`.
+² The store does not record running sessions.
 
 ## Run
 
 ```text
-cargo run -p mukade-tui
+cargo run -p mukade-tui                  # or target\release\mukade-tui.exe
+cargo run -p mukade-tui -- --turns 20    # last 20 user turns per transcript (default 50; 0 = all)
+cargo run -p mukade-tui -- --scan D:\Apps    # also list every installation below a folder
 ```
 
-The transcript opens on the last **50 user turns**; `--turns N` changes it (`--turns 0` loads all).
-The flag also accepts `--turns=N`; a missing or invalid value falls back to 50.
+`--turns=N` and `--scan=<dir>` work too; `--scan` may repeat.
 
-Store roots come from the harnesses' own variables (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
-`OPENCODE_DB`, `PI_CODING_AGENT_DIR`). A missing variable falls back to the catalog's default
-store for that harness, read-only until an explicit resume or hop.
+**Where it reads from:** each harness's own variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`, `PI_CODING_AGENT_DIR`; [usage §7](../docs/usage.md#7-stores-and-executables)); unset, the harness's default store (`catalog/harnesses.json`). Browsing only reads; resume, hop and import write.
 
-## Commands
+Headless (scripts, CI):
 
-| command | what it does |
+| command | prints |
 |---|---|
-| `cargo run -p mukade-tui` | open the explorer over the stores the environment names |
-| `cargo run -p mukade-tui -- --turns 20` | open transcripts on the last 20 user turns |
-| `cargo run -p mukade-tui -- --turns 0` | open transcripts on the full history |
-| `cargo run -p mukade-tui -- --check` | print harnesses and session counts, then exit |
-| `cargo run -p mukade-tui -- --scan D:\Apps` | also list every installation below a folder |
-| `cargo run -p mukade-tui -- --snapshot` | render one 120×40 frame on stdout |
-| `cargo run -p mukade-tui -- --snapshot-hop` | render the same frame with the hop dialog open |
-| `target\release\mukade-tui.exe` | the release binary on Windows |
+| `mukade-tui --check` | each row's session count (or its error), a scanned row's store and engine; then exits |
+| `mukade-tui --check --scan D:\Apps` | the same, with scanned installations |
+| `mukade-tui --snapshot` | one 120×40 frame |
+| `mukade-tui --snapshot-hop` | the same frame with the hop dialog open |
 
-## Examples
+## Screen
 
-Start on the real stores:
+Columns: **harness/installation → folder → sessions → details**. From 120 columns all four show; narrower, the three lists with the transcript opening over them; below 70, only the focused panel.
 
-```powershell
-cargo run -p mukade-tui
-```
+| mark | means |
+|---|---|
+| `↳` | has a parent (a fork or a subagent); details show `parent` |
+| `[live]` | running now (Claude Code only) |
+| `[archived]` | the harness marked it archived |
+| `[unreadable]` | listed, not readable: open, hop, export and resume refuse it and say why |
+| time, or `—` | `updated`, or none recorded |
 
-Limit the transcript to 20 turns, or show everything:
-
-```powershell
-cargo run -p mukade-tui -- --turns 20
-cargo run -p mukade-tui -- --turns 0
-```
-
-Point the explorer at explicit stores (PowerShell; a missing variable uses the catalog default):
-
-```powershell
-$env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE\.claude"
-$env:CODEX_HOME = "$env:USERPROFILE\.codex"
-$env:PI_CODING_AGENT_DIR = "$env:USERPROFILE\.pi\agent"
-$env:OPENCODE_DB = "$env:USERPROFILE\.local\share\opencode\opencode.db"
-.\target\release\mukade-tui.exe
-```
-
-Add the installations below a folder (portable and custom ones, a JanuraCode copy, say), at start
-or from inside the explorer with `o`:
-
-```powershell
-.\target\release\mukade-tui.exe --scan D:\Apps
-.\target\release\mukade-tui.exe --scan D:\Apps --scan E:\
-```
-
-Each installation becomes one more row, `<harness> · <name>` (for example
-`OpenCode · JanuraCode`), with its own store and the executable kept beside it. The scan is the
-library's (`mukade::detect::scan_installations`, the same as `mukade scan`): the explorer recognizes
-nothing itself. A store already listed is not added twice.
-
-Headless checks (useful in a script or CI):
-
-```powershell
-.\target\release\mukade-tui.exe --check
-.\target\release\mukade-tui.exe --check --scan D:\Apps
-.\target\release\mukade-tui.exe --snapshot
-.\target\release\mukade-tui.exe --snapshot-hop
-```
-
-Resume the selected session:
-
-1. select a session with `j`/`k`;
-2. press `R`;
-3. the harness opens in the same terminal with the session's store and cwd;
-4. quit the harness to return to the explorer.
-
-Hop the selected session:
-
-1. press `h`;
-2. choose the destination (`↑`/`↓`), then `enter`;
-3. choose compaction (`none`, `portable`, `summary`), then `enter`;
-4. type an optional resume prompt, then `enter` to run;
-5. read the scrollable result (`j`/`k`, page keys), then `esc`.
-
-`t` switches between the configured history limit and the full history without re-reading the
-session.
-
-## Filter by directory
-
-The columns follow **harness/installation → directory → sessions → details**.
-Directories use each session's recorded working directory and show their session
-counts. Select **All directories** for the complete list, or **Unknown directory**
-for sessions without a recorded cwd. Filtering never depends on the directory
-still existing on disk. The selected directory expands its path over wrapped
-lines; a short viewport preserves the path tail. Identically named projects also
-show a distinguishing parent path.
-
-1. Select a harness with `↑`/`↓`.
-2. Press `tab` or `→` to reach directories; select the project directory.
-3. Press `tab` or `→` again to select a session; `enter` opens its transcript.
-
-`shift+tab` or `←` moves to the previous column. `esc` closes a transcript or
-moves back one selection column. Reloading with `r` resets the filter to
-**All directories**. Resume and hop use the selected filtered session.
-
-At 120 columns or wider, all four panels are visible. Narrower terminals show
-the three selection columns and open transcripts over the full body. Below 70
-columns, only the focused panel is shown.
+A harness row marked `!` could not be listed; its details show the error. **Details:** `harness`, `id`, `parent`, `cwd`, `updated`, `archived`, `live`, `unreadable`, `path`; a scanned installation adds `store` and `engine`.
 
 ## Keys
 
-| key | action |
+**Move**
+
+| key | does |
 |---|---|
-| `j` / `k`, `↑` / `↓` | move in the focused list |
-| `tab` / `→`, `shift+tab` / `←` | move between harnesses, directories and sessions |
-| `enter` | advance to the next column, or open the selected session's transcript |
-| `t` | toggle last-50-turns / full history |
-| `h` | hop the selected session to another harness or installation |
-| `R` | resume the selected session in its own installation |
-| `o` | scan a folder for more installations and add them as rows |
-| `g` / `G` | top / bottom of the transcript |
-| page up/down | scroll the transcript |
-| `esc` | close the transcript or move back one column |
-| `r` | rescan every store and reset the directory filter |
-| `q` | quit |
+| `↑`/`↓` or `j`/`k` | move in the focused list (scroll, in the transcript) |
+| `tab` / `→` · `shift+tab` / `←` | next / previous column |
+| `enter` | next column, or open the selected session's transcript |
+| `esc` | close the transcript, or go back one column |
 
-## Resume
+**Act on the selected session**
 
-`R` leaves the TUI, runs the harness's own interactive resume command in the same terminal with
-the session's store variable and working directory, then returns to the TUI when the harness exits.
-The commands come from `catalog/harnesses.json` (`interactive_resume`), not from a second table:
+| key | does |
+|---|---|
+| **`h`** | **hop** it to another harness or installation |
+| **`e`** | **export** it to a JSON document |
+| **`i`** | **import** a JSON document as a new session |
+| **`R`** | **resume** it in its own harness |
 
-- Claude Code: `claude --resume <id>`
-- Codex: `codex resume <id>`
-- OpenCode: `opencode mini --standalone --session <id>`
-- Pi: `pi --session <file>`
+**View, stores, quit**
 
-## Hop
+| key | does |
+|---|---|
+| `t` | last N turns (`--turns`, default 50) ↔ full history |
+| `g` / `G` · page up/down | transcript top / bottom · scroll 10 lines |
+| `o` | scan a folder for more installations (type it, `enter`) |
+| `r` | reload every store (resets the folder filter; scanned rows stay) |
+| `q` | quit (not while a hop or import runs) |
 
-`h` opens a small dialog: destination (every other row: another harness, or another installation
-of the same harness, such as an OpenCode session into a portable JanuraCode), compaction (`none`, `portable`, `summary`) and an
-optional resume prompt. `portable` needs a source that compacted at least once; `summary` asks the
-source's own model and may take minutes. `enter` on the prompt runs the hop in the background.
-The result is scrollable (`j/k`, page keys) and shows the new id, its location, the headless and
-interactive resume commands, the manifest path, every loss, and the destination's reply when a
-prompt was given. The manifest is saved under `mukade-data/manifests/`.
+The footer shows every key but `g`/`G` and the page keys. A result box scrolls with those and `j`/`k`; `esc`, `enter` or `q` close it.
 
-The source is read from its row's store and the destination written to its own
-(`mukade::hop_into`), with the destination installation's executable, which also appears in the
-resume commands. A destination's model and provider come from that installation's own
-configuration (`mukade::dest::configured_model_in`): a portable JanuraCode's
-`data\config\opencode\opencode.json` beside its `data\share\opencode\opencode.db`, a Codex home's
-`config.toml`; a standard OpenCode falls back to `OPENCODE_CONFIG` / `XDG_CONFIG_HOME`. OpenCode
-refuses a hop without them, and without a project id, which a destination whose database has no
-session for the source's folder yet cannot supply: use the CLI's `--project-id` for that first hop.
+## Hop (`h`)
+
+1. Press `h`.
+2. **Destination:** `↑`/`↓`, `enter`. Every other row: another harness, or another installation of the same one.
+3. **Compaction:** `↑`/`↓`, `enter`:
+   - `none`: the whole history;
+   - `portable`: the source's last compaction summary plus what follows (the source must have compacted);
+   - `summary`: the source's own model writes a handoff summary, no turn kept verbatim (may take minutes, costs a model call).
+4. **Prompt:** an optional resume prompt (empty = write only), then `enter` to run.
+5. Read the result (`j`/`k`, page keys), then `esc`.
+
+`tab` moves between the three fields, `esc` cancels. The session keeps its (shown) working directory.
+The result shows the **new id**, **location**, **headless** and **interactive** resume commands,
+**manifest** path (`mukade-data/manifests/<harness>-<id>.json`), **every loss**, and the destination's reply to a prompt.
+
+**Model and provider** come from the destination installation's own configuration
+(`src/dest.rs` `configured_model_in()`):
+
+| destination | read from |
+|---|---|
+| OpenCode at `<root>\share\opencode\opencode.db` (a portable JanuraCode) | `<root>\config\opencode\opencode.json` (JanuraCode: `data\config\opencode\opencode.json`) |
+| any other OpenCode | `OPENCODE_CONFIG`, else `XDG_CONFIG_HOME` |
+| Codex home | `config.toml` (the provider) |
+| Claude Code, Pi | none read |
+
+OpenCode refuses a write lacking a model, provider or project id; model and provider fall back to the session's recorded model.
+
+## Export (`e`)
+
+1. Select a session, press `e`.
+2. The result shows `mukade-data/exports/<harness>-<id>.json` and its message count.
+
+- The file is the **document `mukade dump` prints**: import it with `i`, or anywhere with `mukade write <harness> <file>`.
+- Exporting a session again overwrites the file. `mukade-data` sits beside the executable, or at an absolute `MUKADE_DATA_DIR`.
+
+## Import (`i`)
+
+1. Press `i`: three fields; `tab` / `shift+tab` move, `enter` advances.
+2. **document**: a `.json` path; starts with your last export.
+3. **into**: the installation to write into (`↑`/`↓`); starts on the selected harness.
+4. **prompt**: optional; the destination answers it once the session is written.
+5. `enter` on the prompt runs it; the result is shown like a hop's, manifest included.
+
+It always makes a **new** session, with the destination's own executable, version, model and (OpenCode)
+project, as a hop does, in the document's working directory. `esc` cancels.
+
+## Resume (`R`)
+
+`R` leaves the window and runs the harness's interactive resume in the same terminal (the session's store, executable and working directory), and returns when you quit it. The commands are
+`interactive_resume` in `catalog/harnesses.json` ([the four entries](../docs/reference/harness-catalog.md#the-four-entries); OpenCode: `mini --standalone`). A scanned installation runs its own executable, not the bare name.
+
+## Folders (directory filter)
+
+- Folders are each session's recorded working directory, with counts.
+- **All directories** shows every session; **Unknown directory** those with no recorded folder.
+- The folder need not exist on disk. A long path wraps; identical project names show a parent path. Resume, hop and export act on the filtered selection.
+
+## Installations found by a scan (`o`, `--scan`)
+
+- Each installation becomes a row `<harness> · <name>` (`OpenCode · JanuraCode`) with its own store and the executable kept beside it; `<name>` is the folder holding both (a portable app's own), else the store's.
+- The scan is the library's (`src/detect/scan.rs` `scan_installations()`, as `mukade scan`); a listed store is not added twice.
+- It reads at most 8 levels and 100,000 folders; the status line says when it stopped early. Scan the folder that holds the installations, not a user profile.
 
 ## Limits
 
-- No export/import dialog yet.
-- Hop options are limited to destination, compaction and resume prompt; reasoning policy,
-  historical tools, interrupted turns (always kept here; `--interrupted drop` in the CLI), cwd
-  override, `all-branches` and advanced destination ids stay in the CLI.
-- Every row is named by its own store: OpenCode and a portable JanuraCode from `session_v2.title`,
-  Claude Code from the rows its `/resume` picker reads, Codex from `session_index.jsonl`, Pi from its
-  `session_info` display name or its first prompt. A session its store does not name — a Claude Code
-  file of bookkeeping rows only, a Codex thread the catalogue has no entry for — is listed under its
-  id.
-- The `updated` column stays empty for Codex and Pi: their lists read a catalogue and a header, not
-  the transcript, and the only stamp there is the creation (the remaining fields of
-  `../docs/superpowers/specs/2026-10-30-mukade-ui-design.md` §7.1).
-- The transcript shows user, assistant, reasoning, tool calls, full results and compactions in
-  native order; `Meta` records are hidden.
-- Scans, session reads and hops run on worker threads; a hop cannot be cancelled once it starts.
-- A folder scan reads at most 8 levels and 100,000 folders; a whole user profile can take tens of
-  seconds and stop early, so scan the folder that holds the installations.
+**Kept in the CLI** (`mukade hop` / `mukade write`, [usage §3](../docs/usage.md#3-commands)):
+
+| kind | flags |
+|---|---|
+| content | `--reasoning`, `--without-tools`, `--interrupted drop` (the TUI always keeps interrupted work), `--all-branches` |
+| compaction | `--compaction native`, `--keep-turns`, `--intent`, `--summary-model`, `--summary-timeout` |
+| destination | `--cwd`, `--dest-shell`, `--dest-id` / `--dest-path`, `--model` / `--model-provider` / `--project-id`, `--dest-agent`, `--metadata-file`, `--tool-map` |
+| safety | `--expect-sha256` |
+
+A TUI hop takes the destination's shell and offered set from its own configuration, as a CLI hop
+without `--dest-shell` does ([tables §4.1](../docs/tool-conversion-tables.md#41-shell)).
+
+- **Names** come from each store (OpenCode `session_v2.title`, Claude Code the rows its `/resume`
+  picker reads, Codex `session_index.jsonl`, Pi its display name or first prompt); an unnamed session shows its id.
+- **`updated`:** Codex's comes from its state database, else the rollout file's last write (copying a rollout without its file time changes it); Pi's, its newest record.
+- **Transcript:** user, assistant, reasoning, tool calls, full results and compactions in native
+  order; a tool call's input is cut at 240 characters; bookkeeping (`Meta`) records are hidden.
+- **Background work:** scans, reads, exports, imports and hops run on worker threads; a hop or import cannot be cancelled.

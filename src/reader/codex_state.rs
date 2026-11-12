@@ -25,8 +25,24 @@ pub struct Thread {
     pub archived: bool,
     /// The thread that spawned this one (`thread_spawn_edges`).
     pub parent: Option<String>,
+    /// The role it ran as (`agent_role`), or `guardian_review` for a guardian review.
+    pub agent: Option<String>,
     /// A thread Codex ran for another (a spawned subagent, a guardian review): not a root.
     pub subagent: bool,
+}
+
+impl Thread {
+    /// A thread with a spawn edge was spawned by its parent, as the role its row records.
+    pub fn parent_kind(&self) -> Option<crate::model::ParentKind> {
+        self.parent
+            .as_ref()
+            .map(|_| crate::model::ParentKind::Spawn {
+                call_id: None,
+                agent: self.agent.clone(),
+                // The database does not say; the rollout's own `session_meta` does.
+                inherits_context: false,
+            })
+    }
 }
 
 /// The catalogue: the database file it came from, and its threads.
@@ -104,6 +120,7 @@ fn read_threads(database: &Path, home: &Path) -> rusqlite::Result<Vec<Thread>> {
         "archived",
         "updated_at_ms",
         "updated_at",
+        "agent_role",
     ];
     let select: Vec<String> = wanted
         .iter()
@@ -127,8 +144,14 @@ fn read_threads(database: &Path, home: &Path) -> rusqlite::Result<Vec<Thread>> {
                 .filter(|s| *s > 0)
                 .map(|s| s.saturating_mul(1000))
         });
+        let agent = if thread_source == "guardian_review" {
+            Some("guardian_review".to_string())
+        } else {
+            text(11).filter(|role| !role.is_empty())
+        };
         Ok(Thread {
             parent: parents.get(&id).cloned(),
+            agent,
             subagent: parents.contains_key(&id)
                 || source.to_ascii_lowercase().contains("subagent")
                 || matches!(thread_source.as_str(), "guardian_review" | "subagent"),
@@ -247,9 +270,7 @@ mod tests {
 
     #[test]
     fn only_a_numbered_state_file_is_the_database() {
-        let dir = std::env::temp_dir().join(format!("mukade-codex-state-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("codex-state");
         for name in [
             "state_5.sqlite",
             "state_5.sqlite-wal",
@@ -265,6 +286,5 @@ mod tests {
             Some(dir.join("state_10.sqlite").as_path()),
             "numbered by value (10 after 5), side files and other databases ignored"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -21,60 +21,35 @@ pub enum ReasoningPolicy {
 }
 
 /// The wire protocol a destination speaks by default. `None` means the destination's provider is
-/// not known, and a policy that needs to compare protocols must then drop the opaque payload.
+/// not known, and a policy that needs to compare protocols must then drop the opaque payload. A
+/// harness that is no destination has none.
 pub fn destination_protocol(harness: HarnessId) -> Option<Protocol> {
-    match harness {
-        HarnessId::ClaudeCode => Some(Protocol::AnthropicMessages),
-        HarnessId::Codex => Some(Protocol::OpenaiResponses),
-        // OpenCode and Pi speak whatever their configured provider speaks.
-        HarnessId::OpenCode | HarnessId::Pi => None,
-    }
+    crate::harnesses::get(harness)
+        .destination()
+        .and_then(|destination| destination.protocol())
 }
 
-/// Whether a destination's own format has a place for this opaque payload. Claude writes a
-/// signature as `thinking` and an encrypted payload as `redacted_thinking`; Pi replays a
-/// `thinkingSignature`, and an Anthropic encrypted payload as its own `redacted: true` block;
-/// Codex only `encrypted_content`; OpenCode keeps both.
+/// Whether a destination's own format has a place for this opaque payload
+/// ([`Destination::payload_has_place`](crate::harnesses::Destination::payload_has_place)). A
+/// harness that is no destination has none.
 pub fn payload_fits(opaque: &Opaque, dest: HarnessId) -> bool {
-    // Other stores cannot retain a Chat envelope. A single ordinary Anthropic detail
-    // has an existing exact scalar conversion; multi-item/OpenAI envelopes do not.
-    if opaque.chat.is_some() && dest != HarnessId::OpenCode && !scalar_chat_payload(opaque) {
-        return false;
-    }
-    match dest {
-        HarnessId::ClaudeCode | HarnessId::OpenCode => {
-            opaque.signature.is_some() || opaque.encrypted.is_some()
-        }
-        HarnessId::Pi => {
-            opaque.signature.is_some()
-                || (opaque.encrypted.is_some() && opaque.protocol == Protocol::AnthropicMessages)
-        }
-        HarnessId::Codex => opaque.encrypted.is_some(),
-    }
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.payload_has_place(opaque))
 }
 
-/// The receiving OpenCode provider must understand the retained envelope. Never relabel
-/// native OpenAI ciphertext as OpenRouter ciphertext merely because both speak Responses.
+/// Whether the destination's provider reads the envelope it keeps
+/// ([`Destination::provider_reads_envelope`](crate::harnesses::Destination::provider_reads_envelope)).
+/// A harness that is no destination has no provider to read it.
 pub fn chat_destination_fits(opaque: &Opaque, dest: HarnessId, provider: Option<&str>) -> bool {
-    if dest != HarnessId::OpenCode {
-        return true;
-    }
-    let Some(chat) = &opaque.chat else {
-        return true;
-    };
-    if provider == Some("openrouter")
-        && chat.details.iter().any(|d| {
-            d.get("format").and_then(serde_json::Value::as_str)
-                == Some("openai-native-responses-v1")
-        })
-    {
-        return false;
-    }
-    provider.is_some() && provider == chat.provider.as_deref()
-        || scalar_chat_payload(opaque) && matches!(provider, Some("anthropic" | "openrouter"))
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.provider_reads_envelope(opaque, provider))
 }
 
-fn scalar_chat_payload(opaque: &Opaque) -> bool {
+/// An opaque payload without a Chat envelope, or with one ordinary Anthropic detail: the envelope
+/// has an exact scalar conversion. Multi-item and OpenAI envelopes do not.
+pub(crate) fn scalar_chat_payload(opaque: &Opaque) -> bool {
     let Some(chat) = &opaque.chat else {
         return true;
     };

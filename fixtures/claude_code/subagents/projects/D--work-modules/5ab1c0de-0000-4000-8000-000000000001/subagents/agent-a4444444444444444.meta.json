@@ -1,0 +1,10 @@
+{
+  "agentType": "Explore",
+  "description": "Check module B tests",
+  "spawnDepth": 2,
+  "requestShape": "foreground",
+  "requestNonInteractive": false,
+  "toolUseId": "toolu_b_inner",
+  "parentAgentId": "a2222222222222222",
+  "finished": true
+}

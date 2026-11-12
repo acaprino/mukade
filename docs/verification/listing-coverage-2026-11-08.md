@@ -43,6 +43,8 @@ The 5 live sessions are the 5 `sessions/<pid>.json` files whose process runs; th
   beside it holds the peer-messaging key and is not read.
 - Not verified: the liveness check on Linux and macOS (`/proc`, `ps`; `procStart` is not compared
   there), and a cold disk with an empty mukade cache.
+  *Update 2026-11-11:* Linux is now verified, and was wrong before: see
+  [linux-2026-11-11.md](linux-2026-11-11.md). macOS and the cold disk remain open.
 
 ## Re-run
 

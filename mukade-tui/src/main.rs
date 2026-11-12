@@ -4,10 +4,13 @@
 //! custom ones included), with their session counts. Directory filters precede the session list.
 //! Right: the selected session's metadata, or its transcript after `Enter`.
 //! `R` resumes in the session's own installation; `h` hops it to another and shows the manifest;
+//! `e` exports it to an interchange document; `i` imports a document into an installation;
 //! `o` scans a folder for more installations (`--scan <dir>` does it at start).
 
 mod directory;
 mod location;
+#[cfg(test)]
+mod scratch;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
@@ -19,8 +22,8 @@ use mukade::catalog;
 use mukade::dest;
 use mukade::exe;
 use mukade::hop::{
-    Compaction, HopError, HopRequest, KeepFrom, ResumePrompt, SessionRef, SummarySource,
-    WriteDetails,
+    Compaction, HopError, HopRequest, ImportOpts, KeepFrom, ResumePrompt, SessionRef, SourceFacts,
+    SummarySource, WriteDetails,
 };
 use mukade::model::{HarnessId, Kind, Session};
 use mukade::policy::ReasoningPolicy;
@@ -81,11 +84,22 @@ enum Mode {
     Result(ResultView),
     /// The folder to scan for installations, as typed so far.
     Open(String),
+    Import(Box<ImportState>),
 }
 
 struct ResultView {
+    title: &'static str,
     lines: Vec<String>,
     scroll: u16,
+}
+
+/// The import dialog: a document file, the installation to write it into, an optional prompt.
+struct ImportState {
+    path: String,
+    destinations: Vec<Location>,
+    dest: usize,
+    prompt: String,
+    field: usize,
 }
 
 struct HopState {
@@ -107,6 +121,8 @@ enum JobKind {
     Scan,
     Read,
     Hop,
+    Export,
+    Import,
 }
 
 enum JobResult {
@@ -121,6 +137,14 @@ enum JobResult {
         result: Box<Result<Session, String>>,
     },
     Hopped(Vec<String>),
+    Exported(Result<Exported, String>),
+    Imported(Vec<String>),
+}
+
+/// A document `e` wrote.
+struct Exported {
+    path: std::path::PathBuf,
+    messages: usize,
 }
 
 struct App {
@@ -144,6 +168,8 @@ struct App {
     viewport_height: u16,
     turn_limit: usize,
     default_turns: usize,
+    /// The last document `e` wrote: the import dialog starts with it.
+    last_export: Option<String>,
 }
 
 impl App {
@@ -172,6 +198,7 @@ impl App {
             viewport_height: 20,
             turn_limit,
             default_turns: turn_limit,
+            last_export: None,
         }
     }
 
@@ -466,7 +493,7 @@ fn run(terminal: &mut Tui, app: &mut App, folders: Vec<std::path::PathBuf>) -> s
             continue;
         }
         if app.busy {
-            if key.code == KeyCode::Char('q') && app.job_kind != JobKind::Hop {
+            if key.code == KeyCode::Char('q') && !matches!(app.job_kind, JobKind::Hop | JobKind::Import) {
                 return Ok(());
             }
             continue;
@@ -478,6 +505,10 @@ fn run(terminal: &mut Tui, app: &mut App, folders: Vec<std::path::PathBuf>) -> s
             }
             Mode::Open(_) => {
                 handle_open_key(app, key.code);
+                continue;
+            }
+            Mode::Import(_) => {
+                handle_import_key(app, key.code);
                 continue;
             }
             Mode::Result(view) => {
@@ -501,6 +532,8 @@ fn run(terminal: &mut Tui, app: &mut App, folders: Vec<std::path::PathBuf>) -> s
         match key.code {
             KeyCode::Char('q') => return Ok(()),
             KeyCode::Char('h') => open_hop(app),
+            KeyCode::Char('e') => start_export(app),
+            KeyCode::Char('i') => open_import(app),
             KeyCode::Char('R') => resume_selected(terminal, app)?,
             KeyCode::Char('o') => app.mode = Mode::Open(String::new()),
             KeyCode::Tab | KeyCode::Right => app.next_focus(),
@@ -725,9 +758,263 @@ fn poll_job(app: &mut App) {
             } else {
                 "hop finished".to_string()
             };
-            app.mode = Mode::Result(ResultView { lines, scroll: 0 });
+            app.mode = Mode::Result(ResultView {
+                title: " hop result ",
+                lines,
+                scroll: 0,
+            });
+        }
+        JobResult::Exported(Ok(exported)) => {
+            let path = exported.path.display().to_string();
+            app.status = format!("exported → {path}");
+            app.last_export = Some(path.clone());
+            app.mode = Mode::Result(ResultView {
+                title: " export result ",
+                lines: vec![
+                    format!("document     {path}"),
+                    format!("messages     {}", exported.messages),
+                    String::new(),
+                    "press i to import it into another installation,".to_string(),
+                    format!("or run: mukade write <harness> \"{path}\""),
+                ],
+                scroll: 0,
+            });
+        }
+        JobResult::Exported(Err(error)) => {
+            app.status = format!("export failed: {error}");
+        }
+        JobResult::Imported(lines) => {
+            app.status = if lines.first().is_some_and(|line| {
+                line.starts_with("import failed") || line.starts_with("resume failed")
+            }) {
+                "import failed".to_string()
+            } else {
+                "import finished".to_string()
+            };
+            app.mode = Mode::Result(ResultView {
+                title: " import result ",
+                lines,
+                scroll: 0,
+            });
         }
     }
+}
+
+/// `e`: write the selected session's interchange document to `mukade-data/exports/`.
+fn start_export(app: &mut App) {
+    if refuse_unreadable(app) {
+        return;
+    }
+    let Some((location, info)) = app.selected_pair() else {
+        app.status = "no session selected".to_string();
+        return;
+    };
+    let Some(dir) = data_dir().map(|dir| dir.join("exports")) else {
+        app.status = "export failed: no mukade-data folder beside the executable".to_string();
+        return;
+    };
+    let location = location.clone();
+    let id = info.id.clone();
+    let (sender, receiver) = mpsc::channel();
+    let shown = id.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(JobResult::Exported(export_session(&location, &id, &dir)));
+    });
+    app.job = Some(receiver);
+    app.job_kind = JobKind::Export;
+    app.busy = true;
+    app.status = format!("exporting {shown}…");
+}
+
+/// Where `e` writes a session's document: `<dir>/<harness>-<id>.json`, the id made safe for a file
+/// name.
+fn export_file(dir: &std::path::Path, harness: HarnessId, id: &str) -> std::path::PathBuf {
+    let id: String = id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    dir.join(format!("{}-{id}.json", harness.as_str()))
+}
+
+/// Read a session and write its document (the same one `mukade dump` prints) into `dir`.
+fn export_session(location: &Location, id: &str, dir: &std::path::Path) -> Result<Exported, String> {
+    let session = mukade::export(&SessionRef::id(location.harness, id), &location.roots)
+        .map_err(|error| error.to_string())?;
+    let doc = mukade::hop::document(&session, None);
+    let messages = doc
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    let path = export_file(dir, location.harness, id);
+    let text = serde_json::to_string_pretty(&doc).map_err(|error| error.to_string())?;
+    std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(Exported { path, messages })
+}
+
+/// `i`: the import dialog, over every location, starting with the last exported document.
+fn open_import(app: &mut App) {
+    let destinations: Vec<Location> = app.rows.iter().map(|row| row.location.clone()).collect();
+    if destinations.is_empty() {
+        app.status = "no installation to import into".to_string();
+        return;
+    }
+    let dest = app.harness.min(destinations.len() - 1);
+    app.mode = Mode::Import(Box::new(ImportState {
+        path: app.last_export.clone().unwrap_or_default(),
+        destinations,
+        dest,
+        prompt: String::new(),
+        field: 0,
+    }));
+}
+
+fn handle_import_key(app: &mut App, code: KeyCode) {
+    let mut run = false;
+    {
+        let Mode::Import(state) = &mut app.mode else {
+            return;
+        };
+        let count = state.destinations.len().max(1);
+        match code {
+            KeyCode::Esc => app.mode = Mode::Normal,
+            KeyCode::Tab => state.field = (state.field + 1) % 3,
+            KeyCode::BackTab => state.field = (state.field + 2) % 3,
+            KeyCode::Up | KeyCode::Down if state.field == 1 => {
+                state.dest = if code == KeyCode::Up {
+                    (state.dest + count - 1) % count
+                } else {
+                    (state.dest + 1) % count
+                };
+            }
+            KeyCode::Enter if state.field < 2 => state.field += 1,
+            KeyCode::Enter => run = true,
+            KeyCode::Backspace if state.field == 0 => {
+                state.path.pop();
+            }
+            KeyCode::Backspace if state.field == 2 => {
+                state.prompt.pop();
+            }
+            KeyCode::Char(character) if state.field == 0 => state.path.push(character),
+            KeyCode::Char(character) if state.field == 2 => state.prompt.push(character),
+            _ => {}
+        }
+    }
+    if run {
+        start_import(app);
+    }
+}
+
+fn start_import(app: &mut App) {
+    let Mode::Import(state) = std::mem::replace(&mut app.mode, Mode::Normal) else {
+        return;
+    };
+    let path = state.path.trim().trim_matches('"').to_string();
+    if path.is_empty() {
+        app.status = "import: no document given".to_string();
+        app.mode = Mode::Import(state);
+        return;
+    }
+    let Some(dest) = state.destinations.get(state.dest).cloned() else {
+        return;
+    };
+    let prompt = Some(state.prompt.trim().to_string()).filter(|prompt| !prompt.is_empty());
+    let label = dest.label.clone();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let lines = execute_import(std::path::Path::new(&path), &dest, prompt);
+        let _ = sender.send(JobResult::Imported(lines));
+    });
+    app.job = Some(receiver);
+    app.job_kind = JobKind::Import;
+    app.busy = true;
+    app.status = format!("importing → {label}…");
+}
+
+/// Read a document file and write it into `dest` as a new session, with the destination's own
+/// version, protocol, model and project; the result lines are the receipt, as a hop shows it.
+fn execute_import(path: &std::path::Path, dest: &Location, prompt: Option<String>) -> Vec<String> {
+    let (doc, session) = match read_document_file(path) {
+        Ok(read) => read,
+        Err(error) => return vec![format!("import failed: {error}")],
+    };
+    let write = write_details_for(dest, session.meta.cwd.as_deref());
+    match import_read(dest, &doc, &session, write, prompt) {
+        Ok(receipt) => receipt_lines(&receipt, dest),
+        Err(HopError::ResumeFailed { reason, receipt }) => {
+            let mut lines = vec![format!("resume failed: {reason}"), String::new()];
+            lines.extend(receipt_lines(&receipt, dest));
+            lines
+        }
+        Err(error) => vec![format!("import failed: {error}")],
+    }
+}
+
+/// A document file and the session it holds.
+fn read_document_file(path: &std::path::Path) -> Result<(serde_json::Value, Session), String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("{}: not a JSON document: {error}", path.display()))?;
+    let session = mukade::hop::read_document(&doc).map_err(|error| error.to_string())?;
+    Ok((doc, session))
+}
+
+/// The import itself, with the destination details already decided (`write`).
+fn import_read(
+    dest: &Location,
+    doc: &serde_json::Value,
+    session: &Session,
+    write: WriteDetails,
+    prompt: Option<String>,
+) -> Result<mukade::Receipt, HopError> {
+    let opts = ImportOpts {
+        cwd: session.meta.cwd.clone(),
+        roots: dest.roots.clone(),
+        reasoning: ReasoningPolicy::default(),
+        write,
+        resume: prompt.map(ResumePrompt::new),
+        source_facts: SourceFacts::of(session),
+        compaction: "none".to_string(),
+        summary: None,
+        native_budget: None,
+    };
+    mukade::import_document(dest.harness, doc, session, &opts)
+}
+
+/// What a write into `dest` needs from the destination itself: its executable and version, its
+/// protocol, the model its own configuration names, the shell it runs and the tools it offers in
+/// `cwd`, and for OpenCode the project of `cwd`.
+fn write_details_for(dest: &Location, cwd: Option<&str>) -> WriteDetails {
+    let exe = dest.engine();
+    let configured = dest::configured_model_in(dest.harness, &dest.roots);
+    let project = cwd.map(std::path::Path::new);
+    let project_id = cwd.and_then(|cwd| {
+        mukade::harnesses::get(dest.harness)
+            .destination()?
+            .project_id(&exe, cwd, &dest.roots, mukade::cache::dir().as_deref())
+            .ok()
+            .flatten()
+    });
+    WriteDetails {
+        dest_version: exe::version_of(&exe),
+        dest_protocol: mukade::policy::destination_protocol(dest.harness),
+        dest_shell: dest::shell_in(dest.harness, &dest.roots, project),
+        offered: Some(mukade::tools::offered_in(
+            dest.harness,
+            &dest.roots,
+            project,
+        )),
+        model_provider: configured.as_ref().map(|(provider, _)| provider.clone()),
+        model: configured.and_then(|(_, model)| model),
+        project_id,
+        exe: Some(exe),
+        ..Default::default()
+    }
+}
+
+/// The `mukade-data` folder beside the executable (or `MUKADE_DATA_DIR`).
+fn data_dir() -> Option<std::path::PathBuf> {
+    Some(mukade::cache::dir()?.parent()?.to_path_buf())
 }
 
 fn open_hop(app: &mut App) {
@@ -850,20 +1137,7 @@ fn execute_hop(hop: &HopState) -> Vec<String> {
             Err(error) => return vec![format!("hop failed: {error}")],
         },
     };
-    let exe = dest.engine();
-    let configured = dest::configured_model_in(dest.harness, &dest.roots);
-    let project_id = if dest.harness == HarnessId::OpenCode {
-        cwd.as_deref().and_then(|cwd| {
-            mukade::reader::opencode::project_id_for(
-                &exe,
-                cwd,
-                &dest.roots,
-                mukade::cache::dir().as_deref(),
-            )
-        })
-    } else {
-        None
-    };
+    let write = write_details_for(dest, cwd.as_deref());
     let request = HopRequest {
         source,
         dest: dest.harness,
@@ -873,15 +1147,7 @@ fn execute_hop(hop: &HopState) -> Vec<String> {
             .then(|| ResumePrompt::new(hop.prompt.trim().to_string())),
         reasoning: ReasoningPolicy::default(),
         roots: hop.source.roots.clone(),
-        write: WriteDetails {
-            dest_version: exe::version_of(&exe),
-            dest_protocol: mukade::policy::destination_protocol(dest.harness),
-            model_provider: configured.as_ref().map(|(provider, _)| provider.clone()),
-            model: configured.and_then(|(_, model)| model),
-            project_id,
-            exe: Some(exe),
-            ..Default::default()
-        },
+        write,
     };
     match mukade::hop_into(&request, &dest.roots) {
         Ok(receipt) => receipt_lines(&receipt, dest),
@@ -948,8 +1214,7 @@ fn receipt_lines_with(
 }
 
 fn save_manifest(receipt: &mukade::Receipt, dest: HarnessId) -> Option<String> {
-    let data = mukade::cache::dir()?.parent()?.to_path_buf();
-    let dir = data.join("manifests");
+    let dir = data_dir()?.join("manifests");
     std::fs::create_dir_all(&dir).ok()?;
     let name = format!("{}-{}.json", dest.as_str(), receipt.dest_id);
     let path = dir.join(name.replace(['/', '\\'], "_"));
@@ -980,6 +1245,10 @@ fn resume_selected(terminal: &mut Tui, app: &mut App) -> std::io::Result<()> {
         (location.clone(), info.clone())
     };
     let harness = location.harness;
+    if let Some(refusal) = mukade::harnesses::get(harness).resume_refusal(&info) {
+        app.status = refusal;
+        return Ok(());
+    }
     let argv = resume_argv(harness, &location.engine(), &info);
     let cwd = info.cwd.clone().or_else(|| {
         mukade::export(&SessionRef::id(harness, info.id.clone()), &location.roots)
@@ -1031,6 +1300,7 @@ fn draw(frame: &mut Frame, app: &mut App) {
         Mode::Hop(hop) => draw_hop(frame, area, hop),
         Mode::Result(view) => draw_result(frame, area, view),
         Mode::Open(path) => draw_open(frame, area, path),
+        Mode::Import(state) => draw_import(frame, area, state),
         Mode::Normal => {}
     }
 }
@@ -1129,6 +1399,62 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
     );
 }
 
+/// The import dialog: document, destination, prompt; one field at a time is active.
+fn draw_import(frame: &mut Frame, area: Rect, state: &ImportState) {
+    let rect = centered(area, 78, 12 + state.destinations.len() as u16);
+    frame.render_widget(Clear, rect);
+    let marker = |field: usize| if state.field == field { "▶ " } else { "  " };
+    let green = Style::default().fg(Color::Green);
+    let gray = Style::default().fg(Color::DarkGray);
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(marker(0), green),
+            Span::styled("1 document  ", gray),
+            Span::raw(if state.path.is_empty() {
+                "(type the path of a .json document)".to_string()
+            } else if state.field == 0 {
+                format!("{}▌", state.path)
+            } else {
+                state.path.clone()
+            }),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(marker(1), green), Span::styled("2 into", gray)]),
+    ];
+    for (index, destination) in state.destinations.iter().enumerate() {
+        let selected = index == state.dest;
+        lines.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(if selected { "● " } else { "○ " }, green),
+            Span::styled(
+                destination.label.clone(),
+                if selected {
+                    green.add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                },
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(marker(2), green),
+        Span::styled("3 prompt    ", gray),
+        Span::raw(if state.prompt.is_empty() {
+            "(empty: write only)".to_string()
+        } else {
+            format!("{}▌", state.prompt)
+        }),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "tab field · ↑/↓ installation · enter next/run · esc cancel",
+        gray,
+    )));
+    let block = Block::default().borders(Borders::ALL).title(" import ");
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), rect);
+}
+
 /// The folder prompt: a path, scanned for installations on Enter.
 fn draw_open(frame: &mut Frame, area: Rect, path: &str) {
     let rect = centered(area, 78, 8);
@@ -1173,7 +1499,7 @@ fn draw_result(frame: &mut Frame, area: Rect, view: &mut ResultView) {
         "j/k scroll · esc closes",
         Style::default().fg(Color::DarkGray),
     )));
-    let block = Block::default().borders(Borders::ALL).title(" hop result ");
+    let block = Block::default().borders(Borders::ALL).title(view.title);
     let paragraph = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false });
@@ -1508,7 +1834,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ),
         Span::raw("  j/k move · tab/←/→ column · enter open · esc back · r reload · q quit"),
     ]);
-    let actions = Line::from(" t history · h hop · R resume · o scan folder");
+    let actions = Line::from(" t history · h hop · e export · i import · R resume · o scan folder");
     frame.render_widget(Paragraph::new(vec![navigation, actions]), area);
 }
 
@@ -1594,19 +1920,14 @@ fn wrap_cells(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// The stores this process's variables name, each missing one at the catalog's default location.
 fn resolve_roots() -> StoreRoots {
     let mut roots = StoreRoots::from_env();
-    if roots.claude_config_dir.is_none() {
-        roots.claude_config_dir = catalog::store_default(HarnessId::ClaudeCode);
-    }
-    if roots.codex_home.is_none() {
-        roots.codex_home = catalog::store_default(HarnessId::Codex);
-    }
-    if roots.opencode_db.is_none() {
-        roots.opencode_db = catalog::store_default(HarnessId::OpenCode);
-    }
-    if roots.pi_agent_dir.is_none() {
-        roots.pi_agent_dir = catalog::store_default(HarnessId::Pi);
+    for harness in mukade::harnesses::all() {
+        let root = harness.store_root_mut(&mut roots);
+        if root.is_none() {
+            *root = catalog::store_default(harness.id());
+        }
     }
     roots
 }
@@ -2310,5 +2631,103 @@ mod tests {
             ..Default::default()
         };
         assert!(session_label(&info).chars().count() <= 48);
+    }
+
+    fn scratch(tag: &str) -> crate::scratch::Scratch {
+        crate::scratch::Scratch::new(tag)
+    }
+
+    #[test]
+    fn an_export_file_is_named_by_harness_and_a_safe_id() {
+        let dir = std::path::Path::new("exports");
+        assert_eq!(
+            export_file(dir, HarnessId::Codex, "01a17e07-93f7"),
+            dir.join("codex-01a17e07-93f7.json")
+        );
+        assert_eq!(
+            export_file(dir, HarnessId::Pi, "a/b\\c:d"),
+            dir.join("pi-a_b_c_d.json")
+        );
+    }
+
+    /// `e` then `i`: a Claude Code fixture is exported to a document and written into a scratch Pi
+    /// store as a new session, with a receipt and the same messages.
+    #[test]
+    fn an_exported_session_imports_into_another_harness() {
+        let dir = scratch("export-import");
+        let id = "c45db7bc-542c-4201-89de-b590c6fdb797";
+        let claude = dir.join("claude");
+        let project = claude.join("projects").join("p");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::copy(
+            format!("../fixtures/claude_code/source/{id}.jsonl"),
+            project.join(format!("{id}.jsonl")),
+        )
+        .unwrap();
+        let roots = StoreRoots {
+            claude_config_dir: Some(claude.clone()),
+            pi_agent_dir: Some(dir.join("pi")),
+            ..Default::default()
+        };
+        let locations = location::standard_locations(&roots);
+        let source = locations
+            .iter()
+            .find(|l| l.harness == HarnessId::ClaudeCode)
+            .unwrap();
+        let exported = export_session(source, id, &dir.join("exports")).expect("export");
+        assert_eq!(exported.path, dir.join("exports").join(format!("claude_code-{id}.json")));
+        assert!(exported.messages > 0);
+
+        let (doc, session) = read_document_file(&exported.path).expect("the document reads back");
+        let pi = locations.iter().find(|l| l.harness == HarnessId::Pi).unwrap();
+        let write = WriteDetails {
+            dest_version: Some("1.4.0".into()),
+            dest_protocol: mukade::policy::destination_protocol(HarnessId::Pi),
+            ..Default::default()
+        };
+        let receipt = import_read(pi, &doc, &session, write, None).expect("import");
+        assert!(std::path::Path::new(&receipt.location).starts_with(dir.join("pi")));
+        let written = mukade::export(&SessionRef::id(HarnessId::Pi, receipt.dest_id.clone()), &roots)
+            .expect("the written session is a Pi session");
+        assert_eq!(
+            written.conversation().count(),
+            session.conversation().count(),
+            "the same conversation"
+        );
+    }
+
+    #[test]
+    fn a_missing_or_broken_document_is_refused_with_its_path() {
+        let dir = scratch("broken-document");
+        let missing = dir.join("missing.json");
+        assert!(read_document_file(&missing).unwrap_err().contains("missing.json"));
+        let broken = dir.join("broken.json");
+        std::fs::write(&broken, "{not json").unwrap();
+        assert!(read_document_file(&broken).unwrap_err().contains("not a JSON document"));
+        let location = location::standard_locations(&StoreRoots::default()).remove(0);
+        let lines = execute_import(&missing, &location, None);
+        assert!(lines[0].starts_with("import failed"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_import_dialog_starts_with_the_last_export_and_walks_its_fields() {
+        let mut app = app_with_directories();
+        app.last_export = Some("exports/claude_code-x.json".to_string());
+        open_import(&mut app);
+        let Mode::Import(state) = &app.mode else {
+            panic!("the import dialog opens");
+        };
+        assert_eq!(state.path, "exports/claude_code-x.json");
+        assert_eq!(state.field, 0);
+        handle_import_key(&mut app, KeyCode::Enter);
+        handle_import_key(&mut app, KeyCode::Down);
+        let Mode::Import(state) = &app.mode else {
+            panic!("still open");
+        };
+        assert_eq!((state.field, state.dest), (1, 1));
+        let rendered = screen(&mut app, 120, 30);
+        assert!(rendered.contains("import"), "{rendered}");
+        handle_import_key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
     }
 }

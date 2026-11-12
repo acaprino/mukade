@@ -18,6 +18,7 @@ pub mod cli;
 pub mod dest;
 pub mod detect;
 pub mod exe;
+pub mod harnesses;
 pub mod hop;
 pub mod intent;
 pub mod manifest;
@@ -28,6 +29,8 @@ pub mod portable;
 pub mod process;
 pub mod reader;
 pub mod roots;
+#[cfg(test)]
+mod scratch;
 pub mod sha256;
 pub mod strict;
 pub mod summary;
@@ -36,7 +39,7 @@ pub mod tools;
 pub mod wire;
 pub mod writer;
 
-pub use hop::{HopError, HopRequest, Receipt, export, hop, hop_into, import};
+pub use hop::{HopError, HopRequest, Receipt, export, hop, hop_into, import, import_document};
 pub use manifest::Manifest;
 pub use model::{Entry, HarnessId, Kind, Meta, Session};
 pub use reader::Reader;

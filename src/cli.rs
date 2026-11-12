@@ -16,12 +16,11 @@ use crate::hop::{
     Compaction, HopError, ImportOpts, KeepFrom, Receipt, SessionRef, SourceFacts, SummarySource,
     WriteDetails,
 };
-use crate::model::{HarnessId, Protocol};
+use crate::model::{HarnessId, ParentKind, Protocol};
 use crate::native_compaction::NativeBudget;
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
 use crate::summary::SummarizeOpts;
-use crate::wire;
 use crate::writer::WriteOpts;
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -70,7 +69,10 @@ options:
   --cwd <dir>              the project the destination files the session under
   --dest-version <v>       the destination's own version stamp
   --dest-protocol <p>      anthropic-messages | openai-responses | openai-chat
-  --dest-shell <s>         bash | sh | zsh | powershell | pwsh â€” the destination's shell
+  --dest-shell <s>         the shell the destination runs: bash, sh, zsh, dash, ksh, posix,
+                           powershell, pwsh (a path to one too), or none: no dialect, so shell
+                           calls into Codex, OpenCode and Pi stay text. Default: the one its
+                           configuration or platform names
   --model-provider <id>    the destination's provider id
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
@@ -105,6 +107,8 @@ options:
                            branch the harness resumes
   --archived <bool>        list: true (default) includes the sessions the harness marked archived,
                            false leaves them out; the same for every harness
+  --children               list: also the subagent sessions (Claude Code, Codex, OpenCode); a
+                           row with a parent names it and its kind, spawn or fork
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
@@ -189,6 +193,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--all-branches" => flags.all_branches = true,
             "--archived" => flags.archived = Some(next(rest, &mut i)?),
+            "--children" => flags.children = true,
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--output" => flags.output = Some(next(rest, &mut i)?),
             "--timing" => crate::timing::enable(),
@@ -196,10 +201,11 @@ pub fn run(args: &[String]) -> Result<()> {
             "--root" => flags.root = Some(next(rest, &mut i)?),
             "--dest-root" => flags.dest_root = Some(next(rest, &mut i)?),
             "--depth" => flags.depth = Some(next(rest, &mut i)?),
-            "--claude-exe" => flags.claude_exe = Some(next(rest, &mut i)?),
-            "--codex-exe" => flags.codex_exe = Some(next(rest, &mut i)?),
-            "--opencode-exe" => flags.opencode_exe = Some(next(rest, &mut i)?),
-            "--pi-exe" => flags.pi_exe = Some(next(rest, &mut i)?),
+            other if exe_flag_harness(other).is_some() => {
+                let harness = exe_flag_harness(other).expect("checked by the guard");
+                let value = next(rest, &mut i)?;
+                *flags.exe_slot(harness) = Some(value);
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(());
@@ -212,6 +218,9 @@ pub fn run(args: &[String]) -> Result<()> {
 
     if flags.archived.is_some() && command != "list" {
         anyhow::bail!("--archived is supported only by list");
+    }
+    if flags.children && command != "list" {
+        anyhow::bail!("--children is supported only by list");
     }
     // Every harness alike: the sessions its store marks archived are kept or left out.
     let with_archived = match flags.archived.as_deref() {
@@ -456,24 +465,34 @@ pub fn run(args: &[String]) -> Result<()> {
         "list" => {
             no_more(operands, 0)?;
             let reader = crate::reader::for_harness(harness)?;
-            for info in reader
-                .list(&roots)?
+            let sessions = if flags.children {
+                reader.list_all(&roots)?
+            } else {
+                reader.list(&roots)?
+            };
+            for info in sessions
                 .into_iter()
                 .filter(|info| with_archived || !info.archived)
             {
-                println!(
-                    "{}",
-                    json!({
-                        "id": info.id,
-                        "title": info.title,
-                        "cwd": info.cwd,
-                        "timestamp": info.updated,
-                        "location": info.path,
-                        "archived": info.archived,
-                        "unreadable": info.unreadable,
-                        "live": info.live,
-                    })
-                );
+                let mut row = json!({
+                    "id": info.id,
+                    "title": info.title,
+                    "cwd": info.cwd,
+                    "timestamp": info.updated,
+                    "location": info.path,
+                    "archived": info.archived,
+                    "unreadable": info.unreadable,
+                    "live": info.live,
+                });
+                // Only a session with a parent has the two keys: a root's row is as it was.
+                if let (Some(parent), Some(object)) = (info.parent, row.as_object_mut()) {
+                    object.insert("parent".into(), json!(parent));
+                    object.insert(
+                        "kind".into(),
+                        json!(info.parent_kind.as_ref().map(ParentKind::name)),
+                    );
+                }
+                println!("{row}");
             }
         }
         "dump" => {
@@ -504,14 +523,11 @@ pub fn run(args: &[String]) -> Result<()> {
             // What `dump` exports is what `hop` would write: `write` imports it later.
             let (selection, summary) =
                 crate::hop::compact(&session, &compaction, &roots).map_err(anyhow::Error::new)?;
-            let mut doc = wire::to_document(&selection);
-            // Who wrote the summary travels with it, for the manifest `write` makes later.
-            if let Some(facts) = &summary {
-                if let Some(command) = &facts.summary.leftover {
-                    eprintln!("the summarizing run left a fork in the source store: run {command}");
-                }
-                doc["summary"] = serde_json::to_value(facts)?;
+            if let Some(command) = summary.as_ref().and_then(|facts| facts.summary.leftover.as_ref()) {
+                eprintln!("the summarizing run left a fork in the source store: run {command}");
             }
+            // Who wrote the summary travels with it, for the manifest `write` makes later.
+            let doc = crate::hop::document(&selection, summary.as_ref());
             let doc = serde_json::to_string_pretty(&doc)?;
             match flags.output.as_deref() {
                 // Written as UTF-8 by the program itself: a shell pipe re-encodes the text with
@@ -522,36 +538,21 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         "write" => {
             no_more(operands, 1)?;
+            crate::harnesses::destination(harness)?;
             let path = operands.first().context("write needs a document file")?;
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
-            let session = wire::from_document(&doc)?;
-            let mut opts = flags.import_opts(
+            let session = crate::wire::from_document(&doc)?;
+            let opts = flags.import_opts(
                 session.meta.harness,
                 harness,
                 &session,
                 &roots,
                 write_engine.as_deref(),
             )?;
-            // A document `dump --compaction summary` made says who wrote its summary.
-            if let Some(facts) = doc
-                .get("summary")
-                .and_then(|facts| serde_json::from_value(facts.clone()).ok())
-            {
-                opts.summary = Some(facts);
-                opts.compaction = "summary".into();
-            }
-            // A document holds no source records: its fingerprint is that of its own messages.
-            opts.source_facts.content_sha256 = crate::sha256::records_sha256(
-                doc.get("messages")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|messages| messages.iter())
-                    .into_iter()
-                    .flatten(),
-            );
             deliver(
-                crate::hop::import(harness, &session, &opts),
+                crate::hop::import_document(harness, &doc, &session, &opts),
                 flags.manifest.as_deref(),
             )?;
         }
@@ -559,9 +560,9 @@ pub fn run(args: &[String]) -> Result<()> {
             no_more(operands, 2)?;
             let source_harness: HarnessId = operands.first().context("document needs a source harness")?.parse()?;
             let dest = harness;
-            if dest != HarnessId::OpenCode {
+            let Some(interchange) = crate::harnesses::destination(dest)?.interchange_document() else {
                 anyhow::bail!("document currently supports only an OpenCode destination");
-            }
+            };
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
                 (Some(path), false) => crate::hop::export_path(source_harness, std::path::Path::new(path)),
                 (Some(path), true) => crate::hop::export_path_all_branches(source_harness, std::path::Path::new(path)),
@@ -573,24 +574,12 @@ pub fn run(args: &[String]) -> Result<()> {
             }.map_err(anyhow::Error::new)?;
             anyhow::ensure!(source.conversation().any(|entry| matches!(entry.kind, crate::model::Kind::Step { .. })), "noCompleteTurn");
             let mut opts = flags.write_opts(dest, &source, &destination_roots, None)?;
-            if source_harness == HarnessId::OpenCode {
-                for entry in source.conversation() {
-                    if let crate::model::Kind::Step { calls, .. } = &entry.kind {
-                        for call in calls {
-                            if crate::tools::offered(dest).contains(&call.source_name) && call.input.is_object() {
-                                opts.tool_map.push((call.source_name.clone(), call.source_name.clone(), call.input.clone(), call.input.clone()));
-                            }
-                        }
-                    }
-                }
-            }
+            opts.tool_map.extend(interchange.source_tool_map(source_harness, &source));
             let mut clock = crate::policy::Clock::new(opts.now.as_deref());
-            let id = opts.dest_id.as_deref().unwrap_or("ses_preview");
-            crate::writer::opencode::validate_session_id(id)?;
             let plan = crate::writer::plan::plan(&source, dest, &opts);
             let violations = crate::strict::check_plan(&plan, opts.dest_protocol.as_ref());
             anyhow::ensure!(violations.is_empty(), "the document would violate the provider contract: {}", violations.join("; "));
-            let (document, native_compaction) = crate::writer::opencode::document_from_plan_report(&source, &plan, id, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
+            let (document, native_compaction) = interchange.document(&source, &plan, opts.cwd.as_deref().context("a working directory is required")?, &opts, &mut clock)?;
             println!("{}", json!({
                 "document": document,
                 "native_compaction": native_compaction.map(|boundary| json!({
@@ -622,16 +611,17 @@ pub fn run(args: &[String]) -> Result<()> {
                 .get(1)
                 .context("hop needs a destination harness")?
                 .parse()?;
-            if dest != HarnessId::OpenCode
-                && (flags.dest_agent.is_some() || flags.metadata_file.is_some())
-            {
-                anyhow::bail!(
-                    "--dest-agent and --metadata-file are supported only for an OpenCode destination"
-                );
-            }
+            crate::harnesses::destination(dest)?;
+            flags.check_write_flags(dest)?;
+            let selection = flags.compaction(harness)?;
+            // The writer and optional resume use the destination's environment, or the
+            // installation --dest-root names, never the source override. A --dest-path is held to
+            // that store before the source is read: a refused hop runs nothing, a summarizing
+            // model included.
+            let (destination_roots, engine) = hop_destination(&flags, dest, destination_roots)?;
+            flags.check_dest_path(dest, &destination_roots)?;
             // The source is read once, by the same path the library uses: a session that is not
             // there is refused (exit 2), one that cannot be read needs recovery (exit 5).
-            let selection = flags.compaction(harness)?;
             let source = match (flags.from_file.as_deref(), flags.all_branches) {
                 (Some(path), false) => crate::hop::export_path(harness, std::path::Path::new(path)),
                 (Some(path), true) => {
@@ -657,12 +647,9 @@ pub fn run(args: &[String]) -> Result<()> {
                     }));
                 }
             }
-            // Compaction (including a source-model summary) uses the source store. The writer and
-            // optional resume use the destination's environment, or the installation --dest-root
-            // names, never the source override.
-            let (destination_roots, engine) = hop_destination(&flags, dest, destination_roots)?;
             let mut opts =
                 flags.import_opts(harness, dest, &source, &destination_roots, engine.as_deref())?;
+            // Compaction (including a source-model summary) uses the source store.
             let (selected, summary) =
                 crate::hop::compact(&source, &selection, &roots).map_err(anyhow::Error::new)?;
             opts.summary = summary;
@@ -688,41 +675,39 @@ struct HarnessStoreInfo {
 fn inventory_roots() -> StoreRoots {
     use std::path::PathBuf;
     let vars = crate::catalog::Vars::from_env();
-    let pick = |harness: HarnessId| {
-        std::env::var_os(crate::catalog::store_env(harness))
+    let mut roots = StoreRoots::default();
+    for harness in crate::harnesses::all() {
+        let id = harness.id();
+        *harness.store_root_mut(&mut roots) = std::env::var_os(crate::catalog::store_env(id))
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .or_else(|| crate::catalog::store_default_with(harness, &vars))
-    };
-    let opencode_db = pick(HarnessId::OpenCode).map(|path| {
-        if path.is_absolute() || path.as_os_str() == ":memory:" {
-            return path;
-        }
-        // OpenCode resolves a relative OPENCODE_DB beneath its data directory, not mukade's cwd:
-        // `$XDG_DATA_HOME/opencode/custom.db` (or the same fallback the catalog uses).
-        crate::catalog::store_default_with(HarnessId::OpenCode, &vars)
-            .and_then(|default| default.parent().map(|dir| dir.join(&path)))
-            .unwrap_or(path)
-    });
-    StoreRoots {
-        claude_config_dir: pick(HarnessId::ClaudeCode),
-        codex_home: pick(HarnessId::Codex),
-        opencode_db,
-        pi_agent_dir: pick(HarnessId::Pi),
+            .or_else(|| crate::catalog::store_default_with(id, &vars))
+            .map(|path| harness.resolve_store_path(path, &vars));
     }
+    roots
 }
 
 fn store_path(harness: HarnessId, roots: &StoreRoots) -> Option<&std::path::Path> {
-    match harness {
-        HarnessId::ClaudeCode => roots.claude_config_dir.as_deref(),
-        HarnessId::Codex => roots.codex_home.as_deref(),
-        HarnessId::OpenCode => roots.opencode_db.as_deref(),
-        HarnessId::Pi => roots.pi_agent_dir.as_deref(),
-    }
+    crate::harnesses::get(harness).store_root(roots)
 }
 
 fn store_env_name(harness: HarnessId) -> &'static str {
     crate::catalog::store_env(harness)
+}
+
+/// The harness whose catalog `binary.flag` is `arg`.
+fn exe_flag_harness(arg: &str) -> Option<HarnessId> {
+    HarnessId::ALL
+        .into_iter()
+        .find(|harness| crate::catalog::binary_flag(*harness) == arg)
+}
+
+/// A harness's place in [`Flags::exes`].
+fn exe_slot_index(harness: HarnessId) -> usize {
+    HarnessId::ALL
+        .iter()
+        .position(|candidate| *candidate == harness)
+        .expect("every harness is in HarnessId::ALL")
 }
 
 /// What the catalog says about lineage, in one line: the fields when the store records them, or
@@ -747,7 +732,7 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
         origin,
         state: "not found".into(),
         sessions: "unknown".into(),
-        forks: if matches!(harness, HarnessId::ClaudeCode | HarnessId::Codex) {
+        forks: if !crate::catalog::lineage_recorded(harness) {
             "unknown (not recorded)".into()
         } else {
             "unknown".into()
@@ -756,7 +741,7 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
     let Some(path) = path.clone() else {
         return missing();
     };
-    if harness == HarnessId::OpenCode && path.as_os_str() == ":memory:" {
+    if crate::harnesses::get(harness).store_is_in_memory(&path) {
         return HarnessStoreInfo {
             path: Some(path),
             origin,
@@ -776,73 +761,26 @@ fn inspect_store(harness: HarnessId, roots: &StoreRoots) -> HarnessStoreInfo {
             origin,
             state: "present, layout not recognized".into(),
             sessions: "unknown".into(),
-            forks: if matches!(harness, HarnessId::ClaudeCode | HarnessId::Codex) {
+            forks: if !crate::catalog::lineage_recorded(harness) {
                 "unknown (not recorded)".into()
             } else {
                 "unknown".into()
             },
         };
     }
-    let reader = match crate::reader::for_harness(harness) {
-        Ok(reader) => reader,
-        Err(error) => {
-            return HarnessStoreInfo {
-                path: Some(path),
-                origin,
-                state: format!("read error: {error}"),
-                sessions: "unknown".into(),
-                forks: "unknown".into(),
-            };
-        }
-    };
-    let (session_count, fork_count) = if harness == HarnessId::OpenCode {
-        match crate::reader::opencode::store_counts(&path) {
-            Ok(counts) => (Ok(counts.sessions), Some(Ok(counts.forks))),
-            Err(error) => {
-                let error = format!("{error:#}");
-                (
-                    Err(anyhow::anyhow!(error.clone())),
-                    Some(Err(anyhow::anyhow!(error))),
-                )
-            }
-        }
-    } else if harness == HarnessId::Pi {
-        match roots.pi_agent_dir.as_deref().map(crate::reader::pi::store_summary) {
-            Some(Ok(summary)) => (Ok(summary.sessions), Some(summary.forks)),
-            Some(Err(error)) => {
-                let error = format!("{error:#}");
-                (
-                    Err(anyhow::anyhow!(error.clone())),
-                    Some(Err(anyhow::anyhow!(error))),
-                )
-            }
-            None => {
-                let error = "PI_CODING_AGENT_DIR is not set: no Pi store to list".to_string();
-                (
-                    Err(anyhow::anyhow!(error.clone())),
-                    Some(Err(anyhow::anyhow!(error))),
-                )
-            }
-        }
-    } else {
-        (reader.list(roots).map(|sessions| sessions.len()), None)
-    };
-    let state = match &session_count {
+    let stats = crate::harnesses::get(harness).store_stats(roots);
+    let oneline = |error: &str| error.replace(['\r', '\n'], " ");
+    let state = match &stats.sessions {
         Ok(_) => "recognized".to_string(),
-        Err(error) => format!(
-            "recognized, read error: {}",
-            error.to_string().replace(['\r', '\n'], " ")
-        ),
+        Err(error) => format!("recognized, read error: {}", oneline(error)),
     };
-    let sessions = session_count
+    let sessions = stats
+        .sessions
         .map(|count| count.to_string())
         .unwrap_or_else(|_| "unknown".into());
-    let forks = match fork_count {
+    let forks = match stats.forks {
         Some(Ok(count)) => count.to_string(),
-        Some(Err(error)) => format!(
-            "unknown ({})",
-            error.to_string().replace(['\r', '\n'], " ")
-        ),
+        Some(Err(error)) => format!("unknown ({})", oneline(&error)),
         None => "unknown (not recorded)".into(),
     };
     HarnessStoreInfo {
@@ -997,15 +935,14 @@ struct Flags {
     from_file: Option<String>,
     all_branches: bool,
     archived: Option<String>,
+    children: bool,
     manifest: Option<String>,
     output: Option<String>,
     root: Option<String>,
     dest_root: Option<String>,
     depth: Option<String>,
-    claude_exe: Option<String>,
-    codex_exe: Option<String>,
-    opencode_exe: Option<String>,
-    pi_exe: Option<String>,
+    /// The `--<harness>-exe` values, in [`HarnessId::ALL`] order.
+    exes: [Option<String>; HarnessId::ALL.len()],
 }
 
 impl Flags {
@@ -1067,6 +1004,36 @@ impl Flags {
         })
     }
 
+    /// The destination's own rules ([`crate::harnesses::Destination::validate_write`]) on the reserved
+    /// id, the agent and the metadata the flags ask for, before a store is read or a process
+    /// started. The metadata file is read later: here only its presence counts.
+    fn check_write_flags(&self, harness: HarnessId) -> Result<()> {
+        crate::harnesses::destination(harness)?.validate_write(&WriteOpts {
+            dest_id: self.dest_id.clone(),
+            dest_agent: self.dest_agent.clone(),
+            metadata: self
+                .metadata_file
+                .as_ref()
+                .map(|_| serde_json::Value::Object(serde_json::Map::new())),
+            ..WriteOpts::default()
+        })
+    }
+
+    /// `--dest-path` held to the destination's own rules in `roots`, the store the write goes to:
+    /// the refusal the import gives (exit 2), given before the source is read.
+    fn check_dest_path(&self, harness: HarnessId, roots: &StoreRoots) -> Result<()> {
+        let Some(path) = self.dest_path.as_deref() else {
+            return Ok(());
+        };
+        crate::harnesses::destination(harness)?
+            .validate_write(&WriteOpts {
+                roots: roots.clone(),
+                dest_path: Some(std::path::PathBuf::from(path)),
+                ..WriteOpts::default()
+            })
+            .map_err(|error| anyhow::Error::new(HopError::Unsupported(format!("{error:#}"))))
+    }
+
     /// `engine` is the executable the destination installation keeps beside its store: an
     /// explicit `--<harness>-exe` wins over it, and it wins over `MUKADE_*_EXE` and `PATH`.
     fn write_opts(
@@ -1076,23 +1043,7 @@ impl Flags {
         roots: &StoreRoots,
         engine: Option<&str>,
     ) -> Result<WriteOpts> {
-        if harness != HarnessId::OpenCode
-            && (self.dest_agent.is_some() || self.metadata_file.is_some())
-        {
-            anyhow::bail!(
-                "--dest-agent and --metadata-file are supported only for an OpenCode destination"
-            );
-        }
-        if let Some(id) = self.dest_id.as_deref() {
-            if harness == HarnessId::OpenCode {
-                crate::writer::opencode::validate_session_id(id)?;
-            } else {
-                uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination UUID"))?;
-            }
-        }
-        if let Some(agent) = self.dest_agent.as_deref() {
-            crate::writer::opencode::validate_agent(agent)?;
-        }
+        self.check_write_flags(harness)?;
         let metadata = match self.metadata_file.as_deref() {
             None => None,
             Some(file) => {
@@ -1133,15 +1084,20 @@ impl Flags {
             Some(name) => Some(Protocol::from_provider(name)),
             None => crate::policy::destination_protocol(harness),
         };
+        let cwd = self.cwd.clone().or_else(|| session.meta.cwd.clone());
+        let project = cwd.as_deref().map(std::path::Path::new);
+        // The flag, else the shell the destination's own configuration or platform names.
         let dest_shell = match self.dest_shell.as_deref() {
+            Some(name) if name.trim().eq_ignore_ascii_case("none") => None,
             Some(name) => match crate::writer::plan::shell_of(name) {
                 Some(shell) => Some(shell),
-                None => {
-                    anyhow::bail!("unknown --dest-shell {name} (bash, sh, zsh, powershell, pwsh)")
-                }
+                None => anyhow::bail!(
+                    "unknown --dest-shell {name} (bash, sh, zsh, dash, ksh, posix, powershell, pwsh, none)"
+                ),
             },
-            None => None,
+            None => crate::dest::shell_in(harness, roots, project),
         };
+        let offered = crate::tools::offered_in(harness, roots, project);
         // What the *destination* is configured to use, when the caller did not state it. OpenCode's
         // interchange format refuses a model reference without a provider, and Codex stamps the
         // provider its own config names, so both are read from the destination's own files.
@@ -1173,15 +1129,14 @@ impl Flags {
             let _span = crate::timing::span("probe destination version");
             crate::exe::version_of(&resolved_exe)
         });
-        let cwd = self.cwd.clone().or_else(|| session.meta.cwd.clone());
         // OpenCode's interchange format requires the destination's own project id; the destination
         // is the only one that knows it, so it is asked.
         let project_id = match self.project_id.clone() {
             Some(id) => Some(id),
-            None if harness == HarnessId::OpenCode => cwd
-                .as_deref()
-                .and_then(|cwd| opencode_project_id(&resolved_exe, cwd, roots)),
-            None => None,
+            None => match cwd.as_deref() {
+                Some(cwd) => destination_project_id(harness, &resolved_exe, cwd, roots)?,
+                None => None,
+            },
         };
         Ok(WriteOpts {
             roots: StoreRoots::from_env(),
@@ -1189,7 +1144,7 @@ impl Flags {
             dest_version,
             dest_protocol,
             dest_shell,
-            offered: None,
+            offered: Some(offered),
             model_provider,
             model,
             project_id,
@@ -1258,7 +1213,7 @@ impl Flags {
                     )
                     .into());
                 }
-                if self.from_file.is_some() && source != HarnessId::Pi {
+                if self.from_file.is_some() && !crate::harnesses::get(source).summarizes_from_file() {
                     return Err(HopError::Unsupported(format!(
                         "--compaction summary with --from-file: {} summarizes a session from its own \
                          store, by id; only Pi forks one from a file",
@@ -1316,12 +1271,11 @@ impl Flags {
 
     /// The executable override stated for one harness, if any.
     fn exe_flag(&self, harness: HarnessId) -> Option<&str> {
-        match harness {
-            HarnessId::ClaudeCode => self.claude_exe.as_deref(),
-            HarnessId::Codex => self.codex_exe.as_deref(),
-            HarnessId::OpenCode => self.opencode_exe.as_deref(),
-            HarnessId::Pi => self.pi_exe.as_deref(),
-        }
+        self.exes[exe_slot_index(harness)].as_deref()
+    }
+
+    fn exe_slot(&mut self, harness: HarnessId) -> &mut Option<String> {
+        &mut self.exes[exe_slot_index(harness)]
     }
 }
 
@@ -1385,37 +1339,47 @@ fn installation_json(found: &crate::detect::Installation) -> serde_json::Value {
     })
 }
 
-/// The project the destination already files sessions of this directory under. The destination is
-/// asked from **inside that directory**: the CLI scopes its session list to the project it is run
-/// in, so the question has to be asked where the session will live.
-fn opencode_project_id(exe: &str, cwd: &str, roots: &StoreRoots) -> Option<String> {
-    let _span = crate::timing::span("probe opencode project");
-    opencode_project_id_in(exe, cwd, roots, crate::cache::dir().as_deref())
-}
-
-/// [`opencode_project_id`] with the cache folder stated. The probe lives in the OpenCode reader:
-/// it asks the harness's own store, and the TUI needs the same answer without a second copy.
-fn opencode_project_id_in(
+/// The project the destination already files sessions of this directory under, for a harness
+/// that files them under one. The destination is asked from **inside that directory**: the CLI
+/// scopes its session list to the project it is run in, so the question has to be asked where the
+/// session will live.
+fn destination_project_id(
+    harness: HarnessId,
     exe: &str,
     cwd: &str,
     roots: &StoreRoots,
-    cache: Option<&std::path::Path>,
-) -> Option<String> {
-    crate::reader::opencode::project_id_for(exe, cwd, roots, cache)
+) -> Result<Option<String>> {
+    crate::harnesses::destination(harness)?.project_id(
+        exe,
+        cwd,
+        roots,
+        crate::cache::dir().as_deref(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::opencode_project_id_in;
+    use crate::model::HarnessId;
     use crate::roots::StoreRoots;
+
+    /// The project of `cwd` in the OpenCode adapter, with the cache folder stated.
+    fn opencode_project_id_in(
+        exe: &str,
+        cwd: &str,
+        roots: &StoreRoots,
+        cache: Option<&std::path::Path>,
+    ) -> Option<String> {
+        crate::harnesses::destination(HarnessId::OpenCode)
+            .unwrap()
+            .project_id(exe, cwd, roots, cache)
+            .unwrap()
+    }
 
     /// The project id OpenCode files a directory under takes one process start per session it has
     /// to look at: it is asked once per binary, database and directory.
     #[test]
     fn the_opencode_project_of_a_directory_is_asked_once() {
-        let dir = std::env::temp_dir().join(format!("mukade-project-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("project");
         let work = dir.join("work");
         std::fs::create_dir_all(&work).unwrap();
         let (count, document) = (dir.join("count.txt"), dir.join("export.json"));
@@ -1471,6 +1435,5 @@ mod tests {
             Some("proj_work")
         );
         assert_eq!(runs(), asked, "the second answer came from the cache");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

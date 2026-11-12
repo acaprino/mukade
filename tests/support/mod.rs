@@ -8,7 +8,6 @@
 use mukade::hop::{ImportOpts, ResumePrompt, SourceFacts, WriteDetails};
 use mukade::model::{HarnessId, Kind, Protocol, Session};
 use mukade::policy::ReasoningPolicy;
-use mukade::reader::{claude_code, codex, opencode, pi};
 use mukade::roots::StoreRoots;
 use mukade::tools::Shell;
 use mukade::writer::WriteOpts;
@@ -51,14 +50,9 @@ pub fn source_id(harness: HarnessId) -> &'static str {
 
 /// Read a harness's own source session with our reader.
 pub fn read_source(harness: HarnessId) -> Session {
-    let path = source_path(harness);
-    match harness {
-        HarnessId::ClaudeCode => claude_code::read_file(&path),
-        HarnessId::Codex => codex::read_file(&path),
-        HarnessId::OpenCode => opencode::read_file(&path),
-        HarnessId::Pi => pi::read_file(&path),
-    }
-    .expect("the fixture must read")
+    mukade::harnesses::get(harness)
+        .read_file(&source_path(harness))
+        .expect("the fixture must read")
 }
 
 /// A fresh scratch directory for one test, under the harness's own scratch area. The process id
@@ -154,6 +148,33 @@ pub fn stage_fixture(harness: HarnessId, scratch: &Path) -> String {
     }
 }
 
+/// The Claude Code parent with its `subagents/` folder (`fixtures/claude_code/subagents`), staged
+/// as the store's `projects/`.
+pub const CLAUDE_PARENT: &str = "5ab1c0de-0000-4000-8000-000000000001";
+
+/// Copy `fixtures/claude_code/subagents/projects` into the scratch store and answer its roots.
+pub fn stage_claude_subagents(scratch: &Path) -> StoreRoots {
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).expect("create a store folder");
+        for entry in std::fs::read_dir(from)
+            .expect("read a fixture folder")
+            .flatten()
+        {
+            let target = to.join(entry.file_name());
+            if entry.file_type().expect("a fixture entry").is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), &target).expect("stage a fixture file");
+            }
+        }
+    }
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(FIXTURES)
+        .join("claude_code/subagents/projects");
+    copy_tree(&fixture, &scratch.join("home").join("projects"));
+    roots(scratch)
+}
+
 /// The destination's own facts as a write needs them, copied from the options the test stated.
 pub fn details(opts: &WriteOpts) -> WriteDetails {
     WriteDetails {
@@ -197,14 +218,9 @@ pub fn import_opts(
 
 /// Read a session a writer just wrote, with the reader its destination provides.
 pub fn read_destination(harness: HarnessId, location: &str) -> Session {
-    let path = Path::new(location);
-    match harness {
-        HarnessId::ClaudeCode => claude_code::read_file(path),
-        HarnessId::Codex => codex::read_file(path),
-        HarnessId::OpenCode => opencode::read_file(path),
-        HarnessId::Pi => pi::read_file(path),
-    }
-    .expect("the destination session must read back")
+    mukade::harnesses::get(harness)
+        .read_file(Path::new(location))
+        .expect("the destination session must read back")
 }
 
 /// The name a kind is asserted by, the same in every reader's conformance test.
@@ -344,7 +360,11 @@ pub fn cli_in(
         .env_remove("MUKADE_CLAUDE_EXE")
         .env_remove("MUKADE_CODEX_EXE")
         .env_remove("MUKADE_OPENCODE_EXE")
-        .env_remove("MUKADE_PI_EXE");
+        .env_remove("MUKADE_PI_EXE")
+        // Nor the shell the developer runs, which a destination's default shell reads.
+        .env_remove("SHELL")
+        .env_remove("OPENCODE_CONFIG_CONTENT")
+        .env_remove("CLAUDE_CODE_USE_POWERSHELL_TOOL");
     for (name, value) in overrides {
         command.env(name, value);
     }
@@ -367,7 +387,13 @@ pub fn launcher(dir: &Path, name: &str, windows: &str, unix: &str) -> PathBuf {
         path
     } else {
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{unix}\n")).expect("write the launcher");
+        // The tests run mukade with an empty PATH, so no real harness is found; the fake one still
+        // needs the system's own tools (`cp`, `cat`), which on Windows are built into `cmd`.
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\n{unix}\n"),
+        )
+        .expect("write the launcher");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -504,4 +530,32 @@ pub fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).expect("each line is JSON"))
         .collect()
+}
+
+/// Hop `source` into each destination mukade writes as files (Claude Code, Codex, Pi), in
+/// scratch stores: each write passes the strict gate, and `text` is in a user turn of the session
+/// read back.
+pub fn assert_hops_keeping(source: &Session, text: &str, tag: &str) {
+    for dest in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+        let scratch = scratch(dest, &format!("{tag}-{}", dest.as_str()));
+        let write_opts = opts(dest, &scratch);
+        let receipt = mukade::hop::import(dest, source, &import_opts(&write_opts, source, None))
+            .unwrap_or_else(|error| panic!("{dest:?}: {error:?}"));
+        assert_eq!(receipt.manifest["strict"]["checked"], true, "{dest:?}");
+        // Strict passing is not enough: the plan repairs a broken pairing quietly, so nothing
+        // may have been repaired either.
+        for repair in ["dropped_orphan_results", "dropped_duplicate_results", "unanswered_calls"] {
+            assert_eq!(
+                receipt.manifest["counts"][repair], 0,
+                "{dest:?}: {repair} in {:#}",
+                receipt.manifest["counts"]
+            );
+        }
+        let written = read_destination(dest, &receipt.location);
+        assert!(
+            user_texts(&written).iter().any(|turn| turn.contains(text)),
+            "{dest:?}: {:#?}",
+            user_texts(&written)
+        );
+    }
 }

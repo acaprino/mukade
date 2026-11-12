@@ -1,497 +1,507 @@
-# Using Mukade — harness sessions manager
+# Using mukade — command-line guide
 
-## Local MCP chat (planned)
+Use this page to run `mukade` from a shell. Mukade moves a coding-agent session from one harness to
+another — Claude Code, Codex CLI, OpenCode, Pi — and the destination continues it **as one of its
+own sessions**.
 
-The [chat specification](superpowers/specs/2026-11-11-mcp-chat-design.md) defines a
-shared background server with `mukade chat start`, `status` and `stop`, MCP tools for agents,
-and a CLI client for people and scripts. Chat clients will use the running service; persistent
-rooms and messages survive its restart.
+- The sessions explorer window is a separate crate: [mukade-tui](../mukade-tui/README.md) (its
+  commands, keys, resume and hop examples).
+- Paths, session IDs, project IDs, model and provider names in the examples are **illustrative**:
+  use the values of your installation.
+- Examples are Windows PowerShell. On macOS or Linux use `/` paths and `export NAME=value` instead
+  of `$env:NAME = 'value'`; a POSIX block is shown where more than that differs.
 
-These commands are not available in the current build. The library foundations do not yet
-provide an MCP service. Setup instructions will accompany the working server and verified
-harness integrations.
+## Pick your task
 
-## Session interchange
+**Find**
 
-Mukade moves a coding-agent session from one harness to another — Claude Code, Codex CLI,
-OpenCode, Pi — and the destination continues it **as one of its own sessions**. This guide is the
-command-line manual: how to get it, the use cases it is made for, how to read what it prints, and
-every harness's details.
+| I want to… | Run |
+|---|---|
+| see which harnesses are installed, and their stores | [`mukade harnesses`](#mukade-harnesses) |
+| find every installation below a folder, portable ones too | [`mukade scan <dir>`](#mukade-scan) |
+| know which harness a folder belongs to | [`mukade detect <dir>`](#mukade-detect) |
+| find a session ID | [`mukade list <harness>`](#mukade-list) |
 
-The native sessions explorer is a separate crate: [mukade-tui](../mukade-tui/README.md) documents
-its commands, keys, resume and hop examples.
+**Move**
 
-Paths, session IDs, project IDs, model names and provider names in the examples are
-**illustrative**: replace them with values from your installation. Commands are shown for Windows
-PowerShell; on macOS or Linux use the corresponding paths and `export NAME=value` instead of
-`$env:NAME = 'value'`.
+| I want to… | Run |
+|---|---|
+| continue a session in another harness | [`mukade hop <from> <id> <to>`](#mukade-hop) ([Quick start](#2-quick-start)) |
+| try a hop without touching the real store | [`hop` into a scratch store](#rehearse-first) |
+| move a session to another machine or person | [`dump` there, `write` here](#move-a-session-to-another-machine) |
+| get OpenCode's import document, writing nothing | [`mukade document opencode …`](#mukade-document) |
+| run mukade on a machine I do not own | [copy the executable](#1-get-it) |
 
-## Contents
+**Shape and check**
 
-1. [Get it](#1-get-it) · 2. [Quick start](#2-quick-start) · 3. [Use cases](#3-use-cases) ·
-4. [Reading the receipt and the manifest](#4-reading-the-receipt-and-the-manifest) ·
-5. [Speed](#5-speed) · 6. [Where its files go](#6-where-its-files-go) · 7. [Exit codes](#7-exit-codes) ·
-8. [Stores and executables](#8-stores-and-executables) · 9. [Per-harness examples](#9-per-harness-examples) ·
-10. [Discover, export, import](#10-discover-export-import) · 11. [Troubleshooting](#11-troubleshooting)
+| I want to… | Use |
+|---|---|
+| carry a long session in less space | [`--compaction`, `--intent`](#make-a-long-session-smaller) |
+| leave out half-done turns | [`--interrupted drop`](#a-session-with-interrupted-turns) |
+| carry a rewound Codex thread whole | [`--all-branches`](#a-session-that-was-rewound-or-branched) |
+| know exactly what a hop lost | [the receipt, `--manifest`](#4-reading-the-receipt-and-the-manifest) |
+| understand an error | [exit codes](#11-exit-codes), [troubleshooting](#12-troubleshooting) |
 
 ## 1. Get it
 
-mukade is one command-line executable. There is nothing to install and nothing to configure:
+Mukade is one command-line executable: no installer, no configuration file.
 
-```powershell
-cargo build --release                       # target\release\mukade.exe
-Copy-Item target\release\mukade.exe D:\tools\    # anywhere: a folder, a USB stick
-D:\tools\mukade.exe --help
-```
+1. Build it and copy it anywhere (a folder, a USB stick):
 
-The Windows executable has the C runtime built in, so it runs on a machine with no Visual C++
-redistributable. Run it from a shell, by its path or from a folder on `PATH`; in the examples below
-`mukade` stands for whichever you use (`D:\tools\mukade.exe`, say). It has no installer and no
-configuration file. On first start it copies the editable intent prompts to an `intent-prompts`
-folder beside the executable (an existing file is never replaced), and by default generates its
-other files in a `mukade-data` folder beside the executable, made only when something is first
-written. A host may set an absolute `MUKADE_DATA_DIR` instead. See
-[Where its files go](#6-where-its-files-go).
+   ```powershell
+   cargo build --release                            # target\release\mukade.exe (target/release/mukade on macOS/Linux)
+   Copy-Item target\release\mukade.exe D:\tools\
+   D:\tools\mukade.exe --help
+   ```
 
-Install and configure the harnesses you intend to use separately: mukade moves sessions, it does
-not install harnesses or transfer their credentials.
+2. Run it from a shell, by its path or from a folder on `PATH`. In the examples `mukade` stands for
+   whichever you use.
+3. Install and configure the harnesses separately: mukade moves sessions; it installs no harness
+   and transfers no credentials.
+
+- The Windows executable has the C runtime built in: no Visual C++ redistributable.
+- Its own files (editable intent prompts, a cache) go beside it: [section 10](#10-where-its-files-go).
+- `mukade help`, `-h` or `--help` prints the usage text; `mukade --identity` prints
+  `{"name","version","commit","target"}` as JSON.
+
+**A machine you do not own:** run `mukade.exe` from the stick; deleting its folder leaves nothing on
+the machine ([section 10](#10-where-its-files-go)).
 
 ## 2. Quick start
 
-### Find supported harnesses and existing installations
+Continue a Claude Code session in Pi.
 
-List the supported harnesses found on this machine, with their binary, version, store, session
-counts and the lineage information each format records:
+1. See what is installed and where the stores are: `mukade harnesses`.
+2. Know the **existing project directory** the session belongs to: `--cwd` names the destination's;
+   without it mukade uses the source's recorded one, when present.
+3. Point both harnesses at their stores:
 
-```powershell
-mukade harnesses
-```
+   ```powershell
+   $env:CLAUDE_CONFIG_DIR   = Join-Path $HOME '.claude'
+   $env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
+   ```
 
-This command checks the standard store locations and honors `CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
-`OPENCODE_DB`, `PI_CODING_AGENT_DIR` and `MUKADE_*_EXE`. It reads store files without modifying them
-and asks a discovered executable for its version; unknown counts and lineage are shown as unknown,
-not guessed. It reports **one resolved executable per harness**, not every copy on disk, and does
-not change the explicit-root behavior of `list`, `dump`, `write` or `hop`.
+4. Find the session ID, then hop:
 
-The store line carries one of these states, so a store that is there but unreadable is never mistaken
-for an empty one:
+   ```powershell
+   mukade list claude_code
+   mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project'
+   ```
+
+5. Read the one JSON receipt it prints: `id` (the new session), `resume` (how to open it),
+   `manifest.losses` (what did not travel). See [section 4](#4-reading-the-receipt-and-the-manifest).
+6. Open the new session with the receipt's `resume` command, from the project folder:
+
+   ```powershell
+   Set-Location 'C:\work\my-project'
+   pi -p --session 'C:\Users\you\.pi\agent\sessions\--C--work-my-project--\2026-10-28T16-00-00-000Z_a7b29d83-….jsonl' 'where were we?'
+   ```
+
+Always true:
+
+- The destination session is **new**; the source is never touched.
+- The order is the harness's **native order**, never timestamps.
+- **No loss is silent**: whatever was left behind or changed is a line in the receipt's manifest.
+- Without `--resume-prompt` mukade only writes the session and gives you the command; with it, mukade
+  *runs* the destination harness, which may make a model/API call.
+
+## 3. Commands
+
+| command | does | prints |
+|---|---|---|
+| `mukade harnesses` | inventory of the supported harnesses on this machine | text |
+| `mukade scan <dir> [--depth <n>]` | every installation below a folder | JSON |
+| `mukade detect <dir>` | which harness stores a folder holds | JSON |
+| `mukade list <harness> [options]` | the sessions, one per line | JSON lines |
+| `mukade intents` | the editable summary prompts | JSON |
+| `mukade dump <harness> <session-id> [options]` | export a session as one harness-neutral document | JSON document |
+| `mukade write <harness> <document.json> [options]` | import a document as a new session | receipt |
+| `mukade hop <src-harness> <session-id> <dst-harness> [options]` | read the source and write the destination in one process | receipt |
+| `mukade document opencode <src-harness> <session-id> [options]` | OpenCode's import document, nothing written | JSON |
+
+- Harness names: `claude_code`, `codex`, `opencode`, `pi`. Store variables per harness:
+  [section 7](#7-stores-and-executables).
+- With `--root` the harness may be left out of `list`, `dump` and a hop's source. `write` always
+  needs it.
+- Options go anywhere after the command. An option a command does not take is refused (exit 1).
+- `--timing` works with every command: see [Speed](#9-speed).
+
+**Which options each command takes**
+
+| option | commands | what |
+|---|---|---|
+| `--root <dir>` | list, dump, write, hop (source) | the store to use, and to infer the harness from |
+| `--dest-root <dir>` | hop | the destination's store or installation folder |
+| `--cwd <dir>` | write, hop, document | the project the destination files the session under (a relative path is resolved against where the command runs) |
+| `--from-file <path>` | dump, hop, document | read the source from a file instead of its store |
+| `--archived <true\|false>` | list | include (default) or leave out archived sessions |
+| `--depth <n>` | scan | folder levels to descend (default 8) |
+| `--output <path>` | dump | write the document to this file (UTF-8) instead of stdout |
+| `--manifest <path>` | write, hop | also save the manifest there |
+
+**What travels** ([section 5](#5-choose-what-travels))
+
+| option | commands | what |
+|---|---|---|
+| `--compaction <mode>` | dump, hop (`native`: document, hop) | `none` (default), `portable`, `summary`, `native` |
+| `--intent <name>` | dump, hop | summary prompt `intent-prompts/<name>.md`; implies `--compaction summary` |
+| `--keep-turns <n>`, `--summary-model <id>`, `--summary-timeout <s>` | dump, hop | with `summary` only ([summary](#summary-the-sources-own-model-writes-one)) |
+| `--context-window <n>`, `--max-output-tokens <n>`, `--text-token-factor <f>` | document, hop | with `native` only |
+| `--interrupted keep\|drop` | write, hop, document | whether the work of unfinished turns travels |
+| `--all-branches` | dump, hop, document | every branch a Codex thread keeps |
+| `--without-tools` | write, hop, document | omit historical tool calls and results |
+| `--reasoning <mode>` | write, hop, document | `drop_foreign` (default), `as_text`, `drop` |
+| `--dest-protocol <p>` | write, hop, document | `anthropic-messages`, `openai-responses`, `openai-chat` |
+| `--dest-shell <s>` | write, hop, document | `bash`, `sh`, `zsh`, `dash`, `ksh`, `posix`, `powershell`, `pwsh` (any case, a path to one too), `none`; default: the shell the destination runs |
+| `--tool-map <path>` | write, hop, document | explicit source-to-destination tool bindings |
+
+**The destination** ([section 6](#6-host-and-automation-options), [section 7](#7-stores-and-executables))
+
+| option | commands | what |
+|---|---|---|
+| `--dest-version <v>` | write, hop, document | the destination's own version stamp |
+| `--model-provider <id>`, `--model <id>` | write, hop, document | the destination's provider and model |
+| `--project-id <id>` | write, hop, document | the destination's project (OpenCode requires one) |
+| `--dest-id <id>`, `--dest-path <path>` | write, hop, document | a reserved session ID; a reserved file (file-based destinations) |
+| `--dest-agent <name>`, `--metadata-file <path>` | write, hop, document | OpenCode only: primary agent; JSON session metadata |
+| `--expect-sha256 <hash>` | hop | refuse when the source's fingerprint changed |
+| `--resume-prompt <text>` | write, hop | resume in the destination and keep its reply in the receipt |
+| `--claude-exe`, `--codex-exe`, `--opencode-exe`, `--pi-exe <path>` | write, hop, document, dump (summary) | the binary to spawn |
+
+### `mukade harnesses`
+
+Lists every supported harness with the executable and store mukade finds, its version, session and
+fork counts, and the lineage each format records. It takes no options and prints text for a person;
+a program uses the library or `mukade list` (JSON rows).
+
+1. Optional: set the store variables or `MUKADE_*_EXE` ([section 7](#7-stores-and-executables)) for
+   non-default locations.
+2. Run `mukade harnesses`.
+3. Read one block per harness:
+
+| line | says |
+|---|---|
+| `<harness> (<name>) - <status>` | the executable is `configured` (`MUKADE_*_EXE`), `installed` (`PATH` or the catalog location) or `not found` |
+| `binary:` | the **one** resolved executable, not every copy on disk, and where it came from |
+| `version:` | its answer to `--version`; `unknown` otherwise |
+| `store:` | the store path, its variable, and `environment` or `default` |
+| `status:` | the store's state (below) |
+| `sessions:`, `forks:`, `lineage:`, `layout:` | counts, lineage support and file layout; unknown is shown as unknown, never guessed |
+
+`status:` says why a store that is there but unreadable is not an empty one:
 
 | state | meaning |
-| --- | --- |
+|---|---|
 | `recognized` | the store holds files in that harness's own layout and mukade listed them |
-| `recognized, read error: <reason>` | the layout is right but counting failed; the reason follows |
-| `present, layout not recognized` | the path exists but no file matches that harness's layout. An explicit store variable skips this check and is read directly (failures then show as a read error) |
+| `recognized, read error: <reason>` | the layout is right but counting failed |
+| `present, layout not recognized` | the path exists but no file matches that harness's layout. An explicit store variable skips this check and is read directly (failures show as a read error). `mukade detect <dir>` prints the evidence |
 | `read error: <reason>` | the harness reader could not be opened at all |
 | `not found` | no store at the default or the configured path |
 | `non-persistent (:memory:)` | OpenCode's `OPENCODE_DB` points at an in-memory database |
 
-The harness line reports the executable as `configured` (a `--<harness>-exe` flag or `MUKADE_*_EXE`),
-`installed` (`PATH` or the catalog location) or `not found`. When a store reads
-`present, layout not recognized`, `mukade detect <dir>` prints the evidence it looked for (see
-[Discover, export, import](#10-discover-export-import)).
+- It reads store files without modifying them and asks a discovered executable for its version.
+- It is the only command that falls back to default store locations: `list`, `dump`, `write` and
+  `hop` keep their explicit-root behavior.
+- The locations it consults are the [harness catalog](reference/harness-catalog.md)
+  (`catalog/harnesses.json`), which ships inside the executable.
 
-`harnesses` takes no options and prints text, not JSON: it is meant to be read by a person. A program
-that needs the same facts should use the library or `mukade list`, whose rows are JSON.
+To enumerate `PATH` matches yourself: `Get-Command claude,codex,opencode,pi -All -ErrorAction
+SilentlyContinue | Select-Object Name,Source` (POSIX: `command -v <name>`). For package-managed
+installs use `npm prefix -g`, `npm root -g` or `brew --prefix`, then run each binary's `--version`.
+Custom stores and executables: [section 7](#7-stores-and-executables). Per-OS procedure and native
+locations: [Finding existing installations](reference/harness-catalog.md#finding-existing-installations).
 
-The locations it consults, per harness and per platform, are the [harness catalog](reference/harness-catalog.md)
-(`catalog/harnesses.json`), which ships inside the executable. To enumerate `PATH` matches yourself:
+### `mukade scan`
+
+Finds **every** installation below a folder, portable and custom ones included. It takes only
+`--depth`.
+
+1. Scan: `mukade scan D:\` or `mukade scan D:\Apps --depth 4`.
+2. Read the JSON: `path`, `depth`, `visited`, `truncated`, and `installations`, one entry each with
+   `harness`, `store` (as the harness's variable names it), `exe` (the executable kept beside the
+   store; `null` when there is none, and the standard resolution then applies) and `evidence`.
+3. Pass a found folder as `--root` (source) or `--dest-root` (destination):
 
 ```powershell
-# Windows PowerShell
-Get-Command claude,codex,opencode,pi -All -ErrorAction SilentlyContinue |
-  Select-Object Name,Source
+mukade scan 'D:\Apps'
+mukade list --root 'D:\Apps\JanuraCode'
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
+```
+
+A portable JanuraCode copy is an OpenCode installation: store `<app>\data\share\opencode\opencode.db`,
+executable `<app>\resources\opencode-cli\opencode.exe`.
+
+How it walks:
+
+- 8 folder levels by default.
+- It never follows links or junctions; it skips `node_modules`, `.git` and `target`, and does not
+  enter a store's own session folders.
+- It reads at most 100,000 folders; `"truncated": true` says the depth or that budget stopped it.
+- An installation is recognized by its store: a copy never started has no sessions and is not reported.
+
+### `mukade detect`
+
+Prints which harness stores one folder holds, with the evidence.
+
+1. Run `mukade detect 'D:\portable\pi\agent'`.
+2. Read the JSON: `path` and `candidates`, each with `harness` and `evidence` (session records, Pi's
+   `models.json`, or OpenCode's `opencode.db`).
+3. Pass the harness explicitly to later commands when the answer is empty or ambiguous.
+
+- It can return zero or several candidates. An empty folder tree infers nothing: a newly created
+  store has no reliable session layout.
+- `opencode.db` can be passed directly; other SQLite files (Codex's `state_*.sqlite`) are not OpenCode.
+  For a nonstandard database filename, pass `opencode` and the file path explicitly.
+
+### `mukade list`
+
+Prints one JSON line per session.
+
+1. Set the harness's store variable ([section 7](#7-stores-and-executables)) or pass `--root`: Claude
+   Code, Codex and Pi need an explicit root, and `list opencode` needs `OPENCODE_DB` or `--root` (it
+   never falls back to OpenCode's configured store). It reads the database read-only, without starting
+   OpenCode.
+2. Run `mukade list <harness>`.
+3. Take the `id` of the session you want.
+
+```powershell
+$env:CODEX_HOME = Join-Path $HOME '.codex';   mukade list codex
+mukade list --root 'D:\portable\pi\agent'                 # harness inferred from the folder
+mukade list codex --archived false                        # without the archived threads
+mukade list claude_code --children                        # with the subagent sessions
+```
+
+#### The list output
+
+```json
+{"id":"01a1a817-…","title":"Alpha work","cwd":"D:\\work\\alpha","timestamp":"2026-11-08T14:03:20.000+00:00","location":"C:\\Users\\you\\.codex\\sessions\\2026\\11\\08\\rollout-….jsonl","archived":false,"unreadable":null,"live":null}
+```
+
+| key | meaning |
+|---|---|
+| `id`, `title`, `cwd` | what the store records; any may be `null` |
+| `timestamp` | the session's **last activity**: Claude Code and OpenCode from the store, Codex from its state database or else the rollout file's last write, Pi from the newest record time; `null` when nothing says |
+| `location` | the file (or database) the session is recorded in |
+| `archived` | the harness marked it archived |
+| `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
+| `live` | `true` when a process of the harness runs the session now; `false` when the store records running sessions and none runs it; `null` when the store does not say |
+| `parent`, `kind` | only on a row with a parent: the session it came from, and `spawn` (a subagent) or `fork`. Without `--children` only a fork can have them (Pi, OpenCode) |
+
+A harness forgets transcripts long before it forgets sessions, so `list` reports both. The
+`unreadable` rows are how a caller sees every project:
+
+| harness | an `unreadable` row is |
+|---|---|
+| Codex | a thread with a row in the home's newest `state_<n>.sqlite` whose rollout file is gone. `location` is the path the row records. Subagent and guardian threads are listed with `--children` only |
+| Claude Code | a session `history.jsonl` still has prompts for, whose session file is gone (`location` is `history.jsonl`; `title` is its first prompt); or a running session that has not written its transcript yet |
+| OpenCode | a session in another `opencode*.db` beside the selected one (read it by selecting that file), or one only in the legacy `session` table, which OpenCode cannot export |
+
+A project is the distinct `cwd` of the rows. To count only what can be hopped, drop the rows with an
+`unreadable` reason; to count every project a harness remembers, keep them all:
+
+```powershell
+mukade list codex | ConvertFrom-Json | Where-Object { -not $_.unreadable } | Select-Object -ExpandProperty cwd -Unique
+mukade list claude_code | ConvertFrom-Json | Where-Object { $_.live } | Select-Object id, cwd
 ```
 
 ```bash
-# macOS / Linux
-for h in claude codex opencode pi; do command -v "$h" || true; done
+mukade list codex | jq -r 'select(.unreadable == null) | .cwd' | sort -u
+mukade list claude_code | jq -c 'select(.live == true) | {id, cwd}'
 ```
 
-To find **every** installation below a folder, portable and custom ones included, scan it:
+**`live`** is Claude Code's: it keeps `sessions/<pid>.json` while a process runs a session. The check
+also compares the process start time, so a reused process ID is not the session: Windows creation
+time, Linux `/proc/<pid>/stat` (verified with Claude Code 2.1.322 on 2026-11-11). macOS does not
+compare it, so a reused ID reads as live. Codex, OpenCode and Pi keep no such record, so their `live`
+is `null`: **a cleaner must read `null` as "not known", not as "not running".**
 
-```powershell
-mukade scan D:\
-mukade scan D:\Apps --depth 4
-```
+#### Subagent sessions
 
-`scan` prints JSON: one entry per installation, with the harness, its store as the harness's
-variable names it, the executable kept beside the store (`null` when there is none: the standard
-resolution then applies) and the evidence. A portable JanuraCode copy, for example, is an OpenCode
-installation whose store is `<app>\data\share\opencode\opencode.db` and whose executable is
-`<app>\resources\opencode-cli\opencode.exe`. The scan descends 8 folder levels by default, never
-follows links or junctions, skips `node_modules`, `.git` and `target`, does not enter a store's own
-session folders, and reads at most 100,000 folders; `"truncated": true` says the depth or that budget
-stopped it before the whole tree was read. An installation is recognized by its store: a copy that
-was never started has no sessions yet and is not reported.
+`--children` lists every session the store holds, subagent sessions included; any other command
+given it is a command-line mistake (exit 1). `dump` and `hop` read a child by its `id` as listed.
 
-Use `npm prefix -g`, `npm root -g` or `brew --prefix` for package-managed installs, then run each
-binary's `--version`. For custom executables and stores, the override order and `--root` are in
-[Stores and executables](#8-stores-and-executables); the full per-OS discovery procedure and the
-canonical native locations are in [Finding existing installations](reference/harness-catalog.md#finding-existing-installations).
+| harness | `--children` adds | child `id` | `parent` |
+|---|---|---|---|
+| Claude Code | each `subagents/agent-<agentId>.jsonl` (a meta.json without a transcript is not listed); `title` is its meta.json `description` | `<parent-id>.<agentId>`, matched exactly (no prefix) | the spawning session, or the spawning subagent for a child of a child |
+| Codex | the subagent and guardian threads of `state_<n>.sqlite` | the thread id | the thread that spawned it (`thread_spawn_edges`); none for a guardian review |
+| OpenCode | the child sessions (`parent_id`) | the session id | the spawning session |
+| Pi | nothing: no subagents | | |
 
-### Move your first session
+What `parent_kind` holds per harness: [spec §3.1](session-interchange-spec.md#31-the-librarys-own-model-session).
+A hop of a parent does not carry its children; what a child reported to its parent travels in the
+parent as a user turn ([Choose what travels](#subagents-and-what-they-reported)).
 
-Continue a Claude Code session in Pi:
+#### Archived sessions
 
-```powershell
-$env:CLAUDE_CONFIG_DIR   = Join-Path $HOME '.claude'
-$env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
+`--archived <true|false>` works the same for every harness:
 
-mukade list claude_code                                  # find the session id
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project'
-```
-
-The last command prints one JSON receipt. The new Pi session exists; open it with the `resume`
-command the receipt gives, from the project folder:
-
-```powershell
-Set-Location 'C:\work\my-project'
-pi -p --session 'C:\Users\you\.pi\agent\sessions\--C--work-my-project--\2026-10-28T16-00-00-000Z_a7b29d83-….jsonl' 'where were we?'
-```
-
-Three things always hold: the destination session is **new** (the source is never touched), the
-order is the harness's **native order** (never timestamps), and **no loss is silent**: whatever was
-left behind or changed is a line in the receipt's manifest.
-
-Before you start, know the **existing project directory** the source belongs to; `--cwd` names the
-destination's project directory (if omitted, mukade uses the source's recorded one, when present).
-A `--resume-prompt` *runs* the destination harness and may make a model/API call; without it mukade
-only writes the session and gives you the command.
-
-## 3. Use cases
-
-### Switch harness in the middle of a task
-
-*You started in Claude Code and want to continue in Pi, Codex or OpenCode.* This is the quick start
-above. Any pair works; the four harnesses are `claude_code`, `codex`, `opencode`, `pi`:
-
-```powershell
-mukade hop codex YOUR_CODEX_SESSION_ID claude_code --cwd 'C:\work\my-project'
-mukade hop pi    YOUR_PI_SESSION_ID    opencode    --cwd 'C:\work\my-project' --project-id YOUR_PROJECT --model-provider YOUR_PROVIDER --model YOUR_MODEL
-```
-
-Tool calls are translated to what the destination really offers; a call it cannot express travels
-as text, with its arguments, and is counted (`tools_text_form`). Add `--resume-prompt 'continue'`
-to also run the destination once and keep its reply in the receipt (`resume_output`).
-
-### Carry a very long session cheaply
-
-*The history is huge but only the recent turns matter.* `--compaction portable` writes one handoff
-message holding the **source's own compaction summary**, then the tail the source's compaction
-kept, instead of the whole history:
-
-```powershell
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --compaction portable
-```
-
-The source must have compacted at least once (a Claude `/compact`, a Pi compaction, …); otherwise
-the hop is refused with a reason and nothing is written. The manifest keeps the lines
-`the source's compaction summary travels as one user message` and how many entries were kept.
-
-### Keep the whole session and add a native boundary
-
-*The imported history is larger than the destination model's useful budget, but nothing should be
-removed from the session.* `--compaction native` keeps the whole generated session and appends the
-destination's own compaction record with a deterministic, free summary of the earlier user requests.
-The destination then sends that summary plus the recent tail, while the older rows stay in the session
-and remain readable:
-
-```powershell
-mukade document opencode codex YOUR_CODEX_THREAD_ID --from-file 'C:\path\rollout.jsonl' --cwd 'C:\work\my-project' --project-id YOUR_PROJECT --model-provider YOUR_PROVIDER --model YOUR_MODEL --compaction native --context-window 1000000 --max-output-tokens 64000 --text-token-factor 1.3333
-mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --compaction native --context-window 200000
-```
-
-The record is the destination's own: OpenCode `compaction` with `metadata.keepID`, Pi `compaction` with
-`firstKeptEntryId`, Codex `compacted` with `replacement_history`, and Claude Code `compact_boundary`
-followed by an `isCompactSummary` row. `--context-window` is required; `--max-output-tokens` defaults
-to 16000 and `--text-token-factor` is optional. The common conservative budget is the smaller of half
-the window and OpenCode's verified automatic-compaction ceiling minus room for the next turn.
-`document` reports the boundary under `native_compaction`; `hop` puts `"compaction": "native"` in the
-manifest. No source or destination model is called. `dump` refuses this mode because its interchange
-document is harness-neutral.
-
-### Move only a summary, written by the source's own model
-
-*The session is long, it never compacted, or its summary is encrypted (Codex).* `--compaction summary`
-asks the source harness to summarize the session with its own model, its own login and its own
-configuration, in a run that saves nothing in its store; the destination starts from that summary:
-
-```powershell
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --compaction summary
-```
-
-`--keep-turns 2` also keeps the last two user turns verbatim after it; `--summary-model` names a
-cheaper model; `--summary-timeout` (seconds, default 300) bounds the run; a value too large for the
-clock sets no bound. To export the summary and import it later, or elsewhere:
-
-```powershell
-mukade dump codex YOUR_CODEX_SESSION_ID --compaction summary --output 'C:\work\summary.json'
-mukade write opencode 'C:\work\summary.json' --cwd 'C:\work\my-project'
-```
-
-It costs one model call on the source's account; the manifest's `options.summary` says which model
-wrote it, which intent prompt was used, how long it is and, for Claude Code, what it cost. If the
-summary cannot be written (an error, an empty reply, the deadline) nothing is written and the exit
-code is 4.
-
-#### Choose what the summary emphasizes
-
-`--intent <name>` selects a prompt for the source model. It implies `--compaction summary`, so the
-destination receives the summary alone unless `--keep-turns` adds turns:
-
-```powershell
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --intent review
-mukade hop codex YOUR_CODEX_THREAD_ID claude_code --intent execute --keep-turns 2
-```
-
-The prompts are ordinary `.md` files in `intent-prompts` beside the executable, copied there on the
-first start. The file stem is the intent name, so `security.md` is selected with
-`--intent security`. `generic.md` is used when `--intent` is omitted. Files edited or added are
-picked up by the next run; mukade never overwrites one. List the folder and every available intent:
-
-```powershell
-mukade intents
-```
-
-The shipped intents are `generic`, `continue`, `execute`, `review`, `analyze`, `brainstorm` and
-`plan`. A prompt is read as plain text and its whitespace is folded to one line before it is passed
-to the harness. A Windows `.cmd` launcher can receive only ASCII letters, digits, spaces and
-`.,;:()`; a prompt outside that subset is refused before the harness starts. Name the harness's
-native executable to use a prompt with accents or richer punctuation. A host may set an absolute
-`MUKADE_INTENT_DIR` to keep the prompts elsewhere.
-
-The intent affects only the summary prompt. It does not start the destination, change its
-permissions, or add a second model call. `--intent` is accepted by `hop` and `dump`; `write`
-imports the summary a document already holds.
-
-### Rehearse before touching the real store
-
-*You want to see what a hop would do first.* Point the **destination's** store variable at an empty
-scratch folder: the session is written there, and your real store is not touched.
-
-```powershell
-$env:CLAUDE_CONFIG_DIR   = Join-Path $HOME '.claude'      # the real source
-$env:PI_CODING_AGENT_DIR = 'C:\work\rehearsal\pi'         # an empty scratch destination
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --manifest C:\work\rehearsal\manifest.json
-```
-
-Read the manifest ([section 4](#4-reading-the-receipt-and-the-manifest)); when it is what you want,
-set the variable to the real store and run it again. A hop is repeatable: each run writes another
-new session and changes nothing else.
-
-### Hand a session to someone else, or another machine
-
-*Export a harness-neutral document, move the file, write it on the other side.* Use `--output`, not
-a shell pipe (PowerShell re-encodes piped text with the console code page and garbles non-ASCII
-text):
-
-```powershell
-# machine A
-mukade dump claude_code YOUR_CLAUDE_SESSION_ID --output C:\work\session.json
-
-# machine B (any destination harness; its store variable set)
-$env:CODEX_HOME = 'D:\codex\home'
-mukade write codex C:\work\session.json --cwd 'D:\work\my-project'
-```
-
-A document holds conversation data: protect it like the original session. `write` needs the
-destination harness named explicitly, and the destination must have its own configuration and
-credentials — mukade does not transfer them.
-
-### Audit what a conversion lost
-
-*You need to know exactly what changed.* `--manifest <file>` also saves the manifest, and the
-receipt prints it anyway. Its `counts` and `losses` say what was dropped, rewritten, or written as
-text; its `source.content_sha256` is the SHA-256 of the **source file's own bytes**, so you can
-check it with `Get-FileHash -Algorithm SHA256 <file>` (or `sha256sum`) and know which exact file
-was carried. See [section 4](#4-reading-the-receipt-and-the-manifest).
-
-### A session with interrupted turns
-
-*You stopped the agent in the middle of an answer, or the harness was killed, and the session
-holds half-done work.* Nothing asks for a finished turn: a session whose turns were **all**
-interrupted is exported like any other, with every prompt and whatever the agent had written or
-run before each interruption. That is the default, `--interrupted keep`:
-
-```powershell
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project'
-```
-
-To carry only your requests and the turns that finished, add `--interrupted drop`. For each
-interrupted turn the prompt stays — it is yours, and complete — and everything the agent did
-after it is left out: the cut-off reply, the tool calls and their results.
-
-```powershell
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --interrupted drop
-```
-
-| `--interrupted` | what is written |
+| value | rows printed |
 |---|---|
-| `keep` (default) | every turn as the source holds it |
-| `drop` | finished turns whole; of an interrupted turn, the prompt alone |
+| `true`, or the flag left out (the default) | every session, the archived ones included |
+| `false` | only the rows whose `archived` is `false` |
 
-What each kind of turn becomes:
+Any other value, or `--archived` on another command, is a command-line mistake (exit 1). It combines
+with `--root`.
 
-| a turn in the source | `keep` | `drop` |
-|---|---|---|
-| finished | prompt, replies, tool calls and results | the same |
-| interrupted while the model was answering | prompt and the cut-off reply. Pi marks it `aborted`; another destination writes an ordinary reply, counted in `aborted_steps_as_replies` | the prompt |
-| interrupted after tools had run | prompt, calls and results | the prompt |
-| interrupted before anything was written | the prompt | the prompt |
-
-`hop`, `write` and `document` accept the option; any other value than `keep` or `drop`, and any
-other command, is refused before a store is read (exit 1).
-
-**How a turn is known to be interrupted.** Mukade does not guess: it reads the sign the source
-itself wrote.
-
-| source | the sign |
+| harness | `archived` is `true` when |
 |---|---|
-| Claude Code | the user row `[Request interrupted by user]`, or `[Request interrupted by user for tool use]` beside a tool result |
-| Codex | the `<turn_aborted>` message and the `turn_aborted` event |
-| OpenCode | an assistant row with no `finish`, or `finish: "aborted"` |
-| Pi | an assistant message with `stopReason: "aborted"` |
-
-Those markers are the harness's words, not yours: they are never written into the destination as
-a prompt, with either mode.
-
-**Check what was left out.** The manifest states the mode, counts the steps and adds a loss line
-(the output of a run on a hand-made Codex rollout of two turns, both interrupted):
+| Codex | the rollout is in `<CODEX_HOME>/archived_sessions/` (where `codex archive` moves it), or its row in `state_<n>.sqlite` says `archived`. Found with or without that database; `dump` and `hop` read it |
+| OpenCode | the session has a `time_archived` (top-level sessions) |
+| Claude Code, Pi | never: their stores record no archived flag, so `--archived false` leaves nothing out |
 
 ```powershell
-$env:PI_CODING_AGENT_DIR = 'C:\work\rehearsal\pi'         # an empty scratch destination
-mukade hop codex YOUR_CODEX_THREAD_ID pi --cwd 'C:\work\my-project' --interrupted drop --manifest C:\work\rehearsal\drop.json
-(Get-Content C:\work\rehearsal\drop.json | ConvertFrom-Json).counts.dropped_interrupted_steps    # 2
+mukade list opencode --root 'C:\path\to\opencode.db' --archived false      # an OpenCode database named directly
+mukade list codex | ConvertFrom-Json | Where-Object { $_.archived } | Select-Object id, title, location
+mukade list codex --archived false | ConvertFrom-Json | Select-Object -ExpandProperty cwd -Unique   # projects with work not archived
 ```
+
+```bash
+mukade list codex | jq -c 'select(.archived) | {id, title, location}'
+mukade list codex --archived false | jq -r '.cwd' | sort -u
+```
+
+### `mukade intents`
+
+Lists the editable summary prompts as JSON, without reading a session or starting a harness. It
+takes no options.
+
+1. Run `mukade intents`.
+2. Read `directory`, `default`, and every prompt with `name`, `path`, `builtin` (the name ships with
+   mukade) and `custom` (a file in the folder supplies it).
+3. Use a name with `--intent` ([Choose what the summary emphasizes](#choose-what-the-summary-emphasizes)).
 
 ```json
-"options": { "compaction": "none", "summary": null, "reasoning": "drop_foreign",
-             "resume_prompt": false, "without_tools": false, "interrupted": "drop" },
-"counts":  { "messages_in": 5, "messages_out": 2, "dropped_interrupted_steps": 2, … },
-"losses":  [ "steps of interrupted turns omitted by request, with their tool results (2)",
-             "interrupted_last_turn" ]
+{
+  "directory": "D:\\tools\\intent-prompts",
+  "default": "generic",
+  "prompts": [
+    {"name": "generic", "path": "D:\\tools\\intent-prompts\\generic.md", "builtin": true, "custom": true},
+    {"name": "security", "path": "D:\\tools\\intent-prompts\\security.md", "builtin": false, "custom": true}
+  ]
+}
 ```
 
-`messages_in` counts what the source holds, `messages_out` what was written: here the two prompts.
-`interrupted_last_turn` is still stated, because the source did end on a turn it never finished.
+### `mukade dump`
 
-**More examples.**
+Exports a session as one harness-neutral JSON document (**export**; the TUI's `e`).
+
+1. Set the source's store variable, or pass `--root`.
+2. Run `mukade dump <harness> <session-id> --output <file>`. Use `--output`, not a shell pipe:
+   PowerShell re-encodes piped text with the console code page and garbles non-ASCII text.
+   `--output` writes UTF-8.
+3. Protect the file like the original session: it holds the conversation.
 
 ```powershell
-# start the last request again in the destination, without the half-written answer
-mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --interrupted drop --resume-prompt 'Start again from my last request.'
+mukade dump claude_code YOUR_CLAUDE_SESSION_ID --output C:\work\session.json
+mukade dump pi YOUR_PI_SESSION_ID --root 'D:\portable\pi\agent' --output 'C:\work\session.json'
+mukade dump codex --from-file 'C:\path\rollout.jsonl' --output C:\work\session.json   # no ID with --from-file
+```
 
-# text only: no historical tool calls, and no interrupted work
-mukade hop pi YOUR_PI_SESSION_ID codex --cwd 'C:\work\my-project' --without-tools --interrupted drop
+- **`dump` converts nothing.** Every tool call keeps its name, its arguments and the canonical form
+  mukade read it as; reasoning keeps its text and opaque part. Conversion happens when the document
+  is **written**, so one document written into any of the four harnesses gives the result a hop
+  would.
+- It exports the session as it is, interrupted turns included; what is left out is decided at write.
+- It takes `--compaction portable|summary` and `--intent`; `native` is refused, because the document
+  is harness-neutral. It does not take `--interrupted` or `--without-tools`.
 
-# through a document, on another machine
-mukade dump pi YOUR_PI_SESSION_ID --output C:\work\session.json
-mukade write claude_code C:\work\session.json --cwd 'C:\work\my-project' --interrupted drop
+### `mukade write`
 
-# the OpenCode import document, without writing anything
+Imports a document as a **new** session of any harness (**import**; the TUI's `i`).
+
+1. Set the **destination's** store variable. The destination needs its own configuration and
+   credentials: mukade does not transfer them.
+2. Run `mukade write <harness> <document.json> --cwd <project>`. The harness is always required: a
+   destination store can legitimately be empty.
+3. Read the receipt ([section 4](#4-reading-the-receipt-and-the-manifest)).
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
+mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
+
+```
+
+- `--root` names the destination store; the executable kept beside it imports into it.
+- It takes `--without-tools`, `--interrupted drop` and the destination options like `hop`; it refuses
+  `--compaction` and `--intent` (chosen by `dump`) and imports the summary a document already holds.
+- A document saved with a UTF-8 byte-order mark is accepted.
+
+#### Move a session to another machine
+
+1. Machine A: `mukade dump claude_code YOUR_CLAUDE_SESSION_ID --output C:\work\session.json`.
+2. Move the file.
+3. Machine B: set the destination's store variable (`$env:CODEX_HOME = 'D:\codex\home'`), then
+   `mukade write codex C:\work\session.json --cwd 'D:\work\my-project'`.
+
+### `mukade hop`
+
+Reads the source and writes the destination in one process: `dump` and `write` without the file.
+
+1. Set **both** harnesses' store variables ([section 7](#7-stores-and-executables)); Claude Code,
+   Codex and Pi need an explicit root.
+2. Find the ID: `mukade list <src-harness>`.
+3. Run `mukade hop <src-harness> <session-id> <dst-harness> --cwd <project>`.
+4. Read the receipt; open the session with its `resume` command, with the destination's store
+   variable still set.
+
+Any pair works:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID codex --cwd 'C:\work\my-project'
+mukade hop pi YOUR_PI_SESSION_ID opencode --cwd 'C:\work\my-project' --project-id YOUR_PROJECT --model-provider YOUR_PROVIDER --model YOUR_MODEL
+```
+
+- Tool calls are translated to what the destination offers; one it cannot express travels as text and
+  is counted (`tools_text_form`; [section 5](#tool-calls-and-reasoning-what-is-converted-and-when)).
+- `--resume-prompt 'continue'` also runs the destination once and keeps its reply in the receipt
+  (`resume_output`).
+- `--root` selects the **source**, even when both ends are the same harness; the destination takes its
+  variable or `--dest-root` ([section 7](#7-stores-and-executables)).
+- With `--from-file` the source is that file; the `<session-id>` position is still written.
+- A hop is repeatable: each run writes another new session and changes nothing else.
+
+#### Rehearse first
+
+Point the **destination's** store variable at an empty scratch folder to see what a hop would do.
+
+1. Set the source's real store and a scratch destination:
+
+   ```powershell
+   $env:CLAUDE_CONFIG_DIR   = Join-Path $HOME '.claude'      # the real source
+   $env:PI_CODING_AGENT_DIR = 'C:\work\rehearsal\pi'         # an empty scratch destination
+   mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --manifest C:\work\rehearsal\manifest.json
+   ```
+
+2. Read the manifest ([section 4](#4-reading-the-receipt-and-the-manifest)); when it is right, set the
+   variable to the real store and run it again.
+
+### `mukade document`
+
+Builds the OpenCode import document for a session and prints it with a report. **Nothing is
+written.** OpenCode is the only destination it supports.
+
+1. Set the source's store variable (or use `--from-file`).
+2. Run `mukade document opencode <src-harness> <session-id>` with the OpenCode facts
+   (`--project-id`, `--model-provider`, `--model`) and `--cwd` when the source records none.
+3. Read the JSON: `document`, `native_compaction` (or `null`), `turns`, `interrupted_last_turn`,
+   `counts` (`messages_in`, `messages_out`, `tools_translated`, `tools_text_form`, `tools_omitted`)
+   and `losses`.
+
+```powershell
 mukade document opencode claude_code YOUR_CLAUDE_SESSION_ID --project-id YOUR_OPENCODE_PROJECT_ID --interrupted drop
 ```
 
-What it does not do:
-
-- **A process killed while the model was answering leaves no sign** in a Claude Code or Codex
-  file: that reply reads as an ordinary one, and `drop` keeps it. (A turn killed before anything
-  was written is a prompt alone, and travels as one.)
-- **A document made by `dump` keeps each reply's end but not the markers.** `write --interrupted
-  drop` therefore sees the turns whose last reply was cut, not the ones interrupted right after a
-  tool answered. `hop` reads the source itself and sees both: prefer it.
-- **A summary is not rewritten.** With `--compaction portable` or `summary`, the turns folded into
-  the summary are the summary's; the option acts on the turns that travel as they are.
-- It is not a `dump` or `list` option, and the sessions explorer (`mukade-tui`) always keeps.
-
-### A session that was rewound or branched
-
-*You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* Mukade reads the
-selected branch: the abandoned turns do not become history in the destination. They stay in the
-source untouched, and the manifest counts them
-(`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`, `custom_message` and `context_edit`
-entries reach the destination the way Pi shows them to its model.
-
-For Claude Code, `last-prompt.leafUuid` selects a checkpoint when present. A later continuation
-descending from it can supersede it. A new user branch can supersede it when the checkpoint's
-leaf was already recorded before the checkpoint. A checkpoint flushed before its own leaf is
-not treated as a rewind ordering barrier. Text beside tool results can start a new user turn too.
-Without a checkpoint, the last non-sidechain user or assistant
-row selects the branch. Parent links and compaction metadata reconstruct its order; split responses
-and parallel results are grouped by message and call IDs, even if written late. A UUID-less block,
-result or compaction summary is recovered only when those identities establish its position.
-An explicit parent on an abandoned conversation branch prevents a tool result from being
-recovered into the selected branch, even if `sourceToolAssistantUUID` names an active response.
-Missing parents, cycles, duplicate UUIDs, contradictory compaction metadata and genuinely ambiguous
-records are refused, not silently assigned to a branch. Real automatic compaction and rewind
-remain to be verified against Claude Code itself.
-
-Codex Desktop 0.165 keeps such a thread over two files: the earlier one, and a page that continues
-from part of it, which is what Codex resumes (redone again, a thread gets a further page that
-continues from the previous one). mukade reads the latest version, the way Codex resumes it: each
-earlier file up to the point the next one continues from, then the latest page; what the earlier
-files hold past those points is left behind and counted. To
-carry **everything**, the abandoned turns included (in file order, before the active ones), add
-`--all-branches` to `dump` or `hop`:
-
-```powershell
-mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project' --all-branches
-```
-
-`--all-branches` is read for Codex only; for another harness it is refused (exit 2).
-
-To omit historical calls and their results, use `--without-tools` with `hop` or `write`. The
-manifest records `options.without_tools`, the `tools_omitted` count and the loss. It is not a
-`dump` or `list` option.
-
-To leave out what the agent did in the turns the source never finished, use `--interrupted drop`
-with `hop`, `write` or `document`: see
-[A session with interrupted turns](#a-session-with-interrupted-turns).
-
-`--expect-sha256 <hash>` on `hop` checks the captured source fingerprint before writing or
-starting a source-model summary. A mismatch is refused with exit 2. It checks the selected source
-in its entirety; an appended file changes the fingerprint rather than automatically freezing the
-previous prefix.
-
-A host importing into OpenCode can reserve an ID with `--dest-id ses_<id>`, select the primary
-agent with `--dest-agent <name>`, and supply a JSON object with `--metadata-file <path>`. When an
-ID or metadata is supplied, `OPENCODE_DB` must identify the destination explicitly: mukade checks
-the resulting ID and metadata there after the native import. If the process fails or the check
-cannot confirm the write, exit 5 reports an uncertain result and its ID; inspect the destination
-before retrying. A metadata file may be at most 1 MiB and should be protected by the host.
-
-`--dest-path <path>` reserves the destination file itself, for the file-based destinations (Claude
-Code, Codex, Pi). It must be absolute, inside the destination root, and free of `..`; OpenCode refuses
-it (exit 2) because its native import allocates the file. A host that retries a hop states both
-`--dest-id`/`--dest-path` and `--expect-sha256`, so the second run lands on the same destination and
-only while the source is unchanged.
-
-`--tool-map <path>` states the source-to-destination tool bindings explicitly instead of the
-destination catalog's defaults. The file is a JSON array of `[source, destination, original, mapped]`
-tuples: the two names are tool names (up to 256 characters) and the two values are the JSON objects
-the conversation holds and the destination should receive. At most 4096 entries and 1 MiB; `hop`,
-`write` and `document` accept it, and a malformed map is refused before anything is written.
-
-`--dest-shell bash|sh|zsh|powershell|pwsh` states the shell the destination is configured to use; it
-matters only where the destination records one.
-
-### Use it from a task runner or another program
-
-*A host that already runs these harnesses wants the pipeline in-process.* mukade is a library first:
-`mukade::hop(&HopRequest { … })` does everything the command does, with typed errors
-(`HopError::ResumeFailed` carries the written session's receipt, so a caller never has to guess
-whether the destination exists). See the [README](../README.md#library).
-
-### Carry mukade itself on a stick
-
-*A machine you do not own, or one you cannot install on.* Copy `mukade.exe` to the stick and run
-it from there: it generates what it needs next to itself ([section 6](#6-where-its-files-go)), so
-deleting the folder leaves nothing on the machine.
+- It needs a working directory and one complete turn at least (else `noCompleteTurn`); the plan is
+  held to the provider rules first, and a violating document is refused.
+- The session ID is `ses_preview` unless `--dest-id` gives one.
+- `native_compaction` reports `keep_id`, `summary_chars`, `estimated_tokens`, `projected_tokens`,
+  `summarized_messages`, `summarized_user_messages`, `budget`, `context_window` and `fits`; an
+  example with `--compaction native` is in [section 5](#native-keep-everything-add-a-native-boundary).
 
 ## 4. Reading the receipt and the manifest
 
-`hop` and `write` print one JSON object (this one is a real run: the Claude Code fixture hopped
-into Pi with `--compaction portable`; long paths shortened):
+`hop` and `write` print one JSON object. This one is a real run: the Claude Code fixture hopped into
+Pi with `--compaction portable` (long paths shortened):
 
 ```json
 {
@@ -505,13 +515,7 @@ into Pi with `--compaction portable`; long paths shortened):
     "options": { "compaction": "portable", "summary": null, "reasoning": "drop_foreign", "resume_prompt": false,
                  "without_tools": false, "interrupted": "keep" },
     "counts": { "messages_in": 5, "messages_out": 5, "tool_calls": 0, "tools_text_form": 0,
-                "reasoning_dropped": 0, "reasoning_as_text": 0,
-                "dropped_orphan_results": 0, "dropped_duplicate_results": 0,
-                "rewritten_call_ids": 0, "dropped_off_branch": 0, "dropped_unfinished_lines": 0,
-                "aborted_steps_as_replies": 0, "dropped_interrupted_steps": 0,
-                "unanswered_calls": 0, "dropped_empty_steps": 0,
-                "dropped_attachments": 0, "dropped_result_blocks": 0,
-                "dropped_unreadable_summaries": 0 },
+                "reasoning_dropped": 0, "dropped_off_branch": 0, "dropped_interrupted_steps": 0, … },
     "losses": [
       "interrupted_last_turn",
       "the source's compaction summary travels as one user message",
@@ -523,50 +527,286 @@ into Pi with `--compaction portable`; long paths shortened):
 }
 ```
 
-- `id`, `location`, `resume`: the new session's id, where it was written, and the destination's own
-  command to continue it. Keep the destination's store variable set when you run it by hand.
-- `resume_output`: the destination's reply, when you passed `--resume-prompt`.
-- `counts`: every kind of loss as a number; every number above zero also has a line in `losses`.
-- `strict`: the plan was held against the rules a provider API enforces (every tool call answered
-  once, ids in the allowed pattern, …) **before** anything was written; a plan that would be
-  refused is not written (exit code 4).
+| field | what it tells you |
+|---|---|
+| `id`, `location`, `resume` | the new session's ID, where it was written, and the destination's command to continue it (keep its store variable set when you run it by hand) |
+| `resume_output` | the destination's reply, when you passed `--resume-prompt` |
+| `counts` | every kind of loss as a number (all of them: [spec §6.3](session-interchange-spec.md#63-manifest-written-with-every-hop)); every number above zero also has a line in `losses` |
+| `strict` | the plan was held against the rules a provider API enforces (every tool call answered once, IDs in the allowed pattern, …) **before** writing; a plan that would be refused is not written (exit 4) |
+| `source.content_sha256` | the SHA-256 of the **source file's own bytes** |
 
-What the `losses` lines mean, and what to do:
+**Audit the loss.**
+
+1. Save the manifest with `--manifest <file>` (the receipt prints it anyway).
+2. Read `counts` and `losses`: what was dropped, rewritten, or written as text.
+3. Compare `source.content_sha256` with `Get-FileHash -Algorithm SHA256 <file>` (or `sha256sum <file>`)
+   to know which exact file was carried.
+
+What the `losses` lines mean:
 
 | line | what happened |
 |---|---|
-| `interrupted_last_turn` | the source ended on a turn it never finished (the harness was killed, or the turn was interrupted). With no reply at all it travels as a user message alone; what the agent had done before the interruption travels too, unless `--interrupted drop`. Normal. |
-| `steps of interrupted turns omitted by request, with their tool results (n)` | `--interrupted drop`: the work of the turns the source never finished was left out; their prompts travelled. |
-| `reasoning dropped: <reason> (n)` | thinking can only be replayed to a provider that speaks the same protocol and whose format can hold its signature or encrypted payload; otherwise it is dropped, one line per reason: *the destination's provider protocol is not known; name it with --dest-protocol* (OpenCode, Pi), *made by another provider protocol*, *no signature or encrypted payload to replay it with*, *the destination's format has no place for its payload*, *not carried, as --reasoning drop asks*, *encrypted only, no visible text to write as text*. `--reasoning as_text` keeps it as labelled text instead. |
-| `reasoning written as labelled text, no longer replayable by a provider (n)` | `--reasoning as_text`: the destination's model can read it, its provider cannot replay it. |
-| `tool calls written as text, not translated (n, Tool, …)` | the destination has no equivalent tool, or an argument had no counterpart; the call and its result travel as text. Nothing is invented. |
-| `unanswered tool calls carried as text (n)` | the source never recorded a result for a call (a killed tool); a provider refuses a call without its result, so it travels as text. |
-| `orphan tool results dropped (n)` · `duplicate tool results dropped, the first answer kept (n)` | a result with no call, or a second answer to one call; a provider would refuse either. |
-| `tool call ids rewritten to the destination's id pattern (n)` | Anthropic accepts only `[a-zA-Z0-9_-]` ids; the call and its result were rewritten together. |
-| `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries a Codex thread whole. |
-| `compaction summaries with no readable text (encrypted by the source's provider), not carried (n)` | Codex 0.165 keeps its compaction summary encrypted: there is no text to write, so it is left out rather than written as an empty message. The history before and after it travels. |
-| `an unfinished last line of the source left unread (n)` | a hard kill cut the last line mid-write; the rest of the session was read. |
-| `steps the source aborted or that failed, written as ordinary replies (n)` | the destination cannot mark a step as aborted (Pi can, and does). To leave the interrupted ones out, use `--interrupted drop`. |
-| `empty steps dropped (n)` · `user attachments dropped (n)` · `structured tool-result blocks flattened to text (n)` | content the destination cannot hold (a PDF, an image toward a text-only result) is counted, never silently dropped. Images are rewritten into each harness's own shape. |
-| `the source's compaction summary travels as one user message` | `--compaction portable`. |
-| `the resume prompt did not complete: …` | the session was written but `--resume-prompt` failed (exit 5): see [troubleshooting](#11-troubleshooting). |
+| `interrupted_last_turn` | the source ended on a turn it never finished (the harness was killed, or the turn was interrupted). With no reply at all it travels as a user message alone; what the agent had done before the interruption travels too, unless `--interrupted drop`. Normal |
+| `steps of interrupted turns omitted by request, with their tool results (n)` | `--interrupted drop`: the work of the turns the source never finished was left out; their prompts travelled |
+| `tool calls and their results omitted by request (n)` | `--without-tools` |
+| `reasoning dropped: <reason> (n)` | thinking is replayed only to a provider of the same protocol whose format can hold its signature or encrypted payload; otherwise one line per reason: *the destination's provider protocol is not known; name it with --dest-protocol* (OpenCode, Pi), *made by another provider protocol*, *no signature or encrypted payload to replay it with*, *the destination's format has no place for its payload*, *not carried, as --reasoning drop asks*, *encrypted only, no visible text to write as text*. `--reasoning as_text` keeps it as labelled text instead |
+| `reasoning written as labelled text, no longer replayable by a provider (n)` | `--reasoning as_text`: the destination's model can read it, its provider cannot replay it |
+| `tool calls written as text, not translated (n, Tool, …)` | the destination has no equivalent tool, or an argument had no counterpart; the call and its result travel as text. Nothing is invented |
+| `unanswered tool calls carried as text (n)` | the source never recorded a result for a call (a killed tool); a provider refuses a call without its result, so it travels as text |
+| `orphan tool results dropped (n)` · `duplicate tool results dropped, the first answer kept (n)` | a result with no call, or a second answer to one call; a provider would refuse either |
+| `tool call ids rewritten to the destination's id pattern (n)` | Anthropic accepts only `[a-zA-Z0-9_-]` IDs; the call and its result were rewritten together |
+| `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries a Codex thread whole |
+| `messages between a subagent and its parent with no readable text (encrypted by the source), not carried (n)` | Codex keeps most `agent_message` rows encrypted: no text to write. The readable ones travel as user turns |
+| `compaction summaries with no readable text (encrypted by the source's provider), not carried (n)` | Codex 0.165 keeps its compaction summary encrypted: no text to write, so it is left out rather than written as an empty message. The history before and after it travels |
+| `an unfinished last line of the source left unread (n)` | a hard kill cut the last line mid-write; the rest of the session was read |
+| `steps the source aborted or that failed, written as ordinary replies (n)` | the destination cannot mark a step as aborted (Pi can, and does). To leave them out, use `--interrupted drop` |
+| `empty steps dropped (n)` · `user attachments dropped (n)` · `structured tool-result blocks flattened to text (n)` | content the destination cannot hold (a PDF, an image toward a text-only result) is counted, never silently dropped. Images are rewritten into each harness's own shape |
+| `the source's compaction summary travels as one user message` | `--compaction portable` |
+| `the resume prompt did not complete: …` | the session was written but `--resume-prompt` failed (exit 5): see [troubleshooting](#12-troubleshooting) |
+
+## 5. Choose what travels
+
+### Make a long session smaller
+
+| `--compaction` | the destination receives | model call | commands |
+|---|---|---|---|
+| `none` (default) | the whole history | none | all |
+| `portable` | one handoff message holding the **source's own compaction summary**, then the tail that compaction kept | none | dump, hop |
+| `summary` | a summary the source's model writes now; `--keep-turns n` adds the last n user turns verbatim | one, on the source's account | dump, hop |
+| `native` | the whole history, plus the destination's own compaction record with a deterministic summary | none | document, hop |
+
+#### `portable`: reuse the source's compaction
+
+*The history is huge but only the recent turns matter.*
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --compaction portable
+```
+
+- The source must have compacted at least once (a Claude `/compact`, a Pi compaction, …); otherwise
+  the hop is refused with a reason, nothing written (exit 2). A Codex 0.165 summary is encrypted, so
+  it is refused too.
+- The manifest keeps the line `the source's compaction summary travels as one user message` and how
+  many entries were kept.
+
+#### `native`: keep everything, add a native boundary
+
+*The imported history is larger than the destination model's useful budget, but nothing should be
+removed.* Mukade keeps the whole session and appends the destination's own compaction record with a
+deterministic, free summary of the earlier user requests; the destination sends that summary plus the
+recent tail, and the older rows stay readable.
+
+```powershell
+mukade document opencode codex YOUR_CODEX_THREAD_ID --from-file 'C:\path\rollout.jsonl' --cwd 'C:\work\my-project' --project-id YOUR_PROJECT --model-provider YOUR_PROVIDER --model YOUR_MODEL --compaction native --context-window 1000000 --max-output-tokens 64000 --text-token-factor 1.3333
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --compaction native --context-window 200000
+```
+
+| destination | the record written |
+|---|---|
+| OpenCode | `compaction` with `metadata.keepID` |
+| Pi | `compaction` with `firstKeptEntryId` |
+| Codex | `compacted` with `replacement_history` |
+| Claude Code | `compact_boundary` followed by an `isCompactSummary` row |
+
+- `--context-window` is required (above zero); `--max-output-tokens` defaults to 16000;
+  `--text-token-factor` is optional (a positive number; default chars/3).
+- The budget is the smaller of half the window and OpenCode's automatic-compaction ceiling minus room
+  for the next turn (`src/native_compaction.rs` `import_budget()`).
+- `document` reports the boundary under `native_compaction`; `hop` puts `"compaction": "native"` in
+  the manifest. No model is called; `dump` refuses this mode.
+
+#### `summary`: the source's own model writes one
+
+*The session is long, it never compacted, or its summary is encrypted (Codex).* The source harness
+summarizes it with its own model, login and configuration, in a run that saves nothing in its store;
+the destination starts from that summary.
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --compaction summary
+
+# export the summary and import it later, or elsewhere
+mukade dump codex YOUR_CODEX_SESSION_ID --compaction summary --output 'C:\work\summary.json'
+mukade write opencode 'C:\work\summary.json' --cwd 'C:\work\my-project'
+```
+
+| option | effect |
+|---|---|
+| `--keep-turns 2` | also keep the last two user turns verbatim after the summary |
+| `--summary-model <id>` | a cheaper model (default: the session's own) |
+| `--summary-timeout <s>` | bounds the run, in seconds above zero (default 300); a value too large for the clock sets no bound |
+
+- Cost: one model call on the source's account. The manifest's `options.summary` says which model
+  wrote it, which intent prompt, how long it is and, for Claude Code, what it cost.
+- A summary that cannot be written (error, empty reply, deadline) writes nothing (exit 4).
+- Refused (exit 2): with `--all-branches` (the summary stands for the branch the source resumes), and
+  with `--from-file` unless the source is Pi (only Pi forks a session from a file).
+- If OpenCode's fork could not be deleted, `dump` prints on stderr
+  `the summarizing run left a fork in the source store: run <command>`.
+
+#### Choose what the summary emphasizes
+
+`--intent <name>` selects a prompt for the source model. It implies `--compaction summary`, so the
+destination receives the summary alone unless `--keep-turns` adds turns. It changes only the summary
+prompt. `dump` and `hop` take it.
+
+1. See the prompts: `mukade intents`.
+2. Pick one:
+
+   ```powershell
+   mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --intent review
+   mukade dump codex YOUR_CODEX_SESSION_ID --intent analyze --output 'C:\work\summary.json'
+   ```
+
+3. To add your own, save `<name>.md` in `intent-prompts`: `security.md` is `--intent security`.
+
+- Shipped: `generic`, `continue`, `execute`, `review`, `analyze`, `brainstorm`, `plan`. `generic.md`
+  is used when `--intent` is omitted.
+- The prompts are plain `.md` files in `intent-prompts` beside the executable ([section 10](#10-where-its-files-go));
+  edited or added files are picked up by the next run. A host may set an absolute `MUKADE_INTENT_DIR`
+  to keep them elsewhere.
+- A prompt is plain text, its whitespace folded to one line.
+- A Windows `.cmd` launcher can receive only ASCII letters, digits, spaces and `.,;:()`; any other
+  prompt is refused before the harness starts. Name the harness's native executable to use accents
+  or richer punctuation.
+
+### A session with interrupted turns
+
+*You stopped the agent mid-answer, or the harness was killed, and the session holds half-done work.*
+A session whose turns were **all** interrupted is exported like any other, with every prompt and
+whatever the agent had written or run before each interruption.
+
+| `--interrupted` | what is written |
+|---|---|
+| `keep` (default) | every turn as the source holds it |
+| `drop` | finished turns whole; of an interrupted turn, the prompt alone (it is yours, and complete) |
+
+`hop`, `write` and `document` take it; another value, or another command, is refused before a store
+is read (exit 1).
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --interrupted drop
+# start the last request again in the destination, without the half-written answer
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --interrupted drop --resume-prompt 'Start again from my last request.'
+```
+
+| a turn in the source | `keep` | `drop` |
+|---|---|---|
+| finished | prompt, replies, tool calls and results | the same |
+| interrupted while the model was answering | prompt and the cut-off reply. Pi marks it `aborted`; another destination writes an ordinary reply, counted in `aborted_steps_as_replies` | the prompt |
+| interrupted after tools had run | prompt, calls and results | the prompt |
+| interrupted before anything was written | the prompt | the prompt |
+
+**How a turn is known to be interrupted.** Mukade does not guess: it reads the sign the source wrote.
+
+| source | the sign |
+|---|---|
+| Claude Code | the user row `[Request interrupted by user]`, or `[Request interrupted by user for tool use]` beside a tool result |
+| Codex | the `<turn_aborted>` message and the `turn_aborted` event |
+| OpenCode | an assistant row with no `finish`, or `finish: "aborted"` |
+| Pi | an assistant message with `stopReason: "aborted"` |
+
+These markers are the harness's words: never written into the destination as a prompt, in either mode.
+
+**Check what was left out.** The manifest states the mode, counts the steps and adds a loss line (a
+hand-made Codex rollout of two interrupted turns, hopped with `--interrupted drop --manifest <file>`):
+
+```json
+"options": { "compaction": "none", "summary": null, "reasoning": "drop_foreign",
+             "resume_prompt": false, "without_tools": false, "interrupted": "drop" },
+"counts":  { "messages_in": 5, "messages_out": 2, "dropped_interrupted_steps": 2, … },
+"losses":  [ "steps of interrupted turns omitted by request, with their tool results (2)",
+             "interrupted_last_turn" ]
+```
+
+`messages_out` is the two prompts. `interrupted_last_turn` is still stated: the source did end on a
+turn it never finished.
+
+What it does not do:
+
+- **A process killed while the model was answering leaves no sign** in a Claude Code or Codex file:
+  that reply reads as an ordinary one, and `drop` keeps it. (A turn killed before anything was
+  written is a prompt alone.)
+- **A document made by `dump` keeps each reply's end but not the markers**, so `write --interrupted
+  drop` sees the turns whose last reply was cut, not those interrupted right after a tool answered.
+  `hop` reads the source itself and sees both: prefer it.
+- **A summary is not rewritten**: turns folded into the summary (`--compaction portable` or
+  `summary`) are the summary's; the option acts on the turns that travel as they are.
+- It is not a `dump` or `list` option, and `mukade-tui` always keeps.
+
+### A session that was rewound or branched
+
+*You rewound in Claude Code, edited a prompt, or navigated back in Pi's `/tree`.* Mukade reads the
+selected branch: abandoned turns do not become history in the destination, stay in the source
+untouched, and are counted (`dropped_off_branch`). Pi's `branch_summary`, `bashExecution`,
+`custom_message` and `context_edit` entries reach the destination the way Pi shows them to its model.
+
+**Claude Code: how the branch is chosen.** By the `last-prompt.leafUuid` checkpoint when present
+(a later continuation or a new user branch can supersede it), else the last non-sidechain user or
+assistant row; parent links and compaction metadata give the order. Missing parents, cycles,
+duplicate UUIDs, contradictory compaction metadata and ambiguous records are refused, not assigned
+to a branch. Rules and refusals: [spec §2.1](session-interchange-spec.md#21-claude-code-21311) and
+[the Claude Code page](harnesses/claude-code.md#how-mukade-reads-it). Real automatic compaction and
+rewind are still to be verified against Claude Code itself ([next.md](../next.md)).
+
+**Codex Desktop 0.165: a thread over several files.** Such a thread is an earlier file plus a page
+that continues from part of it (redone again, a further page continues from the previous one). Mukade
+reads it as Codex resumes it: each earlier file up to the point the next continues from, then the
+latest page; what the earlier files hold past those points is left behind and counted.
+
+To carry **everything**, abandoned turns included (in file order, before the active ones), add
+`--all-branches` to `dump`, `hop` or `document`; Codex only, refused (exit 2) for another harness:
+
+```powershell
+mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project' --all-branches
+```
+
+### Subagents and what they reported
+
+*The agent started subagents (Claude Code `Agent`, Codex `spawn_agent`, OpenCode `subagent`).* A hop
+carries the session itself: its spawn calls travel as text, and each report the parent's model
+received travels where it was received — a call's result stays its result, a report that arrived
+on its own is a user turn:
+
+| harness | the report in the parent |
+|---|---|
+| Claude Code | the `Agent` call's result (a foreground subagent); the `<task-notification>` that announces a background one, a plain row or an `attachment` row |
+| Codex | an `agent_message` with readable text; an encrypted one is counted (`dropped_subagent_messages`) |
+| OpenCode | the `synthetic` message with `metadata.source: "subagent"` |
+
+A report on an abandoned branch (a rewind) is left behind with that branch and counted in
+`dropped_off_branch`. A subagent's own transcript is a session of its own: `list --children` finds
+it, `dump` and `hop` take it by its id ([Subagent sessions](#subagent-sessions)). The TUI does not
+resume a Claude Code subagent (`R`): Claude Code resumes sessions, not their subagents; it names the
+parent to resume instead.
+
+### Leave out tool calls
+
+`--without-tools` on `hop`, `write` or `document` omits the historical calls and their results; the
+manifest records `options.without_tools`, `tools_omitted` and the loss. `dump` and `list` do not take it.
 
 ### Tool calls and reasoning: what is converted, and when
 
-**`dump` converts nothing.** The document keeps every tool call as the source wrote it: its own
-name, its own arguments, and the canonical form mukade read it as. Reasoning blocks keep their text
-and their opaque part (below). Conversion happens when a session is **written** into a harness, by
-`write` or `hop`, so one document can be written into any of the four with the same result a hop
-would have.
+**Tool calls** are translated to the destination's own tool when a session is written (`write`,
+`hop`, `document`), by the rules of [`tool-conversion-tables.md`](tool-conversion-tables.md). One with
+no equivalent travels as text, with its arguments, and is counted (`tools_text_form`).
 
-**Tool calls** are translated to the destination's own tool, by the rules of
-[`tool-conversion-tables.md`](tool-conversion-tables.md); one with no equivalent travels as text,
-with its arguments, and is counted (`tools_text_form`).
+**Shell calls** keep their dialect: the command is never rewritten (`src/tools.rs` `other_dialect()`).
 
-**Reasoning (chain of thought)** is not converted, because it cannot be. A block has visible text
-and an opaque part — a signature over the text, or a provider-encrypted payload — that only the
-provider protocol that produced it can read back, and that mukade never edits or makes up.
-`--reasoning` decides what happens to each block:
+- Toward Codex, OpenCode and Pi a shell call is translated only when the destination runs a shell of
+  its dialect: the one `--dest-shell` names (`bash`, `sh`, `zsh`, `dash`, `ksh` or `posix` for
+  POSIX, `powershell` or `pwsh` for PowerShell), else the one the destination's own configuration or
+  platform names for the project the session is filed under
+  ([per destination](tool-conversion-tables.md#41-shell)). `--dest-shell none` names no dialect:
+  every such call travels as text.
+- Toward Claude Code a POSIX call becomes `Bash`, a PowerShell call `PowerShell` where the
+  installation runs that tool ([how mukade tells](harnesses/claude-code.md#the-powershell-tool)),
+  else text. That is the offered set, not a dialect: `--dest-shell` does not change it, `none`
+  included.
+
+**Reasoning (chain of thought) is not converted**, because it cannot be: a block has visible text
+and an opaque part (a signature over the text, or a provider-encrypted payload) that only the
+protocol that produced it can read back, and mukade never edits or makes up. `--reasoning` decides
+what happens to each block:
 
 | `--reasoning` | what happens |
 |---|---|
@@ -574,28 +814,238 @@ provider protocol that produced it can read back, and that mukade never edits or
 | `as_text` | written as visible text before the answer it led to, labelled `[earlier reasoning, not replayable]`: the destination's model can read it, but it is no longer reasoning to its provider; counted (`reasoning_as_text`). A block with no visible text (encrypted only) is dropped |
 | `drop` | never carried |
 
-Where the opaque part fits: Claude Code takes a signature (`thinking`) or an encrypted payload
-(`redacted_thinking`), Codex only an encrypted payload, Pi only a signature, OpenCode either. So
-Claude → Claude and Codex → Codex keep reasoning natively; Claude → Codex and Codex → Claude drop
-it, or carry it as text with `as_text`.
+Where the opaque part fits (`src/policy.rs` `payload_fits()`):
 
-OpenCode and Pi speak whatever provider they are configured with, so mukade does not know their
-protocol, and **with the default every reasoning block toward them is dropped**. Say which protocol
-the destination will use and blocks from the same protocol are kept:
+| destination | takes |
+|---|---|
+| Claude Code | a signature (`thinking`) or an encrypted payload (`redacted_thinking`) |
+| Codex | an encrypted payload only |
+| Pi | a signature, or an Anthropic encrypted payload, written as a `redacted: true` thinking block |
+| OpenCode | either |
+
+**OpenCode and Pi** speak whatever provider they are configured with, so their protocol is unknown and
+**by default every reasoning block toward them is dropped**. Name the protocol to keep blocks of the
+same protocol:
 
 ```powershell
 mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --dest-protocol anthropic-messages
 ```
 
-`--dest-protocol` is `anthropic-messages`, `openai-responses` or `openai-chat`. Name the one the
-destination's configured provider really uses. mukade takes it on trust: the strict check refuses a
-block of one protocol carried into another (exit 4), but it compares against this value, so it
-cannot tell that the value itself is wrong.
+- `--dest-protocol` is `anthropic-messages`, `openai-responses` or `openai-chat` (also accepted:
+  `anthropic`, `claude`; `openai`, `responses`, `codex`; `chat`, `chat-completions`,
+  `openai-completions`). Without it, Claude Code is `anthropic-messages` and Codex `openai-responses`.
+- Name the protocol the destination's provider really uses: mukade takes it on trust. The strict
+  check refuses a block of one protocol carried into another (exit 4) but compares against this value,
+  so it cannot tell that the value itself is wrong.
 
-## 5. Speed
+## 6. Host and automation options
 
-A handover is meant to feel instant. Measured on this repository's release build, hopping a Claude
-Code session of that size (mostly tool output, like real ones) into Pi, Claude or Codex:
+**Use it from a program.** Mukade is a library first: `mukade::hop(&HopRequest { … })` does what the
+command does, with typed errors (`HopError::ResumeFailed` carries the written session's receipt).
+See the [README](../README.md#library).
+
+| option | rule |
+|---|---|
+| `--expect-sha256 <hash>` | `hop` only; 64 hex digits. Checks the captured source fingerprint before writing or starting a source-model summary; a mismatch is refused (exit 2). It covers the selected source in its entirety: an appended file changes it |
+| `--dest-id <id>` | reserves the destination session ID: `ses_<id>` for OpenCode, a UUID for Claude Code, Codex and Pi |
+| `--dest-path <path>` | reserves the destination file itself, for the file-based destinations (Claude Code, Codex, Pi). Absolute, inside the destination root, free of `..`. OpenCode refuses it (exit 2): its native import allocates the file. `hop` checks it before reading the source, so a refused path runs nothing, a summarizing model included |
+| `--dest-agent <name>` | OpenCode only: the primary agent |
+| `--metadata-file <path>` | OpenCode only: a JSON object stored as session metadata; at most 1 MiB; protect it like the session |
+| `--tool-map <path>` | explicit bindings instead of the destination catalog's defaults (below) |
+| `--dest-shell <s>` | the shell the destination runs, over the one mukade reads from its configuration; `none`: no dialect (shell calls into Codex, OpenCode and Pi as text; Claude Code's offered set unchanged). Decides whether shell calls are translated ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)), and is recorded where the destination records one |
+
+- **OpenCode IDs and metadata.** When supplied, `OPENCODE_DB` must name the destination explicitly:
+  mukade checks the resulting ID and metadata there after the native import. If the process fails or
+  the check cannot confirm the write, exit 5 reports an uncertain result and its ID; inspect the
+  destination before retrying.
+- **Retrying safely.** State both `--dest-id`/`--dest-path` and `--expect-sha256`, so the second run
+  lands on the same destination, and only while the source is unchanged.
+- **Tool map file.** A JSON array of `[source, destination, original, mapped]` tuples: two tool names
+  (1 to 256 characters) and the two JSON objects the conversation holds and the destination should
+  receive. At most 4096 entries and 1 MiB; a malformed map is refused before anything is written.
+
+## 7. Stores and executables
+
+| Harness | CLI name | Store/config variable | Executable flag | Executable environment variable |
+|---|---|---|---|---|
+| Claude Code | `claude_code` | `CLAUDE_CONFIG_DIR` | `--claude-exe` | `MUKADE_CLAUDE_EXE` |
+| Codex CLI | `codex` | `CODEX_HOME` | `--codex-exe` | `MUKADE_CODEX_EXE` |
+| OpenCode | `opencode` | `OPENCODE_DB` (database file), plus its applicable `XDG_*` settings | `--opencode-exe` | `MUKADE_OPENCODE_EXE` |
+| Pi | `pi` | `PI_CODING_AGENT_DIR` | `--pi-exe` | `MUKADE_PI_EXE` |
+
+**Stores.**
+
+- Claude Code, Codex and Pi require an explicit root, even for standard installations (an empty
+  variable is no root).
+- OpenCode: `list opencode` needs an explicit `OPENCODE_DB` or `--root`; without one it refuses with
+  `OPENCODE_DB is not set: no OpenCode store to list`. The OpenCode processes mukade starts
+  (`session export`, the import, a resume) get `OPENCODE_DB` when set, and otherwise run with the
+  variable removed, against OpenCode's own configured store: supply the database and environment
+  when isolation matters.
+- `--root` changes the selected harness's store for `list`, `dump` or `write`. For `hop` it applies to
+  the **source**, including when both ends use the same harness; the destination is its variable, or
+  `--dest-root`.
+- For OpenCode, an existing directory passed as `--root` means its `opencode.db`; a file path is used
+  as-is.
+- `--root` and `--dest-root` take a store, or a folder that holds one installation: a path that is
+  not a store is scanned as `mukade scan` would and must hold exactly one installation (of the
+  harness named, when one is); several are refused with the list of their stores. A path that holds
+  nothing is still used as the store of a named harness: a destination store can be empty.
+- Without a harness name, `--root` infers it from the directory's own layout when exactly one
+  harness is recognized, or from the only installation below it.
+
+**Executables.**
+
+1. An override points to the **launcher or executable**, not its installation directory.
+2. Resolution order: the `--<harness>-exe` flag, then `MUKADE_*_EXE`, then `PATH` (`.cmd` launchers
+   included), then the platform locations in [`catalog/harnesses.json`](../catalog/harnesses.json),
+   then the bare command name. `mukade harnesses` shows which one it resolves.
+3. An explicitly configured executable is also put into the returned resume command.
+4. OpenCode as the **source**: its export reader uses `MUKADE_OPENCODE_EXE` or default resolution,
+   not the `--opencode-exe` flag. The flag applies to OpenCode as a destination.
+
+**`--dest-root`: a hop into a named installation.** Its executable, the one `scan` reports beside the
+store, writes the session and appears in the resume command; an explicit `--<harness>-exe` still wins
+over it (and over `MUKADE_*_EXE` and `PATH`). Into a portable JanuraCode:
+
+```powershell
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
+```
+
+- The destination's model and provider come from the installation's own configuration when it keeps
+  one beside its store: an OpenCode database in an XDG data layout (`<root>\share\opencode\opencode.db`)
+  is configured by `<root>\config\opencode\opencode.json`, a Codex home by its `config.toml`. When
+  that file exists it alone answers; otherwise `OPENCODE_CONFIG` and `XDG_CONFIG_HOME` apply.
+  `--model-provider` and `--model` win over both.
+- A database with no session for the source's folder yet cannot name its project: pass `--project-id`
+  for that first hop.
+- Only `OPENCODE_DB` is set for the import itself, as for any OpenCode destination: the engine runs
+  with the `XDG_*` configuration of the shell that runs mukade.
+
+**Resume.**
+
+- A `--resume-prompt` runs the destination with its store variable set to the root the session was
+  written to, from the destination's working directory (`--cwd`, or the source's recorded one, which
+  must exist on this machine).
+- A resume command you run later by hand does not inherit that: set the destination's variable in
+  that shell first (for OpenCode also `XDG_*` and `OPENCODE_CONFIG` where needed: a database path
+  alone does not isolate completely).
+- Refused before anything is written: a resume prompt that starts with `-` (every harness CLI would
+  read it as an option), and one with line breaks when the destination's executable is a `.cmd`
+  launcher, which cannot take them.
+
+**Deadlines.** Every harness process mukade starts, except `mukade-tui`'s interactive resume, runs with
+a deadline; one that outlives it is stopped **with everything it started** (an MCP server, a shell):
+Windows `taskkill /T`, elsewhere a walk of the process tree (`src/exe.rs` `kill_tree()`). A detached
+daemon is not found. A timeout too large for the clock sets no deadline.
+
+## 8. Per-harness notes
+
+A harness kept in a folder of its own (`D:\portable\…`, a USB stick) needs its store variable and
+`--<harness>-exe` (that concerns the **harness**; mukade needs only its executable). Each harness
+has a reference page (install, store, compaction, tools, hooks): [`docs/harnesses/`](harnesses/). The
+examples above work for any pair; what changes per harness:
+
+| harness | store variable, resume | destination flags | also |
+|---|---|---|---|
+| Claude Code | `CLAUDE_CONFIG_DIR`, kept set for `resume` | `--claude-exe` | mukade sets up no install or authentication |
+| Codex CLI | `CODEX_HOME`, kept set for `resume` | `--codex-exe`, `--dest-version` | `list` includes archived threads |
+| OpenCode | `OPENCODE_DB` plus `XDG_*`, kept set for `resume` | `--opencode-exe`, `--project-id`, `--model-provider`, `--model` | reads a source with `opencode session export … --standalone`; imports with `--standalone` |
+| Pi | `PI_CODING_AGENT_DIR`, kept set for `resume` | `--pi-exe` (a `.cmd` launcher works) | a separate agent directory does not prove every resource Pi reads is isolated |
+
+A harness in its own folder, as destination:
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
+$env:PI_CODING_AGENT_DIR = 'D:\portable\pi\agent'
+mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
+```
+
+### Claude Code
+
+Claude Code names a project's folder by its own rule (every character outside `[a-zA-Z0-9]` becomes
+`-`; a name past 200 characters is cut and suffixed with a hash); mukade follows it
+([Claude Code page](harnesses/claude-code.md)).
+
+### Codex CLI
+
+- `list codex` marks the threads archived with `codex archive` (rollouts in
+  `$env:CODEX_HOME\archived_sessions`) `"archived": true` ([Archived sessions](#archived-sessions));
+  `dump` and `hop` read them like any other.
+- Codex requires a destination CLI version in its session metadata. Mukade asks the chosen
+  executable's `--version`; if that cannot be done or parsed, supply it: `--dest-version 0.164.0`
+  (your version).
+- Mukade reads `model_provider` from `$env:CODEX_HOME\config.toml` when available; `--model-provider`
+  states it explicitly. Only the top-level `model_provider` key counts, not a profile's or a provider
+  table's.
+
+**Threads of the Codex Desktop app (0.165).** The ID in a `codex://threads/<id>` link is the thread ID
+mukade takes: `mukade hop codex 01a181e2-4cd9-7c63-82b8-f75e3d6bb172 claude_code --cwd 'D:\Projects\daodan'`.
+What to expect:
+
+- **Several files**: read as Codex resumes it; `--all-branches` carries it whole
+  ([rewound or branched](#a-session-that-was-rewound-or-branched)).
+- **Encrypted compaction**: `--compaction portable` is refused (exit 2) and a whole-history hop leaves
+  the summaries out, counted. A long thread is therefore carried whole: a 17.8 MB thread became a
+  4.1 MB Claude Code session of several hundred thousand tokens, which only a model with a very large
+  context can resume. Every message in a resumed session reads the whole context first: the first one
+  costs that much, or makes Claude Code compact before answering.
+- **Code mode**: most tool calls are one `exec` script each. A script of only literal
+  `text(await tools.<name>(<literal>));` statements is read as the calls it made, each translated like
+  any other (`split_code_mode()`; `apply_patch` becomes a write or edit); any other script stays one
+  call in text form. On 34 real rollouts (Codex 0.167), 725 of 981 scripts were split
+  ([verification](verification/2026-11-11-codex-code-mode.md), [rule](tool-conversion-tables.md#5-reading-codex-desktop-code-mode-exec)).
+- **PowerShell shell calls**: such rollouts declare PowerShell, so their shell calls translate only
+  toward a destination that runs PowerShell, Codex on Windows included
+  ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)).
+- **Reasoning** is OpenAI's: dropped toward any other provider, counted.
+- **Subagents**: their messages to the main agent are left out on purpose (encrypted, readable only by
+  OpenAI); the main agent's messages to them travel as text with that content replaced by
+  `<encrypted by the source's provider, N chars>` ([Codex page](harnesses/codex.md#how-mukade-reads-it)).
+- **Model warning in Claude Code**: resuming prints `Session model gpt-… could not be restored …
+  using claude-…`: the rows name the model that wrote each reply, which Claude Code does not know.
+  Expected; nothing to fix.
+
+### OpenCode
+
+`list opencode` needs the database via `OPENCODE_DB` or `--root`, reads it without starting OpenCode,
+and includes top-level archived sessions (`--archived false` leaves them out). Set the `XDG_*`
+variables your installation uses in the shell as well, if applicable.
+
+**A custom OpenCode destination.** The database, configuration, XDG directories and executable must
+belong to the intended installation; the project ID, provider and model must already be valid for it.
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
+$env:OPENCODE_DB = 'D:\portable\opencode\data\opencode.db'
+$env:XDG_DATA_HOME = 'D:\portable\opencode\data'
+$env:XDG_CONFIG_HOME = 'D:\portable\opencode\config'
+$env:XDG_STATE_HOME = 'D:\portable\opencode\state'
+$env:XDG_CACHE_HOME = 'D:\portable\opencode\cache'
+$env:OPENCODE_CONFIG = 'D:\portable\opencode\config\opencode.json'
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --cwd 'C:\work\my-project' --opencode-exe 'D:\portable\opencode\opencode.exe' --project-id YOUR_OPENCODE_PROJECT_ID --model-provider YOUR_PROVIDER --model YOUR_MODEL
+```
+
+- OpenCode's import needs a project ID and a complete provider/model reference. Mukade can discover
+  the project from OpenCode's existing sessions (asked of the store the session will be written to),
+  and the provider and model from its configuration. Explicit values avoid relying on discovery and
+  are faster ([Speed](#9-speed)).
+- The receipt's `location` names the database the session was imported into (`OPENCODE_DB`), or
+  says it went to OpenCode's configured store: use the returned ID with that store.
+- **A custom OpenCode source:** set `MUKADE_OPENCODE_EXE` ([section 7](#7-stores-and-executables)).
+
+### Pi
+
+- The new session goes below `PI_CODING_AGENT_DIR\sessions`, in the folder Pi itself would use for the
+  project; the receipt's `resume` holds the chosen launcher and the session file path.
+- Verify that Pi installation's provider credentials and configuration separately.
+- Sessions written this way were run against Pi 1.2.0 and 1.4.0
+  (`docs/verification/pi-session-and-reasoning-verification.md`).
+
+## 9. Speed
+
+Measured on this repository's release build, hopping a Claude Code session of that size (mostly tool
+output, like real ones) into Pi, Claude or Codex:
 
 | source session | time (Pi, Claude or Codex as destination) | peak memory |
 |---|---|---|
@@ -603,10 +1053,13 @@ Code session of that size (mostly tool output, like real ones) into Pi, Claude o
 | 10 MB | 185–240 ms (`dump` alone: 150 ms) | about 100 MB |
 | 30 MB | 440–630 ms (`dump` alone: 420 ms) | about 300 MB |
 
-Before the work on speed the same hops took 83, 556 and 1657 ms. The time is proportional to the
-size of the session, because every record is read and decoded once.
+Before the work on speed the same hops took 83, 556 and 1657 ms. The time is proportional to the size
+of the session, because every record is read and decoded once.
 
-`--timing` prints where the time went, phase by phase, on stderr:
+`--timing` prints the phases on stderr (a real run, `hop claude_code … pi --compaction portable` on
+the 5-message fixture). A phase prints when it ends, so a nested one comes first: `serialize + write
+file` is inside `write files`; `resumed branch`, `entries`, `finish` inside `build entries`;
+`fingerprint (parallel)` runs on a second thread while the file is parsed:
 
 ```text
 read file                          0.5 ms
@@ -625,512 +1078,111 @@ write files                        5.8 ms
 total                             16.2 ms
 ```
 
-(A real run on the 5-message Claude Code fixture, `hop claude_code … pi --compaction portable`.
-A phase is printed when it ends, so one that runs inside another comes first: `serialize + write
-file` is inside `write files`, and `resumed branch`, `entries`, `finish` are inside `build entries`.
-`fingerprint (parallel)` runs on a second thread while the file is parsed.)
-
 What makes it fast, and what you can do:
 
 - **The file formats are not the cost.** Claude Code, Codex and Pi store JSON Lines and OpenCode
-  SQLite; those are the harnesses' own and mukade reads and writes them as they are. A binary
-  intermediate would not help — a hop has none. Decoding is spread over up to 8 threads for large
-  files; the source's fingerprint is hashed on another thread while the rest is read.
-- **Starting the destination to ask its version is the real cost for small sessions.** Pi's
-  `--version` takes about half a second (it starts Node). mukade therefore reads the version from the
-  npm package the launcher starts, without starting anything; for a native binary it asks once and
-  remembers the answer by the binary's path, size and modification time, in `mukade-data/cache`
-  beside the executable ([section 6](#6-where-its-files-go)). To skip the question entirely,
-  state the facts: `--dest-version`, and for OpenCode `--project-id`, `--model-provider`, `--model`.
-- A `--resume-prompt` starts the destination harness and a model: that is its time, not mukade's.
+  SQLite; mukade reads and writes them as they are. Decoding is spread over up to 8 threads for large
+  files; the fingerprint is hashed on another thread.
+- **Asking the destination its version is the real cost for small sessions.** Pi's `--version` takes
+  about half a second (it starts Node), so mukade reads the version from the npm package the launcher
+  starts. A native binary is asked once; the answer is remembered by path, size and modification time
+  in `mukade-data/cache` ([section 10](#10-where-its-files-go)).
+- **To skip the question, state the facts:** `--dest-version`, and for OpenCode `--project-id`,
+  `--model-provider`, `--model`. A `--resume-prompt` starts the destination and a model: that time is
+  not mukade's.
 
-## 6. Where its files go
+## 10. Where its files go
 
-mukade has no installer or configuration file. On its first start it copies the editable intent
-prompts to `intent-prompts` beside the executable; an existing file is never replaced. By default it
-keeps its other files in `mukade-data` beside the executable. `MUKADE_DATA_DIR` can select a
-different **absolute** data folder for a host; an invalid override is refused rather than
-redirected. The data folder is made the first time something is written to it (never at start-up):
+On first start mukade copies the editable intent prompts to `intent-prompts` beside the executable (an
+existing file is never replaced). Its other files go to `mukade-data` beside the executable, made the
+first time something is written to it. `MUKADE_DATA_DIR` can select a different **absolute** data
+folder for a host; an invalid override is refused (exit 1) rather than redirected.
 
 | file | what for |
 |---|---|
 | `intent-prompts/*.md` | the editable summary prompts: `generic.md` is the default, every other file stem is an `--intent` name; copied on first start and never overwritten |
-| `mukade-data/cache/probes.json` | the versions and OpenCode project ids learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not start the harness to ask again |
-| `mukade-data/cache/claude-list-<hash>.json` | what `list claude_code` read from each session file (id, title, cwd, time), keyed by the file's path, size and modification time, so only the files that changed are read next time; one file per Claude Code `projects/` folder, rewritten whole, and a file modified in the last 2 seconds is never kept in it |
+| `mukade-data/cache/probes.json` | versions and OpenCode project IDs learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not ask again |
+| `mukade-data/cache/claude-list-<hash>.json` | what `list claude_code` read from each session file (ID, title, cwd, time), keyed by path, size and modification time, so only changed files are read next time; one per Claude Code `projects/` folder, rewritten whole; a file modified in the last 2 seconds is never kept in it |
 | `mukade-data/tmp/mukade-import-*.json` | the document `opencode session import` needs as a file; private, and removed when the import ends, even when it fails |
 | `mukade-data/tmp/summary-*/` | one folder per `--compaction summary` run: the file Codex writes its summary to, the session Pi forks; removed when the run ends, even when it fails |
 | `.mukade-*.tmp` | beside the session being written, in the destination's store: the session as it is written, renamed into place when complete |
 
-Nothing is written to the user profile, the application-data folders, the registry or the system's
-temporary folder. A temporary file or summary folder a **killed** run left behind is removed by the
-next run once it is an hour old. The files that *are* yours stay yours: the sessions it writes into the harnesses'
-stores, and what you ask for with `--output` and `--manifest`. To remove mukade, delete the folder
-it is in.
+- Nothing is written to the user profile, the application-data folders, the registry or the system's
+  temporary folder.
+- A temporary file or summary folder a **killed** run left behind is removed by the next run once it
+  is an hour old.
+- Yours stay yours: the sessions written into the harnesses' stores, and what `--output` and
+  `--manifest` ask for.
+- To remove mukade, delete its folder. Harnesses are separate ([section 7](#7-stores-and-executables)).
 
-If the selected data folder is in a place it cannot write to, the folder cannot be made.
-mukade does not look for another place: the cache is not kept (every hop asks the harness, which
-costs time but works), and a hop to OpenCode stops with an error that names the folder, before
-anything is written. Set `MUKADE_DATA_DIR` to an absolute writable folder, or run the executable
-from a writable location without the override.
+**When the data folder cannot be written**, mukade looks for no other place: the cache is not kept
+(every hop asks the harness: slower, but works), and a hop to OpenCode stops with an error that names
+the folder, before anything is written. Set `MUKADE_DATA_DIR` to an absolute writable folder, or run
+the executable from a writable location.
 
-**What it looks like.** A real run: the executable copied alone into an empty folder, then two hops
-to Claude Code whose launcher answers `--version` (`--timing` shows the cost of asking):
+**What it looks like.** The executable copied alone into an empty folder, then two hops to Claude Code
+whose launcher answers `--version`; afterwards the folder holds `mukade.exe`, `intent-prompts\` and
+`mukade-data\cache\probes.json`:
 
 ```text
-before the first hop          after it
-tools\                          tools\
-  mukade.exe                        mukade.exe
-                                    intent-prompts\
-                                    mukade-data\cache\probes.json
-
 1st hop   probe destination version   70.8 ms   total  78.6 ms
 2nd hop   probe destination version    0.3 ms   total   9.4 ms     (answered from the cache)
-
 probes.json: {"version|<dir>/claude.cmd|20|1793205746861450700":"2.9.9"}
 ```
 
-A hop that has nothing to ask adds nothing under `mukade-data`: a hop to Pi, with no `pi` launcher
-to start, left `mukade-data` absent.
+A hop that has nothing to ask adds nothing under `mukade-data`: a hop to Pi, with no `pi` launcher to
+start, left it absent. A test asserts the sandbox around the real binary stays empty
+([README](../README.md)).
 
-This is checked by an automated test that runs the real binary alone in a folder, with the
-temporary folder, the home folder and the application-data folders pointed at an empty sandbox, and
-asserts the sandbox stays empty and the folder holds the executable, `intent-prompts` and
-`mukade-data`.
-
-**Harnesses are separate.** A harness installed in its own folder is reached with its store
-variable and `--<harness>-exe`: see [section 8](#8-stores-and-executables) and the examples in
-[section 9](#9-per-harness-examples).
-
-## 7. Exit codes
+## 11. Exit codes
 
 | code | meaning |
 |---|---|
 | 0 | done |
-| 1 | a command-line mistake (unknown option, a flag without its value, an unexpected argument) |
-| 2 | refused with a reason; nothing was written: the session is not there, the store is not configured, the id is ambiguous, or the request is not supported (a resume prompt starting with `-`, `--compaction portable` on a source that never compacted, …) |
+| 1 | a command-line mistake (unknown option, a flag without its value, an unexpected argument, an option the command does not take, a bad value), or another error outside the codes below (a document that cannot be read or parsed, a `MUKADE_DATA_DIR` that is not absolute) |
+| 2 | refused with a reason; nothing was written: the session is not there, the store is not configured, the ID is ambiguous, the source changed (`--expect-sha256`), or the request is not supported (a resume prompt starting with `-`, `--compaction portable` on a source that never compacted, `--all-branches` on a harness other than Codex, …) |
 | 4 | failed and nothing changed: the plan would be refused by a provider, the source's model could not write the summary, or the write failed before starting the destination import |
 | 5 | recovery is needed: the source could not be read, an external import has an uncertain outcome, or the session was written but the resume failed. A failed resume still prints its receipt and saves `--manifest`; an uncertain import names its destination ID |
 
-## 8. Stores and executables
+## 12. Troubleshooting
 
-| Harness | CLI name | Store/config variable | Executable flag | Executable environment variable |
-|---|---|---|---|---|
-| Claude Code | `claude_code` | `CLAUDE_CONFIG_DIR` | `--claude-exe` | `MUKADE_CLAUDE_EXE` |
-| Codex CLI | `codex` | `CODEX_HOME` | `--codex-exe` | `MUKADE_CODEX_EXE` |
-| OpenCode | `opencode` | `OPENCODE_DB` (database file), plus its applicable `XDG_*` settings | `--opencode-exe` | `MUKADE_OPENCODE_EXE` |
-| Pi | `pi` | `PI_CODING_AGENT_DIR` | `--pi-exe` | `MUKADE_PI_EXE` |
+**Finding the session or the harness**
 
-Claude Code, Codex and Pi require an explicit root, even for standard installations (an empty
-variable is no root). OpenCode may use its configured store, but supply its database and
-environment explicitly when isolation matters.
-
-An executable override points to the **launcher or executable**, not its installation directory.
-The CLI resolves the destination executable using its flag, then its `MUKADE_*_EXE` variable,
-then `PATH` (`.cmd` launchers included), then the platform locations in
-[`catalog/harnesses.json`](../catalog/harnesses.json), and finally the bare command name. Run
-`mukade harnesses` to see which one it resolves. An explicitly configured executable is also put
-into the returned resume command. OpenCode is special: when it is the **source**, its export reader
-uses `MUKADE_OPENCODE_EXE` or default resolution, not the `--opencode-exe` flag. The flag applies to
-OpenCode as a destination.
-
-`--root` changes the selected harness's store for `list`, `dump` or `write`. For `hop`, it applies
-to the **source**, including when both ends use the same harness; the destination is its
-environment variable, or `--dest-root`. For OpenCode,
-an existing directory passed as `--root` means its `opencode.db`; a file path is used as-is.
-
-`--root` and `--dest-root` take a store, or a folder that holds one installation: when the path is
-not a store itself, it is scanned as `mukade scan` would, and must hold exactly one installation (of
-the harness named, when one is). Several are refused with the list of their stores, so one of them
-can be passed instead. A path that holds nothing is still used as the store of a named harness: a
-destination store can legitimately be empty.
-
-`--dest-root` names a hop's destination installation. Its executable, the one `scan` reports beside
-the store, writes the session and appears in the resume command; an explicit `--<harness>-exe`
-still wins over it, and it wins over `MUKADE_*_EXE` and `PATH`. Into a portable JanuraCode:
-
-```powershell
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
-```
-
-The destination's model and provider come from that installation's own configuration when it keeps
-one beside its store: an OpenCode database in an XDG data layout (`<root>\share\opencode\opencode.db`,
-as in a portable JanuraCode) is configured by `<root>\config\opencode\opencode.json`, a Codex home by
-its `config.toml`. When that file exists it alone answers; otherwise `OPENCODE_CONFIG` and
-`XDG_CONFIG_HOME` apply as before. `--model-provider` and `--model` still win over both. A
-destination whose database holds no session for the source's folder yet cannot name its project:
-pass `--project-id` for that first hop.
-
-Only `OPENCODE_DB` is set for the import itself, as for any OpenCode destination: the JanuraCode
-engine runs with the `XDG_*` configuration of the shell that runs mukade.
-
-A `--resume-prompt` runs the destination with its store variable set to the root the session was
-written to, whether it came from the environment or from `--root`, and from the destination's
-working directory (`--cwd`, or the source's recorded directory, which must exist on this machine).
-A resume command you run later by hand does not inherit that: set the destination's variable in
-that shell first. For OpenCode, also configure the appropriate `XDG_*` and `OPENCODE_CONFIG`
-settings where needed; a database path alone is not a guarantee of complete isolation.
-
-A resume prompt that starts with `-` is refused, because every harness CLI would read it as an
-option; so is one with line breaks when the destination's executable is a `.cmd` launcher, which
-cannot take them. Both are refused before anything is written. Every harness process mukade
-starts, except the interactive resume of `mukade-tui`, runs with a deadline; one that outlives it is
-stopped, on Windows together with everything it started, elsewhere the process itself only, so
-subprocesses the harness started may keep running. A timeout too large for the clock sets no
-deadline: mukade waits for the process to exit.
-
-## 9. Per-harness examples
-
-Most examples use the harnesses' standard locations. Where a harness is kept in a folder of its own
-(`D:\portable\…`, a USB stick, say) the example shows its store variable and executable flag; that
-is about the **harness**, not about mukade, which needs nothing beyond its own executable.
-
-### Claude Code
-
-Standard location, read Claude and write Pi (select the source ID from the `list` output):
-
-```powershell
-$env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude'
-$env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
-mukade list claude_code
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project'
-```
-
-A custom Claude destination, with Pi as the source:
-
-```powershell
-$env:PI_CODING_AGENT_DIR = 'D:\portable\pi\agent'
-$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
-mukade list pi
-mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
-```
-
-Keep `CLAUDE_CONFIG_DIR` set when executing the returned `resume` arguments. Mukade does not install
-Claude or create its authentication configuration. Claude Code writes the folder name of a project
-with its own rule (every character outside `[a-zA-Z0-9]` becomes `-`, a name past 200 characters
-is cut and suffixed with a hash), and mukade follows it.
-
-### Codex CLI
-
-```powershell
-$env:CODEX_HOME = Join-Path $HOME '.codex'
-$env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
-mukade list codex
-mukade hop codex YOUR_CODEX_SESSION_ID pi --cwd 'C:\work\my-project'
-```
-
-`list codex` includes the threads archived with `codex archive` (their rollouts are in
-`$env:CODEX_HOME\archived_sessions`) and marks them `"archived": true`; `dump` and `hop` read them
-like any other. To see only the threads that are not archived:
-
-```powershell
-mukade list codex --archived false
-```
-
-A custom Codex destination:
-
-```powershell
-$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
-$env:CODEX_HOME = 'D:\portable\codex\home'
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID codex --cwd 'C:\work\my-project' --codex-exe 'D:\portable\codex\bin\codex.exe'
-```
-
-Codex requires a destination CLI version in its session metadata. Mukade asks the chosen
-executable's `--version`; if that cannot be done or parsed, supply it with `--dest-version 0.164.0`
-(your version). Mukade reads `model_provider` from `$env:CODEX_HOME\config.toml` when available;
-`--model-provider` states it explicitly: only the top-level `model_provider` key counts, not a
-profile's or a provider table's. Keep `CODEX_HOME` set for a resume command run later.
-
-**Threads of the Codex Desktop app (0.165).** The id in a `codex://threads/<id>` link is the
-thread id mukade takes:
-
-```powershell
-$env:CODEX_HOME = Join-Path $HOME '.codex'
-$env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude'
-mukade hop codex 01a181e2-4cd9-7c63-82b8-f75e3d6bb172 claude_code --cwd 'D:\Projects\daodan'
-```
-
-What to expect from such a thread:
-
-- A thread kept over two files (a page that redoes its later turns) is read as Codex resumes it;
-  `--all-branches` carries it whole (see [use cases](#a-session-that-was-rewound-or-branched)).
-- Its compaction summaries are encrypted, so `--compaction portable` is refused (exit 2) and a
-  whole-history hop leaves them out, counted. A long thread is therefore carried whole: a 17.8 MB
-  thread became a 4.1 MB Claude Code session of several hundred thousand tokens, which only a
-  model with a very large context can resume.
-- Most of its tool calls are one `exec` script each (Codex's "code mode"); they travel as text,
-  with their script, not as translated calls. Its reasoning is OpenAI's and is dropped toward any
-  other provider, counted.
-- Messages its subagents sent to the main agent are left out on purpose: their content is
-  encrypted, readable only by OpenAI. The messages the main agent sent to its subagents travel as
-  text with that encrypted content replaced by `<encrypted by the source's provider, N chars>`.
-- In Claude Code, resuming such a session prints `Session model gpt-… could not be restored … using
-  claude-…`: the rows name the model that really wrote each reply, which Claude Code does not
-  know, so it carries on with its own. Expected; nothing to fix.
-- **Mind the size before writing in it.** Each message sent in a resumed session reads its whole
-  context first: a session of several hundred thousand tokens costs that much on the first message,
-  or makes Claude Code compact it before answering.
-
-### OpenCode
-
-Read OpenCode and write Pi. `list opencode` requires the selected database via `OPENCODE_DB` or
-`--root`, reads it without starting OpenCode, and includes top-level archived sessions
-(`--archived false` leaves them out).
-
-```powershell
-$env:OPENCODE_DB = 'C:\path\to\opencode.db'
-$env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
-Set-Location 'C:\work\my-project'
-mukade list opencode
-mukade list opencode --archived false                    # without the archived sessions
-mukade hop opencode YOUR_OPENCODE_SESSION_ID pi --cwd 'C:\work\my-project'
-```
-
-Mukade calls `opencode session export … --standalone` to read the source. Set the `XDG_*`
-variables used by your OpenCode installation in this shell as well, if applicable.
-
-A custom OpenCode destination. The database, configuration, XDG directories and executable must
-belong to the intended installation; the project ID, provider and model must already be valid for it.
-
-```powershell
-$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
-$env:OPENCODE_DB = 'D:\portable\opencode\data\opencode.db'
-$env:XDG_DATA_HOME = 'D:\portable\opencode\data'
-$env:XDG_CONFIG_HOME = 'D:\portable\opencode\config'
-$env:XDG_STATE_HOME = 'D:\portable\opencode\state'
-$env:XDG_CACHE_HOME = 'D:\portable\opencode\cache'
-$env:OPENCODE_CONFIG = 'D:\portable\opencode\config\opencode.json'
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --cwd 'C:\work\my-project' --opencode-exe 'D:\portable\opencode\opencode.exe' --project-id YOUR_OPENCODE_PROJECT_ID --model-provider YOUR_PROVIDER --model YOUR_MODEL
-```
-
-OpenCode's import needs a project ID and a complete provider/model reference. Mukade can discover
-the project from OpenCode's existing sessions (asked of the store the session will be written to),
-and the provider and model from its configuration; explicit values avoid relying on discovery, and
-are faster (see [Speed](#5-speed)). OpenCode imports with `--standalone`.
-
-For a **custom OpenCode source**, set its executable through the environment variable before
-exporting:
-
-```powershell
-$env:MUKADE_OPENCODE_EXE = 'D:\portable\opencode\opencode.exe'
-$env:PI_CODING_AGENT_DIR = 'D:\portable\pi\agent'
-mukade hop opencode YOUR_OPENCODE_SESSION_ID pi --cwd 'C:\work\my-project'
-```
-
-For an OpenCode destination, the receipt's `location` names the database the session was imported
-into (`OPENCODE_DB`), or says it went to OpenCode's configured store; the import document is a
-temporary file of mukade's own and is removed after the import, on success and on failure. Use the
-returned ID with that store, and keep the OpenCode environment configured when using the resume command.
-
-### Pi
-
-Read Pi and write Claude Code:
-
-```powershell
-$env:PI_CODING_AGENT_DIR = Join-Path $HOME '.pi\agent'
-$env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude'
-mukade list pi
-mukade hop pi YOUR_PI_SESSION_ID claude_code --cwd 'C:\work\my-project'
-```
-
-A Pi destination kept in its own folder:
-
-```powershell
-$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
-$env:PI_CODING_AGENT_DIR = 'D:\portable\pi\agent'
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --pi-exe 'D:\portable\pi\bin\pi.cmd'
-```
-
-Mukade writes the new Pi session below `PI_CODING_AGENT_DIR\sessions`, in the folder Pi itself
-would use for the project. The receipt's `resume` contains the chosen launcher and the session
-file path. Keep `PI_CODING_AGENT_DIR` set when running it; separately verify that Pi
-installation's provider credentials and configuration. A separate agent directory does not by itself
-prove that every resource Pi reads is isolated. Sessions written this way were run against Pi 1.2.0
-and 1.4.0 (see `docs/verification/pi-session-and-reasoning-verification.md`).
-
-Each harness has its own reference page, with how it is installed and launched, its store,
-compaction, tools, plugins and hooks: [`docs/harnesses/`](harnesses/).
-
-## 10. Discover, export, import
-
-`detect` inspects the evidence of one folder; `scan` walks a folder and reports every installation
-below it, with the executable kept beside each store (see
-[Find supported harnesses and existing installations](#find-supported-harnesses-and-existing-installations)).
-Both can return zero or multiple candidates. An empty or ambiguous root cannot be inferred;
-pass the harness explicitly when you know it. For a nonstandard OpenCode database filename, pass
-`opencode` and its file path explicitly rather than relying on detection.
-
-`intents` lists the editable summary prompts without reading a session or starting a harness. Its
-JSON gives the folder, the default intent, and every prompt with `name`, `path`, `builtin` (the name
-ships with mukade) and `custom` (a file in the folder supplies it):
-
-```powershell
-mukade intents
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --intent review
-mukade dump codex YOUR_CODEX_SESSION_ID --intent analyze --output 'C:\work\summary.json'
-```
-
-A trimmed answer (paths are illustrative):
-
-```json
-{
-  "directory": "D:\\tools\\intent-prompts",
-  "default": "generic",
-  "prompts": [
-    {"name": "generic", "path": "D:\\tools\\intent-prompts\\generic.md", "builtin": true, "custom": true},
-    {"name": "review", "path": "D:\\tools\\intent-prompts\\review.md", "builtin": true, "custom": true},
-    {"name": "security", "path": "D:\\tools\\intent-prompts\\security.md", "builtin": false, "custom": true}
-  ]
-}
-```
-
-```powershell
-mukade detect 'D:\portable\pi\agent'
-mukade list --root 'D:\portable\pi\agent'
-mukade dump pi YOUR_PI_SESSION_ID --root 'D:\portable\pi\agent' --output 'C:\work\session.json'
-$env:CLAUDE_CONFIG_DIR = 'D:\portable\claude\config'
-mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --claude-exe 'D:\portable\claude\bin\claude.exe'
-```
-
-With `--root` the harness may be left out of `list`, `dump` and a hop's source: it is inferred from
-the directory's own layout when exactly one harness is recognized, or from the only installation
-below it. `write` always needs it.
-
-`dump` exports the session as it is, interrupted turns included; what is left out is decided when
-it is written. `write` takes `--without-tools` and `--interrupted drop` like `hop` does:
-
-```powershell
-mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --interrupted drop
-```
-
-A portable installation found by `scan` can be named by its folder instead of its store:
-
-```powershell
-mukade scan 'D:\Apps'
-mukade list --root 'D:\Apps\JanuraCode'
-mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\JanuraCode' --cwd 'C:\work\my-project'
-```
-
-### The list output
-
-`mukade list <harness>` prints one JSON object per line, one per session:
-
-```json
-{"id":"01a1a817-…","title":"Alpha work","cwd":"D:\\work\\alpha","timestamp":"2026-11-08T14:03:20.000+00:00","location":"C:\\Users\\you\\.codex\\sessions\\2026\\11\\08\\rollout-….jsonl","archived":false,"unreadable":null,"live":null}
-```
-
-| key | meaning |
+| symptom | cause and fix |
 |---|---|
-| `id`, `title`, `cwd`, `timestamp` | what the store records; any may be `null` |
-| `location` | the file (or database) the session is recorded in |
-| `archived` | the harness marked it archived |
-| `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
-| `live` | `true` when a process of the harness runs the session now; `false` when the store records running sessions and none runs it; `null` when the store does not say |
+| No store or session found (exit 2) | check the variable, `--root`, source ID and whether the project/store holds that session; `mukade detect <path>` prints evidence |
+| Detection ambiguous or empty | name the harness explicitly; a newly created empty store has no layout to infer |
+| Cannot run the executable | verify the launcher path, runtime and permissions. A custom OpenCode source needs `MUKADE_OPENCODE_EXE`; a destination uses its flag or variable |
+| Codex version or OpenCode project/model missing | pass `--dest-version`, `--project-id`, `--model-provider`, `--model` |
 
-A harness forgets transcripts long before it forgets sessions, so `list` reports both, and the
-`unreadable` rows are how a caller sees every project:
+**Writing**
 
-| harness | an `unreadable` row is |
+| symptom | cause and fix |
 |---|---|
-| Codex | a thread with a row in the home's newest `state_<n>.sqlite` whose rollout file is gone. `location` is the path the row records. Subagent and guardian threads are not listed |
-| Claude Code | a session `history.jsonl` still has prompts for, whose session file is gone (`location` is `history.jsonl`; `title` is its first prompt); or a running session that has not written its transcript yet |
-| OpenCode | a session in another `opencode*.db` beside the selected one (read it by selecting that file), or one only in the legacy `session` table, which OpenCode cannot export |
+| "mukade could not create its temporary directory" (exit 4, hop to OpenCode) | the data folder cannot be written; nothing was imported. Set `MUKADE_DATA_DIR` to an absolute writable folder |
+| External OpenCode import uncertain (exit 5) | the error names the attempted session ID: check it and its provenance in the selected database before retrying; a zero exit from the underlying command does not prove the import |
+| Manifest could not be saved | the session was still written, its receipt is on stdout: save the receipt's `manifest` field, do not run again |
+| Path problem on Windows | Pi files a session under a folder named after the whole project path, which can pass 260 characters: use a shorter `--cwd` |
 
-A project is the distinct `cwd` of the rows. To count only what can be hopped, drop the rows with an
-`unreadable` reason; to count every project a harness remembers, keep them all:
+**Summary**
 
-```powershell
-mukade list codex | ConvertFrom-Json | Where-Object { -not $_.unreadable } | Select-Object -ExpandProperty cwd -Unique
-mukade list claude_code | ConvertFrom-Json | Where-Object { $_.live } | Select-Object id, cwd
-```
-
-`live` is Claude Code's: it keeps `sessions/<pid>.json` while a process runs a session. The check
-looks at the process (on Windows also its start time, so a reused process id is not the session).
-Codex, OpenCode and Pi keep no such record, so their `live` is `null`: **a cleaner must read `null` as
-"not known", not as "not running".**
-
-### Archived sessions
-
-`list` takes `--archived <true|false>`, and it works the same for every harness:
-
-| value | rows printed |
+| symptom | cause and fix |
 |---|---|
-| `true`, or the flag left out (the default) | every session, the archived ones included |
-| `false` | only the rows whose `archived` is `false` |
+| "summary failed: …" (exit 4) | nothing was written. The message names the command (prompt shown as `<summary prompt v1>`), its exit status and output: a login or quota problem of the source harness, an unreachable model (`--summary-model`), a run past `--summary-timeout`, or a model that called a tool. If OpenCode's fork could not be deleted, it ends with the command that removes it |
+| "the summary prompt cannot be passed through the batch launcher …" (exit 2) | `intent-prompts/<name>.md` holds a line break or a character a `.cmd` shim cannot carry ([charset](#choose-what-the-summary-emphasizes)): name the harness's native executable |
 
-Any other value, or `--archived` given to a command other than `list`, is a command-line mistake
-(exit 1, nothing printed). The flag goes anywhere after the command and combines with `--root`.
+**Resume and interrupted turns**
 
-| harness | `archived` is `true` when |
+| symptom | cause and fix |
 |---|---|
-| Codex | the rollout is in `<CODEX_HOME>/archived_sessions/` (where `codex archive` moves it), or its row in `state_<n>.sqlite` says `archived`. Found with or without that database; `dump` and `hop` read it |
-| OpenCode | the session has a `time_archived` |
-| Claude Code, Pi | never: their stores record no archived flag, so `--archived false` leaves nothing out |
+| Resume fails after a successful write (exit 5) | the session exists; its receipt is on stdout and `--manifest` is saved: use its `id` and `location`, since retrying creates another session. Check configuration and credentials in the process environment |
+| The destination carries on from a half-written answer | the interrupted turn's work travelled (the default): hop again with `--interrupted drop`; the first session stays ([interrupted turns](#a-session-with-interrupted-turns)) |
+| `--interrupted drop` kept a reply that was cut | no sign of the interruption in the source, or the document came from `dump`: hop from the source itself, check `dropped_interrupted_steps` |
+| "unknown --interrupted …" (exit 1) · "--interrupted is supported only by hop, write and document" | the mode is `keep` or `drop`; `dump` and `list` do not take it |
 
-```powershell
-# the threads that are not archived
-mukade list codex --archived false
+**Speed and memory**
 
-# the same for an OpenCode database named directly
-mukade list opencode --root 'C:\path\to\opencode.db' --archived false
-
-# only the archived ones, with where they are kept
-mukade list codex | ConvertFrom-Json | Where-Object { $_.archived } | Select-Object id, title, location
-
-# the projects that still have work not archived
-mukade list codex --archived false | ConvertFrom-Json | Select-Object -ExpandProperty cwd -Unique
-```
-
-## 11. Troubleshooting
-
-- **No store or session found** (exit 2): check the variable, `--root`, source ID and whether the
-  intended project/store contains that session. Use `mukade detect <path>` for diagnostic evidence.
-- **Ambiguous or empty detection:** specify the harness explicitly; a newly created empty store has
-  no reliable session layout to infer.
-- **Cannot run the executable:** verify the launcher path, its runtime and permissions. A custom
-  OpenCode source requires `MUKADE_OPENCODE_EXE`; a destination uses its corresponding flag or env var.
-- **Codex version or OpenCode project/model missing:** provide the actual destination version,
-  project ID, provider or model using the flags described above.
-- **"mukade could not create its temporary directory"** (exit 4, from a hop to OpenCode): the
-  selected data folder cannot be written. Nothing was imported; set `MUKADE_DATA_DIR` to an
-  absolute writable folder or use the default beside a writable executable.
-- **"summary failed: …"** (exit 4, `--compaction summary`): the source harness could not write the
-  summary, and nothing was written. The message names the command (the prompt shown as
-  `<summary prompt v1>`), its exit status and what it printed: a login or quota problem of the
-  source harness, a model it cannot reach (name another with `--summary-model`), a run longer than
-  `--summary-timeout`, or a model that called a tool instead of summarizing. When OpenCode's fork
-  could not be deleted, the message ends with the command that removes it.
-- **"the summary prompt cannot be passed through the batch launcher …"** (exit 2): the selected
-  `intent-prompts/<name>.md` contains a line break or a character an install's `.cmd` shim cannot
-  carry. Name the harness's native executable, or keep the prompt to ASCII letters, digits, spaces
-  and `.,;:()`.
-- **External OpenCode import is uncertain** (exit 5): the error names the attempted session ID.
-  Check that ID and its provenance in the selected database before retrying; a zero exit from the
-  underlying command alone is not enough to prove that it imported the session.
-- **Resume fails after a successful write** (exit 5): the session already exists. Mukade still
-  prints its receipt on stdout and saves `--manifest`: use that `id` and `location` instead of
-  retrying, which would create another session. A resume that outlives its timeout is stopped,
-  including a harness behind a `.cmd` launcher. Check configuration and credentials in the process
-  environment; provider availability must be verified in your own environment.
-- **The destination carries on from a half-written answer:** the source turn was interrupted and
-  its work travelled, as it does by default. Hop again with `--interrupted drop`: the prompt is
-  written without the cut-off reply (see
-  [A session with interrupted turns](#a-session-with-interrupted-turns)). The first hop's session
-  stays where it is; a hop never changes or removes one.
-- **`--interrupted drop` kept a reply that was cut:** the source wrote no sign of the
-  interruption. A harness killed while its model was answering leaves none in a Claude Code or
-  Codex file, and a document made by `dump` does not hold the markers: hop from the source itself,
-  and check `dropped_interrupted_steps` in the manifest.
-- **"unknown --interrupted …"** (exit 1): the mode is `keep` or `drop`. **"--interrupted is
-  supported only by hop, write and document"**: `dump` and `list` do not take it.
-- **Manifest could not be saved:** the session was still written, and its receipt is on stdout; the
-  error names its location. Save the `manifest` field of that receipt instead of running again.
-- **It is slower than the table in [Speed](#5-speed):** run with `--timing`. A large `probe …` line
-  is a harness being started to ask its version or project: pass `--dest-version` (and
-  `--project-id`), so the question is not asked at all. (The answer is remembered after the first
-  time, in `mukade-data/cache`, when the executable's folder can be written to.)
-- **"The paging file is too small" / "memory allocation failed":** the machine ran out of memory
-  (a 30 MB session needs about 300 MB). Close other programs and retry; nothing is half-written,
-  because a session is written to a temporary file and renamed into place.
-- **A path or file name problem on Windows:** Pi files a session under a folder named after the
-  whole project path, so a very deep project path can pass the 260-character limit; use a shorter
-  `--cwd`.
+| symptom | cause and fix |
+|---|---|
+| Slower than the [Speed](#9-speed) table | run with `--timing`: a large `probe …` line is a harness started to ask its version or project; pass `--dest-version` (and `--project-id`) |
+| "The paging file is too small" / "memory allocation failed" | out of memory (a 30 MB session needs about 300 MB): close other programs and retry; nothing is half-written, because a session is written to a temporary file and renamed into place |

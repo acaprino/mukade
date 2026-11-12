@@ -399,3 +399,108 @@ fn reasoning_details_are_read_as_the_opaque_payload() {
         mukade::model::Protocol::AnthropicMessages
     );
 }
+
+/// A child session names the session that spawned it: `info.parentID` in an export (OpenCode
+/// 2.2.5 `session/info.ts`), `parent_id` in a store row. A fork names its source in `info.fork`.
+#[test]
+fn a_child_names_its_parent_in_either_form_and_a_fork_its_source() {
+    use mukade::model::ParentKind;
+    let mut doc = export_doc();
+    doc["info"]["parentID"] = "ses_parent".into();
+    let child = opencode::parse(&doc, None).unwrap().meta;
+    assert_eq!(child.parent.as_deref(), Some("ses_parent"));
+    assert_eq!(child.parent_kind, Some(ParentKind::spawn()));
+
+    let mut doc = export_doc();
+    let boundary = serde_json::json!({"type": "through", "messageID": "msg_1"});
+    doc["info"]["fork"] = serde_json::json!({"sessionID": "ses_source", "boundary": boundary});
+    let fork = opencode::parse(&doc, None).unwrap().meta;
+    assert_eq!(fork.parent.as_deref(), Some("ses_source"));
+    assert_eq!(fork.parent_kind, Some(ParentKind::Fork));
+
+    let mut rows: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(source("rows.json")).unwrap()).unwrap();
+    rows["session_v2"][0]["parent_id"] = "ses_parent".into();
+    let row = opencode::parse(&rows, None).unwrap().meta;
+    assert_eq!(row.parent.as_deref(), Some("ses_parent"));
+    assert_eq!(row.parent_kind, Some(ParentKind::spawn()));
+
+    rows["session_v2"][0]["parent_id"] = serde_json::Value::Null;
+    rows["session_v2"][0]["fork_session_id"] = "ses_source".into();
+    rows["session_v2"][0]["fork_boundary"] =
+        serde_json::json!({"type": "through", "messageID": "msg_1"});
+    let forked_row = opencode::parse(&rows, None).unwrap().meta;
+    assert_eq!(forked_row.parent.as_deref(), Some("ses_source"));
+    assert_eq!(forked_row.parent_kind, Some(ParentKind::Fork));
+
+    let root = read_export().meta;
+    assert_eq!((root.parent, root.parent_kind), (None, None));
+}
+
+/// A subagent's report reaches the parent as a `synthetic` message (`metadata.source:
+/// "subagent"`): the parent's model received it, so it is a user turn in place. Other synthetic
+/// messages (a shell job's) stay records.
+#[test]
+fn a_subagents_report_is_a_user_turn_in_its_parent() {
+    let mut doc = export_doc();
+    let report = serde_json::json!({
+        "id": "msg_report", "type": "synthetic", "time": {"created": 1793115157000_i64},
+        "text": "<subagent sessionID=\"ses_child\" state=\"completed\">The tests pass.</subagent>",
+        "description": "Run the tests",
+        "metadata": {"source": "subagent", "childID": "ses_child", "agent": "general", "state": "completed"},
+    });
+    let shell = serde_json::json!({
+        "id": "msg_shell", "type": "synthetic", "time": {"created": 1793115157001_i64},
+        "text": "<shell>done</shell>", "description": "build",
+        "metadata": {"source": "shell", "jobID": "j1", "shellID": "s1", "state": "completed"},
+    });
+    let messages = doc["messages"].as_array_mut().unwrap();
+    messages.push(report);
+    messages.push(shell);
+
+    let session = opencode::parse(&doc, None).unwrap();
+
+    let last_user = session
+        .conversation()
+        .filter_map(|entry| match &entry.kind {
+            Kind::User { text, .. } => Some((entry.id.as_str(), text.as_str())),
+            _ => None,
+        })
+        .last();
+    assert_eq!(
+        last_user,
+        Some((
+            "msg_report",
+            "<subagent sessionID=\"ses_child\" state=\"completed\">The tests pass.</subagent>"
+        ))
+    );
+    let shell = session.entry("msg_shell").unwrap();
+    assert!(matches!(shell.kind, Kind::Meta { .. }), "{:?}", shell.kind);
+}
+
+/// A subagent report with no text gives the parent's model nothing: it stays a record, not an
+/// empty user turn.
+#[test]
+fn an_empty_subagent_report_stays_a_record() {
+    let mut doc = export_doc();
+    doc["messages"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": "msg_empty_report", "type": "synthetic", "time": {"created": 1793115157000_i64},
+        "metadata": {"source": "subagent", "childID": "ses_child", "state": "completed"},
+    }));
+    let session = opencode::parse(&doc, None).unwrap();
+    let report = session.entry("msg_empty_report").unwrap();
+    assert!(matches!(report.kind, Kind::Meta { .. }), "{:?}", report.kind);
+}
+
+/// A parent whose subagent reported into it hops into every file destination with the report.
+#[test]
+fn a_parent_with_a_report_hops_into_every_file_destination() {
+    let mut doc = export_doc();
+    doc["messages"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": "msg_report", "type": "synthetic", "time": {"created": 1793115157000_i64},
+        "text": "<subagent sessionID=\"ses_child\" state=\"completed\">The tests pass.</subagent>",
+        "metadata": {"source": "subagent", "childID": "ses_child", "agent": "general", "state": "completed"},
+    }));
+    let session = opencode::parse(&doc, None).unwrap();
+    support::assert_hops_keeping(&session, "The tests pass.", "oc-report-hop");
+}

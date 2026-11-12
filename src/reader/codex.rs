@@ -20,11 +20,13 @@
 //!   than once; ordinals run on across the files. Codex's own state names the latest page as the
 //!   thread's rollout; each earlier file's records past its cut are a branch the thread left.
 
+mod exec;
+
 use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
+    Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -397,6 +399,23 @@ fn class_of(row: &Value) -> Class {
             "reasoning" | "function_call" | "custom_tool_call" | "local_shell_call"
             | "web_search_call" => Class::StepPart,
             "function_call_output" | "custom_tool_call_output" => Class::Result,
+            // What another agent of the spawn tree sent this one (a subagent's report, a
+            // parent's task): a user turn where its text is readable. Codex encrypts most of
+            // them: those stay records, counted as left behind.
+            "agent_message" => {
+                let content = payload.get("content").and_then(Value::as_array);
+                let encrypted = content.is_some_and(|blocks| {
+                    blocks.iter().any(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("encrypted_content")
+                    })
+                });
+                let readable = content.is_some_and(|blocks| !blocks_text(blocks).trim().is_empty());
+                match (encrypted, readable) {
+                    (true, _) => Class::Meta(MetaKind::SubagentMessage),
+                    (false, true) => Class::User,
+                    (false, false) => Class::Meta(MetaKind::Internal),
+                }
+            }
             "message" => match payload.get("role").and_then(Value::as_str).unwrap_or("") {
                 "assistant" => Class::StepPart,
                 "developer" | "system" => Class::Meta(MetaKind::SystemPrompt),
@@ -455,11 +474,25 @@ struct Builder {
     /// The shell the harness runs commands with, as its own `<environment_context>` states it.
     /// It decides whether `exec_command` reads as the canonical `Bash` or `PowerShell` (L13).
     env_shell: Option<CanonicalTool>,
+    /// The shell in effect where each code-mode `exec` call was made (spec L10, L13).
+    exec_shells: HashMap<String, Option<CanonicalTool>>,
 }
 
 #[derive(Default)]
 struct MetaBuilder {
     id: Option<String>,
+    /// `session_meta.session_id`: the thread's own id, except in a subagent's rollout, where it
+    /// names the thread that spawned it.
+    session_id: Option<String>,
+    /// `session_meta.parent_thread_id` (or `source.subagent.thread_spawn.parent_thread_id`): the
+    /// thread that spawned this one, preferred to `session_id` (the same thread at depth 1).
+    parent_thread_id: Option<String>,
+    /// The first `session_meta` names `forked_from_id`: a subagent spawned with the parent's
+    /// turns (`fork_turns`), whose rollout copies them before its own.
+    forked: bool,
+    /// The role a spawned subagent ran as (`agent_role`), or `guardian_review` for a guardian
+    /// review (`thread_source`, or `source.subagent.other: "guardian"`).
+    agent: Option<String>,
     cwd: Option<String>,
     version: Option<String>,
     created: Option<String>,
@@ -473,12 +506,35 @@ impl MetaBuilder {
         let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
         if row.get("type").and_then(Value::as_str) == Some("session_meta") {
             if self.id.is_none() {
+                // Only the rollout's own (first) `session_meta`: a forked subagent's rollout
+                // carries its parent's next.
+                self.forked = str_at(payload, "/forked_from_id").is_some_and(|s| !s.is_empty());
                 // `id` is the rollout's own thread; a subagent's `session_id` names the thread
                 // that spawned it. A hand-written rollout may carry only one of the two.
                 self.id = str_at(payload, "/id")
                     .filter(|s| !s.is_empty())
                     .or_else(|| str_at(payload, "/session_id"))
                     .filter(|s| !s.is_empty());
+            }
+            if self.session_id.is_none() {
+                self.session_id = str_at(payload, "/session_id").filter(|s| !s.is_empty());
+            }
+            if self.parent_thread_id.is_none() {
+                self.parent_thread_id = str_at(payload, "/parent_thread_id")
+                    .or_else(|| str_at(payload, "/source/subagent/thread_spawn/parent_thread_id"))
+                    .filter(|s| !s.is_empty());
+            }
+            if self.agent.is_none() {
+                let guardian = str_at(payload, "/thread_source").as_deref()
+                    == Some("guardian_review")
+                    || str_at(payload, "/source/subagent/other").as_deref() == Some("guardian");
+                self.agent = if guardian {
+                    Some("guardian_review".into())
+                } else {
+                    str_at(payload, "/agent_role")
+                        .or_else(|| str_at(payload, "/source/subagent/thread_spawn/agent_role"))
+                        .filter(|s| !s.is_empty())
+                };
             }
             if self.cwd.is_none() {
                 self.cwd = str_at(payload, "/cwd");
@@ -736,15 +792,21 @@ impl Builder {
                 let (name, input) = match item_type {
                     "local_shell_call" => ("local_shell".to_string(), action_of(payload)),
                     "web_search_call" => ("web_search".to_string(), action_of(payload)),
+                    // A code-mode `exec` script is read once its output is known (L10,
+                    // `exec::split_code_mode`).
                     _ => (
                         str_at(payload, "/name").unwrap_or_default(),
                         arguments_of(payload),
                     ),
                 };
+                let id = str_at(payload, "/call_id")
+                    .or_else(|| str_at(payload, "/id"))
+                    .unwrap_or_else(|| id_of(payload, index));
+                if name == "exec" {
+                    self.exec_shells.insert(id.clone(), self.env_shell.clone());
+                }
                 calls.push(ToolCall {
-                    id: str_at(payload, "/call_id")
-                        .or_else(|| str_at(payload, "/id"))
-                        .unwrap_or_else(|| id_of(payload, index)),
+                    id,
                     canonical: Some(canonical_call(&name, &input, self.env_shell.clone())),
                     source_name: name,
                     input,
@@ -795,6 +857,7 @@ impl Builder {
 
     fn finish(mut self, source_path: Option<&Path>) -> Result<Session> {
         self.flush();
+        exec::split_code_mode(&mut self.entries, &self.exec_shells);
         for i in 0..self.entries.len() {
             if !matches!(
                 self.entries[i].kind,
@@ -814,6 +877,17 @@ impl Builder {
             }
         }
         let m = self.meta;
+        // A subagent's rollout names the thread that spawned it in `parent_thread_id`; an older
+        // one only in `session_id`, which is the thread's own id in a root thread.
+        let parent = m.parent_thread_id.or_else(|| {
+            m.session_id
+                .filter(|session| m.id.as_deref().is_some_and(|id| id != session))
+        });
+        let parent_kind = parent.as_ref().map(|_| ParentKind::Spawn {
+            call_id: None,
+            agent: m.agent,
+            inherits_context: m.forked,
+        });
         Ok(Session {
             meta: Meta {
                 harness: HarnessId::Codex,
@@ -825,7 +899,8 @@ impl Builder {
                 updated: m.updated,
                 models: m.models,
                 git_branch: m.git_branch,
-                parent: None,
+                parent,
+                parent_kind,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
             },
@@ -956,6 +1031,8 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
                 id: id.clone(),
                 title: names.get(&id).cloned(),
                 cwd: peek_cwd(&file),
+                // A rollout is only ever appended to: its last write is the thread's last activity.
+                updated: super::json::modified_rfc3339(&file),
                 archived,
                 path: file.to_string_lossy().into_owned(),
                 ..Default::default()
@@ -970,13 +1047,16 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
             listed.remove(&thread.id);
             continue;
         }
+        let parent_kind = thread.parent_kind();
         if let Some(info) = listed.get_mut(&thread.id) {
             info.title = info.title.take().or(thread.title);
             info.cwd = info.cwd.take().or(thread.cwd);
-            info.updated = thread.updated;
+            // The database's own `updated_at` is the thread's; the file time stands in without it.
+            info.updated = thread.updated.or(info.updated.take());
             // Archived when either says so: the folder the rollout sits in, or its row.
             info.archived |= thread.archived;
             info.parent = thread.parent;
+            info.parent_kind = parent_kind;
             continue;
         }
         let on_disk = thread.rollout.as_deref().filter(|file| file.is_file());
@@ -991,6 +1071,7 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
                 .map(|file| file.to_string_lossy().into_owned())
                 .unwrap_or_else(|| database.clone()),
             parent: thread.parent.clone(),
+            parent_kind,
             unreadable: on_disk.is_none().then(|| {
                 format!("rollout file is gone; the thread survives only as a row in {database}")
             }),

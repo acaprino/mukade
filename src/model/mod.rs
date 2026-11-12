@@ -46,9 +46,13 @@ pub struct Meta {
     pub models: Vec<ModelRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
-    /// The session this one was forked from; deliberately *not* carried into a hop.
+    /// The session this one came from; [`Meta::parent_kind`] says how. Deliberately *not* carried
+    /// into a hop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// How the session came from [`Meta::parent`]: set whenever `parent` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_kind: Option<ParentKind>,
     /// Where the session was read from, for the receipt and the manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
@@ -56,6 +60,51 @@ pub struct Meta {
     /// `sha256sum` would print it: what the manifest states as the source's fingerprint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_sha256: Option<String>,
+}
+
+/// How a session came from its parent session. More kinds may come (a harness's own relation),
+/// so a match outside this crate needs a wildcard arm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ParentKind {
+    /// A copy of the parent's conversation, continued on its own (Pi `parentSession`, OpenCode
+    /// `fork`).
+    Fork,
+    /// A subagent the parent's agent started (Claude Code `Agent`, Codex `spawn_agent`, OpenCode
+    /// `subagent`).
+    Spawn {
+        /// The parent's tool call that started it, where the source records it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<String>,
+        /// The agent type or role it ran as, where the source records it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<String>,
+        /// It started from the parent's conversation, not from a prompt of its own: a Claude Code
+        /// `fork` agent (the parent's prefix is not in the child's file) or a Codex `spawn_agent`
+        /// with `fork_turns` (the prefix is copied into the child's rollout).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        inherits_context: bool,
+    },
+}
+
+impl ParentKind {
+    /// A spawn with neither its call nor its agent recorded.
+    pub fn spawn() -> Self {
+        ParentKind::Spawn {
+            call_id: None,
+            agent: None,
+            inherits_context: false,
+        }
+    }
+
+    /// `fork` or `spawn`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ParentKind::Fork => "fork",
+            ParentKind::Spawn { .. } => "spawn",
+        }
+    }
 }
 
 /// One conversation, ready to be written somewhere else.
@@ -220,6 +269,7 @@ mod tests {
                 models: Vec::new(),
                 git_branch: None,
                 parent: None,
+                parent_kind: None,
                 source_path: None,
                 source_sha256: None,
             },

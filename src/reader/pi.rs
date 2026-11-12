@@ -14,8 +14,8 @@
 use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
-    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, Protocol, Reasoning,
-    Session, StepEnd, ToolCall, ToolResult, Trigger,
+    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
+    Reasoning, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -611,6 +611,8 @@ impl Builder {
                 updated: m.updated,
                 models: m.models,
                 git_branch: None,
+                // Pi's `parentSession` is the session this one was forked from.
+                parent_kind: m.parent.as_ref().map(|_| ParentKind::Fork),
                 parent: m.parent,
                 source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
                 source_sha256: None,
@@ -688,6 +690,7 @@ impl Reader for Pi {
 fn peek(file: &Path) -> SessionInfo {
     let mut info = SessionInfo::default();
     let mut titles = TitleBuilder::default();
+    let mut latest: Option<String> = None;
     {
         let mut into = |row: Value| {
             if row.get("type").and_then(Value::as_str) == Some("session") {
@@ -696,13 +699,21 @@ fn peek(file: &Path) -> SessionInfo {
                 }
                 if info.parent.is_none() {
                     info.parent = str_at(&row, "/parentSession").filter(|p| !p.is_empty());
+                    info.parent_kind = info.parent.as_ref().map(|_| ParentKind::Fork);
                 }
             }
             titles.observe(&row);
+            // Every Pi record carries its own ISO time; the newest one seen is the last activity.
+            if let Some(time) = str_at(&row, "/timestamp") {
+                if latest.as_deref().is_none_or(|known| time.as_str() > known) {
+                    latest = Some(time);
+                }
+            }
         };
         super::json::peek_ends(file, &mut into);
     }
     info.title = titles.pick();
+    info.updated = latest;
     info
 }
 

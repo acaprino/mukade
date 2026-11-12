@@ -104,10 +104,8 @@ fn one_line(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
-    fn home_with(history: &str, tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mukade-history-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn home_with(history: &str, tag: &str) -> crate::scratch::Scratch {
+        let dir = crate::scratch::Scratch::new(&format!("history-{tag}"));
         std::fs::write(dir.join("history.jsonl"), history).unwrap();
         dir
     }
@@ -137,6 +135,5 @@ mod tests {
             Some("/only-commands"),
             "better than none"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

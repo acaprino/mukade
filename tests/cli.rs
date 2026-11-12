@@ -334,6 +334,183 @@ fn hop_writes_into_the_installation_dest_root_names() {
     );
 }
 
+/// A hop of the staged Codex rollout into `dest`, filed under `<scratch>/work`: what it printed.
+fn hop_codex_into(scratch: &Path, dest: HarnessId, extra: &[&str]) -> Value {
+    let work = scratch.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let mut args = vec![
+        "hop",
+        "codex",
+        "01a17e07",
+        dest.as_str(),
+        "--dest-version",
+        "1.2.0",
+        "--model-provider",
+        "h27",
+        "--cwd",
+        work.to_str().unwrap(),
+    ];
+    args.extend_from_slice(extra);
+    let (ok, stdout, stderr) = cli(scratch, &args);
+    assert!(ok, "{stderr}");
+    serde_json::from_str(stdout.lines().last().unwrap()).unwrap()
+}
+
+/// The manifest's counts of shell calls written as calls and as text.
+fn shell_counts(printed: &Value) -> (u64, u64) {
+    let counts = &printed["manifest"]["counts"];
+    (
+        counts["tool_calls"].as_u64().unwrap(),
+        counts["tools_text_form"].as_u64().unwrap(),
+    )
+}
+
+/// Without `--dest-shell` a hop takes the shell the destination runs: Codex runs PowerShell on
+/// Windows and a POSIX shell elsewhere, so the rollout's two calls of that dialect stay calls and
+/// its `<environment_context>` names the shell. `--dest-shell none` keeps them text form.
+#[test]
+fn a_hop_into_codex_takes_the_shell_codex_runs() {
+    let scratch = support::scratch(HarnessId::Codex, "cli-codex-shell");
+    let _ = stage_fixture(HarnessId::Codex, &scratch);
+    let shell = if cfg!(windows) { "powershell" } else { "bash" };
+    if !cfg!(windows) {
+        // Off Windows a Codex rollout declares a POSIX shell.
+        let rollout = scratch.join(
+            "home/sessions/2026/10/27/rollout-2026-10-27T16-43-08-01a17e07-93f7-7a73-85c7-9f0205836600.jsonl",
+        );
+        let text = std::fs::read_to_string(&rollout).unwrap();
+        std::fs::write(
+            &rollout,
+            text.replace("<shell>powershell</shell>", "<shell>bash</shell>"),
+        )
+        .unwrap();
+    }
+
+    let printed = hop_codex_into(&scratch, HarnessId::Codex, &[]);
+    assert_eq!(shell_counts(&printed), (2, 0), "{printed}");
+    let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
+    assert!(
+        written.contains(&format!("<shell>{shell}</shell>")),
+        "the rollout names the shell"
+    );
+
+    let printed = hop_codex_into(&scratch, HarnessId::Codex, &["--dest-shell", "none"]);
+    assert_eq!(shell_counts(&printed), (0, 2), "{printed}");
+    let printed = hop_codex_into(&scratch, HarnessId::Codex, &["--dest-shell", "NONE"]);
+    assert_eq!(shell_counts(&printed), (0, 2), "in any case: {printed}");
+}
+
+/// Pi runs its `bash` tool with the `shellPath` its settings name, the project's over the agent
+/// folder's: a PowerShell call stays a call toward a Pi that runs pwsh, and is text toward one that
+/// runs its default POSIX shell.
+#[test]
+fn a_hop_into_pi_takes_the_shell_its_settings_name() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-pi-shell");
+    let _ = stage_fixture(HarnessId::Codex, &scratch);
+
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &[]);
+    assert_eq!(shell_counts(&printed), (0, 2), "a POSIX shell: {printed}");
+
+    std::fs::write(
+        scratch.join("home/settings.json"),
+        r#"{"shellPath":"C:\\Program Files\\PowerShell\\7\\pwsh.exe"}"#,
+    )
+    .unwrap();
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &[]);
+    assert_eq!(shell_counts(&printed), (2, 0), "pwsh: {printed}");
+
+    let project = scratch.join("work/.pi/settings.json");
+    std::fs::create_dir_all(project.parent().unwrap()).unwrap();
+    std::fs::write(&project, r#"{"shellPath":"/bin/bash"}"#).unwrap();
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &[]);
+    assert_eq!(
+        shell_counts(&printed),
+        (0, 2),
+        "the project's bash: {printed}"
+    );
+
+    let printed = hop_codex_into(&scratch, HarnessId::Pi, &["--dest-shell", "pwsh"]);
+    assert_eq!(shell_counts(&printed), (2, 0), "the flag wins: {printed}");
+}
+
+/// A Claude Code installation whose newest transcript records a PowerShell session offers its
+/// `PowerShell` tool: a PowerShell call becomes one. Without that evidence it stays text. The
+/// sessions mukade writes there record no snapshot, so they do not hide it from the next hop.
+#[test]
+fn a_hop_into_claude_code_writes_powershell_calls_where_it_runs_the_tool() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-claude-powershell");
+    let _ = stage_fixture(HarnessId::Codex, &scratch);
+
+    let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
+    assert_eq!(shell_counts(&printed), (0, 2), "no evidence: {printed}");
+
+    // Claude Code records Node's name for the platform it runs on.
+    let platform = match std::env::consts::OS {
+        "windows" => "win32",
+        "macos" => "darwin",
+        os => os,
+    };
+    let snapshot = serde_json::json!({
+        "type": "attachment",
+        "attachment": {
+            "type": "environment",
+            "snapshot": {"platform": platform, "shell": "PowerShell (primary); Bash tool also available for POSIX scripts"}
+        }
+    });
+    let transcript = scratch.join("home/projects/elsewhere/session.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, format!("{snapshot}\n")).unwrap();
+    for hop in 1..=6 {
+        let printed = hop_codex_into(&scratch, HarnessId::ClaudeCode, &[]);
+        assert_eq!(
+            shell_counts(&printed),
+            (2, 0),
+            "hop {hop}, PowerShell offered: {printed}"
+        );
+        let written = std::fs::read_to_string(printed["location"].as_str().unwrap()).unwrap();
+        assert!(
+            written.contains(r#""name":"PowerShell""#),
+            "a PowerShell call"
+        );
+    }
+}
+
+/// A reserved file the destination cannot take is refused before anything is planned (exit 2, as
+/// docs/usage.md says): OpenCode keeps no file per session, and a file destination keeps its
+/// sessions inside its own store.
+#[test]
+fn a_dest_path_the_destination_cannot_take_is_refused() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-dest-path-refused");
+    let home = scratch.join("home");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let cases = [
+        (HarnessId::OpenCode, home.join("reserved.json")),
+        (HarnessId::Pi, scratch.join("outside.jsonl")),
+        (HarnessId::ClaudeCode, scratch.join("outside.jsonl")),
+    ];
+    for (dest, path) in cases {
+        let (code, stdout, stderr) = cli_code(
+            &scratch,
+            &[
+                "hop",
+                "claude_code",
+                "c45db7bc",
+                dest.as_str(),
+                "--dest-version",
+                "1.2.0",
+                "--dest-path",
+                path.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(code, Some(2), "{dest}: {stdout}{stderr}");
+        assert!(stderr.contains("--dest-path"), "{dest}: {stderr}");
+        assert!(stdout.trim().is_empty(), "{dest}: no session reported: {stdout}");
+        assert!(!path.exists(), "{dest}: nothing written at the reserved file");
+    }
+    assert!(!home.join("sessions").exists(), "no Pi session written");
+    assert!(!home.join("opencode.db").exists(), "no OpenCode store written");
+}
+
 #[test]
 fn dest_root_is_refused_outside_hop() {
     let scratch = support::scratch(HarnessId::Pi, "cli-dest-root-list");
@@ -931,6 +1108,46 @@ fn dump_exports_a_model_summary_and_write_imports_it() {
     assert!(losses.contains("session delete ses_fork1"), "{losses}");
 }
 
+/// A `--dest-path` the destination refuses is refused before the source is read: the summarizing
+/// model never runs.
+#[test]
+fn a_refused_dest_path_stops_the_hop_before_the_summary_runs() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-dest-path-before-summary");
+    let id = stage_fixture(HarnessId::Pi, &scratch);
+    let ran = scratch.join("summary-ran.txt");
+    let pi = support::launcher(
+        &scratch.join("bin"),
+        "pi",
+        &format!("echo ran>>\"{}\"\r\necho The summary.", ran.display()),
+        &format!("echo ran >> '{}'\necho The summary.", ran.display()),
+    );
+    let outside = scratch.join("outside.jsonl");
+    let (code, stdout, stderr) = cli_code(
+        &scratch,
+        &[
+            "hop",
+            "pi",
+            &id,
+            "claude_code",
+            "--compaction",
+            "summary",
+            "--pi-exe",
+            pi.to_str().unwrap(),
+            "--dest-version",
+            "2.1.312",
+            "--dest-path",
+            outside.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("--dest-path"), "{stderr}");
+    assert!(
+        !ran.exists(),
+        "the summarizing model ran before the refusal"
+    );
+    assert!(!outside.exists(), "nothing written at the refused path");
+}
+
 #[test]
 fn hop_with_a_model_summary_keeps_the_turns_asked_for() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "cli-hop-summary");
@@ -1229,6 +1446,13 @@ fn harnesses_lists_supported_binaries_stores_and_native_lineage_info() {
         "{stdout}"
     );
     assert!(stdout.contains("recorded: parentSession"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "not recorded (forks are not recorded; a subagent thread names the thread that \
+             spawned it (session_meta.parent_thread_id))"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("status:   recognized"), "{stdout}");
     assert!(stdout.contains("sessions: 1"), "{stdout}");
     assert!(
@@ -1389,9 +1613,12 @@ fn reader_list_all_includes_opencode_forks_while_list_keeps_roots() {
     assert_eq!(listed.len(), 2);
     assert_eq!(all.len(), 3);
     assert!(listed.iter().all(|info| info.parent.is_none()));
-    assert!(
-        all.iter()
-            .any(|info| info.parent.as_deref() == Some("root"))
+    let child = all.iter().find(|info| info.id == "child-a").unwrap();
+    assert_eq!(child.parent.as_deref(), Some("root"));
+    assert_eq!(
+        child.parent_kind,
+        Some(mukade::model::ParentKind::spawn()),
+        "`parent_id` is the session that spawned this one"
     );
 }
 
@@ -1652,7 +1879,7 @@ fn options_are_refused_where_they_cannot_apply() {
         ),
         (
             vec!["write", "pi", document, "--dest-shell", "nope"],
-            "unknown --dest-shell nope",
+            "unknown --dest-shell nope (bash, sh, zsh, dash, ksh, posix, powershell, pwsh, none)",
         ),
         (
             vec!["write", "pi", document, "--compaction", "bogus"],
@@ -1971,5 +2198,129 @@ fn interrupted_drop_writes_the_prompts_without_the_cut_off_replies() {
             .iter()
             .any(|loss| loss.as_str().unwrap().contains("interrupted turns")),
         "{losses:?}"
+    );
+}
+
+/// The JSON rows `mukade list` printed.
+fn list_rows(stdout: &str) -> Vec<Value> {
+    stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
+        .collect()
+}
+
+/// `list --children` lists the subagent sessions too, each naming its parent and how it came from
+/// it; without the flag the rows are the roots, as before, with no `parent` or `kind` key.
+#[test]
+fn list_children_names_each_childs_parent_and_kind() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-list-children");
+    support::stage_claude_subagents(&scratch);
+    let parent = support::CLAUDE_PARENT;
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "claude_code"]);
+    assert!(ok, "{stderr}");
+    let roots = list_rows(&stdout);
+    assert_eq!(roots.len(), 1);
+    let keys: Vec<&String> = roots[0].as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        [
+            "id",
+            "title",
+            "cwd",
+            "timestamp",
+            "location",
+            "archived",
+            "unreadable",
+            "live"
+        ],
+        "a root without a parent prints the keys it always printed"
+    );
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "claude_code", "--children"]);
+    assert!(ok, "{stderr}");
+    let all = list_rows(&stdout);
+    assert_eq!(all.len(), 5, "{stdout}");
+    let row = |id: &str| all.iter().find(|r| r["id"] == id).unwrap().clone();
+    assert!(row(parent).get("parent").is_none());
+    let fg = row(&format!("{parent}.a1111111111111111"));
+    assert_eq!(fg["parent"], parent);
+    assert_eq!(fg["kind"], "spawn");
+    assert_eq!(fg["title"], "Read module A");
+    let deep = row(&format!("{parent}.a4444444444444444"));
+    assert_eq!(deep["parent"], format!("{parent}.a2222222222222222"));
+}
+
+/// A root that is a fork (a Pi `parentSession`) names its parent and `kind: fork` without the
+/// flag: the only change to `list` without `--children`.
+#[test]
+fn list_names_a_forks_parent() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-list-fork");
+    stage_fixture(HarnessId::Pi, &scratch);
+    let fork = scratch.join("home/sessions/--pi-project--/2026-10-30T14-00-00-000Z_fork.jsonl");
+    std::fs::write(
+        fork,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"fork\",\"parentSession\":\"parent\",\"cwd\":\"C:/work\"}\n",
+    )
+    .unwrap();
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "pi"]);
+
+    assert!(ok, "{stderr}");
+    let rows = list_rows(&stdout);
+    let fork = rows.iter().find(|r| r["id"] == "fork").unwrap();
+    assert_eq!(fork["parent"], "parent");
+    assert_eq!(fork["kind"], "fork");
+    let root = rows.iter().find(|r| r["id"] != "fork").unwrap();
+    assert!(
+        root.get("parent").is_none() && root.get("kind").is_none(),
+        "{root}"
+    );
+}
+
+/// An OpenCode fork (`fork_session_id` with its `fork_boundary`) is a root that names its source;
+/// a child (`parent_id`) is listed with `--children`.
+#[test]
+fn list_names_an_opencode_forks_source_and_a_childs_spawner() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-list-oc-lineage");
+    let db_path = scratch.join("home/opencode.db");
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2 (
+             id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT, fork_boundary TEXT
+         );
+         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL, NULL);
+         INSERT INTO session_v2 VALUES ('child', 'Child', 'D:/work', 2, NULL, 'root', NULL, NULL);
+         INSERT INTO session_v2 VALUES ('fork', 'Fork', 'D:/work', 3, NULL, NULL, 'root',
+             '{\"type\":\"through\",\"messageID\":\"msg_1\"}');",
+    )
+    .unwrap();
+    drop(db);
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "opencode"]);
+    assert!(ok, "{stderr}");
+    let rows = list_rows(&stdout);
+    let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["fork", "root"]);
+    assert_eq!(rows[0]["parent"], "root");
+    assert_eq!(rows[0]["kind"], "fork");
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "opencode", "--children"]);
+    assert!(ok, "{stderr}");
+    let rows = list_rows(&stdout);
+    let child = rows.iter().find(|r| r["id"] == "child").unwrap();
+    assert_eq!(child["parent"], "root");
+    assert_eq!(child["kind"], "spawn");
+}
+
+#[test]
+fn children_is_a_list_option() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-children-only-list");
+    let (code, _, stderr) = cli_code(&scratch, &["dump", "claude_code", "x", "--children"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("--children is supported only by list"),
+        "{stderr}"
     );
 }

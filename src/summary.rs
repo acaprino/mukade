@@ -11,7 +11,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 
 use crate::hop::HopError;
 use crate::model::{HarnessId, Kind, ModelRef, Session};
@@ -78,13 +77,6 @@ pub struct SummaryFacts {
 /// and the characters `"%^&|<>!` are not safe there).
 pub const SUMMARY_PROMPT: &str = "Write a handoff summary of this whole session for another coding agent that will continue the work from your summary alone. Do not call tools and do not continue the task: reply only with the summary, in the language the user wrote in. Cover: (1) the goal and what the user asked for, quoting the user where wording matters; (2) the current state, what is done and what is half done; (3) the decisions taken and why, and the approaches tried and dropped; (4) the files read or changed and how, and the commands and tests run with their results; (5) open problems, unanswered questions, and the next step. Keep it as short as it can be while a new agent could continue the work from it alone.";
 
-/// OpenCode's `run` has no switch for tools: its inline configuration denies every permission, so
-/// the summarizing run cannot edit a file or run a command (live record, "Ephemeral runs").
-const OPENCODE_DENY_ALL: &str = r#"{"permission":{"*":"deny"}}"#;
-
-/// How long deleting OpenCode's fork may take.
-const DELETE_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// One summarizing run of a source harness: what to start, from where, and where its reply lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SummaryCommand {
@@ -106,74 +98,21 @@ pub fn summary_command(
     opts: &SummarizeOpts,
     scratch: &Path,
 ) -> Result<SummaryCommand, HopError> {
-    let harness = session.meta.harness;
-    let id = session.meta.id.clone();
-    let model = model_args(harness, opts.model.as_deref(), own_model(session));
-    let mut output_file = None;
-    let mut args: Vec<String> = match harness {
-        // `--tools` takes several values: before `--resume`, so it cannot swallow the prompt.
-        HarnessId::ClaudeCode => [
-            "-p",
-            "--tools",
-            "",
-            "--resume",
-            &id,
-            "--no-session-persistence",
-            "--output-format",
-            "json",
-        ]
-        .map(String::from)
-        .to_vec(),
-        // `exec resume --ephemeral` still appends to the rollout it resumes; a fork does not.
-        HarnessId::Codex => {
-            let file = scratch.join("last-message.txt");
-            let args = vec![
-                "exec".into(),
-                "fork".into(),
-                id,
-                "--ephemeral".into(),
-                "--skip-git-repo-check".into(),
-                "-c".into(),
-                "sandbox_mode=\"read-only\"".into(),
-                "-o".into(),
-                file.display().to_string(),
-            ];
-            output_file = Some(file);
-            args
-        }
-        // `--no-session` cannot be combined with `--fork`: the fork goes to this run's folder.
-        HarnessId::Pi => {
-            let file = session.meta.source_path.clone().ok_or_else(|| {
-                HopError::Unsupported(
-                    "a Pi session is summarized from its own file, and this one was not read from a file"
-                        .into(),
-                )
-            })?;
-            vec![
-                "-p".into(),
-                "--fork".into(),
-                file,
-                "--session-dir".into(),
-                scratch.join("sessions").display().to_string(),
-                "--no-tools".into(),
-            ]
-        }
-        // Every `run` writes to the store: the fork is deleted once the reply is in.
-        HarnessId::OpenCode => [
-            "run",
-            "--standalone",
-            "--session",
-            &id,
-            "--fork",
-            "--format",
-            "json",
-        ]
-        .map(String::from)
-        .to_vec(),
-    };
-    args.extend(model);
+    crate::harnesses::get(session.meta.harness).summary_command(session, opts, scratch)
+}
+
+/// The rest of a harness's summarizing command, the same for all: its program, the prompt as the
+/// last argument, and the directory the session was in. `args` is what the harness adds before the
+/// prompt.
+pub(crate) fn finish_command(
+    session: &Session,
+    opts: &SummarizeOpts,
+    mut args: Vec<String>,
+    output_file: Option<PathBuf>,
+    env: Vec<(String, String)>,
+) -> Result<SummaryCommand, HopError> {
     let prompt = opts.prompt.as_deref().unwrap_or(SUMMARY_PROMPT);
-    let program = crate::exe::resolve(harness, opts.exe.as_deref());
+    let program = crate::exe::resolve(session.meta.harness, opts.exe.as_deref());
     // A Windows `.cmd` shim cannot receive every argument. Native executables take any text; a
     // batch launcher is checked before it is spawned, never silently given a mangled prompt.
     if crate::exe::is_batch(&program) && !batch_safe(prompt) {
@@ -194,12 +133,7 @@ pub fn summary_command(
             .map(PathBuf::from)
             .filter(|dir| dir.is_dir()),
         output_file,
-        env: match harness {
-            HarnessId::OpenCode => {
-                vec![("OPENCODE_CONFIG_CONTENT".into(), OPENCODE_DENY_ALL.into())]
-            }
-            _ => Vec::new(),
-        },
+        env,
     })
 }
 
@@ -216,7 +150,7 @@ fn batch_safe(prompt: &str) -> bool {
 /// The model the conversation was last having: that of its last step, else the last the session
 /// recorded. A subagent's model is recorded too, and a killed or failed Claude reply is recorded as
 /// `<synthetic>`, which no harness can be asked for.
-fn own_model(session: &Session) -> Option<&ModelRef> {
+pub(crate) fn own_model(session: &Session) -> Option<&ModelRef> {
     let real = |model: &&ModelRef| !model.id.is_empty() && model.id != "<synthetic>";
     session
         .entries
@@ -229,31 +163,19 @@ fn own_model(session: &Session) -> Option<&ModelRef> {
         .or_else(|| session.meta.models.iter().rev().find(real))
 }
 
-/// The model flags: the one named, else the session's own last model. Pi gets the provider apart
-/// (a model id may hold a slash itself); OpenCode names a model only with its provider.
-fn model_args(harness: HarnessId, named: Option<&str>, recorded: Option<&ModelRef>) -> Vec<String> {
-    let flag = match harness {
-        HarnessId::ClaudeCode | HarnessId::Pi => "--model",
-        HarnessId::Codex | HarnessId::OpenCode => "-m",
-    };
+/// The model flags: the one named, else the session's own last model, spelled by `recorded_args`.
+pub(crate) fn model_args(
+    flag: &str,
+    named: Option<&str>,
+    recorded: Option<&ModelRef>,
+    recorded_args: impl FnOnce(&ModelRef) -> Vec<String>,
+) -> Vec<String> {
     if let Some(model) = named {
         return vec![flag.into(), model.into()];
     }
-    let Some(model) = recorded.filter(|model| !model.id.is_empty()) else {
-        return Vec::new();
-    };
-    match (harness, model.provider.as_deref()) {
-        (HarnessId::Pi, Some(provider)) => vec![
-            "--provider".into(),
-            provider.into(),
-            flag.into(),
-            model.id.clone(),
-        ],
-        (HarnessId::OpenCode, Some(provider)) => {
-            vec![flag.into(), format!("{provider}/{}", model.id)]
-        }
-        (HarnessId::OpenCode, None) => Vec::new(),
-        _ => vec![flag.into(), model.id.clone()],
+    match recorded.filter(|model| !model.id.is_empty()) {
+        Some(model) => recorded_args(model),
+        None => Vec::new(),
     }
 }
 
@@ -275,82 +197,7 @@ pub fn parse_reply(
     stdout: &str,
     output_file: Option<&str>,
 ) -> Result<Reply, String> {
-    let mut reply = Reply {
-        text: String::new(),
-        usage: None,
-        fork: None,
-    };
-    match harness {
-        HarnessId::ClaudeCode => {
-            let result: Value = stdout
-                .lines()
-                .rev()
-                .find_map(|line| serde_json::from_str(line.trim()).ok())
-                .or_else(|| serde_json::from_str(stdout.trim()).ok())
-                .ok_or_else(|| "Claude Code printed no JSON result".to_string())?;
-            let subtype = result.get("subtype").and_then(Value::as_str).unwrap_or("");
-            let text = result.get("result").and_then(Value::as_str).unwrap_or("");
-            if result.get("is_error").and_then(Value::as_bool) == Some(true) || subtype != "success"
-            {
-                return Err(format!(
-                    "Claude Code answered with an error ({}): {}",
-                    if subtype.is_empty() {
-                        "no subtype"
-                    } else {
-                        subtype
-                    },
-                    text.trim()
-                ));
-            }
-            reply.text = text.to_string();
-            let usage = json!({
-                "total_cost_usd": result.get("total_cost_usd"),
-                "usage": result.get("usage"),
-                "modelUsage": result.get("modelUsage"),
-            });
-            reply.usage = Some(usage.to_string());
-        }
-        HarnessId::Codex => reply.text = output_file.unwrap_or("").to_string(),
-        HarnessId::Pi => reply.text = stdout.to_string(),
-        HarnessId::OpenCode => {
-            let mut texts = Vec::new();
-            for event in stdout
-                .lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-            {
-                match event.get("type").and_then(Value::as_str) {
-                    Some("text") => {
-                        if let Some(text) = event.pointer("/part/text").and_then(Value::as_str) {
-                            texts.push(text.to_string());
-                        }
-                    }
-                    // A model that reached for a tool was working, not summarizing.
-                    Some("tool_use") => {
-                        return Err(format!(
-                            "the model called a tool ({}) instead of only summarizing",
-                            event
-                                .pointer("/part/tool")
-                                .and_then(Value::as_str)
-                                .unwrap_or("?")
-                        ));
-                    }
-                    Some("error") => {
-                        let error = event.get("error").unwrap_or(&event);
-                        let message = error
-                            .pointer("/data/message")
-                            .or_else(|| error.get("message"))
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| error.to_string());
-                        return Err(format!("OpenCode reported an error: {message}"));
-                    }
-                    _ => {}
-                }
-            }
-            reply.fork = opencode_fork(stdout);
-            reply.text = texts.join("\n\n");
-        }
-    }
+    let mut reply = crate::harnesses::get(harness).parse_summary_reply(stdout, output_file)?;
     reply.text = reply.text.trim().to_string();
     if reply.text.is_empty() {
         return Err("the model returned no summary".into());
@@ -361,15 +208,7 @@ pub fn parse_reply(
 /// The session OpenCode forked for a run: the `sessionID` of the first event it printed, there as
 /// soon as the fork exists, before any text.
 pub fn opencode_fork(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-        .find_map(|event| {
-            event
-                .get("sessionID")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+    crate::harnesses::opencode_fork(stdout)
 }
 
 /// Ask `session`'s own harness for a summary of it (design 2026-10-28). The run saves nothing in
@@ -429,12 +268,7 @@ fn summarize_in(
     let parsed = parse_reply(harness, &stdout, written.as_deref());
     // OpenCode's fork exists as soon as it names it: it goes whatever came of the run, and a
     // failure says how to remove one that stayed.
-    let leftover = match harness {
-        HarnessId::OpenCode => {
-            opencode_fork(&stdout).and_then(|fork| delete_opencode_fork(&command, roots, &fork))
-        }
-        _ => None,
-    };
+    let leftover = crate::harnesses::get(harness).after_summary(&command, roots, &stdout);
     let failed = |reason: String| {
         HopError::SummaryFailed(match &leftover {
             Some(command) => {
@@ -475,27 +309,6 @@ fn summarize_in(
             .as_ref()
             .map(|_| opts.intent.clone().unwrap_or_else(|| "custom".into())),
     })
-}
-
-/// Delete the session OpenCode forked for the summary: `None` once it is gone, else the command
-/// that removes it.
-fn delete_opencode_fork(
-    command: &SummaryCommand,
-    roots: &StoreRoots,
-    fork: &str,
-) -> Option<String> {
-    let args = ["session", "delete", fork, "--standalone"];
-    let mut process = Command::new(crate::exe::spawnable(&command.program));
-    process.args(args);
-    if let Some(cwd) = &command.cwd {
-        process.current_dir(cwd);
-    }
-    roots.apply_to(HarnessId::OpenCode, &mut process);
-    let deleted = crate::exe::run_within(&mut process, DELETE_TIMEOUT)
-        .ok()
-        .and_then(|finished| finished.status)
-        .is_some_and(|status| status.success());
-    (!deleted).then(|| format!("{} {}", command.program, args.join(" ")))
 }
 
 /// The folders of runs a killed process left behind, removed once they are an hour old.

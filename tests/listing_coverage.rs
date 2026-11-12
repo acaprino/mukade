@@ -38,7 +38,7 @@ const THREAD_B: &str = "019e0000-0000-7000-8000-00000000000b";
 const THREAD_SUB: &str = "019e0000-0000-7000-8000-0000000000c1";
 const THREAD_GUARD: &str = "019e0000-0000-7000-8000-0000000000c2";
 
-/// One `threads` row, with the columns Codex 0.166 gives it that matter here.
+/// One `threads` row, with the columns Codex 0.166 gives it that matter here (`agent_role`: 0.167).
 struct Thread {
     id: &'static str,
     rollout_path: String,
@@ -48,6 +48,7 @@ struct Thread {
     preview: &'static str,
     source: &'static str,
     thread_source: Option<&'static str>,
+    agent_role: Option<&'static str>,
     archived: bool,
     updated_ms: i64,
 }
@@ -68,6 +69,7 @@ impl Thread {
             preview: "",
             source: "cli",
             thread_source: Some("user"),
+            agent_role: None,
             archived: false,
             updated_ms: 1_794_149_000_000,
         }
@@ -85,7 +87,7 @@ fn codex_state(home: &Path, file: &str, threads: &[Thread], edges: &[(&str, &str
              updated_at INTEGER NOT NULL, source TEXT NOT NULL, cwd TEXT NOT NULL,
              title TEXT NOT NULL, archived INTEGER NOT NULL, first_user_message TEXT NOT NULL,
              created_at_ms INTEGER, updated_at_ms INTEGER, thread_source TEXT,
-             preview TEXT NOT NULL, name TEXT);
+             preview TEXT NOT NULL, name TEXT, agent_role TEXT);
          CREATE TABLE thread_spawn_edges (
              parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL PRIMARY KEY,
              status TEXT NOT NULL);",
@@ -93,7 +95,7 @@ fn codex_state(home: &Path, file: &str, threads: &[Thread], edges: &[(&str, &str
     .unwrap();
     for t in threads {
         db.execute(
-            "INSERT INTO threads VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO threads VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, ?10, ?11, ?12, ?13, ?14)",
             rusqlite::params![
                 t.id,
                 t.rollout_path,
@@ -108,6 +110,7 @@ fn codex_state(home: &Path, file: &str, threads: &[Thread], edges: &[(&str, &str
                 t.thread_source,
                 t.preview,
                 t.name,
+                t.agent_role,
             ],
         )
         .unwrap();
@@ -136,6 +139,7 @@ fn codex_home_without_rollouts(tag: &str) -> PathBuf {
     let mut sub = Thread::root(&home, THREAD_SUB, "D:/work/alpha");
     sub.source = "subagent-thread_spawn";
     sub.thread_source = Some("subagent");
+    sub.agent_role = Some("explorer");
     let mut guard = Thread::root(&home, THREAD_GUARD, "D:/work/gamma");
     guard.source = "subagent-guardian";
     guard.thread_source = Some("guardian_review");
@@ -201,10 +205,21 @@ fn codex_list_all_adds_the_subagent_threads_with_their_parent() {
         Some(THREAD_A),
         "the spawn edge is the parent link"
     );
+    assert_eq!(
+        sub.parent_kind,
+        Some(mukade::model::ParentKind::Spawn {
+            call_id: None,
+            agent: Some("explorer".into()),
+            inherits_context: false,
+        }),
+        "a spawned thread, with the role its row records"
+    );
     let guard = all.iter().find(|s| s.id == THREAD_GUARD).unwrap();
     assert_eq!(guard.parent, None);
+    assert_eq!(guard.parent_kind, None);
     let a = all.iter().find(|s| s.id == THREAD_A).unwrap();
     assert_eq!(a.parent, None);
+    assert_eq!(a.parent_kind, None);
 }
 
 #[test]
@@ -815,7 +830,8 @@ fn damaged_registrations_and_history_are_ignored() {
 #[test]
 fn a_process_id_taken_by_another_process_is_not_the_session() {
     use mukade::process::{self, Process};
-    // Only where a process's start time can be read (Windows) is a reused id told from the process.
+    // Only where a process's start time can be read (Windows, Linux) is a reused id told from the
+    // process. The unit is the platform's: a FILETIME on Windows, clock ticks since boot on Linux.
     let Process::Running {
         started: Some(started),
     } = process::inspect(std::process::id())
@@ -828,34 +844,29 @@ fn a_process_id_taken_by_another_process_is_not_the_session() {
     support::stage_fixture(HarnessId::ClaudeCode, &scratch);
     let pid = std::process::id();
     let json = |procstart: u64| serde_json::json!({ "procStart": procstart.to_string() });
+    let live = |procstart: u64| {
+        registration(&home, pid, kept, "D:\\work\\kept", json(procstart));
+        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"].clone()
+    };
 
-    registration(
-        &home,
-        pid,
-        kept,
-        "D:\\work\\kept",
-        json(started + 5_000_000),
-    );
-    assert_eq!(
-        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
-        true,
-        "half a second apart is the same process"
-    );
-
-    let an_hour = 3_600 * 10_000_000;
-    registration(&home, pid, kept, "D:\\work\\kept", json(started - an_hour));
-    assert_eq!(
-        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
-        false,
-        "the registration is from a process that started an hour before this one"
-    );
-
-    // A creation time in some other unit says nothing about the process.
-    registration(&home, pid, kept, "D:\\work\\kept", json(1_794_143_992_646));
-    assert_eq!(
-        row(&list(HarnessId::ClaudeCode, &scratch), kept)["live"],
-        true
-    );
+    if cfg!(windows) {
+        assert_eq!(live(started + 5_000_000), true, "half a second apart is the same process");
+        let an_hour = 3_600 * 10_000_000;
+        assert_eq!(
+            live(started - an_hour),
+            false,
+            "the registration is from a process that started an hour before this one"
+        );
+        // A creation time in some other unit says nothing about the process.
+        assert_eq!(live(1_794_143_992_646), true);
+    } else {
+        assert_eq!(live(started), true, "the kernel's own count, read the same way");
+        assert_eq!(
+            live(started + 1),
+            false,
+            "a process that started one tick later is another process"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1287,5 +1298,41 @@ fn an_archived_page_never_takes_its_base_from_outside_its_home() {
     assert!(
         error.contains("archived_sessions"),
         "the error names the folders it looked in: {error}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// `timestamp`: the last activity, for every harness.
+
+/// Pi's list reads a session file's two ends: the newest record time there is its last activity.
+#[test]
+fn a_pi_row_says_when_the_session_was_last_active() {
+    let scratch = support::scratch(HarnessId::Pi, "cov-pi-updated");
+    support::stage_fixture(HarnessId::Pi, &scratch);
+    let id = "01a17e17-9f07-743d-8072-8b3b13d65ab5";
+    let last = std::fs::read_to_string(support::source_path(HarnessId::Pi))
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|row| row["timestamp"].as_str().map(str::to_owned))
+        .max()
+        .expect("Pi records carry their time");
+    let rows = list(HarnessId::Pi, &scratch);
+    assert_eq!(row(&rows, id)["timestamp"], last.as_str());
+}
+
+/// A Codex rollout is only appended to: without a database row its file time is its last activity.
+#[test]
+fn a_codex_row_without_a_database_says_when_its_rollout_was_last_written() {
+    let scratch = support::scratch(HarnessId::Codex, "cov-codex-updated");
+    support::stage_fixture(HarnessId::Codex, &scratch);
+    let rows = list(HarnessId::Codex, &scratch);
+    let stamp = row(&rows, "01a17e07-93f7-7a73-85c7-9f0205836600")["timestamp"]
+        .as_str()
+        .expect("a time")
+        .to_owned();
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&stamp).is_ok(),
+        "{stamp} is an RFC 3339 time"
     );
 }

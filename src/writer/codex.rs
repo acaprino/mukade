@@ -12,6 +12,7 @@
 //!   cannot have a stale row. Codex rebuilds its SQLite stores from the rollout by itself;
 //! - the conversation lives in `response_item` records; `turn_context` starts a turn.
 
+use super::media::Image;
 use super::plan::{self, PlannedBlock, PlannedResult};
 use super::{WriteOpts, Writer, Written, write_jsonl};
 use crate::model::{HarnessId, Reasoning, Session};
@@ -37,7 +38,7 @@ impl Writer for Codex {
         plan: &plan::Plan,
         opts: &WriteOpts,
     ) -> Result<Written> {
-        super::validate_options(HarnessId::Codex, opts)?;
+        crate::harnesses::destination(HarnessId::Codex)?.validate_write(opts)?;
         let root = opts
             .roots
             .codex_home
@@ -370,4 +371,12 @@ fn assistant_message_id() -> String {
 /// both this shape and no id at all resume, `msg_<uuid v4 simple>` does not).
 fn local_message_id() -> String {
     format!("msg_{}", uuid::Uuid::now_v7())
+}
+
+/// An image as Codex holds it, in a user turn or a tool result (OpenAI responses).
+pub(crate) fn image_block(image: &Image) -> Value {
+    json!({
+        "type": "input_image",
+        "image_url": format!("data:{};base64,{}", image.mime, image.data),
+    })
 }

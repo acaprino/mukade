@@ -7,9 +7,7 @@
 use crate::model::{
     Attachment, HarnessId, Kind, MetaKind, ModelRef, Protocol, ResultContent, Session, StepEnd,
 };
-use crate::policy::{
-    ReasoningDrop, ReasoningPlan, chat_destination_fits, payload_fits, plan_reasoning,
-};
+use crate::policy::{ReasoningDrop, ReasoningPlan, plan_reasoning};
 use crate::tools::{self, Shell, Translation};
 use crate::writer::{Interrupted, WriteOpts, media};
 use serde_json::Value;
@@ -127,6 +125,9 @@ pub struct Counts {
     pub dropped_result_blocks: usize,
     /// Compaction summaries with no readable text (encrypted by the source's provider).
     pub dropped_unreadable_summaries: usize,
+    /// Messages between a subagent and its parent with no readable text (Codex's encrypted
+    /// `agent_message`), not written.
+    pub dropped_subagent_messages: usize,
 }
 
 impl Counts {
@@ -234,6 +235,15 @@ fn carry_attachments(
     carried
 }
 
+/// Whether `dest`'s writer flattens a result's structured blocks to text
+/// ([`Destination::flattens_result_blocks`](crate::harnesses::Destination::flattens_result_blocks)).
+/// A harness that is no destination flattens nothing.
+fn flattens_result_blocks(dest: HarnessId) -> bool {
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.flattens_result_blocks())
+}
+
 /// A result's structured blocks as a destination that keeps them (Pi, OpenCode) holds them: an
 /// image in its own shape, text as text, and anything else dropped and counted. Claude Code and
 /// Codex results are flattened to text by their writers, counted where the plan takes them.
@@ -246,7 +256,7 @@ fn carry_result_content(
     let ResultContent::Blocks(blocks) = content else {
         return content.clone();
     };
-    if source == dest || matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex) {
+    if source == dest || flattens_result_blocks(dest) {
         return content.clone();
     }
     let mut carried = Vec::new();
@@ -282,6 +292,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
     let mut counts = Counts {
         dropped_off_branch: source_records(MetaKind::OffBranch),
         dropped_unfinished_lines: source_records(MetaKind::Unfinished),
+        dropped_subagent_messages: source_records(MetaKind::SubagentMessage),
         ..Counts::default()
     };
     // The calls of the step just planned: which of them the destination took natively, and which
@@ -345,7 +356,11 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                 calls,
                 end,
             } => {
-                if matches!(end, StepEnd::Aborted | StepEnd::Error) && dest != HarnessId::Pi {
+                if matches!(end, StepEnd::Aborted | StepEnd::Error)
+                    && crate::harnesses::get(dest)
+                        .destination()
+                        .is_some_and(|destination| destination.failed_steps_are_replies())
+                {
                     counts.aborted_steps_as_replies += 1;
                 }
                 let mut planned = PlannedStep {
@@ -363,18 +378,16 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                         // the block would be written without it and refused.
                         ReasoningPlan::Native(native)
                             if native.opaque.as_ref().is_some_and(|opaque| {
-                                payload_fits(opaque, dest)
-                                    && chat_destination_fits(
-                                        opaque,
-                                        dest,
-                                        opts.model_provider.as_deref().or_else(|| {
-                                            session
-                                                .meta
-                                                .models
-                                                .first()
-                                                .and_then(|m| m.provider.as_deref())
-                                        }),
-                                    )
+                                let provider = opts.model_provider.as_deref().or_else(|| {
+                                    session
+                                        .meta
+                                        .models
+                                        .first()
+                                        .and_then(|m| m.provider.as_deref())
+                                });
+                                crate::harnesses::get(dest).destination().is_some_and(
+                                    |destination| destination.payload_fits(opaque, provider),
+                                )
                             }) =>
                         {
                             planned.reasoning.push(ReasoningPlan::Native(native))
@@ -454,7 +467,7 @@ pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
                     }
                     step_answered.push(result.call_id.clone());
                     if last_step_native.contains(&result.call_id) {
-                        if matches!(dest, HarnessId::ClaudeCode | HarnessId::Codex)
+                        if flattens_result_blocks(dest)
                             && let ResultContent::Blocks(blocks) = &result.content
                         {
                             counts.dropped_result_blocks += blocks
@@ -618,13 +631,13 @@ pub fn protocol_name(protocol: &Protocol) -> &str {
     }
 }
 
-/// The shell dialect a destination runs commands with, when its configuration states it.
+/// The shell dialect `--dest-shell` names: a shell [`crate::tools::shell_named`] reads, as a
+/// destination's configuration names it, or `posix`.
 pub fn shell_of(name: &str) -> Option<Shell> {
-    match name.to_ascii_lowercase().as_str() {
-        "bash" | "sh" | "zsh" | "posix" => Some(Shell::Posix),
-        "powershell" | "pwsh" => Some(Shell::PowerShell),
-        _ => None,
+    if name.trim().eq_ignore_ascii_case("posix") {
+        return Some(Shell::Posix);
     }
+    crate::tools::shell_named(name)
 }
 
 /// The model id a plan writes into the destination's records: the destination's own model when the

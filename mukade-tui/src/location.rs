@@ -86,13 +86,19 @@ pub fn add_installations(
     added
 }
 
-/// Where a session at `source` can hop: every other location, the same harness elsewhere
-/// included (a Claude Code session into a portable JanuraCode, an OpenCode one into another).
+/// Where a session at `source` can hop: every other location whose harness mukade writes, the same
+/// harness elsewhere included (a Claude Code session into a portable JanuraCode, an OpenCode one
+/// into another).
 pub fn destinations(locations: &[Location], source: usize) -> Vec<Location> {
     locations
         .iter()
         .enumerate()
-        .filter(|(index, _)| *index != source)
+        .filter(|(index, location)| {
+            *index != source
+                && mukade::harnesses::get(location.harness)
+                    .destination()
+                    .is_some()
+        })
         .map(|(_, location)| location.clone())
         .collect()
 }
@@ -228,8 +234,7 @@ mod tests {
     /// library scan (the one `mukade scan` prints) reports.
     #[test]
     fn a_folder_scan_lists_exactly_what_the_library_scan_reports() {
-        let root = std::env::temp_dir().join(format!("mukade-tui-scan-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = crate::scratch::Scratch::new("scan");
         let write = |relative: &str, bytes: &[u8]| {
             let path = root.join(relative);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -252,7 +257,7 @@ mod tests {
         let mut locations = Vec::new();
         scan_folders(
             &mut locations,
-            std::slice::from_ref(&root),
+            &[root.to_path_buf()],
             &StoreRoots::default(),
         );
         let listed: Vec<(HarnessId, Option<PathBuf>)> = locations
@@ -266,7 +271,6 @@ mod tests {
             .collect();
         assert_eq!(listed, reported);
         assert_eq!(listed.len(), 2);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

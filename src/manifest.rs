@@ -100,6 +100,10 @@ impl Manifest {
             "dropped_unreadable_summaries".into(),
             json!(self.counts.dropped_unreadable_summaries),
         );
+        counts.insert(
+            "dropped_subagent_messages".into(),
+            json!(self.counts.dropped_subagent_messages),
+        );
 
         json!({
             "source": {
@@ -249,6 +253,13 @@ impl Manifest {
                 counts.dropped_unreadable_summaries
             ));
         }
+        if counts.dropped_subagent_messages > 0 {
+            losses.push(format!(
+                "messages between a subagent and its parent with no readable text (encrypted by \
+                 the source), not carried ({})",
+                counts.dropped_subagent_messages
+            ));
+        }
         if interrupted_last_turn {
             losses.push("interrupted_last_turn".into());
         }
@@ -268,7 +279,7 @@ mod tests {
     #[test]
     fn every_loss_count_has_a_loss_line_and_a_key() {
         type Set = fn(&mut Counts);
-        let losses: [(&str, Set); 16] = [
+        let losses: [(&str, Set); 17] = [
             ("dropped_interrupted_steps", |c| {
                 c.dropped_interrupted_steps = 1
             }),
@@ -294,6 +305,9 @@ mod tests {
             ("dropped_result_blocks", |c| c.dropped_result_blocks = 1),
             ("dropped_unreadable_summaries", |c| {
                 c.dropped_unreadable_summaries = 1
+            }),
+            ("dropped_subagent_messages", |c| {
+                c.dropped_subagent_messages = 1
             }),
         ];
         assert!(Manifest::losses_for(&Counts::default(), false, false).is_empty());

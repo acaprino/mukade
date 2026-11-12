@@ -103,6 +103,7 @@ fn a_shell_call_carries_its_timeout_in_seconds() {
             models: vec![],
             git_branch: None,
             parent: None,
+            parent_kind: None,
             source_path: None,
             source_sha256: None,
         },

@@ -59,6 +59,9 @@ pub enum MetaKind {
     /// The file's last line, cut off mid-write (a hard kill during an append): kept as text, not
     /// read.
     Unfinished,
+    /// A message between a subagent and its parent that the source keeps unreadable (Codex's
+    /// encrypted `agent_message`): kept, not carried.
+    SubagentMessage,
 }
 
 /// One unit of the interchange model.

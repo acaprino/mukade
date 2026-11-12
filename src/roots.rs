@@ -25,18 +25,15 @@ pub struct StoreRoots {
 impl StoreRoots {
     /// The roots the calling process declares through the harnesses' own variables.
     pub fn from_env() -> Self {
-        // An empty variable is no store: as a path it would put the store beside the cwd.
-        let var = |name: &str| {
-            std::env::var_os(name)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        };
-        StoreRoots {
-            claude_config_dir: var("CLAUDE_CONFIG_DIR"),
-            codex_home: var("CODEX_HOME"),
-            opencode_db: var("OPENCODE_DB"),
-            pi_agent_dir: var("PI_CODING_AGENT_DIR"),
+        let mut roots = StoreRoots::default();
+        for harness in crate::harnesses::all() {
+            // An empty variable is no store: as a path it would put the store beside the cwd.
+            *harness.store_root_mut(&mut roots) =
+                std::env::var_os(crate::catalog::store_env(harness.id()))
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from);
         }
+        roots
     }
 
     /// Claude Code's `projects/` directory, where one folder per project holds the session files.
@@ -65,50 +62,20 @@ impl StoreRoots {
 
     /// One harness's store, as its variable names it.
     pub fn root(&self, harness: HarnessId) -> Option<&Path> {
-        match harness {
-            HarnessId::ClaudeCode => self.claude_config_dir.as_deref(),
-            HarnessId::Codex => self.codex_home.as_deref(),
-            HarnessId::OpenCode => self.opencode_db.as_deref(),
-            HarnessId::Pi => self.pi_agent_dir.as_deref(),
-        }
+        crate::harnesses::get(harness).store_root(self)
     }
 
-    /// Point one harness at an explicit store, e.g. a portable installation's own. OpenCode's
-    /// store is the database file: an existing folder means its `opencode.db`.
+    /// Point one harness at an explicit store, e.g. a portable installation's own; the harness's
+    /// adapter decides how a path becomes its store.
     pub fn set_root(&mut self, harness: HarnessId, root: &Path) {
-        let root = root.to_path_buf();
-        match harness {
-            HarnessId::ClaudeCode => self.claude_config_dir = Some(root),
-            HarnessId::Codex => self.codex_home = Some(root),
-            HarnessId::OpenCode => {
-                self.opencode_db = Some(if root.is_dir() {
-                    root.join("opencode.db")
-                } else {
-                    root
-                })
-            }
-            HarnessId::Pi => self.pi_agent_dir = Some(root),
-        }
+        crate::harnesses::get(harness).set_store_root(self, root);
     }
 }
 
 impl StoreRoots {
-    /// Point a harness process at this store: the variable the harness reads, set to its root when
-    /// one is configured. OpenCode's database is passed, or the variable removed so the process
-    /// does not inherit another store (L1).
+    /// Point a harness process at this store, through the variable the harness's adapter sets.
     pub fn apply_to(&self, harness: HarnessId, command: &mut std::process::Command) {
-        let (variable, root) = match harness {
-            HarnessId::ClaudeCode => ("CLAUDE_CONFIG_DIR", &self.claude_config_dir),
-            HarnessId::Codex => ("CODEX_HOME", &self.codex_home),
-            HarnessId::Pi => ("PI_CODING_AGENT_DIR", &self.pi_agent_dir),
-            HarnessId::OpenCode => {
-                crate::reader::opencode::opencode_environment(command, self);
-                return;
-            }
-        };
-        if let Some(root) = root {
-            command.env(variable, root);
-        }
+        crate::harnesses::get(harness).apply_store_env(self, command);
     }
 }
 
@@ -170,8 +137,7 @@ mod tests {
 
     #[test]
     fn an_opencode_folder_means_its_database() {
-        let dir = std::env::temp_dir().join(format!("mukade-roots-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::new("roots");
         let mut roots = StoreRoots::default();
         roots.set_root(HarnessId::OpenCode, &dir);
         assert_eq!(roots.opencode_db, Some(dir.join("opencode.db")));

@@ -124,51 +124,34 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 
 impl std::error::Error for WriteOutcomeUnknown {}
 
-/// The CLI validates a reserved ID before it knows the source or starts a process.
+/// The CLI validates a reserved ID before it knows the source or starts a process: an id some
+/// destination takes ([`Destination::validate_write`](crate::harnesses::Destination::validate_write)).
+/// An id in a harness's own shape ([`Destination::claims_id`](crate::harnesses::Destination::claims_id))
+/// gets that harness's verdict.
 pub fn validate_id_syntax(id: &str) -> Result<()> {
-    if id.starts_with("ses_") {
-        return opencode::validate_session_id(id);
+    let opts = WriteOpts {
+        dest_id: Some(id.to_string()),
+        ..WriteOpts::default()
+    };
+    let destinations = crate::harnesses::all()
+        .into_iter()
+        .filter_map(|harness| harness.destination());
+    if let Some(owner) = destinations
+        .clone()
+        .find(|destination| destination.claims_id(id))
+    {
+        return owner.validate_write(&opts);
     }
-    uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination session ID"))?;
-    Ok(())
-}
-
-/// Options for another destination must never be silently ignored by a writer.
-pub(crate) fn validate_options(harness: HarnessId, opts: &WriteOpts) -> Result<()> {
-    if harness != HarnessId::OpenCode && (opts.dest_agent.is_some() || opts.metadata.is_some()) {
-        anyhow::bail!("a destination agent and metadata are currently supported only for OpenCode");
-    }
-
-    if harness == HarnessId::OpenCode && opts.dest_path.is_some() {
-        anyhow::bail!("--dest-path is supported only for file-based destinations");
-    }
-    if let Some(path) = &opts.dest_path {
-        let root = match harness {
-            HarnessId::ClaudeCode => opts.roots.claude_config_dir.as_ref(),
-            HarnessId::Codex => opts.roots.codex_home.as_ref(),
-            HarnessId::Pi => opts.roots.pi_agent_dir.as_ref(),
-            HarnessId::OpenCode => None,
-        }.ok_or_else(|| anyhow::anyhow!("a destination root is required with --dest-path"))?;
-        anyhow::ensure!(path.is_absolute() && path.starts_with(root), "--dest-path must stay inside the destination root");
-        anyhow::ensure!(!path.components().any(|component| matches!(component, std::path::Component::ParentDir)), "--dest-path must not contain parent traversal");
-    }
-    if let Some(id) = opts.dest_id.as_deref() {
-        if harness == HarnessId::OpenCode {
-            opencode::validate_session_id(id)?;
-        } else {
-            uuid::Uuid::parse_str(id).map_err(|_| anyhow::anyhow!("invalid destination session ID"))?;
+    let mut refusal = None;
+    for destination in destinations {
+        match destination.validate_write(&opts) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                refusal.get_or_insert(error);
+            }
         }
     }
-    if let Some(agent) = opts.dest_agent.as_deref() {
-        opencode::validate_agent(agent)?;
-    }
-    if let Some(metadata) = &opts.metadata {
-        anyhow::ensure!(
-            metadata.is_object(),
-            "session metadata must be a JSON object"
-        );
-    }
-    Ok(())
+    Err(refusal.unwrap_or_else(|| anyhow::anyhow!("invalid destination session ID")))
 }
 
 /// One writer per harness.
@@ -196,13 +179,50 @@ pub trait Writer {
     ) -> Result<Written>;
 }
 
-/// The writer for a harness.
+/// The writer for a harness. A harness that is no destination gets one that refuses every write,
+/// before anything is planned, with the reason [`crate::harnesses::destination`] gives (exit 2):
+/// asking never panics.
 pub fn for_harness(harness: HarnessId) -> Box<dyn Writer> {
-    match harness {
-        HarnessId::ClaudeCode => Box::new(claude_code::ClaudeCode),
-        HarnessId::Codex => Box::new(codex::Codex),
-        HarnessId::OpenCode => Box::new(opencode::Opencode),
-        HarnessId::Pi => Box::new(pi::Pi),
+    match crate::harnesses::destination(harness) {
+        Ok(destination) => Box::new(destination.writer()),
+        Err(refusal) => Box::new(Refused {
+            harness,
+            reason: match refusal {
+                crate::hop::HopError::Unsupported(reason) => reason,
+                other => other.to_string(),
+            },
+        }),
+    }
+}
+
+/// The writer of a harness that is no destination: every write is refused.
+struct Refused {
+    harness: HarnessId,
+    reason: String,
+}
+
+impl Refused {
+    fn refuse(&self) -> Result<Written> {
+        Err(crate::hop::HopError::Unsupported(self.reason.clone()).into())
+    }
+}
+
+impl Writer for Refused {
+    fn harness(&self) -> HarnessId {
+        self.harness
+    }
+
+    fn write(&self, _session: &Session, _opts: &WriteOpts) -> Result<Written> {
+        self.refuse()
+    }
+
+    fn write_planned(
+        &self,
+        _session: &Session,
+        _plan: &plan::Plan,
+        _opts: &WriteOpts,
+    ) -> Result<Written> {
+        self.refuse()
     }
 }
 

@@ -94,8 +94,8 @@ impl CanonicalTool {
         }
     }
 
-    /// The canonical form of a Codex tool name. Codex Desktop's `exec` code-mode script is not
-    /// read yet (spec L10 is open, §10): it stays one opaque call, and travels in text form.
+    /// The canonical form of a Codex tool name. A Codex Desktop `exec` script the reader could not
+    /// split into its calls (spec L10) stays one opaque call, and travels in text form.
     pub fn from_codex(name: &str) -> CanonicalTool {
         match name {
             "exec_command" | "local_shell" => CanonicalTool::Bash,

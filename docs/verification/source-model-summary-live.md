@@ -129,7 +129,7 @@ The three throwaway sessions were deleted by id.
 
 ## Final commands
 
-These are what `src/summary.rs` runs (`<prompt>` is always the last argument; `[…]` only when a
+These are what `src/summary.rs` ran; each adapter's `summary_command` (`src/harnesses/<harness>.rs`) builds them now (`<prompt>` is always the last argument; `[…]` only when a
 model is known):
 
 | harness | argv |

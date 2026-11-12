@@ -55,7 +55,7 @@ mod tests {
         claude_store(&root);
         claude_store(&root.join("nested/.claude"));
         match locate_installation(&root, None) {
-            Located::One(found) => assert_eq!(found.store, root),
+            Located::One(found) => assert_eq!(found.store, root.to_path_buf()),
             other => panic!("{other:?}"),
         }
     }

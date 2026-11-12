@@ -1,10 +1,19 @@
 # Architecture decision records
 
-One record per version of a decision: ADR-NNNN-<slug>.md, then ADR-NNNN-vN-<slug>.md.
-A record is Proposed when the interview produces it, Accepted when the user
-approves its text, Superseded when a later version or another Accepted record
-replaces it, and Abandoned when it is retired unapproved. Read the active table
-before touching the paths, modules or domains it governs.
+Before touching a path, module or domain listed under **Governs** in the active table, read that
+record.
+
+**File names:** one record per version of a decision: `ADR-NNNN-<slug>.md`, then
+`ADR-NNNN-vN-<slug>.md`.
+
+**Status:**
+
+| status | when |
+|---|---|
+| Proposed | the interview produces it |
+| Accepted | the user approves its text |
+| Superseded | a later version or another Accepted record replaces it |
+| Abandoned | it is retired unapproved |
 
 <!-- adr-index:start -->
 

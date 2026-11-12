@@ -1029,3 +1029,586 @@ fn an_abort_of_another_turn_leaves_a_finished_reply_alone() {
     };
     assert_eq!(*end, StepEnd::Completed);
 }
+
+/// L10: in a Codex Desktop rollout a code-mode `exec` script that is exactly one shell call reads
+/// as that call and reaches Claude Code as its `Bash` tool; a script of several calls stays `exec`
+/// and travels as text. Both records are kept verbatim.
+#[test]
+fn a_one_call_code_mode_script_reads_as_the_call_it_wraps() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("mukade-tests")
+        .join("codex-code-mode")
+        .join(std::process::id().to_string());
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let one = r#"text(await tools.exec_command({cmd: "git status", yield_time_ms: 1000}));"#;
+    let many = r#"const r = await Promise.allSettled([tools.exec_command({cmd: "a"}), tools.exec_command({cmd: "b"})]); text(r);"#;
+    let exec = |ordinal, id: &str, script: &str| {
+        record(ordinal, "response_item", serde_json::json!({
+            "type": "custom_tool_call", "call_id": id, "name": "exec", "input": script,
+        }))
+    };
+    let output = |ordinal, id: &str| {
+        record(ordinal, "response_item", serde_json::json!({
+            "type": "custom_tool_call_output", "call_id": id,
+            "output": [
+                {"type": "input_text", "text": "Script completed
+Wall time 0.1 seconds
+Output:
+"},
+                {"type": "input_text", "text": "On branch main"},
+            ],
+        }))
+    };
+    let text = record(0, "session_meta", serde_json::json!({
+            "id": THREAD, "cwd": "/work", "cli_version": "0.166.0", "originator": "codex_work_desktop",
+        }))
+        + &say(1, "user", "status?")
+        + &exec(2, "call_one", one)
+        + &output(3, "call_one")
+        + &exec(4, "call_many", many)
+        + &output(5, "call_many")
+        + &say(6, "assistant", "clean");
+    let file = dir.join(format!("rollout-2026-10-28T10-38-11-{THREAD}.jsonl"));
+    std::fs::write(&file, &text).unwrap();
+
+    let session = codex::read_file(&file).expect("the rollout reads");
+    let calls: Vec<_> = session
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.kind {
+            Kind::Step { calls, .. } => Some(calls.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0].source_name, "exec_command");
+    assert_eq!(calls[0].input["cmd"], "git status");
+    assert_eq!(calls[0].canonical, Some(CanonicalTool::Bash));
+    assert_eq!(calls[1].source_name, "exec");
+    assert_eq!(calls[1].input, Value::String(many.into()));
+    let raw = serde_json::to_string(&session.entries.iter().flat_map(|e| e.raw.iter()).collect::<Vec<_>>()).unwrap();
+    assert!(raw.contains("tools.exec_command"), "the scripts stay in the raw records");
+
+    let scratch = support::scratch(HarnessId::ClaudeCode, "codex-code-mode");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let plan = mukade::writer::plan::plan(&session, HarnessId::ClaudeCode, &opts);
+    let planned: Vec<_> = plan
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            mukade::writer::plan::PlannedBlock::Step(step) => Some(step),
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = planned
+        .iter()
+        .flat_map(|step| step.calls.iter().map(|call| call.name.as_str()))
+        .collect();
+    assert_eq!(names, ["Bash"], "the one-call script is a Bash call; the other is text");
+    assert!(
+        planned.iter().flat_map(|step| step.text.iter()).any(|t| t.contains("Promise.allSettled")),
+        "the several-call script travels as text"
+    );
+}
+
+/// A subagent's rollout names the thread that spawned it in `session_meta.session_id`; a root
+/// thread's `session_id` is its own id and names no parent.
+#[test]
+fn a_subagent_rollout_names_its_parent_thread() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("mukade-tests")
+        .join("codex-subagent-parent")
+        .join(std::process::id().to_string());
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let parent = "01a181df-0000-7000-8000-000000000001";
+    let write = |name: &str, session_id: &str| {
+        let text = record(0, "session_meta", serde_json::json!({
+                "id": THREAD, "session_id": session_id, "cwd": "/work", "cli_version": "0.166.0",
+            }))
+            + &say(1, "user", "go")
+            + &say(2, "assistant", "done");
+        let file = dir.join(format!("rollout-2026-10-28T10-38-11-{name}.jsonl"));
+        std::fs::write(&file, text).unwrap();
+        codex::read_file(&file).expect("the rollout reads")
+    };
+    let sub = write("sub", parent).meta;
+    assert_eq!(sub.parent.as_deref(), Some(parent));
+    assert_eq!(sub.parent_kind, Some(mukade::model::ParentKind::spawn()));
+    let root = write("root", THREAD).meta;
+    assert_eq!(root.parent, None);
+    assert_eq!(root.parent_kind, None);
+}
+
+/// A subagent's `session_meta` as Codex 0.167 writes it: `parent_thread_id` names the thread that
+/// spawned this one, and `source` says how. `session_id` here names another thread.
+fn spawned(tag: &str, meta: serde_json::Value) -> mukade::model::Meta {
+    let scratch = support::scratch(HarnessId::Codex, tag);
+    let mut payload = serde_json::json!({
+        "id": THREAD, "session_id": "01a181df-0000-7000-8000-0000000000a0", "cwd": "/work",
+        "cli_version": "0.167.0",
+    });
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(meta.as_object().unwrap().clone());
+    let text =
+        record(0, "session_meta", payload) + &say(1, "user", "go") + &say(2, "assistant", "done");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-41-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    codex::read_file(&file).expect("the rollout reads").meta
+}
+
+/// `parent_thread_id` is the spawner, whatever `session_id` says; the role the subagent ran as
+/// is its agent.
+#[test]
+fn a_subagent_names_the_thread_that_spawned_it_and_its_role() {
+    use mukade::model::ParentKind;
+    let spawner = "01a181df-0000-7000-8000-0000000000b1";
+    let meta = spawned(
+        "codex-spawned-role",
+        serde_json::json!({
+            "parent_thread_id": spawner,
+            "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": spawner, "depth": 2, "agent_path": "/root/a/b",
+                "agent_nickname": "Curie", "agent_role": "worker",
+            }}},
+            "thread_source": "subagent", "agent_role": "worker",
+        }),
+    );
+    assert_eq!(meta.parent.as_deref(), Some(spawner));
+    assert_eq!(
+        meta.parent_kind,
+        Some(ParentKind::Spawn {
+            call_id: None,
+            agent: Some("worker".into()),
+            inherits_context: false,
+        })
+    );
+
+    let only_in_source = spawned(
+        "codex-spawned-source",
+        serde_json::json!({
+            "source": {"subagent": {"thread_spawn": {"parent_thread_id": spawner, "depth": 2}}},
+        }),
+    );
+    assert_eq!(only_in_source.parent.as_deref(), Some(spawner));
+    assert_eq!(only_in_source.parent_kind, Some(ParentKind::spawn()));
+}
+
+/// A subagent spawned with its parent's turns (`fork_turns`) names `forked_from_id` in its own
+/// `session_meta`: it starts from the parent's conversation. The parent's `session_meta`, copied
+/// into the rollout after the child's, does not make a plain child one.
+#[test]
+fn a_subagent_spawned_with_its_parents_turns_inherits_its_context() {
+    use mukade::model::ParentKind;
+    let spawner = "01a181df-0000-7000-8000-0000000000b2";
+    let forked = spawned(
+        "codex-spawned-forked",
+        serde_json::json!({"parent_thread_id": spawner, "forked_from_id": spawner}),
+    );
+    assert!(matches!(
+        forked.parent_kind,
+        Some(ParentKind::Spawn { inherits_context: true, .. })
+    ));
+
+    let scratch = support::scratch(HarnessId::Codex, "codex-spawned-plain-then-parent");
+    let child = serde_json::json!({
+        "id": THREAD, "parent_thread_id": spawner, "cwd": "/work", "cli_version": "0.167.0",
+    });
+    let parent = serde_json::json!({"id": spawner, "forked_from_id": "01a181df-0000-7000-8000-0000000000b3"});
+    let text = record(0, "session_meta", child)
+        + &record(1, "session_meta", parent)
+        + &say(2, "user", "go")
+        + &say(3, "assistant", "done");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-42-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    let plain = codex::read_file(&file).expect("the rollout reads").meta;
+    assert!(matches!(
+        plain.parent_kind,
+        Some(ParentKind::Spawn { inherits_context: false, .. })
+    ));
+}
+
+/// A guardian review is a thread Codex ran for another; its agent says so.
+#[test]
+fn a_guardian_review_is_spawned_by_the_thread_it_reviews() {
+    use mukade::model::ParentKind;
+    let reviewed = "01a181df-0000-7000-8000-0000000000c1";
+    let meta = spawned(
+        "codex-guardian",
+        serde_json::json!({
+            "session_id": reviewed, "parent_thread_id": reviewed,
+            "source": {"subagent": {"other": "guardian"}}, "thread_source": "guardian_review",
+            "agent_role": null,
+        }),
+    );
+    assert_eq!(meta.parent.as_deref(), Some(reviewed));
+    assert_eq!(
+        meta.parent_kind,
+        Some(ParentKind::Spawn {
+            call_id: None,
+            agent: Some("guardian_review".into()),
+            inherits_context: false,
+        })
+    );
+}
+
+// ------------------------------------------------------------------------- L10: code mode
+
+const HEADER: &str = "Script completed\nWall time 0.1 seconds\nOutput:\n";
+
+fn text_item(text: &str) -> Value {
+    serde_json::json!({"type": "input_text", "text": text})
+}
+
+/// A Codex Desktop `exec` call with its script and the output items Codex recorded.
+fn exec_rows(script: &str, output: Value) -> Session {
+    rows_with(vec![
+        serde_json::json!({"type": "custom_tool_call", "status": "completed", "call_id": "call_x",
+            "name": "exec", "input": script}),
+        serde_json::json!({"type": "custom_tool_call_output", "call_id": "call_x", "output": output}),
+    ])
+}
+
+fn exec_output(header: &str, items: &[&str]) -> Value {
+    let mut out = vec![text_item(header)];
+    out.extend(items.iter().map(|t| text_item(t)));
+    Value::Array(out)
+}
+
+fn results_of(s: &Session) -> Vec<mukade::model::ToolResult> {
+    s.conversation()
+        .filter_map(|e| match &e.kind {
+            Kind::Results { results } => Some(results.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+fn split_ids(s: &Session) -> Vec<String> {
+    calls_of(s)
+        .into_iter()
+        .filter(|c| c.id.starts_with("call_x"))
+        .map(|c| c.id)
+        .collect()
+}
+
+/// L10: a script of one literal call is that call, with the script's output as its result.
+#[test]
+fn a_one_call_script_reads_as_that_call() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(HEADER, &["OUT-1"]),
+    );
+    let call = calls_of(&s).into_iter().find(|c| c.id == "call_x").unwrap();
+    assert_eq!(call.source_name, "exec_command");
+    assert_eq!(call.input, serde_json::json!({"cmd": "CMD-1"}));
+    // The fixture's environment block declares PowerShell: the dialect rule (L13) still applies.
+    assert_eq!(call.canonical, Some(CanonicalTool::PowerShell));
+    assert!(calls_of(&s).iter().all(|c| c.source_name != "exec"));
+    let result = results_of(&s)
+        .into_iter()
+        .find(|r| r.call_id == "call_x")
+        .unwrap();
+    assert_eq!(result.content, ResultContent::Text("OUT-1".into()));
+    assert!(!result.is_error);
+}
+
+/// L10, widened: statements in sequence are calls in sequence, each with its own output item.
+#[test]
+fn a_sequence_reads_as_calls_with_their_own_results() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\n\
+         text(await tools.write_stdin({session_id:7, chars:\"\"}));\n\
+         text(await tools.apply_patch(\"PATCH-1\"));\n",
+        exec_output(HEADER, &["OUT-1", "OUT-2", "OUT-3"]),
+    );
+    assert_eq!(split_ids(&s), ["call_x", "call_x_2", "call_x_3"]);
+    let names: Vec<String> = calls_of(&s)
+        .into_iter()
+        .filter(|c| c.id.starts_with("call_x"))
+        .map(|c| c.source_name)
+        .collect();
+    assert_eq!(names, ["exec_command", "write_stdin", "apply_patch"]);
+    let step_holding_them = s
+        .conversation()
+        .filter(|e| match &e.kind {
+            Kind::Step { calls, .. } => calls.iter().any(|c| c.id.starts_with("call_x")),
+            _ => false,
+        })
+        .count();
+    assert_eq!(step_holding_them, 1, "the calls stay in one step");
+    let results: Vec<(String, String)> = results_of(&s)
+        .into_iter()
+        .filter(|r| r.call_id.starts_with("call_x"))
+        .map(|r| (r.call_id, r.content.text()))
+        .collect();
+    assert_eq!(
+        results,
+        [
+            ("call_x".to_string(), "OUT-1".to_string()),
+            ("call_x_2".to_string(), "OUT-2".to_string()),
+            ("call_x_3".to_string(), "OUT-3".to_string()),
+        ]
+    );
+}
+
+/// A failed one-call script is that call with an error result; with several calls it is not
+/// known which one failed, so the script stays whole.
+#[test]
+fn a_failed_one_call_script_is_an_error_result() {
+    let failed = "Script failed\nWall time 0.1 seconds\nOutput:\n";
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(failed, &["ERR-1"]),
+    );
+    let result = results_of(&s)
+        .into_iter()
+        .find(|r| r.call_id == "call_x")
+        .unwrap();
+    assert!(result.is_error);
+    assert_eq!(result.content.text(), "ERR-1");
+
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\ntext(await tools.exec_command({cmd:\"CMD-2\"}));",
+        exec_output(failed, &["ERR-1", "ERR-2"]),
+    );
+    assert_whole(&s);
+}
+
+/// The script as today's reader leaves it: one opaque `exec` call, one result.
+fn assert_whole(s: &Session) {
+    let calls: Vec<_> = calls_of(s)
+        .into_iter()
+        .filter(|c| c.id.starts_with("call_x"))
+        .collect();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].source_name, "exec");
+    assert_eq!(
+        calls[0].canonical,
+        Some(CanonicalTool::Other("exec".into()))
+    );
+    assert!(calls[0].input.is_string(), "the script stays verbatim");
+    let results: Vec<_> = results_of(s)
+        .into_iter()
+        .filter(|r| r.call_id.starts_with("call_x"))
+        .collect();
+    assert!(results.len() <= 1, "{results:?}");
+}
+
+#[test]
+fn an_item_count_mismatch_keeps_the_script_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\ntext(await tools.exec_command({cmd:\"CMD-2\"}));",
+        exec_output(HEADER, &["OUT-1"]),
+    );
+    assert_whole(&s);
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(HEADER, &["OUT-1", "OUT-2"]),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn an_exec_without_output_stays_whole() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "custom_tool_call", "status": "completed",
+        "call_id": "call_x", "name": "exec", "input": "text(await tools.exec_command({cmd:\"CMD-1\"}));"}),
+    ]);
+    assert_whole(&s);
+}
+
+#[test]
+fn a_running_script_stays_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        exec_output(
+            "Script running with cell ID 3\nWall time 0.7 seconds\nOutput:\n",
+            &["OUT-1"],
+        ),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn a_string_output_stays_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        Value::String(format!("{HEADER}OUT-1")),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn an_image_output_stays_whole() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));",
+        serde_json::json!([text_item(HEADER), {"type": "input_image", "image_url": "data:image/png;base64,AA=="}]),
+    );
+    assert_whole(&s);
+}
+
+#[test]
+fn a_complex_script_stays_whole() {
+    let s = exec_rows(
+        "const r = await Promise.allSettled([tools.exec_command({cmd:\"CMD-1\"})]);\ntext(r);",
+        exec_output(HEADER, &["OUT-1"]),
+    );
+    assert_whole(&s);
+}
+
+/// The split is a reading: every source record is still kept, once, in native order.
+#[test]
+fn the_split_keeps_every_source_record() {
+    let s = exec_rows(
+        "text(await tools.exec_command({cmd:\"CMD-1\"}));\ntext(await tools.exec_command({cmd:\"CMD-2\"}));",
+        exec_output(HEADER, &["OUT-1", "OUT-2"]),
+    );
+    assert_eq!(split_ids(&s), ["call_x", "call_x_2"]);
+    let raw: Vec<&Value> = s.entries.iter().flat_map(|e| e.raw.iter()).collect();
+    let exec_rows_kept = raw
+        .iter()
+        .filter(|r| r["payload"]["call_id"] == "call_x")
+        .count();
+    assert_eq!(
+        exec_rows_kept, 2,
+        "the exec call and its output, verbatim, once each"
+    );
+}
+
+/// A split call keeps the shell in effect where the script ran, not one declared later on.
+#[test]
+fn a_split_call_takes_the_shell_declared_before_it() {
+    let s = rows_with(vec![
+        serde_json::json!({"type": "custom_tool_call", "status": "completed", "call_id": "call_x",
+            "name": "exec", "input": "text(await tools.exec_command({cmd:\"CMD-1\"}));"}),
+        serde_json::json!({"type": "custom_tool_call_output", "call_id": "call_x",
+            "output": exec_output(HEADER, &["OUT-1"])}),
+        serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "<environment_context>
+  <shell>bash</shell>
+</environment_context>"}]}),
+    ]);
+    let call = calls_of(&s).into_iter().find(|c| c.id == "call_x").unwrap();
+    assert_eq!(call.source_name, "exec_command");
+    assert_eq!(call.canonical, Some(CanonicalTool::PowerShell));
+}
+
+/// A Codex v2 `agent_message` row: what one agent of a spawn tree sent another, `encrypted`
+/// holding its body out of reach as Codex 0.167 writes most of them.
+fn agent_message(ordinal: u64, text: &str, encrypted: bool) -> String {
+    let mut content = vec![serde_json::json!({"type": "input_text", "text": text})];
+    if encrypted {
+        content
+            .push(serde_json::json!({"type": "encrypted_content", "encrypted_content": "gAAAA"}));
+    }
+    record(
+        ordinal,
+        "response_item",
+        serde_json::json!({"type": "agent_message", "id": format!("am{ordinal}"),
+                           "author": "/root/review", "recipient": "/root", "content": content,
+                           "internal_chat_message_metadata_passthrough": null}),
+    )
+}
+
+/// What a subagent told its parent is what the parent's model received: a plaintext message is
+/// a user turn where it was received; an encrypted one stays a record, counted as left behind.
+#[test]
+fn a_subagents_readable_message_is_a_user_turn_and_an_encrypted_one_is_counted() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-agent-message");
+    let text = record(
+        0,
+        "session_meta",
+        serde_json::json!({
+            "id": THREAD, "session_id": THREAD, "cwd": "/work", "cli_version": "0.167.0",
+        }),
+    ) + &say(1, "user", "review the change")
+        + &say(2, "assistant", "asked a reviewer")
+        + &agent_message(
+            3,
+            "Message Type: MESSAGE\nTask name: /root\nSender: /root/review\n",
+            true,
+        )
+        + &agent_message(4, "The change is safe.", false)
+        + &say(5, "assistant", "the reviewer says it is safe");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-41-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    let session = codex::read_file(&file).unwrap();
+
+    let turns: Vec<String> = session
+        .conversation()
+        .map(|entry| match &entry.kind {
+            Kind::User { text, .. } => format!("user: {text}"),
+            Kind::Step { text, .. } => format!("step: {}", text.join(" ")),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            "user: review the change",
+            "step: asked a reviewer",
+            "user: The change is safe.",
+            "step: the reviewer says it is safe",
+        ]
+    );
+    let encrypted = session
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                Kind::Meta {
+                    kind: MetaKind::SubagentMessage
+                }
+            )
+        })
+        .count();
+    assert_eq!(encrypted, 1);
+
+    let scratch_opts = support::scratch(HarnessId::Pi, "codex-agent-message-plan");
+    let plan = mukade::writer::plan::plan(
+        &session,
+        HarnessId::Pi,
+        &support::opts(HarnessId::Pi, &scratch_opts),
+    );
+    assert_eq!(plan.counts.dropped_subagent_messages, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("subagent")),
+        "{losses:?}"
+    );
+}
+
+/// A parent whose subagent reported into it hops into every file destination with the report.
+#[test]
+fn a_parent_with_a_readable_report_hops_into_every_file_destination() {
+    let scratch = support::scratch(HarnessId::Codex, "codex-report-hop");
+    let text = record(0, "session_meta", serde_json::json!({
+            "id": THREAD, "session_id": THREAD, "cwd": "/work", "cli_version": "0.167.0",
+        }))
+        + &say(1, "user", "review the change")
+        + &say(2, "assistant", "asked a reviewer")
+        + &agent_message(3, "The change is safe.", false)
+        + &say(4, "assistant", "the reviewer says it is safe")
+        // Received while the model was at work: after its reasoning, before its next call.
+        + &say(5, "user", "and the tests?")
+        + &record(6, "response_item", serde_json::json!({"type": "reasoning", "summary": [],
+                  "encrypted_content": "gAAAA"}))
+        + &agent_message(7, "The tests pass.", false)
+        + &record(8, "response_item", serde_json::json!({"type": "function_call",
+                  "call_id": "call_1", "name": "shell", "arguments": "{\"command\":[\"ls\"]}"}))
+        + &record(9, "response_item", serde_json::json!({"type": "function_call_output",
+                  "call_id": "call_1", "output": "ok"}))
+        + &say(10, "assistant", "both are fine");
+    let file = scratch.join(format!("rollout-2026-11-10T08-49-41-{THREAD}.jsonl"));
+    std::fs::write(&file, text).unwrap();
+    let session = codex::read_file(&file).unwrap();
+    support::assert_hops_keeping(&session, "The change is safe.", "codex-report-hop");
+    support::assert_hops_keeping(&session, "The tests pass.", "codex-report-hop-mid");
+}

@@ -307,25 +307,8 @@ pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopErr
 
 /// Write a session we hold into a destination.
 pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
-    if dest != HarnessId::OpenCode
-        && (opts.write.dest_agent.is_some() || opts.write.metadata.is_some())
-    {
-        return Err(HopError::Unsupported(
-            "a destination agent and metadata are currently supported only for OpenCode"
-                .into(),
-        ));
-    }
-    if opts.compaction == "native" && opts.native_budget.is_none() {
-        return Err(HopError::Unsupported(
-            "compaction native needs --context-window and its optional budget flags".into(),
-        ));
-    }
-    if opts.compaction != "native" && opts.native_budget.is_some() {
-        return Err(HopError::Unsupported(
-            "a native budget goes with compaction native".into(),
-        ));
-    }
-
+    let destination = crate::harnesses::destination(dest)?;
+    let dest_writer = destination.writer();
     let write_opts = WriteOpts {
         roots: opts.roots.clone(),
         cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
@@ -349,6 +332,20 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
         exe: opts.write.exe.clone(),
         native_budget: opts.native_budget.clone(),
     };
+    // What the destination does not take is refused before anything is planned.
+    destination
+        .validate_write(&write_opts)
+        .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
+    if opts.compaction == "native" && opts.native_budget.is_none() {
+        return Err(HopError::Unsupported(
+            "compaction native needs --context-window and its optional budget flags".into(),
+        ));
+    }
+    if opts.compaction != "native" && opts.native_budget.is_some() {
+        return Err(HopError::Unsupported(
+            "a native budget goes with compaction native".into(),
+        ));
+    }
 
     if let Some(prompt) = opts.resume.as_ref() {
         check_resume_prompt(&prompt.text, dest, write_opts.exe.as_deref())?;
@@ -371,7 +368,7 @@ pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<R
     }
 
     let write_span = crate::timing::span("write files");
-    let written: Written = writer::for_harness(dest)
+    let written: Written = dest_writer
         .write_planned(session, &plan, &write_opts)
         .map_err(
             |error| match error.downcast_ref::<writer::WriteOutcomeUnknown>() {
@@ -435,6 +432,7 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
 /// destination written with `destination`. Two installations of one harness (an OpenCode and a
 /// portable JanuraCode, say) cannot share one [`StoreRoots`].
 pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
+    crate::harnesses::destination(req.dest)?;
     let source = export(&req.source, &req.roots)?;
     let facts = SourceFacts::of(&source);
     let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
@@ -455,6 +453,50 @@ pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, H
     import(req.dest, &selection, &opts)
 }
 
+/// The interchange document of a session, as `mukade dump` writes it: the session's messages and,
+/// when its history travels as a summary the source's model wrote, who wrote it (`summary`), for
+/// the manifest a later [`import_document`] makes.
+pub fn document(session: &Session, summary: Option<&SummaryFacts>) -> Value {
+    let mut doc = crate::wire::to_document(session);
+    if let Some(facts) = summary.and_then(|facts| serde_json::to_value(facts).ok()) {
+        doc["summary"] = facts;
+    }
+    doc
+}
+
+/// Read an interchange document back into a session ([`crate::wire::from_document`]).
+pub fn read_document(doc: &Value) -> Result<Session, HopError> {
+    crate::wire::from_document(doc).map_err(|error| HopError::Unsupported(format!("{error:#}")))
+}
+
+/// Write a document [`document`] made as a new session of `dest`. `session` is
+/// [`read_document`]'s result for `doc`; `opts` are the destination's details. What only the
+/// document knows is filled in here: who wrote its summary, if it carries one, and its fingerprint,
+/// which is that of its own messages (a document holds no source records).
+pub fn import_document(
+    dest: HarnessId,
+    doc: &Value,
+    session: &Session,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
+    let mut opts = opts.clone();
+    if let Some(facts) = doc
+        .get("summary")
+        .and_then(|facts| serde_json::from_value::<SummaryFacts>(facts.clone()).ok())
+    {
+        opts.summary = Some(facts);
+        opts.compaction = "summary".into();
+    }
+    opts.source_facts.content_sha256 = records_sha256(
+        doc.get("messages")
+            .and_then(Value::as_array)
+            .map(|messages| messages.iter())
+            .into_iter()
+            .flatten(),
+    );
+    import(dest, session, &opts)
+}
+
 /// Apply compaction to a session already read from a file, then finish the normal import path.
 pub fn hop_session(
     dest: HarnessId,
@@ -462,6 +504,7 @@ pub fn hop_session(
     compaction: &Compaction,
     opts: &ImportOpts,
 ) -> Result<Receipt, HopError> {
+    crate::harnesses::destination(dest)?;
     let (selection, summary) = compact(source, compaction, &opts.roots)?;
     let opts = ImportOpts {
         native_budget: match compaction {
@@ -497,6 +540,9 @@ pub fn compact<'a>(
             summary: SummarySource::SourceModel(opts),
             keep_from,
         } => {
+            // The tail is checked before the source's model is paid to write the summary: a
+            // generated summary has no boundary of its own, so this is the cut `select` makes.
+            cut_index(source, keep_from, None)?;
             resolved = Compaction::Portable {
                 summary: SummarySource::Generated(crate::summary::summarize(source, roots, opts)?),
                 keep_from: keep_from.clone(),
@@ -900,10 +946,9 @@ fn classify_read(error: anyhow::Error) -> HopError {
 /// file, abandoned turns included, then its active page) instead of only the part Codex resumes.
 /// Only Codex is supported; another harness is refused before anything is read.
 pub fn export_all_branches(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
-    all_branches_supported(source.harness)?;
     let _span = crate::timing::span("read source");
-    crate::reader::codex::read_with(&source.id, roots, crate::reader::codex::Branches::All)
-        .map_err(classify_read)
+    let read = crate::harnesses::get(source.harness).read_all_branches_by_id(&source.id, roots);
+    all_branches_supported(source.harness, read)
 }
 
 /// [`export_path`] with every branch the source keeps (see [`export_all_branches`]).
@@ -911,28 +956,28 @@ pub fn export_path_all_branches(
     harness: HarnessId,
     path: &std::path::Path,
 ) -> Result<Session, HopError> {
-    all_branches_supported(harness)?;
-    crate::reader::codex::read_file_with(path, crate::reader::codex::Branches::All)
-        .map_err(classify_read)
+    let read = crate::harnesses::get(harness).read_all_branches(path);
+    all_branches_supported(harness, read)
 }
 
-fn all_branches_supported(harness: HarnessId) -> Result<(), HopError> {
-    if harness == HarnessId::Codex {
-        return Ok(());
+/// What reading every branch came to: the session, or the refusal of a harness that keeps one
+/// branch only (the adapter answered `None`).
+fn all_branches_supported(
+    harness: HarnessId,
+    read: Option<anyhow::Result<Session>>,
+) -> Result<Session, HopError> {
+    match read {
+        Some(read) => read.map_err(classify_read),
+        None => Err(HopError::Unsupported(format!(
+            "--all-branches (every branch, abandoned ones included) is read for a Codex paginated \
+             thread only; {} sessions are read as the branch the harness resumes",
+            harness.as_str()
+        ))),
     }
-    Err(HopError::Unsupported(format!(
-        "--all-branches (every branch, abandoned ones included) is read for a Codex paginated \
-         thread only; {} sessions are read as the branch the harness resumes",
-        harness.as_str()
-    )))
 }
 
 pub fn export_path(harness: HarnessId, path: &std::path::Path) -> Result<Session, HopError> {
-    let session = match harness {
-        HarnessId::ClaudeCode => crate::reader::claude_code::read_file(path),
-        HarnessId::Codex => crate::reader::codex::read_file(path),
-        HarnessId::OpenCode => crate::reader::opencode::read_file(path),
-        HarnessId::Pi => crate::reader::pi::read_file(path),
-    };
-    session.map_err(classify_read)
+    crate::harnesses::get(harness)
+        .read_file(path)
+        .map_err(classify_read)
 }

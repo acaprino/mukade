@@ -10,7 +10,7 @@ pub mod opencode;
 pub mod origin;
 pub mod pi;
 
-use crate::model::{HarnessId, Session};
+use crate::model::{HarnessId, ParentKind, Session};
 use crate::roots::StoreRoots;
 
 /// What a reader knows about a session before reading it.
@@ -27,6 +27,8 @@ pub struct SessionInfo {
     /// The native parent link, when the harness records one. `None` is "not recorded or no
     /// parent", never a guess.
     pub parent: Option<String>,
+    /// How the session came from [`SessionInfo::parent`]: set whenever `parent` is.
+    pub parent_kind: Option<ParentKind>,
     /// Why [`Reader::read`] cannot hand this session back, when the listing already knows: the
     /// store still names the session but its transcript is gone (a Codex `threads` row whose
     /// rollout was deleted, a Claude Code prompt in `history.jsonl` without a session file), or
@@ -47,8 +49,8 @@ pub trait Reader {
     /// Every root session in the store, in a stable order.
     fn list(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>>;
 
-    /// Every session the store holds, forks included, in a stable order. A harness that has no
-    /// cross-session parent link returns the same list as [`Reader::list`].
+    /// Every session the store holds, forks and subagent sessions included, in a stable order. A
+    /// harness that has no cross-session parent link returns the same list as [`Reader::list`].
     fn list_all(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>> {
         self.list(roots)
     }
@@ -82,10 +84,5 @@ impl std::error::Error for Lookup {}
 
 /// The reader for a harness.
 pub fn for_harness(harness: HarnessId) -> anyhow::Result<Box<dyn Reader>> {
-    Ok(match harness {
-        HarnessId::ClaudeCode => Box::new(claude_code::ClaudeCode),
-        HarnessId::Codex => Box::new(codex::Codex),
-        HarnessId::OpenCode => Box::new(opencode::Opencode),
-        HarnessId::Pi => Box::new(pi::Pi),
-    })
+    Ok(Box::new(crate::harnesses::get(harness).reader()))
 }

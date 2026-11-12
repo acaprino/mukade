@@ -831,3 +831,980 @@ fn encrypted_argument_values_are_not_written_into_text_form() {
 fn call_with_input(input: Value) -> ToolCall {
     call(CanonicalTool::Other("exec".into()), "exec", input)
 }
+
+// ------------------------------------------------------------------- Codex apply_patch
+
+fn apply_patch(input: Value) -> ToolCall {
+    call(CanonicalTool::Edit, "apply_patch", input)
+}
+
+fn patch(body: &str) -> String {
+    format!("*** Begin Patch\n{body}\n*** End Patch")
+}
+
+/// A Codex patch that adds one file is a write, wherever the destination has one.
+#[test]
+fn an_added_file_is_a_write() {
+    let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1\n+L2")));
+    let claude = translate(&c, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Write");
+    assert_eq!(
+        input_of(&claude),
+        &json!({"file_path": "D:/w/a.txt", "content": "L1\nL2\n"})
+    );
+    let pi = translate(&c, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "write");
+    assert_eq!(input_of(&pi), &json!({"path": "D:/w/a.txt", "content": "L1\nL2\n"}));
+}
+
+/// One hunk is an ordinary edit; the `@@` anchor line is not part of the texts.
+#[test]
+fn one_hunk_is_an_edit() {
+    let c = apply_patch(json!(patch(
+        "*** Update File: D:/w/a.txt\n@@ fn anchor()\n ctx\n-old\n+new\n ctx2"
+    )));
+    let claude = translate(&c, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Edit");
+    assert_eq!(
+        input_of(&claude),
+        &json!({"file_path": "D:/w/a.txt", "old_string": "ctx\nold\nctx2", "new_string": "ctx\nnew\nctx2"})
+    );
+    assert_eq!(name_of(&translate(&c, HarnessId::OpenCode, None)), "edit");
+    assert_eq!(name_of(&translate(&c, HarnessId::Pi, None)), "edit");
+}
+
+/// Several hunks reach Pi as one edit with its list of changes; elsewhere they are text form.
+#[test]
+fn several_hunks_are_a_multi_edit() {
+    let c = apply_patch(json!(patch(
+        "*** Update File: D:/w/a.txt\n@@\n-a\n+b\n@@\n x\n-c\n+d"
+    )));
+    let pi = translate(&c, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "edit");
+    assert_eq!(input_of(&pi)["edits"].as_array().map(Vec::len), Some(2));
+    assert!(matches!(
+        translate(&c, HarnessId::ClaudeCode, None),
+        Translation::Text { .. }
+    ));
+}
+
+/// Codex records the patch as a bare string (custom tool) or under `input` (function call).
+#[test]
+fn the_object_shape_of_a_patch_reads_too() {
+    let c = apply_patch(json!({"input": patch("*** Add File: D:/w/a.txt\n+L1")}));
+    assert_eq!(name_of(&translate(&c, HarnessId::ClaudeCode, None)), "Write");
+}
+
+/// A patch that is not one plain file stays text form, its patch intact.
+#[test]
+fn a_patch_that_is_not_one_plain_file_stays_text() {
+    for body in [
+        "*** Delete File: D:/w/a.txt",
+        "*** Add File: D:/w/a.txt\n+L1\n*** Add File: D:/w/b.txt\n+L2",
+        "*** Update File: D:/w/a.txt\n@@\n+only-added",
+    ] {
+        let c = apply_patch(json!(patch(body)));
+        assert!(
+            matches!(translate(&c, HarnessId::ClaudeCode, None), Translation::Text { .. }),
+            "{body}"
+        );
+    }
+}
+
+/// Toward Codex a patch is still text form: Codex's own apply_patch form is not written.
+#[test]
+fn a_grep_toward_claude_keeps_every_argument_or_becomes_text() {
+    // Claude's own Grep keeps its call; another harness's grep carries only what the translation
+    // writes, so line context, an offset, multiline and `-n: false` make it text form (tables §1.2).
+    for extra in [
+        json!({"-A": 2}),
+        json!({"-B": 2}),
+        json!({"offset": 5}),
+        json!({"multiline": true}),
+        json!({"-n": false}),
+    ] {
+        let mut input = json!({"pattern": "x", "path": "src"});
+        input.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let out = translate(&call(CanonicalTool::Grep, "grep", input.clone()), HarnessId::ClaudeCode, None);
+        assert!(
+            matches!(out, Translation::Text { why: "an argument has no counterpart" }),
+            "{input} → {out:?}"
+        );
+        let own = translate(&call(CanonicalTool::Grep, "Grep", input.clone()), HarnessId::ClaudeCode, None);
+        assert!(own.is_call(), "Claude's own Grep {input} → {own:?}");
+    }
+    // What the translation writes anyway still translates.
+    for same in [json!({"multiline": false}), json!({"-n": true})] {
+        let mut input = json!({"pattern": "x", "path": "src"});
+        input.as_object_mut().unwrap().extend(same.as_object().unwrap().clone());
+        let out = translate(&call(CanonicalTool::Grep, "grep", input.clone()), HarnessId::ClaudeCode, None);
+        assert!(out.is_call(), "{input} → {out:?}");
+    }
+}
+
+#[test]
+fn a_patch_toward_codex_stays_text() {
+    let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1")));
+    assert!(matches!(
+        translate(&c, HarnessId::Codex, Some(Shell::PowerShell)),
+        Translation::Text { .. }
+    ));
+}
+
+// ------------------------------------------------------------------- characterization
+
+/// One call of each canonical tool and argument shape this file uses, with the shell the
+/// destination runs.
+fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
+    use CanonicalTool as C;
+    let posix = Some(Shell::Posix);
+    let powershell = Some(Shell::PowerShell);
+    vec![
+        (
+            "bash, shell unknown",
+            call(C::Bash, "Bash", json!({"command": "make", "timeout": 2500})),
+            None,
+        ),
+        (
+            "bash toward posix",
+            call(
+                C::Bash,
+                "Bash",
+                json!({"command": "make", "timeout": 2500, "description": "d"}),
+            ),
+            posix,
+        ),
+        (
+            "bash in the background",
+            call(
+                C::Bash,
+                "Bash",
+                json!({"command": "serve", "run_in_background": true}),
+            ),
+            posix,
+        ),
+        (
+            "exec_command with workdir",
+            call(
+                C::Bash,
+                "exec_command",
+                json!({"cmd": "ls", "workdir": "C:/w", "justification": "j", "yield_time_ms": 1000}),
+            ),
+            posix,
+        ),
+        (
+            "opencode shell in the background",
+            call(
+                C::Bash,
+                "shell",
+                json!({"command": "serve", "background": true, "timeout": 4000}),
+            ),
+            posix,
+        ),
+        (
+            "bash without a command",
+            call(C::Bash, "Bash", json!({"description": "d"})),
+            posix,
+        ),
+        (
+            "powershell toward powershell",
+            call(
+                C::PowerShell,
+                "PowerShell",
+                json!({"command": "Get-ChildItem"}),
+            ),
+            powershell,
+        ),
+        (
+            "powershell toward posix",
+            call(
+                C::PowerShell,
+                "PowerShell",
+                json!({"command": "Get-ChildItem"}),
+            ),
+            posix,
+        ),
+        (
+            "read with offset and limit",
+            call(
+                C::Read,
+                "Read",
+                json!({"file_path": "a.txt", "offset": 5, "limit": 10}),
+            ),
+            None,
+        ),
+        (
+            "read with pages",
+            call(
+                C::Read,
+                "Read",
+                json!({"file_path": "a.pdf", "pages": "1-2"}),
+            ),
+            None,
+        ),
+        (
+            "read with an unknown key",
+            call(C::Read, "Read", json!({"file_path": "a", "frobnicate": 1})),
+            None,
+        ),
+        (
+            "write by path",
+            call(C::Write, "write", json!({"path": "a", "content": "c"})),
+            None,
+        ),
+        (
+            "edit",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
+            ),
+            None,
+        ),
+        (
+            "edit replace_all",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "old_string": "a", "new_string": "b", "replace_all": true}),
+            ),
+            None,
+        ),
+        (
+            "opencode edit replaceAll",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "oldString": "x", "newString": "y", "replaceAll": true}),
+            ),
+            None,
+        ),
+        (
+            "edit without new text",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "old_string": "a"}),
+            ),
+            None,
+        ),
+        (
+            "edit without a path",
+            call(C::Edit, "edit", json!({"oldString": "x", "newString": "y"})),
+            None,
+        ),
+        (
+            "edit without old text",
+            call(C::Edit, "Edit", json!({"file_path": "a.txt", "new_string": "b"})),
+            None,
+        ),
+        (
+            "pi edit, one change",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}]}),
+            ),
+            None,
+        ),
+        (
+            "pi edit, two changes",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"oldText": "p", "newText": "q"}]}),
+            ),
+            None,
+        ),
+        (
+            "pi edit, no edits",
+            call(C::Edit, "edit", json!({"path": "a", "edits": []})),
+            None,
+        ),
+        (
+            "pi edit, a change without its texts",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"note": "z"}]}),
+            ),
+            None,
+        ),
+        (
+            "multi-edit",
+            call(
+                C::MultiEdit,
+                "MultiEdit",
+                json!({"file_path": "a", "edits": [{"old_string": "x", "new_string": "y"}, {"old_string": "p", "new_string": "q"}]}),
+            ),
+            None,
+        ),
+        (
+            "multi-edit replace_all",
+            call(
+                C::MultiEdit,
+                "MultiEdit",
+                json!({"file_path": "a", "edits": [{"old_string": "x", "new_string": "y", "replace_all": true}]}),
+            ),
+            None,
+        ),
+        (
+            "claude grep",
+            call(
+                C::Grep,
+                "Grep",
+                json!({"pattern": "fn main", "path": "src", "glob": "*.rs", "-i": true, "-C": 3, "head_limit": 5}),
+            ),
+            None,
+        ),
+        (
+            "opencode grep",
+            call(
+                C::Grep,
+                "grep",
+                json!({"pattern": "x", "include": "*.rs", "literal": true, "caseSensitive": false}),
+            ),
+            None,
+        ),
+        (
+            "grep with output_mode content",
+            call(
+                C::Grep,
+                "grep",
+                json!({"pattern": "x", "output_mode": "content"}),
+            ),
+            None,
+        ),
+        (
+            "grep with an extra key",
+            call(
+                C::Grep,
+                "grep",
+                json!({"pattern": "x", "path": "src", "multiline": true}),
+            ),
+            None,
+        ),
+        (
+            "grep without a pattern",
+            call(C::Grep, "grep", json!({"path": "src"})),
+            None,
+        ),
+        (
+            "grep with a file type",
+            call(C::Grep, "grep", json!({"pattern": "x", "type": "rust"})),
+            None,
+        ),
+        (
+            "glob",
+            call(
+                C::Glob,
+                "Glob",
+                json!({"pattern": "**/*.rs", "path": "src"}),
+            ),
+            None,
+        ),
+        (
+            "glob hidden",
+            call(C::Glob, "glob", json!({"pattern": "*.rs", "hidden": true})),
+            None,
+        ),
+        (
+            "glob limit",
+            call(C::Glob, "find", json!({"pattern": "*.rs", "limit": 5})),
+            None,
+        ),
+        (
+            "ls",
+            call(C::Ls, "ls", json!({"path": "src", "limit": 3})),
+            None,
+        ),
+        (
+            "web fetch with prompt",
+            call(
+                C::WebFetch,
+                "WebFetch",
+                json!({"url": "https://x", "prompt": "sum it up"}),
+            ),
+            None,
+        ),
+        (
+            "web fetch with format",
+            call(
+                C::WebFetch,
+                "webfetch",
+                json!({"url": "https://x", "format": "markdown"}),
+            ),
+            None,
+        ),
+        (
+            "web fetch without a url",
+            call(C::WebFetch, "webfetch", json!({"format": "markdown"})),
+            None,
+        ),
+        (
+            "web search with domains",
+            call(
+                C::WebSearch,
+                "WebSearch",
+                json!({"query": "q", "allowed_domains": ["a.org"]}),
+            ),
+            None,
+        ),
+        (
+            "web search",
+            call(C::WebSearch, "websearch", json!({"query": "q"})),
+            None,
+        ),
+        (
+            "web search without a query",
+            call(C::WebSearch, "websearch", json!({"allowed_domains": ["a.org"]})),
+            None,
+        ),
+        (
+            "apply_patch add",
+            apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1\n+L2"))),
+            None,
+        ),
+        (
+            "apply_patch update",
+            apply_patch(json!(patch(
+                "*** Update File: D:/w/a.txt\n@@ fn anchor()\n ctx\n-old\n+new\n ctx2"
+            ))),
+            None,
+        ),
+        (
+            "apply_patch two hunks",
+            apply_patch(json!(patch(
+                "*** Update File: D:/w/a.txt\n@@\n-a\n+b\n@@\n x\n-c\n+d"
+            ))),
+            None,
+        ),
+        (
+            "agent",
+            call(C::Agent, "Agent", json!({"prompt": "x"})),
+            None,
+        ),
+        (
+            "no canonical form",
+            ToolCall {
+                id: "c1".into(),
+                source_name: "mystery".into(),
+                canonical: None,
+                input: json!({}),
+            },
+            None,
+        ),
+    ]
+}
+
+fn rendered(translation: &Translation) -> String {
+    match translation {
+        Translation::Call { name, input } => format!("{name} {input}"),
+        Translation::Text { why } => format!("text: {why}"),
+    }
+}
+
+/// Every characterization call toward Claude Code, Codex, OpenCode, Pi and Pi with its search
+/// tools.
+fn characterization_row(c: &ToolCall, shell: Option<Shell>) -> [String; 5] {
+    [
+        rendered(&translate(c, HarnessId::ClaudeCode, shell)),
+        rendered(&translate(c, HarnessId::Codex, shell)),
+        rendered(&translate(c, HarnessId::OpenCode, shell)),
+        rendered(&translate(c, HarnessId::Pi, shell)),
+        rendered(&translate_with(c, HarnessId::Pi, shell, PI_WITH_SEARCH)),
+    ]
+}
+
+/// Each characterization call as it was translated before the shapes toward each destination
+/// moved into the adapters: name and input, or the text form's reason.
+#[test]
+fn translation_is_unchanged_for_every_destination() {
+    let destinations = [
+        "Claude Code",
+        "Codex",
+        "OpenCode",
+        "Pi",
+        "Pi with grep, find and ls",
+    ];
+    let expected: Vec<(&str, [&str; 5])> = vec![
+        (
+            "bash, shell unknown",
+            [
+                r#"Bash {"command":"make","timeout":2500}"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+            ],
+        ),
+        (
+            "bash toward posix",
+            [
+                r#"Bash {"command":"make","timeout":2500,"description":"d"}"#,
+                r#"exec_command {"cmd":"make","justification":"d"}"#,
+                r#"shell {"command":"make","timeout":2500}"#,
+                r#"bash {"command":"make","timeout":3}"#,
+                r#"bash {"command":"make","timeout":3}"#,
+            ],
+        ),
+        (
+            "bash in the background",
+            [
+                r#"Bash {"command":"serve","run_in_background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"shell {"command":"serve","background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"text: background execution is not available"#,
+            ],
+        ),
+        (
+            "exec_command with workdir",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"exec_command {"cmd":"ls","workdir":"C:/w","justification":"j"}"#,
+                r#"shell {"command":"ls","workdir":"C:/w"}"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "opencode shell in the background",
+            [
+                r#"Bash {"command":"serve","timeout":4000,"run_in_background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"shell {"command":"serve","timeout":4000,"background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"text: background execution is not available"#,
+            ],
+        ),
+        (
+            "bash without a command",
+            [
+                r#"text: no command"#,
+                r#"text: no command"#,
+                r#"text: no command"#,
+                r#"text: no command"#,
+                r#"text: no command"#,
+            ],
+        ),
+        (
+            "powershell toward powershell",
+            [
+                r#"text: the destination's offered set does not contain it"#,
+                r#"exec_command {"cmd":"Get-ChildItem"}"#,
+                r#"shell {"command":"Get-ChildItem"}"#,
+                r#"bash {"command":"Get-ChildItem"}"#,
+                r#"bash {"command":"Get-ChildItem"}"#,
+            ],
+        ),
+        (
+            "powershell toward posix",
+            [
+                r#"text: the destination's offered set does not contain it"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+            ],
+        ),
+        (
+            "read with offset and limit",
+            [
+                r#"Read {"file_path":"a.txt","offset":5,"limit":10}"#,
+                r#"text: Codex offers no read tool"#,
+                r#"read {"path":"a.txt","offset":5,"limit":10}"#,
+                r#"read {"path":"a.txt","offset":5,"limit":10}"#,
+                r#"read {"path":"a.txt","offset":5,"limit":10}"#,
+            ],
+        ),
+        (
+            "read with pages",
+            [
+                r#"Read {"file_path":"a.pdf","pages":"1-2"}"#,
+                r#"text: Codex offers no read tool"#,
+                r#"text: pages/allow_large has no counterpart"#,
+                r#"text: pages/allow_large has no counterpart"#,
+                r#"text: pages/allow_large has no counterpart"#,
+            ],
+        ),
+        (
+            "read with an unknown key",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: Codex offers no read tool"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "write by path",
+            [
+                r#"Write {"file_path":"a","content":"c"}"#,
+                r#"text: Codex offers no apply_patch here"#,
+                r#"write {"path":"a","content":"c"}"#,
+                r#"write {"path":"a","content":"c"}"#,
+                r#"write {"path":"a","content":"c"}"#,
+            ],
+        ),
+        (
+            "edit",
+            [
+                r#"Edit {"file_path":"a.txt","old_string":"a","new_string":"b"}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a.txt","oldString":"a","newString":"b"}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":"b"}]}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":"b"}]}"#,
+            ],
+        ),
+        (
+            "edit replace_all",
+            [
+                r#"Edit {"file_path":"a.txt","old_string":"a","new_string":"b","replace_all":true}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a.txt","oldString":"a","newString":"b","replaceAll":true}"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+            ],
+        ),
+        (
+            "opencode edit replaceAll",
+            [
+                r#"Edit {"file_path":"a","old_string":"x","new_string":"y","replace_all":true}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a","oldString":"x","newString":"y","replaceAll":true}"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+            ],
+        ),
+        (
+            "edit without new text",
+            [
+                r#"Edit {"file_path":"a.txt","old_string":"a","new_string":""}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a.txt","oldString":"a","newString":""}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":""}]}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":""}]}"#,
+            ],
+        ),
+        (
+            "edit without a path",
+            [
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+            ],
+        ),
+        (
+            "edit without old text",
+            [
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+            ],
+        ),
+        (
+            "pi edit, one change",
+            [
+                r#"Edit {"file_path":"a","old_string":"x","new_string":"y"}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a","oldString":"x","newString":"y"}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"}]}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"}]}"#,
+            ],
+        ),
+        (
+            "pi edit, two changes",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+            ],
+        ),
+        (
+            "pi edit, no edits",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no edits"#,
+                r#"text: no edits"#,
+            ],
+        ),
+        (
+            "pi edit, a change without its texts",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: an edit without its old and new text"#,
+                r#"text: an edit without its old and new text"#,
+            ],
+        ),
+        (
+            "multi-edit",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+            ],
+        ),
+        (
+            "multi-edit replace_all",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+            ],
+        ),
+        (
+            "claude grep",
+            [
+                r#"Grep {"pattern":"fn main","path":"src","glob":"*.rs","-i":true,"-C":3,"head_limit":5}"#,
+                r#"text: no grep tool offered"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"grep {"pattern":"fn main","path":"src","glob":"*.rs","ignoreCase":true,"context":3,"limit":5}"#,
+            ],
+        ),
+        (
+            "opencode grep",
+            [
+                r#"text: Claude's Grep has no literal search"#,
+                r#"text: no grep tool offered"#,
+                r#"grep {"pattern":"x","include":"*.rs","caseSensitive":false,"literal":true}"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"grep {"pattern":"x","glob":"*.rs","ignoreCase":true,"literal":true}"#,
+            ],
+        ),
+        (
+            "grep with output_mode content",
+            [
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+            ],
+        ),
+        (
+            "grep with an extra key",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: no grep tool offered"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "grep without a pattern",
+            [
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+            ],
+        ),
+        (
+            "grep with a file type",
+            [
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+            ],
+        ),
+        (
+            "glob",
+            [
+                r#"Glob {"pattern":"**/*.rs","path":"src"}"#,
+                r#"text: no glob tool offered"#,
+                r#"glob {"pattern":"**/*.rs","path":"src"}"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"find {"pattern":"**/*.rs","path":"src"}"#,
+            ],
+        ),
+        (
+            "glob hidden",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: no glob tool offered"#,
+                r#"glob {"pattern":"*.rs","hidden":true}"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "glob limit",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: no glob tool offered"#,
+                r#"glob {"pattern":"*.rs","limit":5}"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"find {"pattern":"*.rs","limit":5}"#,
+            ],
+        ),
+        (
+            "ls",
+            [
+                r#"text: no ls tool offered"#,
+                r#"text: no ls tool offered"#,
+                r#"text: no ls tool offered"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"ls {"path":"src","limit":3}"#,
+            ],
+        ),
+        (
+            "web fetch with prompt",
+            [
+                r#"WebFetch {"url":"https://x","prompt":"sum it up"}"#,
+                r#"text: no webfetch tool offered"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: no webfetch tool offered"#,
+                r#"text: no webfetch tool offered"#,
+            ],
+        ),
+        (
+            "web fetch with format",
+            [
+                r#"text: no prompt"#,
+                r#"text: no webfetch tool offered"#,
+                r#"webfetch {"url":"https://x","format":"markdown"}"#,
+                r#"text: no webfetch tool offered"#,
+                r#"text: no webfetch tool offered"#,
+            ],
+        ),
+        (
+            "web fetch without a url",
+            [
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+            ],
+        ),
+        (
+            "web search with domains",
+            [
+                r#"WebSearch {"query":"q","allowed_domains":["a.org"]}"#,
+                r#"text: web search is server-side or absent"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: web search is server-side or absent"#,
+                r#"text: web search is server-side or absent"#,
+            ],
+        ),
+        (
+            "web search",
+            [
+                r#"WebSearch {"query":"q"}"#,
+                r#"text: web search is server-side or absent"#,
+                r#"websearch {"query":"q"}"#,
+                r#"text: web search is server-side or absent"#,
+                r#"text: web search is server-side or absent"#,
+            ],
+        ),
+        (
+            "web search without a query",
+            [
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+            ],
+        ),
+        (
+            "apply_patch add",
+            [
+                r#"Write {"file_path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+                r#"text: Codex offers no apply_patch here"#,
+                r#"write {"path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+                r#"write {"path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+                r#"write {"path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+            ],
+        ),
+        (
+            "apply_patch update",
+            [
+                r#"Edit {"file_path":"D:/w/a.txt","old_string":"ctx\nold\nctx2","new_string":"ctx\nnew\nctx2"}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"D:/w/a.txt","oldString":"ctx\nold\nctx2","newString":"ctx\nnew\nctx2"}"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"ctx\nold\nctx2","newText":"ctx\nnew\nctx2"}]}"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"ctx\nold\nctx2","newText":"ctx\nnew\nctx2"}]}"#,
+            ],
+        ),
+        (
+            "apply_patch two hunks",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"a","newText":"b"},{"oldText":"x\nc","newText":"x\nd"}]}"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"a","newText":"b"},{"oldText":"x\nc","newText":"x\nd"}]}"#,
+            ],
+        ),
+        (
+            "agent",
+            [
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+            ],
+        ),
+        (
+            "no canonical form",
+            [
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+            ],
+        ),
+    ];
+    let calls = characterization_calls();
+    assert_eq!(calls.len(), expected.len());
+    for ((label, c, shell), (expected_label, row)) in calls.iter().zip(&expected) {
+        assert_eq!(label, expected_label);
+        let got = characterization_row(c, *shell);
+        for ((destination, got), want) in destinations.iter().zip(&got).zip(row) {
+            assert_eq!(got, want, "{label} toward {destination}");
+        }
+    }
+    // Claude Code's PowerShell tool, where the offered set has it.
+    let powershell = call(
+        CanonicalTool::PowerShell,
+        "PowerShell",
+        json!({"command": "Get-ChildItem", "timeout": 1000, "run_in_background": true}),
+    );
+    let with_powershell = ToolSet {
+        names: &["Bash", "PowerShell"],
+    };
+    assert_eq!(
+        rendered(&translate_with(
+            &powershell,
+            HarnessId::ClaudeCode,
+            None,
+            with_powershell
+        )),
+        r#"PowerShell {"command":"Get-ChildItem","timeout":1000,"run_in_background":true}"#
+    );
+}
+

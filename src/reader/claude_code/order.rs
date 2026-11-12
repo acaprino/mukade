@@ -1,8 +1,8 @@
 //! Reconstruct Claude Code's selected history without relying on write order or timestamps.
 
 use super::{
-    Class, class_of, content_text, is_command_row, is_interruption_marker, is_prompt_command,
-    truthy, with_command_context,
+    Class, class_in, class_of, content_text, is_command_row, is_interruption_marker,
+    is_prompt_command, truthy, with_command_context,
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
@@ -22,10 +22,6 @@ fn text<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
 
 fn uuid(row: &Value) -> Option<&str> {
     text(row, "uuid")
-}
-
-fn main(row: &Value) -> bool {
-    !truthy(row.get("isSidechain"))
 }
 
 fn conversational(row: &Value) -> bool {
@@ -84,10 +80,12 @@ fn block_ids<'a>(
 struct History<'a> {
     rows: &'a [Value],
     by_uuid: HashMap<&'a str, usize>,
+    /// The rows are a subagent's transcript: its sidechain rows are its own conversation.
+    sidechain: bool,
 }
 
 impl<'a> History<'a> {
-    fn new(rows: &'a [Value]) -> Result<Self> {
+    fn new(rows: &'a [Value], sidechain: bool) -> Result<Self> {
         let mut by_uuid = HashMap::new();
         for (index, row) in rows.iter().enumerate() {
             if let Some(id) = uuid(row) {
@@ -97,7 +95,17 @@ impl<'a> History<'a> {
                 );
             }
         }
-        Ok(Self { rows, by_uuid })
+        Ok(Self {
+            rows,
+            by_uuid,
+            sidechain,
+        })
+    }
+
+    /// A row of the conversation being read: in a session's own file, a row that is not a
+    /// subagent's (`isSidechain`); in a subagent's transcript, every row.
+    fn main(&self, row: &Value) -> bool {
+        self.sidechain || !truthy(row.get("isSidechain"))
     }
 
     fn lookup(&self, id: &str) -> Result<usize> {
@@ -132,7 +140,7 @@ impl<'a> History<'a> {
                     }
                     _ => {}
                 }
-            } else if main(row) && conversational(row) && uuid(row).is_some() {
+            } else if self.main(row) && conversational(row) && uuid(row).is_some() {
                 last = Some(index);
                 continued = true;
                 if checkpoint.is_some() && real_prompt(row) {
@@ -149,7 +157,7 @@ impl<'a> History<'a> {
             .copied()
             .with_context(|| format!("missing Claude Code checkpoint leaf {checkpoint}"))?;
         ensure!(
-            main(&self.rows[at]),
+            self.main(&self.rows[at]),
             "Claude Code checkpoint points to a sidechain"
         );
         if continued
@@ -326,7 +334,7 @@ impl<'a> History<'a> {
         while let Some(index) = at {
             ensure!(seen.insert(index), "cycle in Claude Code parent chain");
             ensure!(
-                main(&self.rows[index]),
+                self.main(&self.rows[index]),
                 "Claude Code sidechain on the active parent chain"
             );
             chain.push(index);
@@ -420,7 +428,7 @@ fn recover(history: &History<'_>, chain: &[usize], selected: &mut [bool]) -> Res
         })
         .collect();
     for (index, row) in rows.iter().enumerate() {
-        if main(row)
+        if history.main(row)
             && row.get("type").and_then(Value::as_str) == Some("assistant")
             && message_id(row).is_some_and(|id| active_messages.contains(id))
         {
@@ -453,7 +461,9 @@ fn recover(history: &History<'_>, chain: &[usize], selected: &mut [bool]) -> Res
 
     let mut candidates: HashMap<&str, Vec<usize>> = HashMap::new();
     for (index, row) in rows.iter().enumerate() {
-        if selected[index] || !main(row) || row.get("type").and_then(Value::as_str) != Some("user")
+        if selected[index]
+            || !history.main(row)
+            || row.get("type").and_then(Value::as_str) != Some("user")
         {
             continue;
         }
@@ -556,7 +566,7 @@ fn recover_summaries(history: &History<'_>, chain: &[usize], selected: &mut [boo
         }
     }
     for (index, row) in rows.iter().enumerate() {
-        if !main(row) || uuid(row).is_some() || !matches!(class_of(row), Class::Summary) {
+        if !history.main(row) || uuid(row).is_some() || !matches!(class_of(row), Class::Summary) {
             continue;
         }
         let Some(parent) = text(row, "parentUuid").and_then(|id| history.by_uuid.get(id).copied())
@@ -589,7 +599,7 @@ fn recover_expansions(history: &History<'_>, chain: &[usize], selected: &mut [bo
         }
     }
     for (index, row) in rows.iter().enumerate() {
-        if !main(row) || uuid(row).is_some() || !expanded_prompt(row) {
+        if !history.main(row) || uuid(row).is_some() || !expanded_prompt(row) {
             continue;
         }
         let Some(parent) = text(row, "parentUuid").and_then(|id| history.by_uuid.get(id).copied())
@@ -637,7 +647,7 @@ fn recover_ancestors(history: &History<'_>, chain: &[usize], selected: &mut [boo
         };
         let parent = history.lookup(parent)?;
         ensure!(
-            main(&history.rows[parent]),
+            history.main(&history.rows[parent]),
             "Claude Code recovered record belongs to a sidechain"
         );
         if selected[parent] {
@@ -861,7 +871,8 @@ fn validate(row: &Value) -> Result<()> {
     Ok(())
 }
 
-fn validate_responses(rows: &[Value], ordered: &[usize], check_results: bool) -> Result<()> {
+fn validate_responses(history: &History<'_>, ordered: &[usize], check_results: bool) -> Result<()> {
+    let rows = history.rows;
     let mut seen = HashSet::new();
     let mut current: Option<&str> = None;
     let mut after_prompt_command = false;
@@ -879,7 +890,7 @@ fn validate_responses(rows: &[Value], ordered: &[usize], check_results: bool) ->
     }
     for &index in ordered {
         let row = &rows[index];
-        let class = class_of(row);
+        let class = class_in(row, history.sidechain);
         let text = matches!(class, Class::Meta(super::MetaKind::Command))
             .then(|| content_text(row))
             .flatten();
@@ -933,11 +944,13 @@ fn validate_responses(rows: &[Value], ordered: &[usize], check_results: bool) ->
     Ok(())
 }
 
-pub(super) fn reconstruct(rows: &[Value]) -> Result<Reconstruction> {
-    let history = History::new(rows)?;
+/// The order to read `rows` in, and which rows are on the branch Claude Code resumes. `sidechain`:
+/// the rows are a subagent's transcript.
+pub(super) fn reconstruct(rows: &[Value], sidechain: bool) -> Result<Reconstruction> {
+    let history = History::new(rows, sidechain)?;
     let Some(leaf) = history.leaf()? else {
         ensure!(
-            !rows.iter().any(|row| main(row)
+            !rows.iter().any(|row| history.main(row)
                 && conversational(row)
                 && !matches!(class_of(row), Class::Meta(_))),
             "Claude Code conversation has no reconstructible UUID chain"
@@ -958,7 +971,7 @@ pub(super) fn reconstruct(rows: &[Value]) -> Result<Reconstruction> {
     recover_ancestors(&history, &chain, &mut selected)?;
     let mut unchained_off_branch = vec![false; rows.len()];
     for (index, row) in rows.iter().enumerate() {
-        if main(row)
+        if history.main(row)
             && uuid(row).is_none()
             && conversational(row)
             && !selected[index]
@@ -994,7 +1007,7 @@ pub(super) fn reconstruct(rows: &[Value]) -> Result<Reconstruction> {
         .collect();
     let reordered = ordered != physical;
     let recovered = selected.iter().filter(|on| **on).count() != chain.len();
-    validate_responses(rows, &ordered, reordered || recovered)?;
+    validate_responses(&history, &ordered, reordered || recovered)?;
     if reordered || recovered {
         for &index in &ordered {
             validate(&rows[index]).with_context(|| format!("Claude Code record {}", index + 1))?;
@@ -1041,7 +1054,7 @@ pub(super) fn reconstruct(rows: &[Value]) -> Result<Reconstruction> {
         .enumerate()
         .map(|(index, row)| {
             selected[index]
-                || !main(row)
+                || !history.main(row)
                 || (uuid(row).is_none()
                     && !unchained_off_branch[index]
                     && !((reordered || recovered)

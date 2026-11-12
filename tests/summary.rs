@@ -134,6 +134,16 @@ fn a_batch_launcher_refuses_an_unsafe_prompt_before_spawning() {
     let error = summary::summary_command(&session, &opts, &dir).unwrap_err();
     assert!(matches!(error, HopError::Unsupported(_)), "{error:?}");
     assert!(error.to_string().contains("batch launcher"), "{error}");
+    let HopError::Unsupported(message) = error else {
+        unreachable!("matched above");
+    };
+    assert_eq!(
+        message,
+        format!(
+            "the summary prompt cannot be passed through the batch launcher {}: it must be one line of ASCII letters, digits, spaces and .,;:() ; name the harness's native executable, or edit the intent prompt in the intent-prompts folder to that subset",
+            launcher.display()
+        )
+    );
 }
 
 /// The commands of the live record's "Final commands" table, the prompt last.
@@ -285,6 +295,27 @@ fn a_session_whose_directory_is_gone_runs_from_mukades_own() {
     session.meta.cwd = Some(dir.display().to_string());
     let command = summary::summary_command(&session, &SummarizeOpts::default(), &dir).unwrap();
     assert_eq!(command.cwd.as_deref(), Some(dir.as_path()));
+}
+
+/// Claude Code resumes a session by its own id; a subagent session has none it can resume
+/// (`<parent-id>.<agentId>` is mukade's), so its summary is refused before anything runs.
+#[test]
+fn a_claude_subagent_session_is_not_summarized_by_claude() {
+    let mut session = support::read_source(HarnessId::ClaudeCode);
+    session.meta.id = format!("{}.a1111111111111111", session.meta.id);
+    session.meta.parent = Some("c45db7bc-542c-4201-89de-b590c6fdb797".into());
+    session.meta.parent_kind = Some(mukade::model::ParentKind::spawn());
+    let error = summary::summary_command(
+        &session,
+        &SummarizeOpts::default(),
+        &scratch("claude-child"),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&error, HopError::Unsupported(why) if why.contains("subagent")
+            && why.ends_with("resume c45db7bc-542c-4201-89de-b590c6fdb797")),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -593,4 +624,33 @@ fn a_failed_run_names_the_fork_it_left_behind() {
             .contains("session delete ses_fork1 --standalone"),
         "{error}"
     );
+}
+
+/// A tail that cannot be kept is refused before the source's model is asked: no run, no bill.
+#[test]
+fn a_tail_that_cannot_be_kept_is_refused_before_the_summary_is_paid_for() {
+    use mukade::hop::{Compaction, KeepFrom, SummarySource};
+    let scratch = scratch("summary-keep-turns-first");
+    let marker = scratch.join("ran");
+    let exe = support::launcher(
+        &scratch,
+        "fake-pi",
+        &format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display()),
+        &format!("#!/bin/sh\necho ran > '{}'\n", marker.display()),
+    );
+    let mut session = support::read_source(HarnessId::Pi);
+    session
+        .entries
+        .retain(|entry| !matches!(entry.kind, Kind::User { .. }));
+    let compaction = Compaction::Portable {
+        summary: SummarySource::SourceModel(SummarizeOpts {
+            exe: Some(exe.display().to_string()),
+            ..Default::default()
+        }),
+        keep_from: KeepFrom::LastTurns(2),
+    };
+    let error = mukade::hop::compact(&session, &compaction, &StoreRoots::default())
+        .expect_err("no user turn to keep from");
+    assert!(matches!(error, HopError::Unsupported(_)), "{error}");
+    assert!(!marker.exists(), "the source's model was not asked");
 }

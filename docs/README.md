@@ -1,37 +1,71 @@
 # Documentation
 
+New here: the [project README](../README.md), then the [usage guide](usage.md).
+
 ## Getting started
 
-- [Command-line usage](usage.md): setup, commands, compaction, summary intents, examples and troubleshooting.
-- [Sessions TUI](../mukade-tui/README.md): the native terminal explorer, its commands, keys, resume and hop examples.
-- [Open questions](../next.md): outstanding verification and known limitations.
+| document | read it when |
+|---|---|
+| [Project README](../README.md) | you want the matrix, quick start, library, commands |
+| [Command-line usage](usage.md) | you run `mukade`: setup, commands, compaction, intents, troubleshooting |
+| [Sessions TUI](../mukade-tui/README.md) | you want the terminal explorer: keys, resume, hop, export, import |
+| [Open points](../next.md) | you want the status board: done, to verify, known limits |
+| [Windows checklist](verification/windows-checklist.md) | you settle an open check: steps, pass criterion |
+
+## Harness pages
+
+Install, store, compaction, tools, hooks; read before touching that harness's reader or writer.
+
+| harness | mukade support |
+|---|---|
+| [Claude Code](harnesses/claude-code.md) | reads and writes |
+| [Codex CLI](harnesses/codex.md) | reads and writes |
+| [OpenCode](harnesses/opencode.md) | reads and writes |
+| [Pi](harnesses/pi.md) | reads and writes |
+| [Hermes Agent](harnesses/hermes-agent.md) | none yet; read-first plan in [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) (Proposed) |
+| [DeepSeek Harness](harnesses/deepseek-harness.md) | none yet; same plan |
 
 ## Technical reference
 
-- [Session interchange specification](session-interchange-spec.md): data model, conversion rules and contracts.
-- [Tool conversion tables](tool-conversion-tables.md): tool mappings between harnesses.
-- [Local MCP chat specification](superpowers/specs/2026-11-11-mcp-chat-design.md): shared background service, lifecycle, dialogue, supervision, reduced observation and delivery receipts; [ADR-0003](adr/ADR-0003-local-mcp-chat.md), Proposed.
-- Harness guides: [Claude Code](harnesses/claude-code.md), [Codex](harnesses/codex.md), [OpenCode](harnesses/opencode.md) and [Pi](harnesses/pi.md); and, with no mukade support yet, [Hermes Agent](harnesses/hermes-agent.md) and [DeepSeek Harness](harnesses/deepseek-harness.md) (read-first plan: [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md), Proposed).
-- [Harness session persistence reference](reference/harness-session-persistence-reference.md): secondary research with its original provenance and limitations.
-- [Harness catalog](reference/harness-catalog.md): the four harnesses, their own install and store locations on Windows, macOS and Linux, their store layouts and the lineage each records (`catalog/harnesses.json`).
+| document | read it when |
+|---|---|
+| [Session interchange specification](session-interchange-spec.md) | you change a reader, writer or the manifest: data model, conversion rules, contracts, requirement ids (L1…) |
+| [Architecture](architecture.md) | you change mukade's code: one adapter per harness (`Harness`, `Destination`, the registry), adding or changing a harness, the test that keeps it so |
+| [Tool conversion tables](tool-conversion-tables.md) | you need how one harness's tool call becomes another's |
+| [Harness catalog](reference/harness-catalog.md) | you need install and store locations per OS, store layouts, lineage (`catalog/harnesses.json`) |
+| [Harness session persistence reference](reference/harness-session-persistence-reference.md) | you look beyond the four: secondary research (2026-10-27, restructured 2026-11-11) on 24 harnesses, with provenance and limitations. For the four, harness pages and specification come first (their `[V]` facts supersede it) |
+
+## Decisions
+
+| document | read it when |
+|---|---|
+| [ADR index](adr/README.md) | before touching what an active record governs; how a record is Accepted |
+| [ADR-0001](adr/ADR-0001-installation-scan-in-library-and-cli.md) | you work on `scan`: a library capability the CLI exposes first (Accepted) |
+| [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) | you plan Hermes or DeepSeek support: read-first, Hermes source-only (Proposed) |
 
 ## Verification records
 
-These are records of particular runs, not guarantees for later harness versions. Dates, environments and limitations remain in each record.
+Records of single runs, not guarantees for later versions, in [verification/](verification/); scripts in `verification/live-hops/`, `native-compaction-live/`, `pi-live/`, `pi-reasoning-live/`.
 
+**Hops and reasoning:**
 
-- [Live hops and provider reasoning](verification/live-hops-and-provider-reasoning.md): Claude Code, Codex and OpenCode.
-- [Codex encrypted reasoning live](verification/codex-encrypted-reasoning-live.md): the Codex → Codex hop of 2026-11-04, with the discriminating negative control.
-- [Native compaction records](verification/native-compaction-live.md): live acceptance of §4.4's hand-written records by Claude Code, Codex, OpenCode and Pi.
-- [Pi session and reasoning verification](verification/pi-session-and-reasoning-verification.md): mock-provider import and real-provider signed reasoning, with separate results and limitations.
+- [Live hops and provider reasoning](verification/live-hops-and-provider-reasoning.md): Claude Code, Codex, OpenCode (2026-10-28).
+- [Codex encrypted reasoning live](verification/codex-encrypted-reasoning-live.md): Codex → Codex (2026-11-04), with negative control.
+- [Pi session and reasoning](verification/pi-session-and-reasoning-verification.md): mock import, real signed reasoning.
+- [Opaque reasoning preservation](verification/2026-11-02-opaque-reasoning.md): OpenCode keeps the Chat reasoning array (2026-11-02).
+
+**Compaction, platforms, listing, code mode:**
+
+- [Native compaction records](verification/native-compaction-live.md): §4.4's records accepted live by the four harnesses.
 - [Source-model summary](verification/source-model-summary-live.md): summary runs and their isolation.
-- [Listing coverage](verification/listing-coverage-2026-11-08.md): sessions whose transcripts are gone (Codex `state_5.sqlite`, Claude Code `history.jsonl`, OpenCode's other databases), `live`, and the listing cache, counted on one machine before and after.
-
-Supporting scripts are kept next to these records in `verification/live-hops/`, `verification/native-compaction-live/`, `verification/pi-live/` and `verification/pi-reasoning-live/`.
+- [Linux 2026-11-11](verification/linux-2026-11-11.md): Claude Code `live` (a bug fixed), process-tree kill, suite green.
+- [Listing coverage](verification/listing-coverage-2026-11-08.md): sessions whose transcripts are gone (Codex `state_5.sqlite`, Claude Code `history.jsonl`, OpenCode's other databases), `live`, the cache.
+- [Codex code mode](verification/2026-11-11-codex-code-mode.md): the L10 census: 725 of 981 `exec` scripts read as calls.
 
 ## Archive
 
-Designs and plans preserve historical intent; consult the technical reference and verification records for implemented behavior and evidence.
+Historical intent; for behavior use the reference and records.
 
-- [Source-model summary design](archive/design/source-model-summary.md).
-- [Source-model summary implementation plan](archive/plans/source-model-summary-implementation.md).
+- [Source-model summary design](archive/design/source-model-summary.md) and [plan](archive/plans/source-model-summary-implementation.md).
+- [Design drafts](superpowers/specs/): TUI (2026-10-30), Hermes and DeepSeek (2026-10-31), directory filter (2026-11-02), Codex code mode (2026-11-11); [implementation plans](superpowers/plans/) for the last two.
+- [TUI mockup](mockups/tui.html); [branding assets](assets/branding/) (logo, its generation prompt).

@@ -24,6 +24,7 @@ fn session(entries: Vec<Entry>) -> Session {
             models: vec![],
             git_branch: None,
             parent: None,
+            parent_kind: None,
             source_path: None,
             source_sha256: None,
         },

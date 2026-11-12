@@ -105,8 +105,9 @@ pub fn registrations(config_dir: &Path) -> Option<Vec<Registration>> {
     Some(out)
 }
 
-/// How far a recorded creation time may differ from the process's own and still be the same
-/// process: two seconds, in FILETIME units (the registration is written a moment after the start).
+/// How far a recorded Windows creation time may differ from the process's own and still be the
+/// same process: two seconds, in FILETIME units (the registration is written a moment after the
+/// start).
 const SAME_START: u64 = 2 * 10_000_000;
 
 /// Look at the process of `registration`.
@@ -121,33 +122,55 @@ pub fn liveness(registration: &Registration) -> Liveness {
     match process::inspect(registration.pid) {
         Process::Gone => Liveness::Gone,
         Process::Running { started } => {
-            let recorded = registration
-                .proc_start
-                .as_deref()
-                .and_then(|text| text.trim().parse::<u64>().ok())
-                .filter(|recorded| looks_like_filetime(*recorded));
+            let recorded = registration.proc_start.as_deref().and_then(recorded_start);
             match (started, recorded) {
-                (Some(actual), Some(recorded)) if actual.abs_diff(recorded) > SAME_START => {
-                    Liveness::Gone
-                }
+                (Some(actual), Some(recorded)) if !same_start(actual, recorded) => Liveness::Gone,
                 _ => Liveness::Running,
             }
         }
     }
 }
 
-/// Whether a number can be a creation time in FILETIME units: between 2000 and 2100. A recorded
-/// value that is not one is some other encoding, which says nothing about the process.
+/// A recorded `procStart` in the unit [`process::inspect`] gives on this platform: a FILETIME on
+/// Windows (a value that is not one is some other encoding, which says nothing about the
+/// process), clock ticks since boot on Linux. Elsewhere its unit is not known and it is not read.
+fn recorded_start(text: &str) -> Option<u64> {
+    let value = text.trim().parse::<u64>().ok()?;
+    if cfg!(windows) {
+        Some(value).filter(|value| looks_like_filetime(*value))
+    } else if cfg!(target_os = "linux") {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Whether two start times name the same process: within [`SAME_START`] on Windows, equal on Linux
+/// (both are the kernel's own count of ticks, read the same way).
+fn same_start(actual: u64, recorded: u64) -> bool {
+    if cfg!(windows) {
+        actual.abs_diff(recorded) <= SAME_START
+    } else {
+        actual == recorded
+    }
+}
+
+/// Whether a number can be a creation time in FILETIME units: between 2000 and 2100.
 fn looks_like_filetime(value: u64) -> bool {
     (process::filetime_of_unix_seconds(946_684_800)
         ..process::filetime_of_unix_seconds(4_102_444_800))
         .contains(&value)
 }
 
-/// Whether a `pidDomain` (`<platform>:<machine>`) names this machine and platform. A machine name
-/// that cannot be determined here is not held against the registration.
+/// Whether a `pidDomain` names this machine, platform and process-id namespace.
+///
+/// Claude Code writes `win32:<computer name>` on Windows and
+/// `linux:<machine id>:pid:[<namespace inode>]` on Linux (`/etc/machine-id`, and the target of
+/// `/proc/self/ns/pid`: a container has its own ids). The machine is the part after the platform,
+/// up to the next `:`, and is matched against the machine id or the host name; what cannot be
+/// determined here is not held against the registration.
 fn domain_is_here(domain: &str) -> bool {
-    let (platform, machine) = domain.split_once(':').unwrap_or((domain, ""));
+    let (platform, rest) = domain.split_once(':').unwrap_or((domain, ""));
     let here = if cfg!(windows) {
         "win32"
     } else if cfg!(target_os = "macos") {
@@ -158,22 +181,45 @@ fn domain_is_here(domain: &str) -> bool {
     if !platform.eq_ignore_ascii_case(here) {
         return false;
     }
-    match local_machine() {
-        Some(local) if !machine.is_empty() => local.eq_ignore_ascii_case(machine),
+    let (machine, namespace) = rest.split_once(':').unwrap_or((rest, ""));
+    let names = local_machine_names();
+    if !machine.is_empty()
+        && !names.is_empty()
+        && !names.iter().any(|name| name.eq_ignore_ascii_case(machine))
+    {
+        return false;
+    }
+    match (namespace.is_empty(), local_pid_namespace()) {
+        (false, Some(local)) => local == namespace,
         _ => true,
     }
 }
 
-fn local_machine() -> Option<String> {
-    let name = if cfg!(windows) {
-        std::env::var("COMPUTERNAME").ok()
+/// The names this machine goes by in a `pidDomain`: its machine id (Linux) and its host name.
+fn local_machine_names() -> Vec<String> {
+    let mut names = Vec::new();
+    if cfg!(windows) {
+        names.extend(std::env::var("COMPUTERNAME").ok());
     } else {
-        std::env::var("HOSTNAME")
-            .ok()
-            .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
-    };
-    name.map(|name| name.trim().to_owned())
+        for file in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+            names.extend(std::fs::read_to_string(file).ok());
+        }
+        names.extend(std::env::var("HOSTNAME").ok());
+        names.extend(std::fs::read_to_string("/etc/hostname").ok());
+    }
+    let mut names: Vec<String> = names
+        .into_iter()
+        .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
+        .collect();
+    names.dedup();
+    names
+}
+
+/// This process's process-id namespace as Linux names it (`pid:[4026531836]`).
+fn local_pid_namespace() -> Option<String> {
+    let link = std::fs::read_link("/proc/self/ns/pid").ok()?;
+    Some(link.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -194,12 +240,59 @@ mod tests {
         assert!(!domain_is_here(&format!(
             "{platform}:definitely-another-machine-7f3a"
         )));
-        if let Some(local) = local_machine() {
+        for local in local_machine_names() {
             assert!(domain_is_here(&format!(
                 "{platform}:{}",
                 local.to_uppercase()
             )));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_domain_names_the_machine_id_and_the_pid_namespace() {
+        let Some(namespace) = local_pid_namespace() else {
+            return;
+        };
+        let names = local_machine_names();
+        let Some(machine) = names.first() else {
+            return;
+        };
+        assert!(domain_is_here(&format!("linux:{machine}:{namespace}")));
+        assert!(
+            !domain_is_here(&format!("linux:{machine}:pid:[1]")),
+            "another namespace's ids are not ours"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_registration_of_this_process_is_running_and_a_later_start_is_not() {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let ticks: u64 = stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let mut registration = Registration {
+            pid: std::process::id(),
+            session_id: "s".into(),
+            cwd: None,
+            name: None,
+            started_ms: None,
+            updated_ms: None,
+            proc_start: Some(ticks.to_string()),
+            pid_domain: None,
+            file: PathBuf::new(),
+        };
+        assert_eq!(liveness(&registration), Liveness::Running);
+        registration.proc_start = Some((ticks + 1).to_string());
+        assert_eq!(
+            liveness(&registration),
+            Liveness::Gone,
+            "the id was reused by a later process"
+        );
     }
 
     #[test]

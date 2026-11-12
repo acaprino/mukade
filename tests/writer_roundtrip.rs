@@ -192,6 +192,34 @@ fn a_document_keeps_step_providers_and_entry_ids() {
     assert!(back.entry(kept_from).is_some(), "{kept_from} resolves");
 }
 
+/// A document states the parent link and how the session came from it, and reads them back.
+#[test]
+fn a_document_carries_the_parent_link_and_its_kind() {
+    use mukade::model::ParentKind;
+    use mukade::wire::{from_document, to_document};
+    let mut source = support::read_source(HarnessId::Pi);
+    source.meta.parent = Some("spawner".into());
+    source.meta.parent_kind = Some(ParentKind::Spawn {
+        call_id: Some("toolu_1".into()),
+        agent: Some("Explore".into()),
+        inherits_context: false,
+    });
+    let doc = to_document(&source);
+    assert_eq!(
+        doc["meta"]["parent_kind"],
+        serde_json::json!({"kind": "spawn", "call_id": "toolu_1", "agent": "Explore"})
+    );
+    assert_eq!(from_document(&doc).unwrap().meta, source.meta);
+
+    source.meta.parent_kind = Some(ParentKind::Fork);
+    let doc = to_document(&source);
+    assert_eq!(
+        doc["meta"]["parent_kind"],
+        serde_json::json!({"kind": "fork"})
+    );
+    assert_eq!(from_document(&doc).unwrap().meta, source.meta);
+}
+
 /// A document is read whole or refused: an unknown block is an error, not a silent drop, and a
 /// tool result's content may be a plain string, as Claude writes it.
 #[test]
