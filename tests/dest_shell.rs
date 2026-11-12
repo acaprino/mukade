@@ -145,3 +145,33 @@ fn offered_in_is_the_pinned_list_where_no_configuration_adds_one() {
         );
     }
 }
+
+/// `--dest-shell` takes every name the configuration lookups take, and `posix`, in any case.
+#[test]
+fn the_flag_takes_the_names_the_configurations_take() {
+    use mukade::writer::plan::shell_of;
+    for name in [
+        "bash",
+        "sh",
+        "zsh",
+        "dash",
+        "ksh",
+        "posix",
+        "POSIX",
+        "Bash",
+        "/bin/dash",
+    ] {
+        assert_eq!(shell_of(name), Some(Shell::Posix), "{name}");
+    }
+    for name in [
+        "powershell",
+        "pwsh",
+        "PWSH",
+        r"C:\Program Files\PowerShell\7\pwsh.exe",
+    ] {
+        assert_eq!(shell_of(name), Some(Shell::PowerShell), "{name}");
+    }
+    for name in ["fish", "cmd", "none", ""] {
+        assert_eq!(shell_of(name), None, "{name:?}");
+    }
+}

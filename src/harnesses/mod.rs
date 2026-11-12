@@ -314,6 +314,13 @@ fn listed_stats(harness: &dyn Harness, roots: &StoreRoots) -> StoreStats {
     }
 }
 
+/// The folder a destination reads its project's configuration in: `cwd` when it is an absolute
+/// path to an existing folder. A relative one would be read against mukade's own working folder,
+/// and a missing one (a path from another machine) would lead a walk up to files above any project.
+fn project_dir(cwd: Option<&Path>) -> Option<&Path> {
+    cwd.filter(|cwd| cwd.is_absolute() && cwd.is_dir())
+}
+
 /// Set `variable` to the store root, when there is one; otherwise the process inherits it.
 fn set_store_env(command: &mut std::process::Command, variable: &str, root: Option<&Path>) {
     if let Some(root) = root {
@@ -450,6 +457,19 @@ mod tests {
         ) -> Result<Reply, String> {
             Err("not summarized in this test".into())
         }
+    }
+
+    /// A destination reads project files only in an absolute folder that exists.
+    #[test]
+    fn only_an_existing_absolute_folder_is_a_project() {
+        let dir = crate::scratch::Scratch::new("project-dir");
+        let file = dir.join("file.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(project_dir(Some(&dir)), Some(&*dir));
+        assert_eq!(project_dir(Some(&dir.join("missing"))), None);
+        assert_eq!(project_dir(Some(&file)), None);
+        assert_eq!(project_dir(Some(Path::new("src"))), None, "relative");
+        assert_eq!(project_dir(None), None);
     }
 
     #[test]

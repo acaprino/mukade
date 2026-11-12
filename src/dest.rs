@@ -47,16 +47,8 @@ pub fn shell_in(harness: HarnessId, roots: &StoreRoots, cwd: Option<&Path>) -> O
 mod installation_tests {
     use super::*;
     use crate::roots::StoreRoots;
-    use std::path::{Path, PathBuf};
-
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mukade-dest-{tag}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::scratch::Scratch;
+    use std::path::Path;
 
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -67,7 +59,8 @@ mod installation_tests {
     /// names is the destination's, whatever the shell's own OpenCode uses.
     #[test]
     fn a_self_contained_opencode_names_its_model_beside_its_data() {
-        let data = scratch("opencode").join("JanuraCode/data");
+        let dir = Scratch::new("dest-opencode");
+        let data = dir.join("JanuraCode/data");
         write(
             &data.join("config/opencode/opencode.json"),
             r#"{"model":"tri-llm-gateway/tritech-auto"}"#,
@@ -87,7 +80,8 @@ mod installation_tests {
 
     #[test]
     fn a_configuration_without_a_model_names_none_rather_than_another_installations() {
-        let data = scratch("opencode-no-model").join("data");
+        let dir = Scratch::new("dest-opencode-no-model");
+        let data = dir.join("data");
         write(&data.join("config/opencode/opencode.json"), "{}");
         let roots = StoreRoots {
             opencode_db: Some(data.join("share/opencode/opencode.db")),
@@ -98,10 +92,10 @@ mod installation_tests {
 
     #[test]
     fn a_codex_home_names_its_provider_in_its_own_config() {
-        let home = scratch("codex");
+        let home = Scratch::new("dest-codex");
         write(&home.join("config.toml"), "model_provider = \"azure\"\n");
         let roots = StoreRoots {
-            codex_home: Some(home),
+            codex_home: Some(home.to_path_buf()),
             ..Default::default()
         };
         assert_eq!(

@@ -14,7 +14,9 @@ toward Claude is text form even where Claude runs one. The TUI passes no `--dest
 ## Decision
 
 1. **Precedence:** `--dest-shell <s>` > the destination's configuration > the destination's
-   platform default. `--dest-shell none` keeps today's behaviour (no dialect: shell calls text form).
+   platform default. `--dest-shell none` names no dialect: shell calls into Codex, OpenCode and
+   Pi are text form, as today. It concerns the dialect only: Claude Code's `PowerShell` tool belongs
+   to its offered set (`offered_in`), which `--dest-shell` does not change.
 2. **Who resolves it:** the edges (CLI `write_opts`, TUI `write_details_for`), the same way they
    already resolve `configured_model_in`. The library's `plan()` stays a pure function of
    `WriteOpts`; library callers get two public functions to do the same.

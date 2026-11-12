@@ -627,13 +627,13 @@ pub fn protocol_name(protocol: &Protocol) -> &str {
     }
 }
 
-/// The shell dialect a destination runs commands with, when its configuration states it.
+/// The shell dialect `--dest-shell` names: a shell [`crate::tools::shell_named`] reads, as a
+/// destination's configuration names it, or `posix`.
 pub fn shell_of(name: &str) -> Option<Shell> {
-    match name.to_ascii_lowercase().as_str() {
-        "bash" | "sh" | "zsh" | "posix" => Some(Shell::Posix),
-        "powershell" | "pwsh" => Some(Shell::PowerShell),
-        _ => None,
+    if name.trim().eq_ignore_ascii_case("posix") {
+        return Some(Shell::Posix);
     }
+    crate::tools::shell_named(name)
 }
 
 /// The model id a plan writes into the destination's records: the destination's own model when the

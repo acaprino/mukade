@@ -69,9 +69,10 @@ options:
   --cwd <dir>              the project the destination files the session under
   --dest-version <v>       the destination's own version stamp
   --dest-protocol <p>      anthropic-messages | openai-responses | openai-chat
-  --dest-shell <s>         bash | sh | zsh | powershell | pwsh | none: the shell the
-                           destination runs (default: the one its configuration or platform
-                           names; none: shell calls into Codex, OpenCode and Pi stay text)
+  --dest-shell <s>         the shell the destination runs: bash, sh, zsh, dash, ksh, posix,
+                           powershell, pwsh (a path to one too), or none: no dialect, so shell
+                           calls into Codex, OpenCode and Pi stay text. Default: the one its
+                           configuration or platform names
   --model-provider <id>    the destination's provider id
   --model <id>             the destination's model id
   --project-id <id>        the destination's project (OpenCode requires one)
@@ -1070,11 +1071,11 @@ impl Flags {
         let project = cwd.as_deref().map(std::path::Path::new);
         // The flag, else the shell the destination's own configuration or platform names.
         let dest_shell = match self.dest_shell.as_deref() {
-            Some("none") => None,
+            Some(name) if name.trim().eq_ignore_ascii_case("none") => None,
             Some(name) => match crate::writer::plan::shell_of(name) {
                 Some(shell) => Some(shell),
                 None => anyhow::bail!(
-                    "unknown --dest-shell {name} (bash, sh, zsh, powershell, pwsh, none)"
+                    "unknown --dest-shell {name} (bash, sh, zsh, dash, ksh, posix, powershell, pwsh, none)"
                 ),
             },
             None => crate::dest::shell_in(harness, roots, project),

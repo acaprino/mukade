@@ -152,7 +152,7 @@ Always true:
 | `--without-tools` | write, hop, document | omit historical tool calls and results |
 | `--reasoning <mode>` | write, hop, document | `drop_foreign` (default), `as_text`, `drop` |
 | `--dest-protocol <p>` | write, hop, document | `anthropic-messages`, `openai-responses`, `openai-chat` |
-| `--dest-shell <s>` | write, hop, document | `bash`, `sh`, `zsh`, `powershell`, `pwsh`, `none`; default: the shell the destination runs |
+| `--dest-shell <s>` | write, hop, document | `bash`, `sh`, `zsh`, `dash`, `ksh`, `posix`, `powershell`, `pwsh` (any case, a path to one too), `none`; default: the shell the destination runs |
 | `--tool-map <path>` | write, hop, document | explicit source-to-destination tool bindings |
 
 **The destination** ([section 6](#6-host-and-automation-options), [section 7](#7-stores-and-executables))
@@ -755,13 +755,15 @@ no equivalent travels as text, with its arguments, and is counted (`tools_text_f
 **Shell calls** keep their dialect: the command is never rewritten (`src/tools.rs` `other_dialect()`).
 
 - Toward Codex, OpenCode and Pi a shell call is translated only when the destination runs a shell of
-  its dialect: the one `--dest-shell` names (`bash`, `sh`, `zsh` or `posix` for POSIX, `powershell`
-  or `pwsh` for PowerShell), else the one the destination's own configuration or platform names for
-  the project the session is filed under ([per destination](tool-conversion-tables.md#41-shell)).
-  `--dest-shell none` names no dialect: every such call travels as text.
+  its dialect: the one `--dest-shell` names (`bash`, `sh`, `zsh`, `dash`, `ksh` or `posix` for
+  POSIX, `powershell` or `pwsh` for PowerShell), else the one the destination's own configuration or
+  platform names for the project the session is filed under
+  ([per destination](tool-conversion-tables.md#41-shell)). `--dest-shell none` names no dialect:
+  every such call travels as text.
 - Toward Claude Code a POSIX call becomes `Bash`, a PowerShell call `PowerShell` where the
   installation runs that tool ([how mukade tells](harnesses/claude-code.md#the-powershell-tool)),
-  else text.
+  else text. That is the offered set, not a dialect: `--dest-shell` does not change it, `none`
+  included.
 
 **Reasoning (chain of thought) is not converted**, because it cannot be: a block has visible text
 and an opaque part (a signature over the text, or a provider-encrypted payload) that only the
@@ -812,7 +814,7 @@ See the [README](../README.md#library).
 | `--dest-agent <name>` | OpenCode only: the primary agent |
 | `--metadata-file <path>` | OpenCode only: a JSON object stored as session metadata; at most 1 MiB; protect it like the session |
 | `--tool-map <path>` | explicit bindings instead of the destination catalog's defaults (below) |
-| `--dest-shell <s>` | the shell the destination runs, over the one mukade reads from its configuration; `none`: no dialect. Decides whether shell calls are translated ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)), and is recorded where the destination records one |
+| `--dest-shell <s>` | the shell the destination runs, over the one mukade reads from its configuration; `none`: no dialect (shell calls into Codex, OpenCode and Pi as text; Claude Code's offered set unchanged). Decides whether shell calls are translated ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)), and is recorded where the destination records one |
 
 - **OpenCode IDs and metadata.** When supplied, `OPENCODE_DB` must name the destination explicitly:
   mukade checks the resulting ID and metadata there after the native import. If the process fails or

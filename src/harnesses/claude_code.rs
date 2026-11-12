@@ -321,6 +321,7 @@ fn offered_for(var: Option<&str>, roots: &StoreRoots, cwd: Option<&Path>) -> Too
 /// `cwd`; the first answer wins: the process variable `var`; the same variable under `env` in the
 /// settings, nearest first; the environment snapshot of its newest transcripts. Else off.
 fn powershell_enabled(var: Option<&str>, config: Option<&Path>, cwd: Option<&Path>) -> bool {
+    let cwd = super::project_dir(cwd);
     let settings = [
         cwd.map(|cwd| cwd.join(".claude").join("settings.local.json")),
         cwd.map(|cwd| cwd.join(".claude").join("settings.json")),
@@ -348,7 +349,8 @@ fn switch(value: Option<&str>) -> Option<bool> {
 
 /// The variable under `env` in a settings file, as a string or a number.
 fn settings_switch(file: &Path) -> Option<bool> {
-    let settings: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let text = std::fs::read_to_string(file).ok()?;
+    let settings: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     let value = settings.get("env")?.get(POWERSHELL_VAR)?;
     match value {
         Value::String(text) => switch(Some(text)),
@@ -641,16 +643,15 @@ mod tests {
         transcript_evidence,
     };
     use crate::roots::StoreRoots;
-    use std::path::{Path, PathBuf};
+    use crate::scratch::Scratch;
+    use std::path::Path;
     use std::time::{Duration, SystemTime};
 
     const POWERSHELL_SHELL: &str = "PowerShell (primary); Bash tool also available for POSIX scripts — each takes its own syntax.";
 
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mukade-claude-powershell-{tag}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+    /// A scratch folder holding `config` and `work`.
+    fn scratch(tag: &str) -> Scratch {
+        let dir = Scratch::new(&format!("claude-powershell-{tag}"));
         std::fs::create_dir_all(dir.join("config")).unwrap();
         std::fs::create_dir_all(dir.join("work")).unwrap();
         dir
@@ -766,6 +767,31 @@ mod tests {
         assert!(enabled(), "the local settings over the project's");
         put(&work.join(".claude/settings.local.json"), "{ not json");
         assert!(!enabled(), "a file that does not parse says nothing");
+    }
+
+    /// A settings file saved with a byte-order mark is read like any other.
+    #[test]
+    fn a_settings_file_with_a_byte_order_mark_is_read() {
+        let dir = scratch("bom");
+        let (config, work) = (dir.join("config"), dir.join("work"));
+        put(
+            &config.join("settings.json"),
+            &format!("\u{feff}{}", settings("1")),
+        );
+        assert!(powershell_enabled(None, Some(&config), Some(&work)));
+    }
+
+    /// The project's settings are read only in an absolute folder that exists: a relative one
+    /// would be read against mukade's own working folder.
+    #[test]
+    fn a_relative_project_is_not_read() {
+        let project = Scratch::in_working_dir("claude-relative");
+        put(&project.join(".claude/settings.local.json"), &settings("1"));
+        assert!(powershell_enabled(None, None, Some(&project)), "absolute");
+        assert!(
+            !powershell_enabled(None, None, Some(&project.relative())),
+            "relative"
+        );
     }
 
     #[test]

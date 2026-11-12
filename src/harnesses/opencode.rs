@@ -467,7 +467,8 @@ fn opencode_shell(roots: &StoreRoots, cwd: Option<&Path>, host: &Host) -> Option
 }
 
 /// The `shell` the first source that sets one names, nearest first: `OPENCODE_CONFIG_CONTENT`;
-/// the project files from `cwd` up to its git worktree; `OPENCODE_CONFIG`; the global file.
+/// the project files from `cwd` (an existing absolute folder) up to its git worktree;
+/// `OPENCODE_CONFIG`; the global file.
 fn configured_shell(roots: &StoreRoots, cwd: Option<&Path>, host: &Host) -> Option<String> {
     if let Some(shell) = host
         .var("OPENCODE_CONFIG_CONTENT")
@@ -475,7 +476,9 @@ fn configured_shell(roots: &StoreRoots, cwd: Option<&Path>, host: &Host) -> Opti
     {
         return Some(shell);
     }
-    let project = cwd.into_iter().flat_map(project_config_files);
+    let project = super::project_dir(cwd)
+        .into_iter()
+        .flat_map(project_config_files);
     let named = host.var("OPENCODE_CONFIG").map(PathBuf::from);
     let global = global_config_files(roots, host);
     project
@@ -525,9 +528,10 @@ fn global_config_files(roots: &StoreRoots, host: &Host) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The non-empty `shell` string of a JSONC document.
+/// The non-empty `shell` string of a JSONC document, a byte-order mark before it or not.
 fn shell_in_jsonc(text: &str) -> Option<String> {
-    let document: Value = serde_json::from_str(&strip_jsonc(text)).ok()?;
+    let document: Value =
+        serde_json::from_str(&strip_jsonc(text.trim_start_matches('\u{feff}'))).ok()?;
     document
         .get("shell")?
         .as_str()
@@ -743,6 +747,7 @@ fn web_fetch(input: &Value) -> Translation {
 mod tests {
     use super::{Host, opencode_config_beside, opencode_shell, strip_jsonc};
     use crate::roots::StoreRoots;
+    use crate::scratch::Scratch;
     use crate::tools::Shell;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -771,11 +776,8 @@ mod tests {
     }
 
     /// A scratch project inside a git worktree of its own, so the walk up stops inside it.
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mukade-opencode-shell-{tag}-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
+    fn scratch(tag: &str) -> Scratch {
+        let dir = Scratch::new(&format!("opencode-shell-{tag}"));
         std::fs::create_dir_all(dir.join("repo/.git")).unwrap();
         std::fs::create_dir_all(dir.join("repo/app/src")).unwrap();
         dir
@@ -915,6 +917,36 @@ mod tests {
             shell(&[], false),
             Some(Shell::Posix),
             "the global bash again"
+        );
+    }
+
+    /// A project that is not an existing folder (a path from another machine) has no project
+    /// files: walking up from it would reach files above any project.
+    #[test]
+    fn a_missing_project_is_not_walked_up() {
+        let dir = Scratch::new("opencode-shell-missing");
+        let home = dir.join("home");
+        write(&dir.join("opencode.json"), r#"{"shell":"pwsh"}"#);
+        let cwd = dir.join("elsewhere/app/src");
+        assert_eq!(
+            shell_with(&StoreRoots::default(), &cwd, &[], &home, false),
+            None
+        );
+    }
+
+    /// A configuration saved with a byte-order mark is read like any other.
+    #[test]
+    fn a_configuration_with_a_byte_order_mark_is_read() {
+        let dir = scratch("bom");
+        let home = dir.join("home");
+        let cwd = dir.join("repo/app/src");
+        write(
+            &dir.join("repo/opencode.json"),
+            "\u{feff}{\"shell\":\"pwsh\"}",
+        );
+        assert_eq!(
+            shell_with(&StoreRoots::default(), &cwd, &[], &home, false),
+            Some(Shell::PowerShell)
         );
     }
 

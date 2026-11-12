@@ -184,7 +184,7 @@ destination runs the same dialect.
   (`pwsh`, `powershell`; `bash`, `sh`, `zsh`, `posix`), else the
   `<environment_context><shell>…</shell>` declared before it [V] (`bash`, `sh`, `zsh`, `posix`,
   `git-bash`; `powershell`, `pwsh`), else `Bash` (`src/reader/codex.rs` `canonical_call()`).
-- Destination dialect, first answer wins: `--dest-shell bash|sh|zsh|powershell|pwsh` (`none`: no
+- Destination dialect, first answer wins: `--dest-shell` (the names below, or `posix`; `none`: no
   dialect, text form into Codex, OpenCode and Pi); else what the destination runs for the project
   the session is filed under (`src/dest.rs` `shell_in()`, the adapter's `default_shell()`; library
   `WriteDetails::dest_shell`). Where each reads it: the harness pages.

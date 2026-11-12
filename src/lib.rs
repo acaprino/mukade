@@ -27,6 +27,8 @@ pub mod portable;
 pub mod process;
 pub mod reader;
 pub mod roots;
+#[cfg(test)]
+mod scratch;
 pub mod sha256;
 pub mod strict;
 pub mod summary;

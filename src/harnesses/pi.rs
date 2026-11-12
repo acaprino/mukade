@@ -221,13 +221,15 @@ impl Destination for Pi {
     }
 }
 
-/// The `shellPath` Pi's settings name: `<cwd>/.pi/settings.json` over `<agent dir>/settings.json`,
-/// as Pi merges them. A file that does not parse, or has no non-empty string there, names none.
+/// The `shellPath` Pi's settings name: `<cwd>/.pi/settings.json` (`cwd` an existing absolute
+/// folder) over `<agent dir>/settings.json`, as Pi merges them. A file that does not parse, or has
+/// no non-empty string there, names none.
 fn shell_path(agent_dir: Option<&Path>, cwd: Option<&Path>) -> Option<String> {
-    let project = cwd.map(|cwd| cwd.join(".pi").join("settings.json"));
+    let project = super::project_dir(cwd).map(|cwd| cwd.join(".pi").join("settings.json"));
     let global = agent_dir.map(|dir| dir.join("settings.json"));
     [project, global].into_iter().flatten().find_map(|file| {
-        let settings: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+        let text = std::fs::read_to_string(file).ok()?;
+        let settings: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
         settings
             .get("shellPath")?
             .as_str()
@@ -353,5 +355,41 @@ fn ls(input: &Value) -> Translation {
     Translation::Call {
         name: "ls",
         input: tools::obj_pairs(pairs),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_path;
+    use crate::scratch::Scratch;
+    use std::path::Path;
+
+    fn put(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// The project's settings are read only in an absolute folder that exists: a relative one
+    /// would be read against mukade's own working folder.
+    #[test]
+    fn a_relative_project_is_not_read() {
+        let project = Scratch::in_working_dir("pi-relative");
+        put(
+            &project.join(".pi/settings.json"),
+            r#"{"shellPath":"pwsh"}"#,
+        );
+        assert_eq!(shell_path(None, Some(&project)).as_deref(), Some("pwsh"));
+        assert_eq!(shell_path(None, Some(&project.relative())), None);
+    }
+
+    /// A settings file saved with a byte-order mark is read like any other.
+    #[test]
+    fn a_settings_file_with_a_byte_order_mark_is_read() {
+        let agent = Scratch::new("pi-bom");
+        put(
+            &agent.join("settings.json"),
+            "\u{feff}{\"shellPath\":\"pwsh\"}",
+        );
+        assert_eq!(shell_path(Some(&agent), None).as_deref(), Some("pwsh"));
     }
 }

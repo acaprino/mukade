@@ -396,6 +396,8 @@ fn a_hop_into_codex_takes_the_shell_codex_runs() {
 
     let printed = hop_codex_into(&scratch, HarnessId::Codex, &["--dest-shell", "none"]);
     assert_eq!(shell_counts(&printed), (0, 2), "{printed}");
+    let printed = hop_codex_into(&scratch, HarnessId::Codex, &["--dest-shell", "NONE"]);
+    assert_eq!(shell_counts(&printed), (0, 2), "in any case: {printed}");
 }
 
 /// Pi runs its `bash` tool with the `shellPath` its settings name, the project's over the agent
@@ -1867,7 +1869,7 @@ fn options_are_refused_where_they_cannot_apply() {
         ),
         (
             vec!["write", "pi", document, "--dest-shell", "nope"],
-            "unknown --dest-shell nope (bash, sh, zsh, powershell, pwsh, none)",
+            "unknown --dest-shell nope (bash, sh, zsh, dash, ksh, posix, powershell, pwsh, none)",
         ),
         (
             vec!["write", "pi", document, "--compaction", "bogus"],
