@@ -490,7 +490,8 @@ impl Kit {
         )
     }
 
-    /// Write one launch file, private like the service's own files.
+    /// Write one launch file, private like the service's own files. `relative` uses `/`; the
+    /// path returned has the platform's own separators.
     pub fn write(&self, relative: &str, bytes: &[u8]) -> Result<PathBuf, ChatError> {
         let failed = || {
             refused(
@@ -498,7 +499,9 @@ impl Kit {
                 format!("cannot write the launch file {relative}"),
             )
         };
-        let path = self.folder.join(relative);
+        let path = relative
+            .split('/')
+            .fold(self.folder.clone(), |path, part| path.join(part));
         let folder = path.parent().ok_or_else(failed)?;
         security::create_private_directory(folder).map_err(|_| failed())?;
         security::atomic_write(&path, bytes).map_err(|_| failed())?;

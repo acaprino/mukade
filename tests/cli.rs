@@ -2465,8 +2465,11 @@ fn children_is_a_list_dump_hop_and_write_option() {
 #[test]
 fn dump_names_the_fork_a_summary_left_in_the_source_store() {
     let scratch = support::scratch(HarnessId::OpenCode, "cli-dump-summary-leftover");
-    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/opencode");
-    let rows = fixtures.join("source/rows.json");
+    // Native separators: `type` in the Windows launcher finds no file named with `/`.
+    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("opencode");
+    let rows = fixtures.join("source").join("rows.json");
     let id = "ses_e82023514ffe02y4T8OoUu99VZ";
     let database = scratch.join("opencode.db");
     rusqlite::Connection::open(&database)

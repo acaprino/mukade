@@ -37,9 +37,14 @@ mukade harnesses
 
 The `mukade` commands below read and write only the stores these variables name.
 
+`TMP` and `TEMP` must point outside any git repository: the chat tests refuse a data folder inside
+a project (`Chat data directory is inside a project`) and 7 of them fail. A session whose temporary
+folder sits in another repository needs `$env:TMP = $env:TEMP = "D:\mukade-test-scratch"` first.
+`LNK1180` (disk full) means `target\debug\deps` needs clearing.
+
 **Pass if**
 
-- [ ] `cargo test` ends with **0 failed** in every suite (519 tests on Linux; Windows adds a few of its own).
+- [ ] `cargo test` ends with **0 failed** in every suite (519 tests on Linux on 2026-11-11; 1089 on Windows on 2026-11-12).
 - [ ] `harnesses` lists Claude Code, Codex, OpenCode and Pi with a version and a store each.
 
 **Write down:** the four versions.
