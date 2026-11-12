@@ -391,8 +391,20 @@ pub async fn start_with_executable(
             if line.len() > 16384 {
                 return Err(failure("Invalid chat startup readiness"));
             }
-            let state: Instance = serde_json::from_str(&line)
-                .map_err(|_| failure("Chat service failed before readiness"))?;
+            let state: Instance = match serde_json::from_str(&line) {
+                Ok(state) => state,
+                Err(_) => {
+                    // The child's own reason, when it gave one.
+                    #[derive(Deserialize)]
+                    struct Failed {
+                        error: ChatError,
+                    }
+                    return Err(serde_json::from_str::<Failed>(&line).map_or_else(
+                        |_| failure("Chat service failed before readiness"),
+                        |failed| failed.error,
+                    ));
+                }
+            };
             if state.instance_id != spawn
                 || state.pid != child.id()
                 || state.data_dir != paths.data_dir
@@ -477,13 +489,25 @@ pub async fn serve(
     port: Option<u16>,
     parent_id: Option<String>,
 ) -> Result<(), ChatError> {
-    let owner = Owner::acquire(&paths)?;
-    let instance = parent_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let result = serve_owned(&owner, port, parent_id, instance.clone()).await;
-    let cleanup = owner.clear_instance(&instance);
-    result.and(cleanup)
+    let reports_to_parent = parent_id.is_some();
+    let result = async {
+        let owner = Owner::acquire(&paths)?;
+        let instance = parent_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let result = serve_owned(&owner, port, parent_id, instance.clone()).await;
+        let cleanup = owner.clear_instance(&instance);
+        result.and(cleanup)
+    }
+    .await;
+    // A child started by `chat start` tells its parent why it stopped: the parent reads one
+    // line, and a failure before readiness is that line. After readiness nobody reads it.
+    if reports_to_parent && let Err(error) = &result {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{}", json!({ "error": error }));
+        let _ = out.flush();
+    }
+    result
 }
 async fn serve_owned(
     owner: &Owner,

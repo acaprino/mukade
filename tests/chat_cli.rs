@@ -13,7 +13,11 @@ use std::{
 };
 
 fn scratch() -> PathBuf {
-    let p = PathBuf::from("C:/Users/alfio/AppData/Local/Temp")
+    // A folder outside any project, as the chat service requires: the scratch root the suite is
+    // given, else the system's temporary folder.
+    let p = std::env::var_os("MUKADE_TEST_SCRATCH_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
         .join(format!("mukade-tests-cli-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -136,4 +140,26 @@ async fn real_sdk_delivery_flushes_before_ack_and_escapes_controls() {
     );
     client.close().await;
     svc.finish_shutdown().await;
+}
+
+/// A service that cannot start says why: the parent reports the child's own error, not a
+/// generic "failed before readiness".
+#[test]
+fn a_service_that_fails_to_start_reports_its_own_reason() {
+    let root = scratch().join("data");
+    let paths = lifecycle::Paths::resolve(&root, &StoreRoots::default()).unwrap();
+    security::create_private_directory(&paths.bus_dir).unwrap();
+    security::atomic_write(&paths.bus_dir.join("config.json"), br#"{"port":0}"#).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_mukade"))
+        .args(["chat", "start"])
+        .env("MUKADE_DATA_DIR", &root)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "{stderr}");
+    assert!(stderr.contains("Invalid persisted chat port"), "{stderr}");
+    assert!(
+        !lifecycle::owner_active(&paths).unwrap(),
+        "no service left running"
+    );
 }

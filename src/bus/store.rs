@@ -199,10 +199,13 @@ pub(crate) fn event(
     Ok(())
 }
 
+/// How every low-space refusal begins, so it keeps its reason when it becomes a chat error.
+pub(crate) const LOW_SPACE: &str = "less than 1 GiB free";
+
 pub(super) fn check_space(dir: &Path) -> Result<(), BusError> {
     if free_space(dir).is_some_and(|n| n < 1024 * 1024 * 1024) {
         return Err(BusError::Refused(format!(
-            "less than 1 GiB free in bus folder {}",
+            "{LOW_SPACE} on the disk of {}: free space there, or set MUKADE_DATA_DIR to a folder on another disk",
             dir.display()
         )));
     }
@@ -515,6 +518,27 @@ mod tests {
             let update = bus.chat_call("observe", args, &roots).unwrap();
             assert_eq!(update["items"][0]["kind"], "updated");
         }
+    }
+
+    /// A new database is not made below the floor, and the refusal reaches the user with its
+    /// reason, not as a bare database failure.
+    #[test]
+    fn a_low_space_refusal_keeps_its_reason_as_a_chat_error() {
+        let dir = scratch();
+        let error = crate::bus::ChatError::from(BusError::Refused(format!(
+            "{LOW_SPACE} on the disk of {}: free space there, or set MUKADE_DATA_DIR to a folder on another disk",
+            dir.display()
+        )));
+        assert_eq!(error.code, "storage_low");
+        assert_eq!(error.exit_code(), 4);
+        assert!(error.message.contains(&dir.display().to_string()));
+        assert!(error.message.contains("MUKADE_DATA_DIR"));
+        let other = crate::bus::ChatError::from(BusError::Failed("bus database: disk I/O".into()));
+        assert_eq!(other.code, "storage_failure");
+        assert!(
+            !other.message.contains("disk I/O"),
+            "database details stay out"
+        );
     }
 
     #[test]

@@ -13,7 +13,8 @@
 #   HTTPS_PROXY and NODE_EXTRA_CA_CERTS (docs/verification/source-model-summary-live.md).
 set -u
 M="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-WORK="$(mktemp -d)"
+# MUKADE_LIVE_SCRATCH: a folder outside any project for the throwaway service (default: TMPDIR).
+WORK="$(mktemp -d -p "${MUKADE_LIVE_SCRATCH:-${TMPDIR:-/tmp}}")"
 export MUKADE_DATA_DIR="$(cd "$WORK" && pwd -W 2>/dev/null || pwd)/data"
 cd "$WORK"
 

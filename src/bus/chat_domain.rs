@@ -67,8 +67,16 @@ impl From<serde_json::Error> for ChatError {
 }
 
 impl From<BusError> for ChatError {
-    fn from(_: BusError) -> Self {
-        Self::storage()
+    /// A database failure keeps its details out of the answer; a refusal for low space keeps its
+    /// reason, which names the folder and what to do.
+    fn from(error: BusError) -> Self {
+        match error {
+            BusError::Refused(reason) if reason.contains(super::store::LOW_SPACE) => Self {
+                retryable: true,
+                ..Self::new("storage_low", reason)
+            },
+            _ => Self::storage(),
+        }
     }
 }
 
