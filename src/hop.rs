@@ -188,7 +188,8 @@ pub struct HopRequest {
     pub children: bool,
     /// Read the source with every branch it keeps ([`export_all_branches`], the CLI's
     /// `--all-branches`). A source whose harness keeps one branch only is refused before anything
-    /// is read; [`reads_all_branches`] answers that up front.
+    /// is read; [`reads_all_branches`] answers that up front. A summary from the source's model
+    /// (`SummarySource::SourceModel`) does not go with it, and is refused the same way.
     pub all_branches: bool,
 }
 
@@ -575,6 +576,23 @@ pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
 /// portable JanuraCode, say) cannot share one [`StoreRoots`].
 pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
     crate::harnesses::destination(req.dest)?;
+    // A summary the source's model writes stands for the branch the source resumes: refused before
+    // anything is read or a model is called, as the CLI refuses it.
+    if req.all_branches
+        && matches!(
+            req.compaction,
+            Compaction::Portable {
+                summary: SummarySource::SourceModel(_),
+                ..
+            }
+        )
+    {
+        return Err(HopError::Unsupported(
+            "a summary from the source's model with every branch: the summary stands for the \
+             branch the source resumes"
+                .into(),
+        ));
+    }
     let source = if req.all_branches {
         export_all_branches(&req.source, &req.roots)?
     } else {

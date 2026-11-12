@@ -1061,8 +1061,10 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --de
 
 **Use it from a program.** Mukade is a library first: `mukade::hop(&HopRequest { … })` does what the
 command does, with typed errors (`HopError::ResumeFailed` carries the written session's receipt).
-`HopRequest.all_branches` is `--all-branches`; `mukade::hop::reads_all_branches(harness)` says
-whether a source can take it, without reading anything, so a host offers the option only there.
+`HopRequest.all_branches` is `--all-branches` (refused with a summary from the source's model, as
+the CLI refuses it); `mukade::hop::reads_all_branches(harness)` says whether a source can take it,
+without reading anything, so a host offers the option only there: the TUI's `branches` field, the
+desktop app's `all_branches` on each installation.
 See the [README](../README.md#rust-library).
 
 | option | rule |

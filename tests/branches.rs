@@ -978,6 +978,25 @@ fn a_library_hop_carries_the_branches_when_the_request_asks() {
         "{refused:?}"
     );
     assert_eq!(support::files_under(&scratch.join("home")), before);
+
+    // A summary from the source's model stands for the resumed branch: refused, nothing written,
+    // no model called.
+    use mukade::hop::{Compaction, KeepFrom, SummarySource};
+    use mukade::summary::SummarizeOpts;
+    let refused = hop(&HopRequest {
+        all_branches: true,
+        compaction: Compaction::Portable {
+            summary: SummarySource::SourceModel(SummarizeOpts::default()),
+            keep_from: KeepFrom::LastTurns(0),
+        },
+        ..base
+    })
+    .unwrap_err();
+    assert!(
+        matches!(&refused, HopError::Unsupported(reason) if reason.contains("every branch")),
+        "{refused:?}"
+    );
+    assert_eq!(support::files_under(&scratch.join("home")), before);
 }
 
 // ---------------------------------------------------------------------------------------------

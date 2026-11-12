@@ -117,18 +117,23 @@ struct HopState {
     children: bool,
     /// How many subagent sessions the source has in the listing, for the dialog's line.
     subagents: usize,
+    /// Read and write every branch the source keeps (`HopRequest::all_branches`). Off until asked;
+    /// offered only where the library reads the source's branches.
+    all_branches: bool,
     prompt: String,
     /// The fields this dialog offers, in `tab` order, and the one that has the focus (an index).
     fields: Vec<HopField>,
     field: usize,
 }
 
-/// One field of the hop dialog. `Children` is offered only for a source that has subagents.
+/// One field of the hop dialog. `Children` is offered only for a source that has subagents,
+/// `AllBranches` only for a source whose branches the library reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum HopField {
     Destination,
     Compaction,
     Children,
+    AllBranches,
     Prompt,
 }
 
@@ -1082,11 +1087,13 @@ fn open_hop(app: &mut App) {
         compaction: 0,
         children: false,
         subagents,
+        all_branches: false,
         prompt: String::new(),
         fields: [
             Some(HopField::Destination),
             Some(HopField::Compaction),
             (subagents > 0).then_some(HopField::Children),
+            mukade::hop::reads_all_branches(source.harness).then_some(HopField::AllBranches),
             Some(HopField::Prompt),
         ]
         .into_iter()
@@ -1124,9 +1131,13 @@ fn handle_hop_key(app: &mut App, code: KeyCode) {
                     };
                 }
                 HopField::Children => hop.children = !hop.children,
+                HopField::AllBranches => hop.all_branches = !hop.all_branches,
                 HopField::Prompt => {}
             },
             KeyCode::Char(' ') if hop.focused(HopField::Children) => hop.children = !hop.children,
+            KeyCode::Char(' ') if hop.focused(HopField::AllBranches) => {
+                hop.all_branches = !hop.all_branches
+            }
             KeyCode::Enter if !hop.focused(HopField::Prompt) => hop.field += 1,
             KeyCode::Enter => run = true,
             KeyCode::Backspace if hop.focused(HopField::Prompt) => {
@@ -1213,6 +1224,7 @@ fn execute_hop_with(
             .then(|| ResumePrompt::new(hop.prompt.trim().to_string())),
         write,
         children: hop.children && hop.subagents > 0,
+        all_branches: hop.all_branches && hop.fields.contains(&HopField::AllBranches),
         ..HopRequest::new(source, dest.harness, hop.source.roots.clone())
     };
     match mukade::hop_into(&request, &dest.roots) {
@@ -1284,6 +1296,7 @@ fn receipt_lines_with(
         }
         None => lines.push("losses       (not in manifest)".to_string()),
     }
+    lines.extend(branch_line(&receipt.manifest));
     lines.extend(child_lines(&receipt.manifest));
     if let Some(reply) = &receipt.resume_output {
         lines.push(String::new());
@@ -1291,6 +1304,19 @@ fn receipt_lines_with(
         lines.extend(reply.lines().map(str::to_string));
     }
     lines
+}
+
+/// How many branches of the source the hop wrote and left out (the manifest's `counts`). Nothing
+/// when the source carried none.
+fn branch_line(manifest: &serde_json::Value) -> Option<String> {
+    let count = |key: &str| {
+        manifest
+            .pointer(&format!("/counts/{key}"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let (kept, dropped) = (count("branches_kept"), count("branches_dropped"));
+    (kept + dropped > 0).then(|| format!("branches     {kept} kept, {dropped} left out"))
 }
 
 /// What became of each subagent session a hop carried (the manifest's `children`): where it went
@@ -1498,6 +1524,31 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
             ),
         ]));
     }
+    if hop.fields.contains(&HopField::AllBranches) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                if hop.focused(HopField::AllBranches) {
+                    "▶ "
+                } else {
+                    "  "
+                },
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled("branches    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                if hop.all_branches {
+                    "every branch"
+                } else {
+                    "the resumed one"
+                },
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                "  (abandoned ones too, where the destination keeps them)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
     lines.push(Line::from(vec![
         Span::styled(
             if hop.focused(HopField::Prompt) {
@@ -1526,6 +1577,12 @@ fn draw_hop(frame: &mut Frame, area: Rect, hop: &HopState) {
             "summary asks the source model and may take minutes",
             Style::default().fg(Color::Yellow),
         )));
+        if hop.all_branches {
+            lines.push(Line::from(Span::styled(
+                "summary stands for the resumed branch: not with every branch",
+                Style::default().fg(Color::Yellow),
+            )));
+        }
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -2425,6 +2482,7 @@ mod tests {
             [
                 HopField::Destination,
                 HopField::Compaction,
+                HopField::AllBranches,
                 HopField::Prompt
             ],
             "a fork's source has no subagents"
@@ -2442,6 +2500,7 @@ mod tests {
                 HopField::Destination,
                 HopField::Compaction,
                 HopField::Children,
+                HopField::AllBranches,
                 HopField::Prompt
             ]
         );
@@ -2467,18 +2526,63 @@ mod tests {
         assert!(!hop_of(&app).children);
         handle_hop_key(&mut app, KeyCode::Char(' '));
         assert!(hop_of(&app).children);
-        // The space bar is text in the prompt, and a toggle nowhere else.
+        // The branches field comes next; the space bar is text in the prompt, a toggle elsewhere.
+        handle_hop_key(&mut app, KeyCode::Enter);
+        assert_eq!(hop_of(&app).focus(), HopField::AllBranches);
         handle_hop_key(&mut app, KeyCode::Enter);
         assert_eq!(hop_of(&app).focus(), HopField::Prompt);
         handle_hop_key(&mut app, KeyCode::Char(' '));
         assert!(hop_of(&app).children);
+        assert!(!hop_of(&app).all_branches);
         assert_eq!(hop_of(&app).prompt, " ");
         // Shift+tab goes back through the same fields.
+        handle_hop_key(&mut app, KeyCode::BackTab);
+        assert_eq!(hop_of(&app).focus(), HopField::AllBranches);
         handle_hop_key(&mut app, KeyCode::BackTab);
         assert_eq!(hop_of(&app).focus(), HopField::Children);
         handle_hop_key(&mut app, KeyCode::Tab);
         handle_hop_key(&mut app, KeyCode::Tab);
+        handle_hop_key(&mut app, KeyCode::Tab);
         assert_eq!(hop_of(&app).focus(), HopField::Destination, "tab wraps");
+    }
+
+    /// The branches field: offered for a source whose branches the library reads, off until asked,
+    /// toggled by the arrows and the space bar, and named on the dialog.
+    #[test]
+    fn the_branches_field_is_offered_where_the_library_reads_branches_and_toggles() {
+        let mut app = app_with_a_tree();
+        select(&mut app, "branch");
+        open_hop(&mut app);
+        assert_eq!(
+            hop_of(&app).fields.contains(&HopField::AllBranches),
+            mukade::hop::reads_all_branches(hop_of(&app).source.harness)
+        );
+        assert!(
+            !hop_of(&app).all_branches,
+            "the default is the resumed branch"
+        );
+        let text = screen(&mut app, 120, 30);
+        assert!(text.contains("the resumed one"), "{text}");
+        handle_hop_key(&mut app, KeyCode::Tab);
+        handle_hop_key(&mut app, KeyCode::Tab);
+        assert_eq!(hop_of(&app).focus(), HopField::AllBranches);
+        handle_hop_key(&mut app, KeyCode::Right);
+        assert!(hop_of(&app).all_branches);
+        let text = screen(&mut app, 120, 30);
+        assert!(text.contains("every branch"), "{text}");
+        handle_hop_key(&mut app, KeyCode::Char(' '));
+        assert!(!hop_of(&app).all_branches);
+    }
+
+    #[test]
+    fn a_hops_branches_come_back_as_a_line_of_the_result() {
+        let manifest = serde_json::json!({"counts": {"branches_kept": 2, "branches_dropped": 1}});
+        assert_eq!(
+            branch_line(&manifest).as_deref(),
+            Some("branches     2 kept, 1 left out")
+        );
+        let none = serde_json::json!({"counts": {"branches_kept": 0, "branches_dropped": 0}});
+        assert_eq!(branch_line(&none), None);
     }
 
     #[test]
@@ -2600,6 +2704,92 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("a1111111111111111 ->")),
             "{together:?}"
+        );
+    }
+
+    /// A Claude Code session with an abandoned attempt at its second prompt, hopped into a
+    /// scratch Pi store with and without `HopRequest::all_branches`.
+    #[test]
+    fn a_hop_carries_the_abandoned_branches_only_when_asked() {
+        let dir = scratch("hop-branches");
+        let claude = dir.join("claude");
+        let row = |kind: &str, uuid: &str, parent: Option<&str>, text: &str| {
+            let message = if kind == "user" {
+                serde_json::json!({"role": "user", "content": text})
+            } else {
+                serde_json::json!({"id": format!("msg_{uuid}"), "role": "assistant",
+                    "model": "claude-x", "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": text}]})
+            };
+            serde_json::json!({"type": kind, "uuid": uuid, "parentUuid": parent,
+                "sessionId": "b0000000-0000-4000-8000-000000000001", "cwd": "/work",
+                "isSidechain": false, "timestamp": "2026-11-12T10:00:00.000Z",
+                "message": message})
+            .to_string()
+        };
+        let file = claude.join("projects/-work/b0000000-0000-4000-8000-000000000001.jsonl");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let lines = [
+            row("user", "u1", None, "q1"),
+            row("assistant", "a1", Some("u1"), "r1"),
+            row("user", "u2b", Some("a1"), "q2 first try"),
+            row("assistant", "a2b", Some("u2b"), "r2 first try"),
+            row("user", "u2", Some("a1"), "q2"),
+            row("assistant", "a2", Some("u2"), "r2"),
+        ];
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+        let roots = StoreRoots {
+            claude_config_dir: Some(claude),
+            pi_agent_dir: Some(dir.join("pi")),
+            ..Default::default()
+        };
+        let locations = location::standard_locations(&roots);
+        let rows = load_rows(&locations);
+        let mut app = App::new(locations, roots, rows, 50);
+        app.harness = app
+            .rows
+            .iter()
+            .position(|row| row.location.harness == HarnessId::ClaudeCode)
+            .unwrap();
+        let details = |_: &Location, _: Option<&str>| WriteDetails {
+            dest_version: Some("1.4.0".into()),
+            dest_protocol: mukade::policy::destination_protocol(HarnessId::Pi),
+            ..Default::default()
+        };
+        let hop_with = |app: &mut App, all_branches: bool| {
+            app.focus = Focus::Sessions;
+            app.session = 0;
+            open_hop(app);
+            let Mode::Hop(hop) = &mut app.mode else {
+                panic!("the hop dialog opens");
+            };
+            hop.dest = hop
+                .destinations
+                .iter()
+                .position(|l| l.harness == HarnessId::Pi)
+                .unwrap();
+            assert!(hop.fields.contains(&HopField::AllBranches));
+            hop.all_branches = all_branches;
+            let lines = execute_hop_with(hop, details);
+            app.mode = Mode::Normal;
+            lines
+        };
+
+        let active = hop_with(&mut app, false);
+        assert!(
+            active.iter().any(|line| line.starts_with("destination")),
+            "{active:?}"
+        );
+        assert!(
+            active.iter().all(|line| !line.starts_with("branches")),
+            "no branches unless asked: {active:?}"
+        );
+        let every = hop_with(&mut app, true);
+        assert!(
+            every
+                .iter()
+                .any(|line| line == "branches     1 kept, 0 left out"),
+            "{every:?}"
         );
     }
 

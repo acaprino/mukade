@@ -108,12 +108,13 @@ The footer shows every key but `g`/`G` and the page keys. A result box scrolls w
    - `portable`: the source's last compaction summary plus what follows (the source must have compacted);
    - `summary`: the source's own model writes a handoff summary, no turn kept verbatim (may take minutes, costs a model call).
 4. **Subagents:** shown only when the source has subagent sessions in the list. `↑`/`↓` or `space` toggle `leave behind` (the default) and `carry`. Carrying is the CLI's `hop --children` ([usage](../docs/usage.md#carry-the-subagent-sessions)): each readable subagent session, at any depth, is written as a session of its own after the session, linked to its parent where the destination has a link. Forks are not subagents and are never carried.
-5. **Prompt:** an optional resume prompt (empty = write only), then `enter` to run.
-6. Read the result (`j`/`k`, page keys), then `esc`.
+5. **Branches:** shown only when the library reads every branch of the source's harness (Claude Code, Codex, Pi today; the TUI asks `mukade::hop::reads_all_branches`). `↑`/`↓` or `space` toggle `the resumed one` (the default) and `every branch`. Every branch is the CLI's `hop --all-branches` ([usage](../docs/usage.md#a-session-that-was-rewound-or-branched)): abandoned branches travel too, kept where the destination can keep them and counted where it cannot. Not with `summary`, which stands for the resumed branch (the hop is refused).
+6. **Prompt:** an optional resume prompt (empty = write only), then `enter` to run.
+7. Read the result (`j`/`k`, page keys), then `esc`.
 
 `tab` / `shift+tab` move between the fields, `esc` cancels. The session keeps its (shown) working directory.
 The result shows the **new id**, **location**, **headless** and **interactive** resume commands,
-**manifest** path (`mukade-data/manifests/<harness>-<id>.json`), **every loss**, one line per carried subagent session (`<source id> -> <new id>`, and whether the destination linked it to its parent), and the destination's reply to a prompt. If a subagent session cannot be written, the result says so and shows the receipt of the session itself, which is written.
+**manifest** path (`mukade-data/manifests/<harness>-<id>.json`), **every loss**, how many branches were kept and left out (when the source carried any), one line per carried subagent session (`<source id> -> <new id>`, and whether the destination linked it to its parent), and the destination's reply to a prompt. If a subagent session cannot be written, the result says so and shows the receipt of the session itself, which is written.
 
 **Model and provider** come from the destination installation's own configuration
 (`src/dest.rs` `configured_model_in()`):

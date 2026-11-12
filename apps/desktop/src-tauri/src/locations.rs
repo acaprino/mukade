@@ -47,6 +47,11 @@ impl Location {
     pub fn is_destination(&self) -> bool {
         mukade::harnesses::get(self.harness).destination().is_some()
     }
+
+    /// Whether a session here can be read, and hopped, with every branch it keeps.
+    pub fn reads_all_branches(&self) -> bool {
+        mukade::hop::reads_all_branches(self.harness)
+    }
 }
 
 /// How an installation reaches the interface.
@@ -63,6 +68,9 @@ pub struct InstallationView {
     pub scanned: bool,
     /// Whether mukade writes this harness: a hop or an import can land here.
     pub destination: bool,
+    /// Whether a session here can be hopped with every branch it keeps (the hop's all-branches
+    /// option, `HopRequest::all_branches`), as the library answers.
+    pub all_branches: bool,
 }
 
 impl From<&Location> for InstallationView {
@@ -81,6 +89,7 @@ impl From<&Location> for InstallationView {
                 .map(|_| location.exe.clone().unwrap_or_else(|| "(standard resolution)".into())),
             scanned: location.store.is_some(),
             destination: location.is_destination(),
+            all_branches: location.reads_all_branches(),
         }
     }
 }
@@ -242,6 +251,21 @@ mod tests {
         assert_eq!(locations[0].key(), HarnessId::ALL[0].as_str());
         let keys: std::collections::HashSet<String> = locations.iter().map(Location::key).collect();
         assert_eq!(keys.len(), locations.len(), "keys are unique");
+    }
+
+    #[test]
+    fn an_installation_says_whether_its_sessions_hop_with_every_branch() {
+        for location in standard_locations(&standard()) {
+            let view = InstallationView::from(&location);
+            assert_eq!(view.all_branches, mukade::hop::reads_all_branches(location.harness), "{}", view.key);
+        }
+        let view = |harness: HarnessId| {
+            let locations = standard_locations(&standard());
+            let found = locations.iter().find(|l| l.harness == harness).unwrap();
+            InstallationView::from(found).all_branches
+        };
+        assert!(view(HarnessId::ClaudeCode));
+        assert!(!view(HarnessId::OpenCode));
     }
 
     #[test]
