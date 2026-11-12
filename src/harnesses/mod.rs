@@ -62,6 +62,25 @@ pub trait Harness: Send + Sync {
         crate::reader::origin::Origin::Unknown
     }
 
+    /// What a chat hook prints for this harness: `delivery` in the harness's own hook output
+    /// format for `event` (`None`: this harness has no chat adapter).
+    fn chat_hook_output(
+        &self,
+        _event: crate::chat::adapter::Event,
+        _delivery: &crate::chat::adapter::Delivery,
+    ) -> Option<String> {
+        None
+    }
+
+    /// The command that starts this harness as a member of a chat room, after writing the
+    /// launch files `kit` names (`Ok(None)`: this harness has no chat adapter).
+    fn chat_launch(
+        &self,
+        _kit: &crate::chat::adapter::Kit,
+    ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
+        Ok(None)
+    }
+
     /// Where this harness keeps its user-scope MCP servers, and the entry that names the
     /// local chat service there (`None`: mukade writes no such configuration for it).
     fn chat_mcp_target(

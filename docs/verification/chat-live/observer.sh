@@ -23,8 +23,8 @@ export CLAUDE_CONFIG_DIR="$(native "$WORK/claude")"
 export MUKADE_DATA_DIR="$(native "$WORK")/data"
 cd "$WORK"
 
-"$M" chat start > start.json || exit 4
 trap '"$M" chat stop > /dev/null; cd /; rm -rf "$WORK"' EXIT
+"$M" chat start > start.json || exit 4
 ROOM=$("$M" chat open --name explain --json 2>/dev/null | python -c "import json,sys;print(json.load(sys.stdin)['room_id'])")
 "$M" chat join --room-id "$ROOM" --harness claude_code --role peer --session-id "$ID" --json 2>/dev/null > peer.json \
   || { echo "binding the fixture session failed"; exit 4; }

@@ -23,6 +23,11 @@ mukade chat: one shared local chat service for harness instances
   mukade chat connect <harness> [--dry-run]     add the running service to the harness's
                                       own MCP servers (user scope); no credential is shown
   mukade chat disconnect <harness> [--dry-run]  take that entry out again
+  mukade chat launch <harness> --room <name> [--role peer|lead|worker|observer]
+                     [--listen <seconds>] [--max-wakes <n>] [-- <harness arguments>]
+                                      start the harness already in the room: its hooks hand
+                                      it what the room writes; --listen keeps it waiting for
+                                      messages addressed to it after each turn
   mukade chat <operation> [--<argument> <value>]... [--json] [--output <file>]
 
 Operations: open close reopen delete rooms join rejoin leave members candidates bind unbind
@@ -55,7 +60,26 @@ pub enum Command {
         remove: bool,
         dry_run: bool,
     },
+    /// Start a harness as a member of a room, with the adapter's hooks.
+    Launch(Launch),
+    /// One hook call of a launched harness: the event's JSON on standard input.
+    Hook {
+        harness: crate::HarnessId,
+        event: crate::chat::adapter::Event,
+    },
     Domain(DomainCommand),
+}
+
+/// `mukade chat launch`: which harness, into which room, and how it listens.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Launch {
+    pub harness: crate::HarnessId,
+    pub room: String,
+    pub role: String,
+    pub listen: u64,
+    pub max_wakes: Option<u32>,
+    /// Passed to the harness as they are (after `--`).
+    pub harness_args: Vec<String>,
 }
 
 /// One operation of the service, ready to be called.
@@ -153,6 +177,77 @@ pub fn parse(args: &[String]) -> Result<Command, ChatError> {
                 "status" => Command::Status,
                 _ => Command::Stop,
             });
+        }
+        "hook" => {
+            let [harness, event] = rest else {
+                return Err(usage("chat hook takes a harness and an event"));
+            };
+            let harness = harness
+                .parse::<crate::HarnessId>()
+                .map_err(|_| usage(format!("unknown harness {harness}")))?;
+            return Ok(Command::Hook {
+                harness,
+                event: event.parse()?,
+            });
+        }
+        "launch" => {
+            let (ours, theirs) = match rest.iter().position(|a| a == "--") {
+                Some(at) => (&rest[..at], rest[at + 1..].to_vec()),
+                None => (rest, Vec::new()),
+            };
+            let mut harness = None;
+            let (mut room, mut role, mut listen, mut max_wakes) =
+                (None, "peer".to_string(), 0u64, None);
+            let mut i = 0;
+            while i < ours.len() {
+                match ours[i].as_str() {
+                    "--room" => room = Some(value_of(ours, &mut i, "--room")?.to_string()),
+                    "--role" => {
+                        role = value_of(ours, &mut i, "--role")?.to_string();
+                        if !matches!(role.as_str(), "peer" | "lead" | "worker" | "observer") {
+                            return Err(usage("--role takes peer, lead, worker or observer"));
+                        }
+                    }
+                    "--listen" => {
+                        listen = value_of(ours, &mut i, "--listen")?
+                            .parse()
+                            .ok()
+                            .filter(|s| *s <= crate::chat::adapter::MAX_LISTEN.as_secs())
+                            .ok_or_else(|| usage("--listen takes seconds, at most 3600"))?;
+                    }
+                    "--max-wakes" => {
+                        max_wakes = Some(
+                            value_of(ours, &mut i, "--max-wakes")?
+                                .parse()
+                                .map_err(|_| usage("--max-wakes takes a whole number"))?,
+                        );
+                    }
+                    other if other.starts_with("--") => {
+                        return Err(usage(format!("unknown option {other} for chat launch")));
+                    }
+                    other if harness.is_none() => {
+                        harness = Some(
+                            other
+                                .parse::<crate::HarnessId>()
+                                .map_err(|_| usage(format!("unknown harness {other}")))?,
+                        );
+                    }
+                    other => {
+                        return Err(usage(format!(
+                            "unexpected argument {other}; arguments for the harness go after --"
+                        )));
+                    }
+                }
+                i += 1;
+            }
+            return Ok(Command::Launch(Launch {
+                harness: harness.ok_or_else(|| usage("chat launch needs a harness"))?,
+                room: room.ok_or_else(|| usage("chat launch needs --room <name>"))?,
+                role,
+                listen,
+                max_wakes,
+                harness_args: theirs,
+            }));
         }
         "connect" | "disconnect" => {
             let mut harness = None;
@@ -444,6 +539,10 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
             }
             return Ok(());
         }
+        Command::Hook { harness, event } => {
+            run_hook(*harness, *event);
+            return Ok(());
+        }
         _ => {}
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -486,13 +585,14 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
                     &act(&target, &paths.bus_dir, harness.as_str(), dry_run)?,
                 )
             }
+            Command::Launch(launch) => run_launch(&paths, &launch).await,
             Command::Domain(domain) => {
                 let client = ChatClient::connect(&lifecycle::client_config(&paths)?).await?;
                 let done = execute(&client, &domain, stdout, &mut io::stderr()).await;
                 client.close().await;
                 done
             }
-            Command::Help | Command::Tools => Ok(()),
+            Command::Help | Command::Tools | Command::Hook { .. } => Ok(()),
         }
     });
     // A service past its shutdown deadline may still hold blocking database work: the process
@@ -509,4 +609,197 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 fn print_value(out: &mut dyn Write, value: &Value) -> Result<(), ChatError> {
     write_value(out, value, true)
         .map_err(|_| failed("output_failure", "The result could not be written"))
+}
+
+/// One hook call. A hook never breaks its harness: it always exits 0, prints nothing when the
+/// instance was not launched into a room, and says on stderr why it did nothing else.
+fn run_hook(harness: crate::HarnessId, event: crate::chat::adapter::Event) {
+    use crate::chat::adapter;
+    let result = (|| -> Result<(), ChatError> {
+        let Some(settings) = adapter::Settings::from_env()? else {
+            return Ok(());
+        };
+        let mut text = String::new();
+        io::stdin()
+            .take(1 << 20)
+            .read_to_string(&mut text)
+            .map_err(|_| usage("the hook input could not be read"))?;
+        let value: Value =
+            serde_json::from_str(&text).map_err(|_| usage("the hook input is not JSON"))?;
+        let input = adapter::HookInput::from_json(&value)?;
+        let paths = lifecycle::Paths::from_env()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| failed("transport_failure", "no runtime for the hook"))?;
+        runtime.block_on(async {
+            let client = ChatClient::connect(&lifecycle::client_config(&paths)?).await?;
+            let delivery = adapter::handle(
+                &client,
+                &paths.bus_dir,
+                harness.as_str(),
+                &settings,
+                event,
+                &input,
+            )
+            .await;
+            client.close().await;
+            let Some(delivery) = delivery? else {
+                return Ok(());
+            };
+            let Some(output) = crate::harnesses::get(harness).chat_hook_output(event, &delivery)
+            else {
+                return Ok(());
+            };
+            let mut out = io::stdout().lock();
+            if writeln!(out, "{output}").and_then(|_| out.flush()).is_err() {
+                // The harness did not take it: hand it over again next time.
+                let _ =
+                    adapter::forget_delivery(&paths.bus_dir, harness.as_str(), &input.session_id);
+            }
+            Ok(())
+        })
+    })();
+    if let Err(error) = result {
+        eprintln!("mukade chat hook: {}: {}", error.code, error.message);
+    }
+}
+
+/// A folder path without Windows's `\\?\` prefix, as the harness and its hooks read it back.
+fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// The room named `name`, opened when there is none.
+async fn room_id_of(client: &ChatClient, name: &str) -> Result<String, ChatError> {
+    for attempt in 0..2 {
+        let mut cursor: Option<String> = None;
+        loop {
+            let mut args = json!({"limit": 500});
+            if let Some(cursor) = &cursor {
+                args["cursor"] = json!(cursor);
+            }
+            let page = client.call("rooms", args).await?;
+            let found = page["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|room| room["name"].as_str() == Some(name));
+            if let Some(room) = found {
+                if !room["closed_at"].is_null() {
+                    return Err(failed(
+                        "room_closed",
+                        format!(
+                            "room {name} is closed; reopen it with mukade chat reopen --room-id {}",
+                            room["room_id"].as_str().unwrap_or("?")
+                        ),
+                    ));
+                }
+                return Ok(room["room_id"].as_str().unwrap_or_default().to_string());
+            }
+            match page["next_cursor"].as_str() {
+                Some(next) => cursor = Some(next.to_string()),
+                None => break,
+            }
+        }
+        let opened = client
+            .call(
+                "open",
+                json!({"name": name, "request_id": uuid::Uuid::new_v4().to_string()}),
+            )
+            .await;
+        match opened {
+            Ok(room) => return Ok(room["room_id"].as_str().unwrap_or_default().to_string()),
+            // Another launch opened it meanwhile: look again.
+            Err(_) if attempt == 0 => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(failed("transport_failure", "the room could not be opened"))
+}
+
+/// Start the service if needed, find or open the room, write the harness's launch kit, and run
+/// the harness in this terminal until it exits; its exit code is this command's.
+async fn run_launch(paths: &lifecycle::Paths, launch: &Launch) -> Result<(), ChatError> {
+    use crate::chat::adapter;
+    // A harness that cannot print a hook's answer has no adapter: refused before anything starts.
+    let adapter_of = crate::harnesses::get(launch.harness);
+    if adapter_of
+        .chat_hook_output(
+            adapter::Event::Stop,
+            &adapter::Delivery::Continue(String::new()),
+        )
+        .is_none()
+    {
+        return Err(failed(
+            "unsupported",
+            format!(
+                "{} has no chat adapter yet; connect it with mukade chat connect and use the tools",
+                launch.harness
+            ),
+        ));
+    }
+    lifecycle::start(paths, None).await?;
+    let config = lifecycle::client_config(paths)?;
+    let client = ChatClient::connect(&config).await?;
+    let room_id = room_id_of(&client, &launch.room).await;
+    client.close().await;
+    let room_id = room_id?;
+    let kit = adapter::Kit {
+        exe: std::env::current_exe()
+            .map_err(|_| failed("transport_failure", "the mukade executable cannot be found"))?,
+        folder: paths
+            .bus_dir
+            .join("adapters")
+            .join(launch.harness.as_str())
+            .join(format!("launch-{}", uuid::Uuid::new_v4().simple())),
+        server: crate::chat::connect::Server {
+            endpoint: config.endpoint,
+            token: config.token,
+            service_id: config.service_id,
+        },
+        stop_timeout: launch.listen + 30,
+    };
+    let Some(mut command) = crate::harnesses::get(launch.harness).chat_launch(&kit)? else {
+        return Err(failed(
+            "unsupported",
+            format!(
+                "{} has no chat adapter yet; connect it with mukade chat connect and use the tools",
+                launch.harness
+            ),
+        ));
+    };
+    command
+        .args(&launch.harness_args)
+        .env("MUKADE_DATA_DIR", plain_path(&paths.data_dir))
+        .env(adapter::ENV_ROOM, &room_id)
+        .env(adapter::ENV_ROLE, &launch.role)
+        .env(adapter::ENV_LISTEN, launch.listen.to_string());
+    if let Some(n) = launch.max_wakes {
+        command.env(adapter::ENV_MAX_WAKES, n.to_string());
+    }
+    eprintln!(
+        "mukade: {} joins room {} as {}{}",
+        launch.harness,
+        launch.room,
+        launch.role,
+        if launch.listen > 0 {
+            format!(", listening {} s after each turn", launch.listen)
+        } else {
+            String::new()
+        }
+    );
+    let status = command.status();
+    let _ = std::fs::remove_dir_all(&kit.folder);
+    let status = status.map_err(|_| {
+        failed(
+            "transport_failure",
+            format!("{} could not be started", launch.harness),
+        )
+    })?;
+    std::process::exit(status.code().unwrap_or(1));
 }

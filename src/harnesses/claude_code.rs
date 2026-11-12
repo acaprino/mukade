@@ -52,6 +52,60 @@ impl Harness for ClaudeCode {
         })
     }
 
+    /// Claude Code's hook output: extra context at session start and at each prompt; at a stop,
+    /// `decision: block` with the reason, which Claude Code takes as what to do next.
+    fn chat_hook_output(
+        &self,
+        event: crate::chat::adapter::Event,
+        delivery: &crate::chat::adapter::Delivery,
+    ) -> Option<String> {
+        use crate::chat::adapter::{Delivery, Event};
+        let value = match (event, delivery) {
+            (Event::Stop, Delivery::Continue(text)) => {
+                serde_json::json!({"decision": "block", "reason": text})
+            }
+            (Event::SessionStart | Event::Prompt, Delivery::Context(text)) => serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": if event == Event::SessionStart { "SessionStart" } else { "UserPromptSubmit" },
+                    "additionalContext": text,
+                }
+            }),
+            _ => return None,
+        };
+        Some(value.to_string())
+    }
+
+    /// A plugin for one session (`claude --plugin-dir`): its hooks call `mukade chat hook` and
+    /// its MCP entry names the running service. The user's own settings are not touched.
+    fn chat_launch(
+        &self,
+        kit: &crate::chat::adapter::Kit,
+    ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
+        let hook = |event: &str, timeout: u64| {
+            serde_json::json!([{"hooks": [{"type": "command", "timeout": timeout,
+                "command": kit.hook_command("claude_code", event)}]}])
+        };
+        let hooks = serde_json::json!({"hooks": {
+            "SessionStart": hook("session-start", 30),
+            "UserPromptSubmit": hook("prompt", 30),
+            "Stop": hook("stop", kit.stop_timeout),
+        }});
+        let manifest = serde_json::json!({"name": "mukade", "version": env!("CARGO_PKG_VERSION"),
+            "description": "Membership of a mukade chat room for this session"});
+        let mcp = serde_json::json!({"mcpServers": {"mukade": {"type": "http",
+            "url": kit.server.endpoint, "headers": kit.server.headers()}}});
+        kit.write(
+            ".claude-plugin/plugin.json",
+            manifest.to_string().as_bytes(),
+        )?;
+        kit.write("hooks/hooks.json", hooks.to_string().as_bytes())?;
+        kit.write(".mcp.json", mcp.to_string().as_bytes())?;
+        let exe = crate::exe::resolve(self.id(), None);
+        let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
+        command.arg("--plugin-dir").arg(&kit.folder);
+        Ok(Some(command))
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {

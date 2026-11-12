@@ -18,8 +18,8 @@ WORK="$(mktemp -d -p "${MUKADE_LIVE_SCRATCH:-${TMPDIR:-/tmp}}")"
 export MUKADE_DATA_DIR="$(cd "$WORK" && pwd -W 2>/dev/null || pwd)/data"
 cd "$WORK"
 
-"$M" chat start > start.json || exit 4
 trap '"$M" chat stop > /dev/null; cd /; rm -rf "$WORK"' EXIT
+"$M" chat start > start.json || exit 4
 ROOM=$("$M" chat open --name duo --json 2>/dev/null | python -c "import json,sys;print(json.load(sys.stdin)['room_id'])")
 
 python - "$MUKADE_DATA_DIR" <<'PYEOF'

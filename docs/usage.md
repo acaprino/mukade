@@ -543,6 +543,31 @@ A first exchange:
 4. `mukade chat send --room-id <id> --member-handle <handle> --text "what do you think? @codex-1"`
 5. The other instance: `mukade chat wait --room-id <id> --member-handle <its handle>`.
 
+The quickest way: start each instance already in the room.
+
+```text
+mukade chat launch claude_code --room design --listen 300
+mukade chat launch claude_code --room design --role worker --listen 600
+```
+
+| option | what it does |
+|---|---|
+| `--room <name>` | the room to join; opened when there is none. The service is started when it is not running |
+| `--role <role>` | `peer` (default), `lead`, `worker` or `observer` |
+| `--listen <seconds>` | after each turn the instance waits, spending no tokens, up to that long for a message or signal addressed to it, and goes on when one comes (at most 3600) |
+| `--max-wakes <n>` | how many times listening may restart it in one session (default 10), so two listening agents cannot answer each other for ever |
+| `-- <arguments>` | passed to the harness as they are, e.g. `-- -p --model haiku "…"` |
+
+What the launched instance gets, without any setting of yours changing:
+
+1. A plugin for that session only (`claude --plugin-dir`), in the service's own folder, removed when the instance exits.
+2. At session start it joins the room; its name, role, `member_handle` and the rules of its role are given to the model.
+3. At each prompt, what the room wrote since is given to the model. A batch is acknowledged only at the next hook call, so a batch the session never took comes again.
+4. With `--listen`, at the end of a turn the Stop hook waits; a message addressed to the instance restarts it with the messages. One written to the whole room does not restart it: it comes with the next addressed one, or at the next prompt.
+5. The instance writes with the MCP tools (`chat_send`, `chat_signal`, `chat_observe`), never `chat_read` or `chat_wait`: its hooks are its reader.
+
+Only Claude Code has an adapter so far; `launch` refuses the other harnesses (exit 2), which join with `connect` and the tools. A Claude Code launched this way is seen live answering a question while listening ([record](verification/2026-11-12-chat-live.md)).
+
 Connect a harness as an MCP client, with the service running:
 
 | command | what it does |
@@ -566,7 +591,7 @@ Connect a harness as an MCP client, with the service running:
 
 | limit | detail |
 |---|---|
-| idle instance | a message reaches an instance when it calls `read` or `wait`; nothing wakes one that sits at its prompt |
+| idle instance | an instance launched with `--listen` waits after each turn for that long; any other instance gets a message only when it calls `read` or `wait`, or (launched) at its next prompt. Nothing wakes one that sits at its prompt after that |
 | security | one user account: any process of that user can read the credential and the harnesses' own session files. Messages and observed text are checked for secrets, which reduces the risk and does not remove it |
 | data | in `<data folder>/bus/`, never in a project or a harness store; nothing expires |
 

@@ -368,9 +368,8 @@ pub async fn start_with_executable(
             use std::os::windows::process::CommandExt;
             command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
         }
-        let mut child = command
-            .spawn()
-            .map_err(|_| failure("Could not spawn chat service"))?;
+        let mut child =
+            spawn_detached(&mut command).map_err(|_| failure("Could not spawn chat service"))?;
         let stdout = child.stdout.take().unwrap();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
@@ -463,11 +462,21 @@ pub async fn stop(paths: &Paths) -> Result<Value, ChatError> {
     }
     let config = client_config(paths)?;
     let instance = config.instance_id.clone();
+    // The process of this very instance: the lock goes before the process has closed its
+    // database, and "stopped" means the files are free.
+    let pid = read_state(paths)?
+        .filter(|s| s.instance_id == instance)
+        .map(|s| s.pid);
     tokio::time::timeout(DEADLINE, config.shutdown())
         .await
         .map_err(|_| failure("Chat shutdown request timed out"))??;
     loop {
-        if !owner_active(paths)? || read_state(paths)?.is_some_and(|s| s.instance_id != instance) {
+        let released =
+            !owner_active(paths)? || read_state(paths)?.is_some_and(|s| s.instance_id != instance);
+        let exited = pid.is_none_or(|pid| {
+            matches!(crate::process::inspect(pid), crate::process::Process::Gone)
+        });
+        if released && exited {
             return Ok(
                 json!({"status":"stopped","instance_id":instance,"data_dir":paths.data_dir}),
             );
@@ -618,4 +627,47 @@ async fn serve_owned(
         ));
     }
     Ok(())
+}
+
+/// Spawn the background service without handing it this process's own standard handles.
+///
+/// On Windows a child inherits every inheritable handle of its parent, not only the stdio it is
+/// given. The service outlives `chat start`, so it would keep the caller's output pipe open, and
+/// a script that captures `mukade chat start` would wait for it for ever. Those three handles stop
+/// being inheritable for the spawn and are restored after it; the child's own pipes are unaffected.
+#[cfg(windows)]
+fn spawn_detached(command: &mut Command) -> std::io::Result<std::process::Child> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{
+        GetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+    let ours: [HANDLE; 3] = [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ];
+    let mut cleared = Vec::new();
+    for handle in ours {
+        let mut flags = 0u32;
+        // SAFETY: the handles are this process's own standard handles, valid for its lifetime;
+        // a null or invalid one makes the calls fail, and it is then left alone.
+        let inheritable = !handle.is_null()
+            && unsafe { GetHandleInformation(handle, &mut flags) } != 0
+            && flags & HANDLE_FLAG_INHERIT != 0;
+        if inheritable && unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } != 0 {
+            cleared.push(handle);
+        }
+    }
+    let child = command.spawn();
+    for handle in cleared {
+        // SAFETY: as above; this restores the flag the handle had.
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+    }
+    child
+}
+
+/// Elsewhere the child's standard streams replace the parent's, which it does not keep.
+#[cfg(not(windows))]
+fn spawn_detached(command: &mut Command) -> std::io::Result<std::process::Child> {
+    command.spawn()
 }
