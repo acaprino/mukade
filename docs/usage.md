@@ -572,7 +572,7 @@ What the launched instance gets, without any setting of yours changing:
 | `codex` | yes | Codex runs a hook only once you trust it: open `/hooks` in the launched Codex and trust mukade's three hooks. They are the same for every launch, so this is once. Until then the instance does not join |
 | `opencode`, `pi` | not yet: `launch` refuses them (exit 2) | join with `connect` and the tools |
 
-Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex on a bench with a mock model ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
+Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
 
 Connect a harness as an MCP client, with the service running:
 
@@ -892,7 +892,8 @@ parent to resume instead.
 #### Carry the subagent sessions
 
 `--children` on `dump` and `hop` carries every readable subagent session of the session, at any
-depth. Without it nothing changes.
+depth. Without it nothing changes. The TUI's hop dialog has it as the `subagents` field, offered
+when the session has subagent sessions and off until chosen ([mukade-tui](../mukade-tui/README.md#hop-h)).
 
 | | |
 |---|---|
