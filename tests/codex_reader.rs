@@ -1666,3 +1666,47 @@ fn a_parent_with_a_readable_report_hops_into_every_file_destination() {
     support::assert_hops_keeping(&session, "The change is safe.", "codex-report-hop");
     support::assert_hops_keeping(&session, "The tests pass.", "codex-report-hop-mid");
 }
+
+/// A shell of no dialect mukade translates (`cmd`) is not read as `Bash`: its calls stay Codex's
+/// own tool. A call that names its shell by path takes that shell's dialect.
+#[test]
+fn a_cmd_shell_is_not_bash_and_a_shell_path_names_its_dialect() {
+    let call = |id: &str, shell: Option<&str>| {
+        let mut arguments = serde_json::json!({"cmd": "dir"});
+        if let Some(shell) = shell {
+            arguments["shell"] = serde_json::json!(shell);
+        }
+        serde_json::json!({"type": "function_call", "name": "exec_command", "call_id": id,
+            "arguments": arguments.to_string()})
+    };
+    let output = |id: &str| serde_json::json!({"type": "function_call_output", "call_id": id, "output": "ok"});
+    let s = rows_with(vec![
+        serde_json::json!({"type": "message", "role": "user", "content": [{"type": "input_text",
+            "text": "<environment_context>\n  <shell>cmd</shell>\n</environment_context>"}]}),
+        call("call_cmd", None),
+        output("call_cmd"),
+        call("call_pwsh", Some(r"C:\Program Files\PowerShell\7\pwsh.exe")),
+        output("call_pwsh"),
+        call("call_bash", Some("/usr/bin/bash")),
+        output("call_bash"),
+        call("call_fish", Some("/usr/bin/fish")),
+        output("call_fish"),
+    ]);
+    let canonical = |id: &str| {
+        calls_of(&s)
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .canonical
+    };
+    assert_eq!(
+        canonical("call_cmd"),
+        Some(CanonicalTool::Other("exec_command".into()))
+    );
+    assert_eq!(canonical("call_pwsh"), Some(CanonicalTool::PowerShell));
+    assert_eq!(canonical("call_bash"), Some(CanonicalTool::Bash));
+    assert_eq!(
+        canonical("call_fish"),
+        Some(CanonicalTool::Other("exec_command".into()))
+    );
+}

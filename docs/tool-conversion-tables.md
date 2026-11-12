@@ -202,10 +202,11 @@ excluded); not counted in the manifest.
 **Dialect.** The command string is **never rewritten**, so a call is translated only when the
 destination runs the same dialect.
 
-- Source dialect: Claude splits `Bash`/`PowerShell`. A Codex call takes its own `shell` argument
-  (`pwsh`, `powershell`; `bash`, `sh`, `zsh`, `posix`), else the
-  `<environment_context><shell>…</shell>` declared before it [V] (`bash`, `sh`, `zsh`, `posix`,
-  `git-bash`; `powershell`, `pwsh`), else `Bash` (`src/reader/codex.rs` `canonical_call()`).
+- Source dialect: Claude splits `Bash`/`PowerShell`. A Codex call takes its own `shell` argument,
+  by name or by path (`pwsh`, `C:\…\pwsh.exe`; `bash`, `/usr/bin/bash`), else the
+  `<environment_context><shell>…</shell>` declared before it [V] (also `posix`, `git-bash`), else
+  `Bash` (`src/reader/codex.rs` `canonical_call()`). A shell of no dialect mukade translates (`cmd`,
+  `fish`) leaves the call as Codex's own `exec_command`, which travels as text.
 - Destination dialect, first answer wins: `--dest-shell` (the names below, or `posix`; `none`: no
   dialect, text form into Codex, OpenCode and Pi); else what the destination runs for the project
   the session is filed under (`src/dest.rs` `shell_in()`, the adapter's `default_shell()`; library
@@ -225,6 +226,10 @@ destination runs the same dialect.
   source (`src/tools.rs` `shell_named()`).
 - Into Claude: no dialect check; `Bash` → `Bash`, `PowerShell` → `PowerShell` where the
   installation runs that tool (`src/tools.rs` `offered_in()`; [Claude Code](harnesses/claude-code.md#the-powershell-tool)).
+- Into Pi: `PowerShell` → `bash` toward a `shellPath` of PowerShell; otherwise → Pi's own
+  `powershell` tool (same input as `bash`), offered only where the settings' `defaultTools` turn it
+  on (`powershell` or `+powershell`, the last entry winning; the project's settings over the agent
+  directory's), else text form.
 - The Codex writer records the destination's shell in the new rollout's
   `<environment_context><shell>` (`bash` or `powershell`), so a later read knows the dialect.
 
@@ -383,10 +388,8 @@ translating (spec L11):
 **Today.** Until T11 exists, the library uses the §2 lists (`src/tools.rs` `offered()`) unless the
 caller passes a set (`WriteDetails::offered`, `src/tools.rs` `translate_with()`). The CLI and the TUI
 pass `src/tools.rs` `offered_in()`: the §2 list plus what the destination's configuration turns on,
-so far Claude's `PowerShell` (§4.1). An unlisted tool is text form; the CLI has no flag for a wider
-set.
-
-**Planned:** Pi's `powershell` tool where its settings turn it on ([`next.md`](../next.md)).
+Claude's `PowerShell` and Pi's `powershell` (§4.1). An unlisted tool is text form; the CLI has no
+flag for a wider set.
 
 ## 7. Open questions
 

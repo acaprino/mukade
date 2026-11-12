@@ -56,6 +56,8 @@ pub struct Summary {
     pub text: String,
     pub harness: HarnessId,
     pub harness_version: Option<String>,
+    /// The model the run was told to use. `None`: none was named, so the harness's default
+    /// answered (OpenCode when the session recorded a model without its provider).
     pub model: Option<String>,
     /// The tokens or cost the harness reported, as compact JSON.
     pub usage: Option<String>,
@@ -226,7 +228,11 @@ pub fn summarize(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|age| age.as_nanos())
         .unwrap_or_default();
-    let scratch = base.join(format!("summary-{}-{nanos}", std::process::id()));
+    // The pid names the run's owner for the sweep; the counter keeps two runs of one process
+    // (two threads of a library caller) apart.
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let scratch = base.join(format!("summary-{}-{nanos}-{run}", std::process::id()));
     std::fs::create_dir_all(&scratch).map_err(|error| {
         HopError::SummaryFailed(format!("could not make {}: {error}", scratch.display()))
     })?;
@@ -293,10 +299,14 @@ fn summarize_in(
         (Some(_), Err(reason)) => return Err(failed(format!("{shown}: {reason}"))),
         (Some(_), Ok(reply)) => reply,
     };
-    let model = opts
-        .model
-        .clone()
-        .or_else(|| own_model(session).map(|model| model.id.clone()));
+    // The model the run was told to use: the one named, else the session's own when the
+    // harness could spell it. Unnamed (OpenCode with a model recorded without its provider), the
+    // harness's default answered, and which one that is is not known.
+    let model = opts.model.clone().or_else(|| {
+        own_model(session)
+            .map(|model| model.id.clone())
+            .filter(|id| names_model(&command.args, id))
+    });
     Ok(Summary {
         text: reply.text,
         harness,
@@ -311,6 +321,12 @@ fn summarize_in(
     })
 }
 
+/// Whether `args` name the model `id`: as an argument of its own, or as `<provider>/<id>`.
+fn names_model(args: &[String], id: &str) -> bool {
+    args.iter()
+        .any(|arg| arg == id || arg.strip_suffix(id).is_some_and(|head| head.ends_with('/')))
+}
+
 /// The folders of runs a killed process left behind, removed once they are an hour old.
 fn sweep_stale_runs(base: &Path) {
     let Ok(entries) = std::fs::read_dir(base) else {
@@ -318,7 +334,21 @@ fn sweep_stale_runs(base: &Path) {
     };
     let now = std::time::SystemTime::now();
     for entry in entries.flatten() {
-        let stale = entry.file_name().to_string_lossy().starts_with("summary-")
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // A run whose process still runs is not stale, however long it takes.
+        let owner_runs = name
+            .strip_prefix("summary-")
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_some_and(|pid| {
+                pid == std::process::id()
+                    || matches!(
+                        crate::process::inspect(pid),
+                        crate::process::Process::Running { .. }
+                    )
+            });
+        let stale = name.starts_with("summary-")
+            && !owner_runs
             && entry
                 .metadata()
                 .ok()
@@ -329,5 +359,47 @@ fn sweep_stale_runs(base: &Path) {
         if stale {
             let _ = std::fs::remove_dir_all(entry.path());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The model a run names is its own argument or the end of `<provider>/<id>`; a prompt that
+    /// merely mentions it names none.
+    #[test]
+    fn a_model_is_named_by_its_argument() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert!(super::names_model(&args(&["--model", "gpt-9"]), "gpt-9"));
+        assert!(super::names_model(&args(&["-m", "openai/gpt-9"]), "gpt-9"));
+        assert!(!super::names_model(&args(&["run", "about gpt-9"]), "gpt-9"));
+        assert!(!super::names_model(
+            &args(&["-m", "openai/xgpt-9"]),
+            "gpt-9"
+        ));
+    }
+
+    /// An old run folder is swept unless the process named in it still runs: a long summary is
+    /// never removed from under the run that owns it.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_spares_the_folder_of_a_running_process() {
+        let base = std::env::temp_dir().join(format!("mukade-sweep-{}", uuid::Uuid::new_v4()));
+        let old = std::time::SystemTime::now() - 2 * crate::portable::STALE_AFTER;
+        let make = |name: &str| {
+            let dir = base.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::File::open(&dir)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+            dir
+        };
+        let mine = make(&format!("summary-{}-1-0", std::process::id()));
+        // Pid 0 is never a process a summary runs in.
+        let gone = make("summary-0-1-0");
+        super::sweep_stale_runs(&base);
+        assert!(mine.exists(), "this process still runs");
+        assert!(!gone.exists(), "nobody runs it any more");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

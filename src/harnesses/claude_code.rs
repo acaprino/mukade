@@ -89,7 +89,7 @@ impl Harness for ClaudeCode {
         kit.write(".mcp.json", mcp.to_string().as_bytes())?;
         let exe = crate::exe::resolve(self.id(), None);
         let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
-        command.arg("--plugin-dir").arg(&kit.folder);
+        command.arg("--plugin-dir").arg(&kit.folder).args(&kit.args);
         Ok(Some(command))
     }
 
@@ -244,6 +244,11 @@ impl Destination for ClaudeCode {
 
     /// `<parent>/subagents/agent-<agentId>.jsonl` and its meta.json.
     fn links_children(&self) -> bool {
+        true
+    }
+
+    /// A fork's copied rows carry `forkedFrom`, as `/branch` writes them.
+    fn links_forks(&self) -> bool {
         true
     }
 

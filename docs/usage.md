@@ -432,8 +432,11 @@ mukade write claude_code 'C:\work\session.json' --cwd 'C:\work\my-project' --cla
 - It takes `--without-tools`, `--interrupted drop` and the destination options like `hop`; it refuses
   `--compaction` and `--intent` (chosen by `dump`) and imports the summary a document already holds.
 - A document saved with a UTF-8 byte-order mark is accepted.
-- It imports the session alone: a `children` list in the document is left unwritten, and `write` says
-  so on stderr. Use `hop --children` to write the subagent sessions.
+- With `--children` it writes the document's subagent sessions too (the `children` list `dump --children`
+  made), each after the session, with the same links and `manifest.children` as `hop --children`
+  ([Subagents](#subagents-and-what-they-reported)). A child `dump` could not read (`children_lost`), or
+  a child document that cannot be read, is a line in `losses`, and so is each child below it.
+  Without the flag the session is imported alone and `write` says so on stderr.
 
 #### Move a session to another machine
 
@@ -548,6 +551,8 @@ The quickest way: start each instance already in the room.
 ```text
 mukade chat launch claude_code --room design --listen 300
 mukade chat launch claude_code --room design --role worker --listen 600
+mukade chat launch opencode --room design --listen 300
+mukade chat launch pi --room design --listen 300 -- --model sonnet
 ```
 
 | option | what it does |
@@ -560,17 +565,24 @@ mukade chat launch claude_code --room design --role worker --listen 600
 
 What the launched instance gets, without any setting of yours changing:
 
-1. Claude Code: a plugin for that session only (`claude --plugin-dir`), in the service's own folder, removed when the instance exits. Codex: `-c` overrides for that run only (the MCP entry and three hooks), the credential in the environment.
-2. At session start it joins the room; its name, role, `member_handle` and the rules of its role are given to the model.
-3. At each prompt, what the room wrote since is given to the model. A batch is acknowledged only at the next hook call, so a batch the session never took comes again.
-4. With `--listen`, at the end of a turn the Stop hook waits; a message addressed to the instance restarts it with the messages. One written to the whole room does not restart it: it comes with the next addressed one, or at the next prompt.
+1. The launch kit, in the service's own folder and removed when the instance exits:
+   - Claude Code: a plugin for that session only (`claude --plugin-dir`).
+   - Codex: `-c` overrides for that run only (the MCP entry and three hooks), the credential in the environment.
+   - OpenCode: a server plugin and the MCP entry, in `OPENCODE_CONFIG_CONTENT`, which OpenCode reads as one more configuration document on top of yours. The instance runs its own private server (`--standalone`, placed after `run` or `mini` when you pass one): the shared background service would not have the room in its environment. `--server` is refused. A value you set in `OPENCODE_CONFIG_CONTENT` is kept, with the two added to it.
+   - Pi: one extension for that run (`pi -e`), which registers the MCP entry for the session.
+   - OpenCode and Pi get the credential in the environment only: the plugin files hold none.
+2. At session start it joins the room; its name, role, `member_handle` and the rules of its role are given to the model. OpenCode has no session-start hook: it joins with its first prompt.
+3. At each prompt, what the room wrote since is given to the model: Claude Code and Codex as hook context, OpenCode as a synthetic message ahead of the prompt, Pi as a message with the turn. A batch is acknowledged only at the next hook call, so a batch the session never took comes again.
+4. With `--listen`, at the end of a turn the Stop hook waits (OpenCode: before the session goes idle; Pi: before the run settles); a message addressed to the instance restarts it with the messages. One written to the whole room does not restart it: it comes with the next addressed one, or at the next prompt. In OpenCode and Pi a prompt you type ends the wait at once, and so does Escape in Pi.
 5. The instance writes with the MCP tools (`chat_send`, `chat_signal`, `chat_observe`), never `chat_read` or `chat_wait`: its hooks are its reader.
+6. Only the launched session is a member: an OpenCode subagent's child session is not.
 
 | harness | adapter | first launch |
 |---|---|---|
-| `claude_code` | yes | nothing to do |
-| `codex` | yes | Codex runs a hook only once it is trusted. Run `mukade chat trust codex` once (below). Until then the instance does not join |
-| `opencode`, `pi` | not yet: `launch` refuses them (exit 2) | join with `connect` and the tools |
+| `claude_code` | hooks of a plugin | nothing to do |
+| `codex` | hooks as overrides | Codex runs a hook only once it is trusted. Run `mukade chat trust codex` once (below). Until then the instance does not join |
+| `opencode` | server plugin (OpenCode 2) | nothing to do |
+| `pi` | extension | nothing to do |
 
 Trust Codex's hooks once:
 
@@ -582,9 +594,9 @@ mukade chat trust codex
 1. `--dry-run` lists mukade's three hooks as Codex sees them (`untrusted`, `trusted` or `modified`) and writes nothing.
 2. Without it, Codex's own server (`codex app-server`) records trust for exactly those three, in `~/.codex/config.toml` under `[hooks.state]`. Your other hooks and plugins' hooks are not touched.
 3. The hooks name the mukade executable by its path. After mukade moves to another path, run it again; until then Codex shows them as `modified` and skips them.
-4. `claude_code` answers `not_needed`; a harness without an adapter is refused (exit 2).
+4. `claude_code`, `opencode` and `pi` answer `not_needed`; a harness without an adapter is refused (exit 2).
 
-Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there.
+Seen working: two launched Claude Code instances asking and answering while listening, and a launched Codex answering a launched Claude Code, real models ([record](verification/2026-11-12-chat-live.md)). Codex on Windows runs hooks with PowerShell; the hooks mukade writes for it use PowerShell's call form there. The OpenCode plugin and the Pi extension follow the plugin APIs of OpenCode 2.2.7 and Pi 1.5.2 and run, under Node, against a real service in the test suite; a real OpenCode or Pi instance has not run them yet **[U]**.
 
 Connect a harness as an MCP client, with the service running:
 
@@ -915,7 +927,19 @@ mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project'
 **A fork** (a session copied from another: Claude Code `/branch`, Codex fork, OpenCode fork, Pi
 `/fork`) is a session of its own: `list` shows its origin (`parent`, `kind: fork`), a hop writes a
 self-contained copy and the manifest names the origin (`source.parent`, `source.parent_kind`). The
-written fork is not linked to a written origin.
+fork is linked to its origin's copy when the origin was hopped into the same destination store
+first (the [hop registry](#the-hop-registry)):
+
+| destination | link written |
+|---|---|
+| Claude Code | `forkedFrom: {sessionId, messageUuid}` on every row the fork shares with the origin's copy, naming that copy and its row, as `/branch` writes it |
+| Pi | the header's `parentSession`: the origin copy's file, as `/fork` writes it |
+| Codex, OpenCode, Hermes, DeepSeek Harness | none yet: the manifest names the origin |
+
+The shared rows are found by content: the blocks of the fork's plan that are the same, from the
+first, as those of the origin's copy. `manifest.dest.parent` names the copy linked to. A fork whose
+origin was not hopped there (or was hopped after it) is not linked, and `losses` says so; a written
+session is never changed later to add a link.
 
 ### Subagents and what they reported
 
@@ -961,7 +985,8 @@ What `hop --children` writes, per destination:
 - **Same pipeline, same options.** A child is read, planned and written like the session:
   `--reasoning`, `--without-tools`, `--tool-map`, the destination facts. `--dest-id`, `--dest-path`,
   `--metadata-file`, `--resume-prompt` and `--expect-sha256` are the session's alone; a child gets a
-  new id every run, so a repeated hop writes its children again.
+  new id every run, so a repeated hop writes its children again (a new copy of the session takes new
+  copies of its children; the session's notice names the earlier copy).
 - **Compaction.** `--compaction native` applies to each child (it is deterministic); `portable` and
   `summary` are the session's alone, and a child travels whole (`compaction: "none"` in its entry).
 - **The session names its children.** A spawn call written as text gets one more line, `→ <id>`:
@@ -1386,11 +1411,12 @@ folder for a host; an invalid override is refused (exit 1) rather than redirecte
 | `intent-prompts/*.md` | the editable summary prompts: `generic.md` is the default, every other file stem is an `--intent` name; copied on first start and never overwritten |
 | `mukade-data/cache/probes.json` | versions and OpenCode project IDs learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not ask again |
 | `mukade-data/cache/claude-list-<hash>.json` | what `list claude_code` read from each session file (ID, title, cwd, time), keyed by path, size and modification time, so only changed files are read next time; one per Claude Code `projects/` folder, rewritten whole; a file modified in the last 2 seconds is never kept in it |
+| `mukade-data/registry/<harness>/source-<hash>.json` | the [hop registry](#the-hop-registry): each session written from that source session, where, and a fingerprint and the record ids of each block; at most 32 per source session; `MUKADE_REGISTRY=off` keeps nothing |
 | `mukade-data/tmp/mukade-import-*.json` | the document `opencode session import` needs as a file; private, and removed when the import ends, even when it fails |
 | `mukade-data/tmp/summary-*/` | one folder per `--compaction summary` run: the file Codex writes its summary to, the session Pi forks; removed when the run ends, even when it fails |
 | `.mukade-*.tmp` | beside the session being written, in the destination's store: the session as it is written, renamed into place when complete |
 
-- Nothing is written to the user profile, the application-data folders, the registry or the system's
+- Nothing is written to the user profile, the application-data folders, the Windows registry or the system's
   temporary folder.
 - A temporary file or summary folder a **killed** run left behind is removed by the next run once it
   is an hour old.
@@ -1413,9 +1439,26 @@ whose launcher answers `--version`; afterwards the folder holds `mukade.exe`, `i
 probes.json: {"version|<dir>/claude.cmd|20|1793205746861450700":"2.9.9"}
 ```
 
-A hop that has nothing to ask adds nothing under `mukade-data`: a hop to Pi, with no `pi` launcher to
-start, left it absent. A test asserts the sandbox around the real binary stays empty
+A hop that has nothing to ask adds only its registry record under `mukade-data` (none with
+`MUKADE_REGISTRY=off`). A test asserts the sandbox around the real binary stays empty
 ([README](../README.md)).
+
+### The hop registry
+
+Every `hop` and `write` remembers what it wrote, under the session it came from, in
+`mukade-data/registry`. It is what lets a later hop:
+
+1. **link a fork to its origin's copy** in the same destination store ([forks](#a-session-that-was-rewound-or-branched));
+2. **say a session was written before**: when the same, unchanged session (the same fingerprint) is
+   hopped again into the same destination store and the earlier copy is still there, mukade writes a
+   new copy as always and prints `mukade: this session was already written here, unchanged, as <id>
+   (<location>, <time>); this is a new copy`. The manifest names it in `earlier`.
+
+- A record is used only while its destination file is still there: a deleted copy is forgotten.
+- It is best effort: a registry that cannot be written is a warning on stderr and `manifest.registry.error`,
+  never a failed hop.
+- `MUKADE_REGISTRY=off` (or `0`, `false`) turns it off: nothing is read or written, no fork is linked.
+- It holds ids and paths of sessions on this machine, nothing of their content but fingerprints.
 
 ## 11. Exit codes
 

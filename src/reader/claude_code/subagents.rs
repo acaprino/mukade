@@ -55,11 +55,15 @@ pub(super) fn is_transcript(file: &Path) -> bool {
             .is_some_and(|folder| folder == "subagents")
 }
 
+/// The meta.json beside a transcript.
+pub(super) fn meta_file(transcript: &Path) -> Option<PathBuf> {
+    let agent = agent_id_of(transcript)?;
+    Some(transcript.with_file_name(format!("agent-{agent}.meta.json")))
+}
+
 /// The meta.json beside a transcript. `None` when there is none or it is not a JSON object.
 pub(super) fn agent_meta(transcript: &Path) -> Option<AgentMeta> {
-    let agent = agent_id_of(transcript)?;
-    let file = transcript.with_file_name(format!("agent-{agent}.meta.json"));
-    let text = std::fs::read_to_string(file).ok()?;
+    let text = std::fs::read_to_string(meta_file(transcript)?).ok()?;
     let doc: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     let text_at = |key: &str| {
         doc.get(key)
@@ -73,6 +77,47 @@ pub(super) fn agent_meta(transcript: &Path) -> Option<AgentMeta> {
         tool_use_id: text_at("toolUseId"),
         parent_agent_id: text_at("parentAgentId"),
     })
+}
+
+impl AgentMeta {
+    /// The cache entry of a meta.json: its stamp, then the fields it gave (`None`: no object).
+    pub(super) fn to_entry(meta: Option<&AgentMeta>, size: u64, modified: u64) -> Value {
+        let mut entry = serde_json::Map::new();
+        entry.insert("s".into(), size.into());
+        entry.insert("m".into(), modified.into());
+        if let Some(meta) = meta {
+            entry.insert("o".into(), true.into());
+            for (key, value) in [
+                ("t", &meta.agent_type),
+                ("d", &meta.description),
+                ("u", &meta.tool_use_id),
+                ("p", &meta.parent_agent_id),
+            ] {
+                if let Some(value) = value {
+                    entry.insert(key.into(), value.clone().into());
+                }
+            }
+        }
+        Value::Object(entry)
+    }
+
+    /// The meta.json a cache entry remembers, when the file still has the stamp it was read at:
+    /// `Some(None)` for a file that held no object.
+    pub(super) fn from_entry(entry: &Value, size: u64, modified: u64) -> Option<Option<AgentMeta>> {
+        if entry.get("s")?.as_u64()? != size || entry.get("m")?.as_u64()? != modified {
+            return None;
+        }
+        if entry.get("o").and_then(Value::as_bool) != Some(true) {
+            return Some(None);
+        }
+        let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_owned);
+        Some(Some(AgentMeta {
+            agent_type: text("t"),
+            description: text("d"),
+            tool_use_id: text("u"),
+            parent_agent_id: text("p"),
+        }))
+    }
 }
 
 /// Where a child came from: the agent that spawned it, when its meta.json names one, else its

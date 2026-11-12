@@ -29,6 +29,7 @@ pub mod policy;
 pub mod portable;
 pub mod process;
 pub mod reader;
+pub mod registry;
 pub mod roots;
 #[cfg(test)]
 mod scratch;

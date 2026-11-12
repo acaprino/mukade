@@ -1444,8 +1444,9 @@ fn translation_is_unchanged_for_every_destination() {
                 r#"text: the destination's offered set does not contain it"#,
                 r#"text: shell dialect differs from the destination's"#,
                 r#"text: shell dialect differs from the destination's"#,
-                r#"text: shell dialect differs from the destination's"#,
-                r#"text: shell dialect differs from the destination's"#,
+                // Pi's own `powershell` tool would take it; it is off unless `defaultTools` names it.
+                r#"text: the destination's offered set does not contain it"#,
+                r#"text: the destination's offered set does not contain it"#,
             ],
         ),
         (

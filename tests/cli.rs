@@ -2443,12 +2443,75 @@ fn list_names_an_opencode_forks_source_and_a_childs_spawner() {
 }
 
 #[test]
-fn children_is_a_list_dump_and_hop_option() {
+fn children_is_a_list_dump_hop_and_write_option() {
     let scratch = support::scratch(HarnessId::ClaudeCode, "cli-children-only-list");
-    let (code, _, stderr) = cli_code(&scratch, &["write", "claude_code", "x", "--children"]);
+    let (code, _, stderr) = cli_code(&scratch, &["harnesses", "--children"]);
     assert_eq!(code, Some(1), "{stderr}");
     assert!(
-        stderr.contains("--children is supported only by list, dump and hop"),
+        stderr.contains("--children is supported only by list, dump, hop and write"),
         "{stderr}"
+    );
+}
+
+/// `dump` with a summary from OpenCode names the fork the summarizing run could not delete, so
+/// the user can remove it; the document is still written and holds the command too.
+#[test]
+fn dump_names_the_fork_a_summary_left_in_the_source_store() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-dump-summary-leftover");
+    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/opencode");
+    let rows = fixtures.join("source/rows.json");
+    let id = "ses_e82023514ffe02y4T8OoUu99VZ";
+    let database = scratch.join("opencode.db");
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute_batch(&format!(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT,
+                 directory TEXT, time_updated INTEGER, time_archived INTEGER);
+             INSERT INTO session_v2 VALUES ('{id}', NULL, 'Source', 'D:/work', 2000, NULL);"
+        ))
+        .unwrap();
+    // `session export` prints the session, `session delete` fails, a run prints a summary.
+    let events = fixtures.join("summary-run.jsonl");
+    let opencode = support::launcher(
+        &scratch.join("bin"),
+        "opencode",
+        &format!(
+            "if \"%2\"==\"export\" (type \"{}\"\r\nexit /b 0)\r\nif \"%1\"==\"session\" exit /b 1\r\ntype \"{}\"\r\nexit /b 0",
+            rows.display(),
+            events.display()
+        ),
+        &format!(
+            "if [ \"$2\" = export ]; then cat \"{}\"; exit 0; fi\nif [ \"$1\" = session ]; then exit 1; fi\ncat \"{}\"\nexit 0",
+            rows.display(),
+            events.display()
+        ),
+    );
+    let output = scratch.join("doc.json");
+    let (code, _, stderr) = support::cli_in(
+        &scratch,
+        &scratch,
+        &[
+            "dump",
+            "opencode",
+            id,
+            "--root",
+            database.to_str().unwrap(),
+            "--compaction",
+            "summary",
+            "--output",
+            output.to_str().unwrap(),
+        ],
+        &[("MUKADE_OPENCODE_EXE", opencode.to_str().unwrap())],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stderr.contains("the summarizing run left a fork in the source store: run ")
+            && stderr.contains("session delete ses_e7be56c69ffer6BEbBHfEuQ7mG --standalone"),
+        "{stderr}"
+    );
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+    assert!(
+        doc.to_string().contains("session delete"),
+        "the document names it too"
     );
 }

@@ -96,6 +96,21 @@ pub struct WriteOpts {
     pub native_budget: Option<NativeBudget>,
     /// The subagent sessions around the session being written (`hop --children`).
     pub subagents: Subagents,
+    /// Set when the session is a fork whose origin was already written to this destination: the
+    /// writer links the fork to it where the destination has a link.
+    pub fork_of: Option<ForkOf>,
+}
+
+/// The copy of a fork's origin in the destination, as the hop registry remembers it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForkOf {
+    /// The origin's session in the destination.
+    pub id: String,
+    /// Where it was written ([`Written::location`]).
+    pub location: String,
+    /// The records the origin's copy has for the blocks the fork shares with it, block by block
+    /// ([`Written::records`]): the fork's first `records.len()` planned blocks are those blocks.
+    pub records: Vec<Vec<String>>,
 }
 
 /// What a writer is told about the subagent sessions of the session it writes.
@@ -133,13 +148,16 @@ pub struct ChildOf {
 }
 
 /// A session that was written.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Written {
     pub id: String,
     /// The file (or store) the session was written to.
     pub location: String,
     /// The destination's own resume command, without the prompt.
     pub resume: Vec<String>,
+    /// For each block of the plan's active path, the ids of the records written for it, in order
+    /// (Claude Code row uuids). Empty where the writer does not say.
+    pub records: Vec<Vec<String>>,
 }
 
 /// A started external import may have written its session before its process failed.

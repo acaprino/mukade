@@ -4,7 +4,9 @@
 //! `mukade chat launch <harness> --room <name>` starts the harness with the room in its
 //! environment and a small kit (hooks and the MCP entry) that names `mukade chat hook`. Each hook
 //! call is one short process: it reads what the harness says about the event, talks to the running
-//! service, and answers in the harness's own hook format (`Harness::chat_hook_output`).
+//! service, and answers in the harness's own hook format (`Harness::chat_hook_output`). A harness
+//! without command hooks (OpenCode, Pi) gets a JavaScript plugin (`kits/`) that runs the same
+//! hook at the same boundaries and hands the answer over through the harness's plugin API.
 //!
 //! The adapter is the member's one room consumer. It acknowledges a batch only at the next hook
 //! call of the same session: that call proves the turn that received the batch went on. A batch
@@ -32,8 +34,30 @@ pub const ENV_MAX_WAKES: &str = "MUKADE_CHAT_MAX_WAKES";
 const DEFAULT_MAX_WAKES: u32 = 10;
 /// The longest listening the hooks are given time for.
 pub const MAX_LISTEN: Duration = Duration::from_secs(3600);
-/// One `wait` call may last this long; longer listening is several calls.
-const WAIT_SLICE: u64 = 300;
+/// One `wait` call may last this long; longer listening is several calls. A listening hook the
+/// harness stopped (the user typed, or pressed Escape) can leave its last call running in the
+/// service, which holds the member's stream: a short slice frees it soon.
+const WAIT_SLICE: u64 = 5;
+/// How long a hook waits for a stream another call of its member still holds (a stopped
+/// listener's last slice) before it gives up.
+const BUSY_PATIENCE: Duration = Duration::from_secs(WAIT_SLICE + 3);
+
+/// `client.call`, waiting out a stream that a stopped listener's last call still holds.
+async fn call_consuming(
+    client: &ChatClient,
+    operation: &str,
+    args: Value,
+) -> Result<Value, ChatError> {
+    let deadline = Instant::now() + BUSY_PATIENCE;
+    loop {
+        match client.call(operation, args.clone()).await {
+            Err(error) if error.code == "stream_busy" && Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            other => return other,
+        }
+    }
+}
 
 fn refused(code: &str, message: impl Into<String>) -> ChatError {
     ChatError {
@@ -328,15 +352,15 @@ async fn read(client: &ChatClient, state: &State) -> Result<Value, ChatError> {
     if let Some(batch) = &state.delivered {
         args["ack_batch_id"] = json!(batch);
     }
-    match client.call("read", args).await {
+    match call_consuming(client, "read", args).await {
         // A batch that no longer matches (the agent read the room itself) is not ours to settle.
         Err(error) if matches!(error.code.as_str(), "batch_invalidated" | "batch_not_found") => {
-            client
-                .call(
-                    "read",
-                    json!({"room_id": state.room_id, "member_handle": state.member_handle}),
-                )
-                .await
+            call_consuming(
+                client,
+                "read",
+                json!({"room_id": state.room_id, "member_handle": state.member_handle}),
+            )
+            .await
         }
         other => other,
     }
@@ -391,6 +415,9 @@ pub struct Kit {
     pub server: super::connect::Server,
     /// Seconds the stop hook is given: the listening time plus a margin.
     pub stop_timeout: u64,
+    /// The arguments for the harness, from `--`; the launcher places them where the harness's
+    /// command line wants them.
+    pub args: Vec<String>,
 }
 
 /// The time a Stop hook is given: the longest listening plus a margin. It is the same for every
@@ -414,7 +441,35 @@ pub fn hook_json(event: Event, delivery: &Delivery) -> Option<String> {
     Some(value.to_string())
 }
 
+/// The hook output of a harness whose plugin runs the hook (OpenCode, Pi): `{"context": text}`
+/// for the turn that starts, `{"continue": text}` for an instance that goes on instead of stopping.
+/// The plugin hands it over in the harness's own way.
+pub fn plugin_json(event: Event, delivery: &Delivery) -> Option<String> {
+    let value = match (event, delivery) {
+        (Event::Stop, Delivery::Continue(text)) => json!({"continue": text}),
+        (Event::SessionStart | Event::Prompt, Delivery::Context(text)) => json!({"context": text}),
+        _ => return None,
+    };
+    Some(value.to_string())
+}
+
+/// The part of every JavaScript plugin kit that runs a hook (`mukadeHook`).
+const HOOK_JS: &str = include_str!("kits/hook.js");
+
 impl Kit {
+    /// The source of a JavaScript plugin for `harness`: `const MUKADE` (the mukade executable,
+    /// the harness, and `extra`'s fields), the shared hook runner, then `body`. No credential is
+    /// written: the plugin reads it from the environment.
+    pub fn plugin_source(&self, harness: &str, extra: Value, body: &str) -> String {
+        let exe = self.exe.to_string_lossy();
+        let exe = exe.strip_prefix(r"\\?\").unwrap_or(&exe);
+        let mut config = json!({"exe": exe, "harness": harness});
+        if let (Some(config), Some(extra)) = (config.as_object_mut(), extra.as_object()) {
+            config.extend(extra.clone());
+        }
+        format!("const MUKADE = {config};\n{HOOK_JS}{body}")
+    }
+
     fn exe_path(&self) -> String {
         let exe = self.exe.to_string_lossy().replace('\\', "/");
         exe.strip_prefix("//?/").unwrap_or(&exe).to_string()
@@ -474,13 +529,13 @@ async fn listen(
         }
         // Whole seconds, rounded up: 0.9 s left is one more second of waiting, not none.
         let left = left.as_secs() + u64::from(left.subsec_nanos() > 0);
-        let staged = client
-            .call(
-                "wait",
-                json!({"room_id": state.room_id, "member_handle": state.member_handle,
-                       "addressed_only": true, "timeout_seconds": left.min(WAIT_SLICE)}),
-            )
-            .await?;
+        let staged = call_consuming(
+            client,
+            "wait",
+            json!({"room_id": state.room_id, "member_handle": state.member_handle,
+                   "addressed_only": true, "timeout_seconds": left.min(WAIT_SLICE)}),
+        )
+        .await?;
         if staged["batch_id"].is_string() {
             return Ok(Some(staged));
         }
@@ -493,11 +548,13 @@ async fn listen(
 /// Bind the session once its transcript exists, so an observer can follow it. A failure (the
 /// service does not know this harness's store) is not the hook's problem: it is tried again.
 async fn try_bind(client: &ChatClient, harness: &str, state: &mut State, input: &HookInput) {
+    // A transcript the harness names must exist first; a harness that names none (OpenCode keeps
+    // a database) is tried at once.
     if state.bound
-        || !input
+        || input
             .transcript_path
             .as_deref()
-            .is_some_and(|path| Path::new(path).is_file())
+            .is_some_and(|path| !Path::new(path).is_file())
     {
         return;
     }

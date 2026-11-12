@@ -80,10 +80,11 @@ impl Writer for ClaudeCode {
             .unwrap_or_else(|| dir.join(format!("{id}.jsonl")));
 
         let mut clock = Clock::new(opts.now.as_deref());
-        let rows = rows(plan, session, &id, &cwd, opts, &mut clock);
+        let (rows, records) = rows_and_records(plan, session, &id, &cwd, opts, &mut clock);
         write_jsonl(&file, &rows)?;
 
         Ok(Written {
+            records,
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
             resume: crate::catalog::resume(
@@ -171,6 +172,7 @@ fn write_child(
         return Err(error);
     }
     Ok(Written {
+        records: Vec::new(),
         id: id.clone(),
         location: file.to_string_lossy().into_owned(),
         // A subagent is resumed through its parent.
@@ -185,6 +187,8 @@ fn write_child(
 
 struct RowWriter<'a> {
     out: Vec<Value>,
+    /// For each block of the active path, the uuids of its rows.
+    records: Vec<Vec<String>>,
     parent: Option<String>,
     /// call id → the uuid of the row carrying its `tool_use` block (L2).
     calls_owner: HashMap<String, String>,
@@ -195,6 +199,32 @@ struct RowWriter<'a> {
 }
 
 impl RowWriter<'_> {
+    /// Block `index` of the active path was written from row `start` on: remember its rows, and,
+    /// in a fork, say which row of the origin's copy each one is (`forkedFrom`, as `/branch`
+    /// writes it on the rows it copies).
+    fn block_written(&mut self, start: usize, index: usize) {
+        let mut uuids = Vec::new();
+        for (n, row) in self.out[start..]
+            .iter_mut()
+            .filter(|row| row.get("uuid").is_some())
+            .enumerate()
+        {
+            uuids.push(row["uuid"].as_str().unwrap_or_default().to_string());
+            let origin = self
+                .opts
+                .fork_of
+                .as_ref()
+                .and_then(|fork| Some((fork, fork.records.get(index)?.get(n)?)));
+            if let (Some((fork, uuid)), Some(map)) = (origin, row.as_object_mut()) {
+                map.insert(
+                    "forkedFrom".into(),
+                    json!({"sessionId": fork.id, "messageUuid": uuid}),
+                );
+            }
+        }
+        self.records.push(uuids);
+    }
+
     fn push(&mut self, row: Value) {
         let uuid = row.get("uuid").and_then(Value::as_str).map(str::to_owned);
         self.out.push(row);
@@ -256,6 +286,7 @@ impl RowWriter<'_> {
 /// leave from them.
 fn lay(w: &mut RowWriter, plan: &plan::Plan, session: &Session, opts: &WriteOpts, chain: usize) {
     for (index, block) in plan.chain(chain).iter().enumerate() {
+        let start = w.out.len();
         match block {
             PlannedBlock::User { text, attachments } => {
                 let mut content = Vec::new();
@@ -333,6 +364,9 @@ fn lay(w: &mut RowWriter, plan: &plan::Plan, session: &Session, opts: &WriteOpts
                 }
             }
         }
+        if chain == 0 {
+            w.block_written(start, index);
+        }
         // The branches that leave right after this block: laid out here, each from this block,
         // and then the path goes on from where it was.
         for n in plan.branches_after(Some((chain, index))) {
@@ -363,8 +397,21 @@ pub(crate) fn rows(
     opts: &WriteOpts,
     clock: &mut Clock,
 ) -> Vec<Value> {
+    rows_and_records(plan, session, session_id, cwd, opts, clock).0
+}
+
+/// [`rows`], with the uuids of each active-path block's rows ([`Written::records`]).
+fn rows_and_records(
+    plan: &plan::Plan,
+    session: &Session,
+    session_id: &str,
+    cwd: &str,
+    opts: &WriteOpts,
+    clock: &mut Clock,
+) -> (Vec<Value>, Vec<Vec<String>>) {
     let mut w = RowWriter {
         out: Vec::new(),
+        records: Vec::new(),
         parent: None,
         calls_owner: HashMap::new(),
         session_id,
@@ -467,7 +514,7 @@ pub(crate) fn rows(
         }
         w.out.push(row);
     }
-    w.out
+    (w.out, w.records)
 }
 
 /// The user prompt the conversation ended on, as the picker shows it: one line, at most 200

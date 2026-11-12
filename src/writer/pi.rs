@@ -71,6 +71,7 @@ impl Writer for Pi {
         write_jsonl(&file, &rows)?;
 
         Ok(Written {
+            records: Vec::new(),
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
             // Pi searches the current project first, so the library passes the file path (§5).
@@ -258,13 +259,18 @@ fn rows(
     let mut out: Vec<Value> = Vec::new();
     let mut parent: Option<String> = None;
 
-    out.push(json!({
+    let mut header = json!({
         "type": "session",
         "version": 3,
         "id": id,
         "timestamp": clock.next_iso(),
         "cwd": cwd,
-    }));
+    });
+    // A fork names its origin's file, as Pi's own `/fork` does.
+    if let Some(fork) = &opts.fork_of {
+        header["parentSession"] = Value::String(fork.location.clone());
+    }
+    out.push(header);
 
     // A branch that leaves before the first entry comes first.
     for n in plan.branches_after(None) {

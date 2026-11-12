@@ -56,6 +56,70 @@ impl Harness for OpenCode {
         })
     }
 
+    /// The plugin hands the answer over itself (a synthetic message), so it reads mukade's own
+    /// plugin format.
+    fn chat_hook_output(
+        &self,
+        event: crate::chat::adapter::Event,
+        delivery: &crate::chat::adapter::Delivery,
+    ) -> Option<String> {
+        crate::chat::adapter::plugin_json(event, delivery)
+    }
+
+    /// A server plugin for one run, named with the MCP entry in `OPENCODE_CONFIG_CONTENT`, which
+    /// OpenCode reads as one more configuration document: the user's own files are not touched.
+    /// The plugin runs in OpenCode's server, so the instance runs a private one (`--standalone`)
+    /// that has this environment; the shared background service would not. The credential stays
+    /// in the environment (`{env:…}`).
+    fn chat_launch(
+        &self,
+        kit: &crate::chat::adapter::Kit,
+    ) -> Result<Option<std::process::Command>, crate::bus::ChatError> {
+        let refused = |message: String| crate::bus::ChatError {
+            code: "invalid_arguments".into(),
+            message,
+            retryable: false,
+            ack_batch_id: None,
+        };
+        if kit
+            .args
+            .iter()
+            .any(|a| a == "--server" || a.starts_with("--server="))
+        {
+            return Err(refused(
+                "a launched OpenCode runs its own private server (--standalone); --server cannot be passed".into(),
+            ));
+        }
+        let plugin = kit.folder.join("opencode-plugin");
+        kit.write(
+            "opencode-plugin/package.json",
+            br#"{"name":"mukade-chat","private":true,"type":"module"}"#,
+        )?;
+        let source = kit.plugin_source(
+            "opencode",
+            serde_json::json!({}),
+            include_str!("../chat/kits/opencode.js"),
+        );
+        kit.write("opencode-plugin/server.js", source.as_bytes())?;
+        let content = chat_config(
+            std::env::var("OPENCODE_CONFIG_CONTENT").ok().as_deref(),
+            &plugin,
+            &kit.server.endpoint,
+        )
+        .map_err(refused)?;
+        let exe = crate::exe::resolve(self.id(), None);
+        let mut command = std::process::Command::new(crate::exe::spawnable(&exe));
+        command
+            .args(standalone_args(&kit.args))
+            .env("OPENCODE_CONFIG_CONTENT", content)
+            .env(
+                "MUKADE_CHAT_AUTHORIZATION",
+                format!("Bearer {}", kit.server.token),
+            )
+            .env("MUKADE_CHAT_SERVICE_ID", &kit.server.service_id);
+        Ok(Some(command))
+    }
+
     fn user_origin(&self, raw: Option<&serde_json::Value>) -> crate::reader::origin::Origin {
         use crate::reader::origin::Origin;
         let Some(raw) = raw else {
@@ -810,6 +874,58 @@ fn web_fetch(input: &Value) -> Translation {
         name: "webfetch",
         input: tools::obj_pairs(pairs),
     }
+}
+
+/// The configuration document a launched OpenCode reads on top of the user's own: the chat
+/// plugin's folder and the MCP entry. A document the caller already set in
+/// `OPENCODE_CONFIG_CONTENT` is kept, with the two added to it.
+fn chat_config(existing: Option<&str>, plugin: &Path, endpoint: &str) -> Result<String, String> {
+    let mut document = match existing.filter(|text| !text.trim().is_empty()) {
+        None => serde_json::json!({}),
+        Some(text) => serde_json::from_str::<Value>(text)
+            .ok()
+            .filter(Value::is_object)
+            .ok_or("OPENCODE_CONFIG_CONTENT is set and is not a JSON object; unset it to launch")?,
+    };
+    let plugin = plugin.to_string_lossy();
+    let plugin = plugin.strip_prefix(r"\\?\").unwrap_or(&plugin);
+    let plugins = document["plugins"].take();
+    let mut plugins = match plugins {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items,
+        _ => return Err("OPENCODE_CONFIG_CONTENT has plugins that are not a list".into()),
+    };
+    plugins.push(serde_json::json!(plugin));
+    document["plugins"] = Value::Array(plugins);
+    if !document["mcp"].is_object() && !document["mcp"].is_null() {
+        return Err("OPENCODE_CONFIG_CONTENT has an mcp that is not an object".into());
+    }
+    if !document["mcp"]["servers"].is_object() {
+        document["mcp"]["servers"] = serde_json::json!({});
+    }
+    document["mcp"]["servers"]["mukade"] = serde_json::json!({
+        // Direct tools: the introduction tells the model to call chat_send, not to script it.
+        "type": "remote", "url": endpoint, "oauth": false, "protocol": "legacy", "codemode": false,
+        "headers": {"Authorization": "{env:MUKADE_CHAT_AUTHORIZATION}",
+                    "X-Mukade-Service-Id": "{env:MUKADE_CHAT_SERVICE_ID}"},
+        "timeout": {"execution": 330000},
+    });
+    Ok(document.to_string())
+}
+
+/// The harness arguments with `--standalone` where OpenCode reads it: after `run` or `mini`, else
+/// first (the full-screen interface).
+fn standalone_args(args: &[String]) -> Vec<String> {
+    if args.iter().any(|a| a == "--standalone") {
+        return args.to_vec();
+    }
+    let at = usize::from(matches!(
+        args.first().map(String::as_str),
+        Some("run" | "mini")
+    ));
+    let mut out = args.to_vec();
+    out.insert(at, "--standalone".into());
+    out
 }
 
 #[cfg(test)]
