@@ -1,6 +1,6 @@
 # mukade-tui — harness sessions manager (terminal UI)
 
-One terminal window over the sessions of **Claude Code, Codex, OpenCode and Pi** and any installation a scan finds: browse, read, resume, hop, export, import.
+One terminal window over the sessions of **Claude Code, Codex, OpenCode, Pi, Hermes Agent and DeepSeek Harness** and any installation a scan finds: browse, read, resume, hop, export, import.
 
 A separate crate: the CLI's dependencies do not change. It goes only through the library (`Reader::list_all`, `export`, `hop_into`, `import_document`), never parsing a store itself.
 
@@ -12,19 +12,21 @@ A separate crate: the CLI's dependencies do not change. It goes only through the
 
 ## What it can do, per harness
 
-| | Claude Code | Codex | OpenCode | Pi |
-|---|:-:|:-:|:-:|:-:|
-| list sessions, filter by folder | ✅ | ✅ | ✅ | ✅ |
-| read the transcript | ✅ | ✅ | ✅ | ✅ |
-| resume (`R`) | ✅ | ✅ | ✅ | ✅ |
-| hop to / from (`h`) | ✅ | ✅ | ✅ | ✅ |
-| export (`e`) | ✅ | ✅ | ✅ | ✅ |
-| import into (`i`) | ✅ | ✅ | ✅ ¹ | ✅ |
-| `updated` time | ✅ | ✅ | ✅ | ✅ |
-| `live` (running now) | ✅ | — ² | — ² | — ² |
+| | Claude Code | Codex | OpenCode | Pi | Hermes | DeepSeek |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| list sessions, filter by folder | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| read the transcript | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| resume (`R`) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ ³ |
+| hop to / from (`h`) | ✅ | ✅ | ✅ | ✅ | ✅ ⁴ | ✅ |
+| export (`e`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| import into (`i`) | ✅ | ✅ | ✅ ¹ | ✅ | ✅ ⁴ | ✅ |
+| `updated` time | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `live` (running now) | ✅ | — ² | — ² | — ² | — ² | — ² |
 
 ¹ OpenCode needs a project id for the folder. The TUI asks the destination OpenCode for a session already filed under that folder; with none, the first write there needs the CLI's `--project-id`.
 ² The store does not record running sessions.
+³ DeepSeek Harness has no terminal UI: `R` shows the headless command that continues the session (`dsh --profile headless --session-id <id> "<task>"`), and a hop's result lists `interactive  none: …`.
+⁴ A write into Hermes goes through `hermes sessions import` and takes about a minute, in the background with the busy indicator. Tool calls arrive as text.
 
 ## Run
 
@@ -36,7 +38,7 @@ cargo run -p mukade-tui -- --scan D:\Apps    # also list every installation belo
 
 `--turns=N` and `--scan=<dir>` work too; `--scan` may repeat.
 
-**Where it reads from:** each harness's own variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`, `PI_CODING_AGENT_DIR`; [usage §7](../docs/usage.md#7-stores-and-executables)); unset, the harness's default store (`catalog/harnesses.json`). Browsing only reads; resume, hop and import write.
+**Where it reads from:** each harness's own variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_DB`, `PI_CODING_AGENT_DIR`, `HERMES_HOME`, `DSH_HOME`; [usage §7](../docs/usage.md#7-stores-and-executables)); unset, the harness's default store (`catalog/harnesses.json`). Browsing only reads; resume, hop and import write.
 
 Headless (scripts, CI):
 
@@ -142,7 +144,7 @@ project, as a hop does, in the document's working directory. `esc` cancels.
 ## Resume (`R`)
 
 `R` leaves the window and runs the harness's interactive resume in the same terminal (the session's store, executable and working directory), and returns when you quit it. The commands are
-`interactive_resume` in `catalog/harnesses.json` ([the four entries](../docs/reference/harness-catalog.md#the-four-entries); OpenCode: `mini --standalone`). A scanned installation runs its own executable, not the bare name.
+`interactive_resume` in `catalog/harnesses.json` ([the six entries](../docs/reference/harness-catalog.md#the-six-entries); OpenCode: `mini --standalone`; DeepSeek Harness has none: no terminal UI). A scanned installation runs its own executable, not the bare name.
 
 ## Folders (directory filter)
 

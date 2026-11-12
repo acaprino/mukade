@@ -1,8 +1,8 @@
 # Using mukade — command-line guide
 
 Use this page to run `mukade` from a shell. Mukade moves a coding-agent session from one harness to
-another — Claude Code, Codex CLI, OpenCode, Pi — and the destination continues it **as one of its
-own sessions**.
+another — Claude Code, Codex CLI, OpenCode, Pi, Hermes Agent, DeepSeek Harness — and the destination
+continues it **as one of its own sessions**.
 
 - The sessions explorer window is a separate crate: [mukade-tui](../mukade-tui/README.md) (its
   commands, keys, resume and hop examples).
@@ -120,7 +120,7 @@ Always true:
 | `mukade hop <src-harness> <session-id> <dst-harness> [options]` | read the source and write the destination in one process | receipt |
 | `mukade document opencode <src-harness> <session-id> [options]` | OpenCode's import document, nothing written | JSON |
 
-- Harness names: `claude_code`, `codex`, `opencode`, `pi`. Store variables per harness:
+- Harness names: `claude_code`, `codex`, `opencode`, `pi`, `hermes`, `deepseek_harness`. Store variables per harness:
   [section 7](#7-stores-and-executables).
 - With `--root` the harness may be left out of `list`, `dump` and a hop's source. `write` always
   needs it.
@@ -167,7 +167,7 @@ Always true:
 | `--dest-agent <name>`, `--metadata-file <path>` | write, hop, document | OpenCode only: primary agent; JSON session metadata |
 | `--expect-sha256 <hash>` | hop | refuse when the source's fingerprint changed |
 | `--resume-prompt <text>` | write, hop | resume in the destination and keep its reply in the receipt |
-| `--claude-exe`, `--codex-exe`, `--opencode-exe`, `--pi-exe <path>` | write, hop, document, dump (summary) | the binary to spawn |
+| `--claude-exe`, `--codex-exe`, `--opencode-exe`, `--pi-exe`, `--hermes-exe`, `--dsh-exe <path>` | write, hop, document, dump (summary) | the binary to spawn |
 
 ### `mukade harnesses`
 
@@ -206,7 +206,7 @@ a program uses the library or `mukade list` (JSON rows).
 - The locations it consults are the [harness catalog](reference/harness-catalog.md)
   (`catalog/harnesses.json`), which ships inside the executable.
 
-To enumerate `PATH` matches yourself: `Get-Command claude,codex,opencode,pi -All -ErrorAction
+To enumerate `PATH` matches yourself: `Get-Command claude,codex,opencode,pi,hermes,dsh -All -ErrorAction
 SilentlyContinue | Select-Object Name,Source` (POSIX: `command -v <name>`). For package-managed
 installs use `npm prefix -g`, `npm root -g` or `brew --prefix`, then run each binary's `--version`.
 Custom stores and executables: [section 7](#7-stores-and-executables). Per-OS procedure and native
@@ -259,7 +259,7 @@ Prints which harness stores one folder holds, with the evidence.
 Prints one JSON line per session.
 
 1. Set the harness's store variable ([section 7](#7-stores-and-executables)) or pass `--root`: Claude
-   Code, Codex and Pi need an explicit root, and `list opencode` needs `OPENCODE_DB` or `--root` (it
+   Code, Codex, Pi, Hermes and DeepSeek Harness need an explicit root, and `list opencode` needs `OPENCODE_DB` or `--root` (it
    never falls back to OpenCode's configured store). It reads the database read-only, without starting
    OpenCode.
 2. Run `mukade list <harness>`.
@@ -281,12 +281,12 @@ mukade list claude_code --children                        # with the subagent se
 | key | meaning |
 |---|---|
 | `id`, `title`, `cwd` | what the store records; any may be `null` |
-| `timestamp` | the session's **last activity**: Claude Code and OpenCode from the store, Codex from its state database or else the rollout file's last write, Pi from the newest record time; `null` when nothing says |
+| `timestamp` | the session's **last activity**: Claude Code and OpenCode from the store, Codex from its state database or else the rollout file's last write, Pi from the newest record time, Hermes from `last_activity_at` (else `ended_at`, `started_at`), DeepSeek Harness from the log file's last write; `null` when nothing says |
 | `location` | the file (or database) the session is recorded in |
 | `archived` | the harness marked it archived |
 | `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
 | `live` | `true` when a process of the harness runs the session now; `false` when the store records running sessions and none runs it; `null` when the store does not say |
-| `parent`, `kind` | only on a row with a parent: the session it came from, and `spawn` (a subagent) or `fork`. Without `--children` only a fork can have them (Pi, OpenCode) |
+| `parent`, `kind` | only on a row with a parent: the session it came from, and `spawn` (a subagent) or `fork`. Without `--children` only a fork can have them (Pi, OpenCode, Hermes, DeepSeek Harness) |
 
 A harness forgets transcripts long before it forgets sessions, so `list` reports both. The
 `unreadable` rows are how a caller sees every project:
@@ -318,7 +318,7 @@ is `null`: **a cleaner must read `null` as "not known", not as "not running".**
 
 #### Subagent sessions
 
-`--children` lists every session the store holds, subagent sessions included. `dump` and `hop` take
+`--children` lists every session the store holds, subagent sessions included (Hermes and DeepSeek Harness too). `dump` and `hop` take
 it too ([Carry the subagent sessions](#carry-the-subagent-sessions)); any other command given it is a
 command-line mistake (exit 1). `dump` and `hop` read a child by its `id` as listed.
 
@@ -328,6 +328,8 @@ command-line mistake (exit 1). `dump` and `hop` read a child by its `id` as list
 | Codex | the subagent and guardian threads of `state_<n>.sqlite` | the thread id | the thread that spawned it (`thread_spawn_edges`); none for a guardian review |
 | OpenCode | the child sessions (`parent_id`) | the session id | the spawning session |
 | Pi | nothing: no subagents | | |
+| Hermes | the `delegate_task` sessions (`model_config._delegate_from`, `source = subagent`); a `/branch` copy is listed anyway, as a fork | the session id | the spawning session |
+| DeepSeek Harness | the logs whose header has `origin: "subagent"` | the log's id | its header's `parentSession` |
 
 What `parent_kind` holds per harness: [spec §3.1](session-interchange-spec.md#31-the-librarys-own-model-session).
 What a child reported to its parent travels in the parent as a user turn
@@ -402,7 +404,7 @@ mukade dump codex --from-file 'C:\path\rollout.jsonl' --output C:\work\session.j
 
 - **`dump` converts nothing.** Every tool call keeps its name, its arguments and the canonical form
   mukade read it as; reasoning keeps its text and opaque part. Conversion happens when the document
-  is **written**, so one document written into any of the four harnesses gives the result a hop
+  is **written**, so one document written into any of the six harnesses gives the result a hop
   would.
 - It exports the session as it is, interrupted turns included; what is left out is decided at write.
 - It takes `--compaction portable|summary` and `--intent`; `native` is refused, because the document
@@ -655,7 +657,8 @@ What the `losses` lines mean:
 mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --compaction portable
 ```
 
-- The source must have compacted at least once (a Claude `/compact`, a Pi compaction, …); otherwise
+- The source must have compacted at least once (a Claude `/compact`, a Pi compaction, a Hermes
+  summary row, a dsh `compaction/summary`, …); otherwise
   the hop is refused with a reason, nothing written (exit 2). A Codex 0.165 summary is encrypted, so
   it is refused too.
 - The manifest keeps the line `the source's compaction summary travels as one user message` and how
@@ -679,6 +682,7 @@ mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'C:\work\my-project' --c
 | Pi | `compaction` with `firstKeptEntryId` |
 | Codex | `compacted` with `replacement_history` |
 | Claude Code | `compact_boundary` followed by an `isCompactSummary` row |
+| Hermes, DeepSeek Harness | none: `--compaction native` toward them is refused (exit 2); use `portable` or no compaction |
 
 - `--context-window` is required (above zero); `--max-output-tokens` defaults to 16000;
   `--text-token-factor` is optional (a positive number; default chars/3).
@@ -711,7 +715,10 @@ mukade write opencode 'C:\work\summary.json' --cwd 'C:\work\my-project'
   wrote it, which intent prompt, how long it is and, for Claude Code, what it cost.
 - A summary that cannot be written (error, empty reply, deadline) writes nothing (exit 4).
 - Refused (exit 2): with `--all-branches` (the summary stands for the branch the source resumes), and
-  with `--from-file` unless the source is Pi (only Pi forks a session from a file).
+  with `--from-file` unless the source is Pi (only Pi forks a session from a file). A Hermes or
+  DeepSeek Harness **source** is refused with its reason: neither has a run that leaves the session
+  as it was (`hermes chat --resume` and `dsh --session-id` append the question to it). Use `portable`
+  or `native` for those two, or any other source's summary.
 - If OpenCode's fork could not be deleted, `dump` prints on stderr
   `the summarizing run left a fork in the source store: run <command>`.
 
@@ -869,6 +876,8 @@ What `hop --children` writes, per destination:
 | Claude Code | `subagents/agent-<agentId>.jsonl` and its `.meta.json` in the folder of the parent's id; layout and fields: [Claude Code page, "Writing subagent sessions"](harnesses/claude-code.md) | the folder; its id is `<parent-id>.<agentId>`, the id `list --children` shows |
 | Codex | a rollout of its own | none: Codex records no link a writer can make; the manifest is the only record |
 | Pi | a session file of its own | none: Pi's `parentSession` means fork, not spawner |
+| Hermes | an import of its own (about a minute each) | none: the import has no field for a spawner |
+| DeepSeek Harness | a log of its own | none |
 
 - **Same pipeline, same options.** A child is read, planned and written like the session:
   `--reasoning`, `--without-tools`, `--tool-map`, the destination facts. `--dest-id`, `--dest-path`,
@@ -894,7 +903,7 @@ What `hop --children` writes, per destination:
 |---|---|
 | `source_id` | the child's id in the source |
 | `dest_id`, `dest_path` | its id and file (or database) in the destination |
-| `link` | `native` (OpenCode, Claude Code) or `none` (Codex, Pi) |
+| `link` | `native` (OpenCode, Claude Code) or `none` (Codex, Pi, Hermes, DeepSeek Harness) |
 | `depth` | 1 for a child of the session, 2 for a child of a child, … |
 | `compaction` | how it was written: `none` or `native` |
 | `inherits_context` | `true` when the child starts from its parent's conversation, which its file does not hold |
@@ -920,12 +929,14 @@ no equivalent travels as text, with its arguments, and is counted (`tools_text_f
 
 **Shell calls** keep their dialect: the command is never rewritten (`src/tools.rs` `other_dialect()`).
 
-- Toward Codex, OpenCode and Pi a shell call is translated only when the destination runs a shell of
+- Toward Codex, OpenCode, Pi and DeepSeek Harness a shell call is translated only when the destination runs a shell of
   its dialect: the one `--dest-shell` names (`bash`, `sh`, `zsh`, `dash`, `ksh` or `posix` for
   POSIX, `powershell` or `pwsh` for PowerShell), else the one the destination's own configuration or
   platform names for the project the session is filed under
   ([per destination](tool-conversion-tables.md#41-shell)). `--dest-shell none` names no dialect:
-  every such call travels as text.
+  every such call travels as text. DeepSeek Harness runs `pwsh` on Windows and `bash` elsewhere.
+- Toward Hermes no call is translated: its import keeps no tool call, so every call travels as text with
+  its arguments and its result.
 - Toward Claude Code a POSIX call becomes `Bash`, a PowerShell call `PowerShell` where the
   installation runs that tool ([how mukade tells](harnesses/claude-code.md#the-powershell-tool)),
   else text. That is the offered set, not a dialect: `--dest-shell` does not change it, `none`
@@ -950,8 +961,9 @@ Where the opaque part fits (`src/policy.rs` `payload_fits()`):
 | Codex | an encrypted payload only |
 | Pi | a signature, or an Anthropic encrypted payload, written as a `redacted: true` thinking block |
 | OpenCode | either |
+| Hermes, DeepSeek Harness | nothing: reasoning text is carried (dsh) or dropped (Hermes's import has no place for it); a signature or encrypted payload never |
 
-**OpenCode and Pi** speak whatever provider they are configured with, so their protocol is unknown and
+**OpenCode, Pi, Hermes and DeepSeek Harness** speak whatever provider they are configured with, so their protocol is unknown and
 **by default every reasoning block toward them is dropped**. Name the protocol to keep blocks of the
 same protocol:
 
@@ -975,9 +987,9 @@ See the [README](../README.md#library).
 | option | rule |
 |---|---|
 | `--expect-sha256 <hash>` | `hop` only; 64 hex digits. Checks the captured source fingerprint before writing or starting a source-model summary; a mismatch is refused (exit 2). It covers the selected source in its entirety: an appended file changes it |
-| `--dest-id <id>` | reserves the destination session ID: `ses_<id>` for OpenCode, a UUID for Claude Code, Codex and Pi |
-| `--dest-path <path>` | reserves the destination file itself, for the file-based destinations (Claude Code, Codex, Pi). Absolute, inside the destination root, free of `..`. OpenCode refuses it (exit 2): its native import allocates the file. `hop` checks it before reading the source, so a refused path runs nothing, a summarizing model included |
-| `--dest-agent <name>` | OpenCode only: the primary agent |
+| `--dest-id <id>` | reserves the destination session ID: `ses_<id>` for OpenCode, a UUID for Claude Code, Codex and Pi, `session-<uuid>` (or a UUID) for DeepSeek Harness. Hermes refuses it: Hermes allocates the id |
+| `--dest-path <path>` | reserves the destination file itself, for the file-based destinations (Claude Code, Codex, Pi). Hermes (a database) and DeepSeek Harness (found by id and project folder) refuse it (exit 2). Absolute, inside the destination root, free of `..`. OpenCode refuses it (exit 2): its native import allocates the file. `hop` checks it before reading the source, so a refused path runs nothing, a summarizing model included |
+| `--dest-agent <name>` | OpenCode only: the primary agent (every other destination refuses it) |
 | `--metadata-file <path>` | OpenCode only: a JSON object stored as session metadata; at most 1 MiB; protect it like the session |
 | `--tool-map <path>` | explicit bindings instead of the destination catalog's defaults (below) |
 | `--dest-shell <s>` | the shell the destination runs, over the one mukade reads from its configuration; `none`: no dialect (shell calls into Codex, OpenCode and Pi as text; Claude Code's offered set unchanged). Decides whether shell calls are translated ([section 5](#tool-calls-and-reasoning-what-is-converted-and-when)), and is recorded where the destination records one |
@@ -1000,11 +1012,13 @@ See the [README](../README.md#library).
 | Codex CLI | `codex` | `CODEX_HOME` | `--codex-exe` | `MUKADE_CODEX_EXE` |
 | OpenCode | `opencode` | `OPENCODE_DB` (database file), plus its applicable `XDG_*` settings | `--opencode-exe` | `MUKADE_OPENCODE_EXE` |
 | Pi | `pi` | `PI_CODING_AGENT_DIR` | `--pi-exe` | `MUKADE_PI_EXE` |
+| Hermes Agent | `hermes` | `HERMES_HOME` (the folder holding `state.db`) | `--hermes-exe` | `MUKADE_HERMES_EXE` |
+| DeepSeek Harness | `deepseek_harness` | `DSH_HOME` (the folder holding `sessions/`) | `--dsh-exe` | `MUKADE_DSH_EXE` |
 
 **Stores.**
 
-- Claude Code, Codex and Pi require an explicit root, even for standard installations (an empty
-  variable is no root).
+- Claude Code, Codex, Pi, Hermes and DeepSeek Harness require an explicit root, even for standard
+  installations (an empty variable is no root). Hermes's own home is `%LOCALAPPDATA%\hermes` (Windows) or `~/.hermes`; dsh's is `~/.dsh`.
 - OpenCode: `list opencode` needs an explicit `OPENCODE_DB` or `--root`; without one it refuses with
   `OPENCODE_DB is not set: no OpenCode store to list`. The OpenCode processes mukade starts
   (`session export`, the import, a resume) get `OPENCODE_DB` when set, and otherwise run with the
@@ -1080,6 +1094,19 @@ examples above work for any pair; what changes per harness:
 | Codex CLI | `CODEX_HOME`, kept set for `resume` | `--codex-exe`, `--dest-version` | `list` includes archived threads |
 | OpenCode | `OPENCODE_DB` plus `XDG_*`, kept set for `resume` | `--opencode-exe`, `--project-id`, `--model-provider`, `--model` | reads a source with `opencode session export … --standalone`; imports with `--standalone` |
 | Pi | `PI_CODING_AGENT_DIR`, kept set for `resume` | `--pi-exe` (a `.cmd` launcher works) | a separate agent directory does not prove every resource Pi reads is isolated |
+| Hermes Agent | `HERMES_HOME`, set for the import and for `resume` | `--hermes-exe` | a destination only through `hermes sessions import`: tools travel as text, the id is Hermes's, the import takes about a minute |
+| DeepSeek Harness | `DSH_HOME` | `--dsh-exe` (a `.cmd` launcher works) | the log is written by mukade; resume from the session's own folder |
+
+**Every harness is a destination.** How each is written:
+
+| destination | written by | id | tools | native compaction | resume in the receipt |
+|---|---|---|---|---|---|
+| Claude Code | mukade, a JSONL file | UUID | translated | ✅ | `claude -p --resume <id>` |
+| Codex CLI | mukade, a rollout file | UUID | translated (`exec_command` only) | ✅ | `codex exec resume <id>` |
+| OpenCode | `opencode import` of an interchange document | `ses_…` | translated | ✅ | `opencode run --standalone --session <id>` |
+| Pi | mukade, a JSONL file | UUID | translated | ✅ | `pi -p --session <file>` |
+| Hermes Agent | `hermes sessions import` of a Claude-shaped file | Hermes's own | text form only | ❌ refused | `hermes chat -Q --resume <id> -q` |
+| DeepSeek Harness | mukade, a zstd log | `session-<uuid>` | translated (files, search, fetch, shell) | ❌ refused | `dsh --profile headless --session-id <id>` (add a task) |
 
 A harness in its own folder, as destination:
 
@@ -1169,6 +1196,52 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --cwd 'C:\work\my-project
 - Verify that Pi installation's provider credentials and configuration separately.
 - Sessions written this way were run against Pi 1.2.0 and 1.4.0
   (`docs/verification/pi-session-and-reasoning-verification.md`).
+
+### Hermes Agent
+
+- **Source.** `list hermes` reads `<HERMES_HOME>/state.db` read-only, without starting Hermes; it
+  lists every session, `oneshot` ones included. A store older than schema 32 is refused, naming it.
+- **Destination.** mukade runs `hermes sessions import --from claude` on a file it writes, then deletes
+  the file. That keeps user and assistant text only: every tool call and result is text inside the
+  turns, no model or reasoning is recorded, and an image is `[image]`. Refused (exit 2): `--dest-id`,
+  `--dest-path`, `--dest-agent`, `--metadata-file`, `--compaction native`.
+- **Resume.** The receipt's command is `hermes chat -Q --resume <id> -q`; interactively `hermes --resume <id>`.
+  `--resume-prompt` runs it with `HERMES_HOME` set to the store written to.
+- **Slow.** The import starts Hermes's gateway: about a minute per session, and per child with `--children`.
+  An import that failed or did not confirm may still have written: exit 5 names `state.db`; look with
+  `hermes sessions list` before retrying.
+
+```powershell
+$env:HERMES_HOME = "$env:LOCALAPPDATA\hermes"
+mukade list hermes
+mukade dump hermes YOUR_HERMES_SESSION_ID --output C:\work\session.json
+mukade hop hermes YOUR_HERMES_SESSION_ID claude_code --cwd 'C:\work\my-project'      # out of Hermes
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID hermes --cwd 'C:\work\my-project'      # into Hermes
+```
+
+Details and verification: [Hermes Agent page](harnesses/hermes-agent.md).
+
+### DeepSeek Harness
+
+- **Source.** `list deepseek_harness` walks `<DSH_HOME>/sessions/**/session.v4.jsonl[.zstd]`, decoding
+  the zstd frames itself (no `dsh` needed). Only format 4 is read; a torn tail is dropped and noted.
+- **Destination.** mukade writes a v4 log in the folder `dsh` derives from the id and the cwd. The id
+  is `session-<uuid>` (`--dest-id` takes that or a UUID); `--cwd` must be an absolute folder. Refused
+  (exit 2): `--dest-path`, `--dest-agent`, `--metadata-file`, `--compaction native`.
+- **Resume.** `dsh` has no terminal UI, so the receipt's command is headless and needs a task:
+  `dsh --profile headless --session-id <id> "<task>"`, run from the session's cwd. The TUI says so
+  instead of opening it.
+
+```powershell
+$env:DSH_HOME = "$HOME\.dsh"
+mukade list deepseek_harness
+mukade dump deepseek_harness YOUR_DSH_SESSION_ID --output C:\work\session.json
+mukade hop deepseek_harness YOUR_DSH_SESSION_ID claude_code --cwd 'C:\work\my-project'   # out of dsh
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID deepseek_harness --cwd 'C:\work\my-project' # into dsh
+cd 'C:\work\my-project'; dsh --profile headless --session-id NEW_SESSION_ID "continue"
+```
+
+Details and verification: [DeepSeek Harness page](harnesses/deepseek-harness.md).
 
 ## 9. Speed
 

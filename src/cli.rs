@@ -111,8 +111,9 @@ options:
                            branch the harness resumes
   --archived <bool>        list: true (default) includes the sessions the harness marked archived,
                            false leaves them out; the same for every harness
-  --children               list: also the subagent sessions (Claude Code, Codex, OpenCode); a
-                           row with a parent names it and its kind, spawn or fork
+  --children               list: also the subagent sessions (Claude Code, Codex, OpenCode, Hermes,
+                           DeepSeek Harness); a row
+                           with a parent names it and its kind, spawn or fork
                            dump: the subagent sessions too, in the document's `children`
                            hop: write them too, each as a session of its own after the session,
                            linked where the destination has a link (OpenCode, Claude Code)

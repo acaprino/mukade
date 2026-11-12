@@ -355,6 +355,58 @@ In Claude Code, with the session open:
 
 ---
 
+## 16. Hermes resumes a session `hop` imported (5 min) 🟡
+
+New: the import and the read-back are verified ([record](2026-11-12-hermes-writer-live.md)); a model
+answering from the imported session is not. One model call; use a free OpenRouter model.
+
+**Needs:** Hermes configured with a provider (or `--provider openrouter -m cohere/north-mini-code:free`
+and `OPENROUTER_API_KEY`).
+
+**Do**
+
+```powershell
+$env:HERMES_HOME = "$env:LOCALAPPDATA\hermes"
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID hermes --cwd 'C:\work\my-project'     # about a minute; note the id
+hermes chat -Q --resume NEW_SESSION_ID --provider openrouter -m cohere/north-mini-code:free -q "Which file did we last read?"
+mukade dump hermes NEW_SESSION_ID | Select-String '"role"'                           # four messages now
+```
+
+**Pass if**
+
+- [ ] The answer names something from the imported history (tool calls are text there).
+- [ ] `dump` shows the original turns, then your question and the answer.
+
+**Write down:** the answer, and whether `hermes sessions list` shows a title for the session.
+
+---
+
+## 17. dsh resumes a written session and calls a tool (5 min) 🟡
+
+New: `dsh` resumed a written log and answered a plain prompt ([record](2026-11-12-dsh-writer-live.md)).
+The converted tool history under a task that makes the model call a tool is not checked.
+
+**Needs:** `dsh` 0.2.2 and the OpenRouter patch (`docs/superpowers/specs/2026-11-12-dsh-openrouter.patch.yml`).
+
+**Do**
+
+```powershell
+$env:DSH_HOME = "$HOME\.dsh"
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID deepseek_harness --cwd 'C:\work\my-project'   # note the id
+cd 'C:\work\my-project'
+dsh --profile headless --patch D:\path\to\mukade\docs\superpowers\specs\2026-11-12-dsh-openrouter.patch.yml --session-id NEW_SESSION_ID "Read README.md and tell me its first line"
+mukade dump deepseek_harness NEW_SESSION_ID | Select-String 'tool'
+```
+
+**Pass if**
+
+- [ ] `dsh` answers without a format or checksum error.
+- [ ] The log gained a `read` call and its result after the converted history.
+
+**Write down:** the answer, and the model used.
+
+---
+
 ## When you are done
 
 Send back the ticked list and the "Write down" values. Each passed block becomes a dated line in

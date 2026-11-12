@@ -11,7 +11,7 @@ against its requirement id; cite sections as `spec §N`.
 | Status | 2026-11-11: draft; L1–L14 built and tested (§8), open items in §10; every behaviour below was run on this machine unless marked |
 | Origin | mukade began as Shinatama's session-interchange library (`src/lib.rs`); this spec companions Shinatama's technical design (5.3, 5.4, 5.4.1, 5.5, 6.4), kept with that product's documentation |
 | Evidence | the [verification records](README.md#verification-records); `[V: <path>]` names a file of Shinatama's bench (fixtures under `fixtures/`) |
-| Background | [`reference/harness-session-persistence-reference.md`](reference/harness-session-persistence-reference.md): secondary sources, superseded here for the four harnesses |
+| Background | [`reference/harness-session-persistence-reference.md`](reference/harness-session-persistence-reference.md): secondary sources, superseded here for the six harnesses |
 
 **Evidence labels** (scope and limits of the tests: the verification records).
 
@@ -56,7 +56,7 @@ import path, the writer uses it:
 | Codex | writes the rollout itself (§2.2 says which files Codex needs) | Codex's importer (`externalAgentConfig`, CX4 [V]) turns tool calls into text markers |
 | Claude Code, Pi | write the session file | no session import |
 
-**Out of scope:** harnesses other than the four (the reference report lists them); writing into an
+**Out of scope:** harnesses other than the six (the reference report lists them); writing into an
 existing session; writing while the destination has the same store open for that session; replaying
 one provider's signed or encrypted reasoning to another provider.
 
@@ -85,7 +85,7 @@ SessionRef ──read──▶ Session (IR, §3) ──policy──▶ Session �
 ```rust
 pub struct HopRequest {
     pub source: SessionRef,              // harness + native id (an unambiguous prefix is accepted)
-    pub dest: HarnessId,                 // claude_code | codex | opencode | pi
+    pub dest: HarnessId,                 // claude_code | codex | opencode | pi | hermes | deepseek_harness
     pub cwd: Option<String>,             // project directory the destination files the session under
     pub compaction: Compaction,          // §4
     pub resume: Option<ResumePrompt>,    // §5
@@ -187,7 +187,14 @@ application-data folders, registry or system temporary folder [V: `tests/portabl
 binary alone in a folder with every such location pointed at an empty sandbox and asserts it stays
 empty].
 
-## 2. The four harnesses (verified facts the library depends on)
+## 2. The harnesses (verified facts the library depends on)
+
+Sections 2.1 to 2.4 are the first four. Hermes Agent and DeepSeek Harness have their facts on their pages
+(session store, records, what the model receives), which this spec does not repeat:
+[Hermes Agent](harnesses/hermes-agent.md#session-store), [DeepSeek Harness](harnesses/deepseek-harness.md#session-store).
+Where a rule below says "all four", the two later harnesses follow it as their pages state: both read
+a stored compaction as a `Compaction` entry, neither takes a native compaction record, both are
+destinations.
 
 Each subsection gives isolation, commands, the native records to read and write, and what the model
 receives on resume.
@@ -678,8 +685,9 @@ reaches a harness behind a `.cmd` launcher; elsewhere the tree is read from pare
 so Ctrl-C still reaches the harness. A process that detached itself is not found (`kill_tree()`).
 
 **The resume command each writer returns** is the catalog's `resume` argv with the prompt appended
-([the four commands](reference/harness-catalog.md#the-four-entries)): `claude -p --resume <id>`,
-`codex exec resume <id>`, `opencode run --standalone --session <id>`, `pi -p --session <file>`.
+([the six commands](reference/harness-catalog.md#the-six-entries)): `claude -p --resume <id>`,
+`codex exec resume <id>`, `opencode run --standalone --session <id>`, `pi -p --session <file>`,
+`hermes chat -Q --resume <id> -q`, `dsh --profile headless --session-id <id>`.
 
 **Results.** Success: the receipt keeps stdout as `resume_output`. Failure: `ResumeFailed` carries the
 written receipt; its reason names the command, exit status and stderr; the manifest records the

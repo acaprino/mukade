@@ -8,10 +8,10 @@ readers: `src/model/tool.rs` `CanonicalTool`.
 | | |
 |---|---|
 | **Last updated** | 2026-11-12 |
-| **Verified against** | Claude Code 2.1.311 · Codex CLI 0.164.0 (rollouts of Codex Desktop up to 0.164.0-alpha.11.1; code mode §5 on Codex Desktop 0.167.0 / 0.167.1 rollouts) · OpenCode 2.1.4 · Pi 1.2.0; the destination's shell (§4.1) on Claude Code 2.1.322, Codex CLI 0.167.1, OpenCode 2.2.5, Pi 1.4.0 |
+| **Verified against** | Claude Code 2.1.311 · Codex CLI 0.164.0 (rollouts of Codex Desktop up to 0.164.0-alpha.11.1; code mode §5 on Codex Desktop 0.167.0 / 0.167.1 rollouts) · OpenCode 2.1.4 · Pi 1.2.0 · Hermes Agent v0.23.1 (names read from v0.22.5 source) · DeepSeek Harness 0.2.2-rc.1 (names from the rc.5 catalog, offered set from the headless profile); the destination's shell (§4.1) on Claude Code 2.1.322, Codex CLI 0.167.1, OpenCode 2.2.5, Pi 1.4.0 |
 | **Status** | draft; policy (§1) decided; tables are what mukade's writers do (spec L10–L14) |
 | **Owner document** | [`session-interchange-spec.md`](session-interchange-spec.md) §3 and §8 (requirements L10–L14) |
-| **Per-harness pages** | [Claude Code](harnesses/claude-code.md) · [Codex CLI](harnesses/codex.md) · [OpenCode](harnesses/opencode.md) · [Pi](harnesses/pi.md): each lists its own tools and links here |
+| **Per-harness pages** | [Claude Code](harnesses/claude-code.md) · [Codex CLI](harnesses/codex.md) · [OpenCode](harnesses/opencode.md) · [Pi](harnesses/pi.md) · [Hermes Agent](harnesses/hermes-agent.md) · [DeepSeek Harness](harnesses/deepseek-harness.md): each lists its own tools and links here |
 | **Review when** | a harness changes version (register item E1), or a destination's offered tools change (§6) |
 
 Evidence labels as in the spec: **[V]** reported observation, **[S]** read in source, **[U]** not
@@ -98,10 +98,12 @@ Representative names for the versions above; availability depends on model, conf
 | Codex 0.164.0 `exec` (9) | `exec_command`, `write_stdin`, `request_user_input`, `view_image`, `multi_agent_v1` (namespace), `get_goal`, `create_goal`, `update_goal`, built-in `web_search` |
 | OpenCode 2.1.4 (12) | `edit`, `glob`, `grep`, `question`, `read`, `shell`, `skill`, `subagent`, `webfetch`, `websearch`, `write`, `execute` |
 | Pi 1.2.0 (4) | `read`, `bash`, `edit`, `write` (default set; `grep`, `find`, `ls` appear when enabled; a `powershell` tool exists in its source) |
+| Hermes v0.23.1 (86 names; 51 core) | `read_file`, `write_file`, `patch`, `search_files`, `terminal`, `web_search`, `web_extract`, `delegate_task`, … ([page](harnesses/hermes-agent.md#tools)). As a **destination: none** (its import keeps no tool call) |
+| DeepSeek Harness 0.2.2-rc.1 (69 names; 28 mounted in the base) | `read`, `write`, `edit`, `glob`, `grep`, `bash` (not on Windows) / `pwsh` (Windows), `web_fetch`, `subagent`, `skill`, … ([page](harnesses/deepseek-harness.md#tools)). Offered to a translation: `read`, `write`, `edit`, `glob`, `grep`, `web_fetch` and the platform's shell |
 
 The library's copy, `src/tools.rs` `offered()`, is held to this table by
 `tests/tools_translation.rs` `the_offered_sets_are_the_tables_lists` (its Codex set has 8 names:
-`multi_agent_v1` is a namespace).
+`multi_agent_v1` is a namespace; Hermes's is empty).
 
 **Really used** (census of the real stores, top tools) [V: `tool-census.json`]:
 
@@ -144,8 +146,26 @@ for Codex, OpenCode and Pi calls; a Claude source keeps its own `Grep`, `Glob`, 
 - Subagents, skills, questions and MCP tools are text form on purpose (L14): a translated call would
   claim a capability the destination lacks.
 
+**Toward Hermes and DeepSeek Harness** (same cells; argument rules in §4):
+
+| canonical (Claude) | DeepSeek Harness 0.2.2 | Hermes v0.23.1 |
+|---|---|---|
+| `Bash` | ≈ `bash` (POSIX dialect, off Windows; needs a `description`) | **T** |
+| `PowerShell` | ≈ `pwsh` (Windows; needs a `description`) | **T** |
+| `Read` | `read` (`pages` / `allow_large` → **T**) | **T** |
+| `Write` | `write` | **T** |
+| `Edit` | `edit` (`replace_all` kept; several edits → **T**) | **T** |
+| `Grep` | ≈ `grep` (`pattern`, `path`, `include`; `limit`, context, case and literal flags → **T**) | **T** |
+| `Glob` | `glob` | **T** |
+| `WebFetch` | `web_fetch` (`url` only) | **T** |
+| `WebSearch`, `LS`, `Agent`, `Skill`, `AskUserQuestion`, MCP, everything else | **T** | **T** |
+
+Hermes offers no tool to a translation: its `sessions import` keeps a tool call as `[ran tool: <name>]`
+and drops its result, so every call is written as text with its arguments and its result in the
+turn (`tools_text_form`; `tool_calls` stays 0). That is the one destination whose offered set is empty.
+
 **Reading: source name → canonical** (`src/model/tool.rs` `from_claude()`, `from_codex()`,
-`from_opencode()`, `from_pi()`); the table's names, except:
+`from_opencode()`, `from_pi()`, `from_hermes()`, `from_dsh()`); the table's names, except:
 
 | harness | names read differently |
 |---|---|
@@ -153,6 +173,8 @@ for Codex, OpenCode and Pi calls; a Claude source keeps its own `Grep`, `Glob`, 
 | Codex | `exec_command`, `local_shell` → `Bash` or `PowerShell` (§4.1); `apply_patch` → `Edit`, then read per §5; `web_search` → `WebSearch`; `request_user_input` → `AskUserQuestion` |
 | OpenCode | `shell` → `Bash`; `subagent` → `Agent`; `question` → `AskUserQuestion` |
 | Pi | `find` → `Glob`; `ls` → `LS`; `subagent` → `Agent` |
+| Hermes Agent | `read_file` → `Read`; `write_file` → `Write`; `patch` → `Edit`; `terminal` → `Bash` (its `timeout` is seconds, converted to milliseconds); `search_files` → `Grep` (a `target` of `files` is a find); `web_search` → `WebSearch`; `delegate_task` → `Agent` |
+| DeepSeek Harness | `edit`, `apply_patch` → `Edit` (a Codex patch is read as the write or edit it makes); `bash` → `Bash`; `pwsh` → `PowerShell`; `glob` → `Glob`; `web_fetch` → `WebFetch`; `web_search` → `WebSearch`; `subagent` → `Agent`; `skill` → `Skill`; `ask_user_question` → `AskUserQuestion` |
 
 Any other name stays itself (`CanonicalTool::Other`) and travels as text.
 
@@ -194,6 +216,8 @@ destination runs the same dialect.
   | Codex | PowerShell on Windows, POSIX elsewhere (no configuration key) |
   | OpenCode | its configuration's `shell`, else `$SHELL`, else PowerShell on Windows, else none |
   | Pi | its settings' `shellPath`, else POSIX |
+  | DeepSeek Harness | PowerShell on Windows (`pwsh`), POSIX elsewhere (`bash`): the platform of the machine mukade runs on |
+  | Hermes | none: no call is translated |
   | Claude Code | none needed: the call's own dialect picks the tool (its `PowerShell` tool is the offered set's, below) |
 
   A shell is read by its base name, `.exe` and case ignored: `bash`, `sh`, `zsh`, `dash`, `ksh` are
@@ -278,6 +302,22 @@ and its patch form is not written (`src/tools.rs` `edit()`).
 - `pattern`, `path` everywhere. OpenCode adds `hidden`, `limit`; Pi `find` and `ls` add `limit`.
 - An argument the destination's tool lacks → text form.
 
+### 4.5 DeepSeek Harness (the destination's argument rules)
+
+| tool | keys written | text form instead when |
+|---|---|---|
+| `bash` / `pwsh` | `description` (required), `command`, `timeoutMs` (milliseconds, as canonical), `workdir` | no `description`; background execution; the call's dialect is not the platform's |
+| `read` | `file_path`, `offset` (1-based), `limit` | `pages` or `allow_large` |
+| `write` | `file_path`, `content` | no path |
+| `edit` | `file_path`, `old_string`, `new_string`, `replace_all` (only when true) | several edits |
+| `grep` | `pattern`, `path`, `include` | `limit`, context, case-insensitive or literal flags |
+| `glob` | `pattern`, `path` | |
+| `web_fetch` | `url` | no url |
+
+Keys outside these are not written: a call carrying one is text form, because dropping it would change
+what the call did (`Destination::accepted_keys`). An image in a result is not carried (dsh keeps a
+reference into its attachment store).
+
 ## 5. Reading Codex Desktop "code mode" (`exec`)
 
 [V: census] Codex Desktop rollouts (`originator: codex_work_desktop`) hold almost every call as
@@ -359,6 +399,7 @@ set.
 
 | date | change |
 |---|---|
+| 2026-11-12 | Hermes Agent and DeepSeek Harness: names read (`from_hermes`, `from_dsh`), toward dsh `read`, `write`, `edit`, `glob`, `grep`, `web_fetch` and the platform shell are translated; toward Hermes everything is text (its import keeps no tool call). |
 | 2026-11-12 | The destination's shell (§4.1): Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` offered where the installation runs it; `--dest-shell none`. §7: OpenCode's shell on Windows settled. |
 | 2026-11-12 | Grep into Claude from another harness: `-A`, `-B`, `offset`, `multiline: true` and `-n: false` are text form, as §4.4 says (they were dropped without notice). |
 | 2026-11-11 | L10 built (§5). Tables checked against the code: shell calls need `--dest-shell` outside Claude; `PowerShell` into Claude is text form, into Codex writes no `shell` argument, into Pi is `bash`; text form not cut; Grep `output_mode`; manifest key `tool_calls`; `--tool-map`, `--without-tools`, reading table. |

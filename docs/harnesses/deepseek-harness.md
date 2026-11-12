@@ -115,7 +115,7 @@ Read on this machine and in the `dsh-v0.2.2-rc.2` source [35][36].
 **Folder names**
 - `projectKey(cwd)`: each run of `/`, `\`, `:` becomes one `-`; `[A-Za-z0-9._-]` is kept; any other UTF-16 unit (a space, `~`, non-ASCII) becomes `~` + 4 uppercase hex; leading `-` stripped; empty gives `root`; cut at 251 characters; wrapped `--…--`. Lossy: read `cwd` from the header, never from the folder. `D:\Projects\foo bar` is `--D-Projects-foo~0020bar--`.
 - `encodeSegment(id)`: `[A-Za-z0-9._-]` kept, every other unit `~` + 4 hex, `.` is `~002E`.
-- A folder that is not the one the header's id and cwd name is a "corrupt session log": dsh refuses it. mukade ports both functions (`src/reader/deepseek_harness.rs`, tested against dsh's own examples) [35][36].
+- A folder that is not the one the header's id and cwd name is a "corrupt session log": dsh refuses it. mukade ports both functions (`src/writer/deepseek_harness.rs` `project_key()`, `encode_segment()`, tested against dsh's own examples) [35][36].
 
 **The file**
 - Zstandard, concatenated independent frames with the content checksum on; frame 1 is exactly the header line; then one frame per durable batch of lines. A crash leaves a torn last frame, which dsh repairs by truncating. `session.v4.jsonl` (plain) is the same text, for a root configured without compression [35].

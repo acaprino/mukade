@@ -22,8 +22,8 @@ Install, store, compaction, tools, hooks; read before touching that harness's re
 | [Codex CLI](harnesses/codex.md) | reads and writes |
 | [OpenCode](harnesses/opencode.md) | reads and writes |
 | [Pi](harnesses/pi.md) | reads and writes |
-| [Hermes Agent](harnesses/hermes-agent.md) | none yet; read-first plan in [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) (Proposed) |
-| [DeepSeek Harness](harnesses/deepseek-harness.md) | none yet; same plan |
+| [Hermes Agent](harnesses/hermes-agent.md) | reads `state.db`; writes through `hermes sessions import` (tools as text) |
+| [DeepSeek Harness](harnesses/deepseek-harness.md) | reads and writes its zstd session logs |
 
 ## Technical reference
 
@@ -33,7 +33,7 @@ Install, store, compaction, tools, hooks; read before touching that harness's re
 | [Architecture](architecture.md) | you change mukade's code: one adapter per harness (`Harness`, `Destination`, the registry), adding or changing a harness, the test that keeps it so |
 | [Tool conversion tables](tool-conversion-tables.md) | you need how one harness's tool call becomes another's |
 | [Harness catalog](reference/harness-catalog.md) | you need install and store locations per OS, store layouts, lineage (`catalog/harnesses.json`) |
-| [Harness session persistence reference](reference/harness-session-persistence-reference.md) | you look beyond the four: secondary research (2026-10-27, restructured 2026-11-11) on 24 harnesses, with provenance and limitations. For the four, harness pages and specification come first (their `[V]` facts supersede it) |
+| [Harness session persistence reference](reference/harness-session-persistence-reference.md) | you look beyond the six: secondary research (2026-10-27, restructured 2026-11-11) on 24 harnesses, with provenance and limitations. For the four, harness pages and specification come first (their `[V]` facts supersede it) |
 
 ## Decisions
 
@@ -41,7 +41,7 @@ Install, store, compaction, tools, hooks; read before touching that harness's re
 |---|---|
 | [ADR index](adr/README.md) | before touching what an active record governs; how a record is Accepted |
 | [ADR-0001](adr/ADR-0001-installation-scan-in-library-and-cli.md) | you work on `scan`: a library capability the CLI exposes first (Accepted) |
-| [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) | you plan Hermes or DeepSeek support: read-first, Hermes source-only (Proposed) |
+| [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) | you change how Hermes or DeepSeek Harness are read or written: read-first plan, amended 2026-11-12 (Accepted with changes) |
 
 ## Verification records
 
@@ -56,6 +56,8 @@ Records of single runs, not guarantees for later versions, in [verification/](ve
 
 **Compaction, platforms, listing, code mode:**
 
+- [Hermes writer live](verification/2026-11-12-hermes-writer-live.md): a Claude fixture imported into the real store through `hermes sessions import`, read back (2026-11-12).
+- [DeepSeek Harness writer live](verification/2026-11-12-dsh-writer-live.md): a fixture hopped into `~/.dsh`, resumed by `dsh` 0.2.2-rc.1 (2026-11-12).
 - [Native compaction records](verification/native-compaction-live.md): §4.4's records accepted live by the four harnesses.
 - [Source-model summary](verification/source-model-summary-live.md): summary runs and their isolation.
 - [Local chat live](verification/2026-11-12-chat-live.md): service lifecycle and a real Claude Code client (2026-11-12).
@@ -69,5 +71,5 @@ Records of single runs, not guarantees for later versions, in [verification/](ve
 Historical intent; for behavior use the reference and records.
 
 - [Source-model summary design](archive/design/source-model-summary.md) and [plan](archive/plans/source-model-summary-implementation.md).
-- [Design drafts](superpowers/specs/): TUI (2026-10-30), Hermes and DeepSeek (2026-10-31), directory filter (2026-11-02), Codex code mode (2026-11-11); [implementation plans](superpowers/plans/) for the last two.
+- [Design drafts](superpowers/specs/): TUI (2026-10-30), Hermes and DeepSeek (2026-10-31, then [2026-11-12](superpowers/specs/2026-11-12-hermes-deepseek-design.md)), directory filter (2026-11-02), Codex code mode (2026-11-11), subagents (2026-11-12); [implementation plans](superpowers/plans/) for the later ones.
 - [TUI mockup](mockups/tui.html); [branding assets](assets/branding/) (logo, its generation prompt).

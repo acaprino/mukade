@@ -15,7 +15,7 @@ Top level: `schema`, `description`, `expansions` (the tokens below, for readers;
 
 | key | meaning |
 |---|---|
-| `id` | command-line name: `claude_code`, `codex`, `opencode`, `pi` |
+| `id` | command-line name: `claude_code`, `codex`, `opencode`, `pi`, `hermes`, `deepseek_harness` |
 | `display` | the name people read |
 | `binary.name` | command looked up on `PATH` |
 | `binary.flag` / `binary.env` | `--<harness>-exe` and `MUKADE_*_EXE`, the two overrides |
@@ -23,6 +23,7 @@ Top level: `schema`, `description`, `expansions` (the tokens below, for readers;
 | `binary.beside_store` | where a self-contained installation keeps its executable, relative to the store's folder or one of its three nearest ancestors, per platform; read by `mukade scan` and `--dest-root` (portable JanuraCode: `resources/opencode-cli/opencode.exe`) |
 | `store.env` | variable that points mukade at the store |
 | `store.default` | the harness's own default store, a string with tokens |
+| `store.default_on` | a default for a platform whose convention differs (`windows`, `macos`, `linux`): Hermes on Windows |
 | `store.root_is_a_file` | `true` for OpenCode: the store is the SQLite database |
 | `store.layout` | patterns of the files that make a store recognizable |
 | `lineage.recorded` / `fields` / `note` | what the format records about forks, and what not |
@@ -52,6 +53,8 @@ Native-install locations catalogued, in the order tried:
 | Codex CLI | `{local_app_data}/Programs/OpenAI/Codex/bin/codex.exe` | `{home}/.local/bin/codex` |
 | OpenCode | `{app_data}/npm/node_modules/@opencode/cli/bin/opencode.exe`, `{app_data}/npm/opencode.cmd`, `{home}/.opencode/bin/opencode.exe` | `{home}/.opencode/bin/opencode` |
 | Pi | `{home}/.pi/agent/bin/pi.cmd`, `{app_data}/npm/pi.cmd`, `{app_data}/npm/pi` | `{home}/.pi/agent/bin/pi` |
+| Hermes Agent | `{local_app_data}/hermes/bin/hermes.exe`, `{local_app_data}/hermes/hermes-agent/.hermes/bin/hermes.exe` | `{home}/.local/bin/hermes` |
+| DeepSeek Harness | `{app_data}/npm/dsh.cmd` | `PATH` only (an npm launcher) |
 
 - Codex's Unix launcher links into `$CODEX_HOME/packages/standalone/current/`; Pi's managed
   launcher selects a release under `<PI_CODING_AGENT_DIR>/install/releases/` (details:
@@ -61,7 +64,7 @@ Native-install locations catalogued, in the order tried:
 
 These are fallbacks after `PATH`; order: [usage §7](../usage.md#7-stores-and-executables).
 
-## The four entries
+## The six entries
 
 | harness | binary | store variable | default store | layout | lineage |
 |---|---|---|---|---|---|
@@ -69,6 +72,8 @@ These are fallbacks after `PATH`; order: [usage §7](../usage.md#7-stores-and-ex
 | Codex CLI | `codex` | `CODEX_HOME` | `{home}/.codex` | `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl`, `session_index.jsonl` | not recorded (forks are not recorded; a subagent thread names the thread that spawned it, `session_meta.parent_thread_id`) |
 | OpenCode | `opencode` | `OPENCODE_DB` | `{xdg_data_home}/opencode/opencode.db` | `opencode.db (SQLite; session_v2, session_message)` | `parent_id`, `fork_session_id`, `fork_boundary` |
 | Pi | `pi` | `PI_CODING_AGENT_DIR` | `{home}/.pi/agent` | `sessions/--<project>--/<stamp>_<session-id>.jsonl`, `models.json` | `parentSession` in the session header |
+| Hermes Agent | `hermes` | `HERMES_HOME` | `{home}/.hermes`; Windows `{local_app_data}/hermes` | `state.db (SQLite; sessions, messages)` | `parent_session_id`, `model_config._delegate_from` (subagent), `model_config._branched_from` (`/branch`) |
+| DeepSeek Harness | `dsh` | `DSH_HOME` | `{home}/.dsh` | `sessions/--<project>--/<session-id>/session.v4.jsonl.zstd`, `sessions/_no-cwd/<session-id>/session.v4.jsonl.zstd` | `parentSession`, `origin`, `isSeeded` in the log's header |
 
 Codex lineage: the catalog's note predates the reader. A subagent's rollout names its spawning thread
 in `session_meta.session_id`, kept as `meta.parent` (`src/reader/codex.rs` `Builder::finish()`);
@@ -82,6 +87,8 @@ forks are still not recorded.
 | Codex CLI | `{exe} exec resume {id}` | `{exe} resume {id}` |
 | OpenCode | `{exe} run --standalone --session {id}` | `{exe} mini --standalone --session {id}` |
 | Pi | `{exe} -p --session {file}` | `{exe} --session {file}` |
+| Hermes Agent | `{exe} chat -Q --resume {id} -q` | `{exe} --resume {id}` |
+| DeepSeek Harness | `{exe} --profile headless --session-id {id}` (a task follows) | none: dsh has no terminal UI, so `mukade-tui` refuses (`Harness::resume_refusal`) |
 
 **Default stores** are what the **harness** itself uses. Only `mukade harnesses` and `mukade-tui`
 fall back to them when the store variable is unset or empty; other commands use the explicit roots of
@@ -100,7 +107,7 @@ fall back to them when the store variable is unset or empty; other commands use 
      `not on PATH, no catalog location`.
    - The version comes from an npm launcher's `package.json` or a cache, else from `--version`
      (`src/exe.rs` `version_of()`).
-   - `forks` is `unknown (not recorded)` for Claude Code and Codex; `lineage` is
+   - `forks` is `unknown (not recorded)` for Claude Code and Codex, a count for the others; `lineage` is
      `recorded: <fields>` or `not recorded (<note>)`.
 2. **List every command on `PATH`** and run each `--version`: one-liners in
    [usage](../usage.md#mukade-harnesses); in bash `type -a claude` lists every match.
@@ -112,7 +119,7 @@ fall back to them when the store variable is unset or empty; other commands use 
    brew --prefix     # Homebrew launchers are normally <prefix>/bin/<name>
    ```
 
-   - Windows npm launchers: `%APPDATA%\npm\<name>.cmd`. OpenCode's active database:
+   - Windows npm launchers: `%APPDATA%\npm\<name>.cmd` (`dsh.cmd`). Hermes's own launcher: `%LOCALAPPDATA%\hermes\bin\hermes.exe`. OpenCode's active database:
      `opencode debug paths db`. WSL installations live in the WSL environment, not the Windows one.
 4. **Point mukade at a custom installation** with the flags and variables of
    [usage §7](../usage.md#7-stores-and-executables); `mukade detect <path>` reports which store
@@ -143,6 +150,6 @@ OpenCode's counts: one read-only query; Pi's forks: the session headers.
    - no empty Windows location, at most 3 macOS and 3 Linux (a missing list reads as empty); an
      unexpandable token makes the location unknown, never a literal path;
    - OpenCode's default store falls back to `{home}/.local/share/opencode/opencode.db`;
-   - the exact `resume` argv of Claude Code, OpenCode and Pi (`src/catalog.rs`), and
-     `interactive_resume` of all four (`mukade-tui/src/main.rs`
+   - the exact `resume` argv of Claude Code, OpenCode and Pi, and Hermes's store default per
+     platform (`src/catalog.rs`); `interactive_resume` of all six (`mukade-tui/src/main.rs`
      `every_harness_has_the_exact_interactive_resume_argv`).

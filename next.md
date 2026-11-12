@@ -12,6 +12,7 @@ Its step numbers are in brackets below.
 
 | what | before | now |
 |---|---|---|
+| Hermes Agent and DeepSeek Harness ([design](docs/superpowers/specs/2026-11-12-hermes-deepseek-design.md), [ADR-0002](docs/adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) amended) | neither was supported | both read and written: Hermes `state.db` (schema 32+) and, as a destination, through `hermes sessions import` (tools as text) ([live](docs/verification/2026-11-12-hermes-writer-live.md)); dsh zstd logs, resumed by `dsh` 0.2.2-rc.1 ([live](docs/verification/2026-11-12-dsh-writer-live.md)); the TUI lists, hops and resumes Hermes, and says dsh has no terminal UI; `--compaction summary` from either is refused with its reason (a run on either appends to the session) |
 | Subagent sessions, phase 1 ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)) | Claude Code children unreadable and never listed; OpenCode's `parentID` missed; `parent` meant fork for Pi, spawner for Codex and OpenCode, unsaid; what a child reported to its parent read as `Meta` and lost silently | `parent_kind` (fork / spawn with call and agent) on every parent; Claude children `<parent-id>.<agentId>` read and listed (`list --children`, the TUI); reports the parent received are user turns, an encrypted Codex one counted (`dropped_subagent_messages`) |
 | Subagent sessions, phase 2 ([plan](docs/superpowers/plans/2026-11-12-subagents-phase2.md)) | a hop left a session's subagents behind; `dump` had no way to carry them | `dump --children` nests each child's document; `hop --children` writes each child as a session of its own after the parent, linked where the destination can (OpenCode `info.parentID`, checked with the real `opencode` 2.2.5 in a scratch store; Claude Code `subagents/` folder), unlinked for Codex and Pi, and lists them in `manifest.children` |
 | Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` names no dialect, so shell calls into Codex, OpenCode and Pi stay text as before, while Claude's offered set is unchanged ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
@@ -68,6 +69,10 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 13. **A session bigger than the source model's window** [7] [U]: must end `summary failed`, never half a summary.
 14. **Claude Code signed thinking really validated** [8] [U]: needs a source whose last assistant
     turn is a tool call with thinking; then the tampered copy must be refused.
+15. **Hermes resumes a written session with a model** [16] [U]: `hermes --resume <id>` on a session `hop`
+    imported, with the free OpenRouter route; the import and the read-back are verified, the answer is not.
+16. **dsh resumes a written session and the model calls a tool** [17] [U]: the live resume answered a plain
+    prompt; a task that makes it read a file settles the converted tool history.
 
 ## 🔵 Needs code (next)
 
@@ -104,9 +109,9 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 ## 🔴 Needs an API key
 
-15. **OpenCode's own `anthropic` provider** [10] [U]: mukade writes `native.signature` /
+17. **OpenCode's own `anthropic` provider** [10] [U]: mukade writes `native.signature` /
     `native.encrypted`; only `openrouter` is verified live.
-16. **OpenAI encrypted reasoning through OpenRouter** [11] [U]: written as `reasoning.encrypted`,
+18. **OpenAI encrypted reasoning through OpenRouter** [11] [U]: written as `reasoning.encrypted`,
     never exercised.
 
 ## ⚪ Needs macOS (no machine yet)
@@ -138,8 +143,11 @@ Not bugs. Each is stated in the docs where it applies.
   mukade never starts OpenCode to do it.
 - **Native-compaction budgets:** one conservative budget for all destinations, based on the
   verified OpenCode ceiling. The other harnesses' own trigger values are not all verified [U].
-- **Not supported at all yet:** Hermes Agent and DeepSeek Harness
-  ([ADR-0002](docs/adr/ADR-0002-hermes-and-deepseek-harness-read-first.md), Proposed).
+- **Hermes Agent** ([page](docs/harnesses/hermes-agent.md)): a written session has user and assistant text
+  only (tools as text, no model, no reasoning); the import takes about a minute; `--compaction summary`
+  and `native` are refused. One live import was left untitled by Hermes, the cause is not known.
+- **DeepSeek Harness** ([page](docs/harnesses/deepseek-harness.md)): no terminal UI, so the TUI cannot resume
+  it; no image is written; `--compaction summary` and `native` are refused; format 4 only.
 
 **Small review points still open** (harmless, low priority)
 
