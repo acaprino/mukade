@@ -17,13 +17,14 @@ report: none of its claims was re-run here.
 
 **Use it like this**
 
-1. **Claude Code, Codex, OpenCode or Pi** (the four mukade reads and writes): read the harness page
-   first ([Claude Code](../harnesses/claude-code.md), [Codex](../harnesses/codex.md),
-   [OpenCode](../harnesses/opencode.md), [Pi](../harnesses/pi.md)) and the
+1. **Claude Code, Codex, OpenCode, Pi, Hermes Agent or DeepSeek Harness** (the six mukade reads and
+   writes): read the harness page first ([Claude Code](../harnesses/claude-code.md),
+   [Codex](../harnesses/codex.md), [OpenCode](../harnesses/opencode.md), [Pi](../harnesses/pi.md),
+   [Hermes Agent](../harnesses/hermes-agent.md), [DeepSeek Harness](../harnesses/deepseek-harness.md)) and the
    [spec](../session-interchange-spec.md). They hold facts run on this machine and win over this
    report. [What mukade has settled since](#what-mukade-has-settled-since) lists where they go further.
 2. **Any other harness**: start at the [Comparative matrix](#comparative-matrix), then read its
-   dossier. Hermes Agent also has a page: [Hermes Agent](../harnesses/hermes-agent.md).
+   dossier.
 3. **Designing converter behaviour**: read
    [Conversion architecture](#conversion-architecture-and-cross-harness-failure-modes) and
    [Verification gaps](#verification-gaps-contradictions-and-unsupported-assumptions-to-avoid).
@@ -54,7 +55,7 @@ SQLite, IndexedDB, Electron state, VS Code storage or browser caches would not m
 
 ## What mukade has settled since
 
-Where the report says [Gap] or "not documented" for one of the four supported harnesses, mukade has
+Where the report says [Gap] or "not documented" for one of the supported harnesses, mukade has
 since observed more. The harness page is the authority; this table only points to it.
 
 | Harness | Report (item) | Observed by mukade | Where |
@@ -69,6 +70,8 @@ since observed more. The harness page is the authority; this table only points t
 | OpenCode | 1: `opencode db path` | The command run on this machine is `opencode debug paths db`. A build on another channel uses `opencode-<channel>.db` unless `OPENCODE_DISABLE_CHANNEL_DB` | [opencode.md](../harnesses/opencode.md), Session store |
 | OpenCode | 9: official import/export | mukade reads through `session export` and writes through `session import`, never the database | opencode.md, sections 1 and 8 |
 | pi | 1 and 10: `--session-dir`; no version pinned | `--session-dir` beats `PI_CODING_AGENT_SESSION_DIR`, which beats `sessionDir`; root `PI_CODING_AGENT_DIR` (default `~/.pi/agent`). mukade-written sessions verified on Pi 1.2.0 and 1.4.0 | [pi.md](../harnesses/pi.md), Session store; [Pi verification](../verification/pi-session-and-reasoning-verification.md) |
+| Hermes Agent | 1 and 9: `state.db`, `hermes import <zip>` | `state.db` schema 32 (v0.22.5) and 33 (v0.23.1); the way in is `hermes sessions import --from claude <file>`, which keeps user and assistant text only | [hermes-agent.md](../harnesses/hermes-agent.md), Session store; [verification](../verification/2026-11-12-hermes-writer-live.md) |
+| DeepSeek Harness | format and root | Format 4, `<DSH_HOME>/sessions/--<project>--/<id>/session.v4.jsonl.zstd`; a log written by mukade resumes in `dsh` | [deepseek-harness.md](../harnesses/deepseek-harness.md), Session store; [verification](../verification/2026-11-12-dsh-writer-live.md) |
 | pi | 5 [Gap]: no turn predicate | Assistant `stopReason` is `toolUse`, `aborted`, `error` or another (completed); mukade reads `aborted` as an interrupted turn | pi.md, section 8 |
 
 ## Comparative matrix
@@ -517,8 +520,10 @@ dossier.
 
 ### Hermes Agent — `v0.22.5`
 
-mukade's own notes: [hermes-agent.md](../harnesses/hermes-agent.md), section 5 Session store (no
-mukade support yet).
+mukade's own notes, now the authority: [hermes-agent.md](../harnesses/hermes-agent.md), Session store.
+The report's schema 31, its `hermes import <backup.zip>` route and its "no stored summary row" were
+superseded by reading v0.23.1: schema 32 and 33, `hermes sessions import --from claude`, a stored
+summary row (`_compressed_summary = 1`).
 
 | Item | Claim | Src |
 |---|---|---|
