@@ -9,7 +9,7 @@ Anthropic's agentic coding tool: it reads a codebase, edits files, runs commands
 | mukade name | `claude_code` |
 | Read (`list`, `dump`) | ✅ every `projects/*/*.jsonl`, plus sessions known only from `history.jsonl` or a running process (`unreadable`), with a `live` flag; with `list --children`, every subagent session that has a transcript (`<parent-id>.<agentId>`) |
 | Write | ✅ a new `<uuid>.jsonl` that Claude Code resumes by id; no index file needed [1][5] |
-| Hop as source | ✅ the branch Claude Code resumes. ⚠️ `--all-branches` is refused (Codex only) |
+| Hop as source | ✅ the branch Claude Code resumes; `--all-branches` carries the other branches of the `parentUuid` tree as branches |
 | Hop as destination | ✅ resumed live, signed and redacted thinking included (2.1.312) [43]. ⚠️ a `PowerShell` call is text form where the installation does not run the `PowerShell` tool |
 | Resume | ✅ `claude -p --resume <id> "<prompt>"` (the receipt's `resume`, plus a prompt) or `claude --resume <id>` interactive: same id, same file [1] |
 | Summary by its own model | ✅ `--compaction summary`: `claude -p` with no tools and no transcript; the source is left as it was [27] |
@@ -357,7 +357,7 @@ Skills, slash commands, subagents, hooks, MCP servers and plugins, all configure
 Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reader/claude_history.rs`, `src/reader/claude_live.rs`, `src/process.rs` [4].
 
 **Limits, costliest first**:
-- **Only the branch Claude Code resumes travels.** Rows off it are kept as `Meta(OffBranch)` and counted as `dropped_off_branch`; `--all-branches` is refused for Claude Code (`src/hop.rs` `all_branches_supported()`).
+- **Only the branch Claude Code resumes travels**, unless `--all-branches`. Rows off it are kept as `Meta(OffBranch)` and counted as `dropped_off_branch`; with the flag the user and assistant rows among them are grouped by `parentUuid` into branches (`src/reader/branches.rs` `lift()`: a branch is a chain that follows the first child in file order, the other children are branches of their own) and parsed like the resumed path. Non-conversation rows (progress, attachments) stay records. The leaf rules `explicit`, `rewound`, `cutUuid` of 2.1.322 are not read **[U]**.
 - **A session's subagents travel only with `--children`.** Each is a session of its own (below); what one reported to the parent travels in the parent either way.
 - **A process killed while the model was answering leaves no sign**: that reply reads as an ordinary one; `--interrupted drop` keeps it ([usage](../usage.md#a-session-with-interrupted-turns)).
 - **Not exercised by a bench run** (Open points 1): branch selection is covered by synthetic tests on hand-made records [1][4].

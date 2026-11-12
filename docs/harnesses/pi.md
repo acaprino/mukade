@@ -9,7 +9,7 @@ mukade reads and writes its sessions: list, dump, hop in and out, resume, a summ
 |---|---|
 | **Read** (`list`, `dump`) | ✅ every session file under `<PI_CODING_AGENT_DIR>/sessions`; the branch Pi resumes is carried, other branches are kept but not carried |
 | **Write** | ✅ a new session file: a header, then `message` rows |
-| **Hop as source** | ✅ `mukade hop pi <id> <dst> …`; `--all-branches` ❌ (Codex only) |
+| **Hop as source** | ✅ `mukade hop pi <id> <dst> …`; `--all-branches` carries the other branches of the `parentId` tree as branches |
 | **Hop as destination** | ⚠️ works; a shell call stays a call only in the dialect Pi runs (`shellPath`, else POSIX), and without `--dest-protocol` every reasoning block is dropped |
 | **Resume** | ✅ `pi -p --session <file>`, run from the session's working directory with `PI_CODING_AGENT_DIR` set |
 | **Summary by its own model** | ✅ `--compaction summary`: Pi forks the session into a scratch folder; the source file stays byte-identical [34] |
@@ -299,7 +299,7 @@ Sources: [29], tool names [33]. The record-by-record mapping is the last column 
 **What you may miss**
 
 - **Only `<PI_CODING_AGENT_DIR>/sessions`.** `StoreRoots::pi_sessions()` (`src/roots.rs`) is always that folder: mukade ignores `PI_CODING_AGENT_SESSION_DIR`, the `sessionDir` setting and `--session-dir`, so sessions Pi was told to store elsewhere are not found [31].
-- **One branch.** The reader follows `parentId` from the last record that has an `id` and is not the header, as Pi does [10]; records off that path are kept verbatim as `Meta(OffBranch)`, not resumed, counted as `dropped_off_branch`. `--all-branches` is refused for Pi (`src/hop.rs` `export_all_branches()`).
+- **One branch.** The reader follows `parentId` from the last record that has an `id` and is not the header, as Pi does [10]; records off that path are kept verbatim as `Meta(OffBranch)`, not resumed, counted as `dropped_off_branch`. `--all-branches` carries them as branches instead (`src/reader/branches.rs`: the user and assistant records off the path, grouped by `parentId`).
 
 **Finding sessions**
 

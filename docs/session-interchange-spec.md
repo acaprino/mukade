@@ -326,7 +326,7 @@ developer message + `replacement_history` + later items + prompt; no `encrypted_
   the earlier file and the cut; `state_5.sqlite` `threads.rollout_path` names the page. The reader
   takes the latest version and looks for earlier files only in the page's own home
   (`src/reader/codex.rs` `page_folders()`); their later records are off-branch (§1.3, counted), or
-  carried with `Branches::All` (`--all-branches`, Codex only).
+  carried with `Branches::All` (`--all-branches`) as `Session.branches` (§3.4).
 - **Encrypted compaction summaries** (`compacted.message` empty; an item
   `{type:"compaction", encrypted_content}` in `replacement_history`): none is written as an empty
   message (`dropped_unreadable_summaries`); `Portable` from one is refused.
@@ -429,7 +429,9 @@ pub struct Session {
     pub meta: Meta,                    // source harness + version, id, cwd, title, created/updated,
                                        // model(s), git branch, parent and parent_kind (never carried
                                        // into a hop), source path and SHA-256
-    pub entries: Vec<Entry>,           // in native order (seq / ordinal / parent chain), never by time
+    pub entries: Vec<Entry>,           // in native order (seq / ordinal / parent chain), never by time:
+                                       // the path the harness resumes
+    pub branches: Vec<Branch>,         // the branches it left, only when asked for (§3.4); else empty
 }
 pub struct Entry { pub id: String, pub kind: Kind, pub raw: Vec<serde_json::Value> }  // raw = source record(s)
 
@@ -549,6 +551,50 @@ complete `reasoningDetails` array**, through `Session` and the public document; 
 - The verification record separates source fixtures, native import/storage, outgoing client
   requests and paid provider acceptance.
 - Long-loop answer quality and cost are not inferred from a short successful transfer.
+
+### 3.4 Branches
+
+`Session.branches` is empty unless the reader was asked for the branches (`--all-branches`,
+`Reader::read_all_branches`: Claude Code, Codex and Pi). Then the records of an abandoned path are
+not `Meta(OffBranch)` entries of `entries`: they are parsed with the reader's own conversation parser
+(steps merged, results paired) into entries of a `Branch`.
+
+```rust
+pub struct Branch {
+    pub from: Option<String>,   // the entry it leaves from: an id in `entries` or an earlier branch;
+                                // None: before the first entry
+    pub entries: Vec<Entry>,    // its own entries, after `from`
+}
+```
+
+- **A branch is a run.** One path of the tree is cut into runs: a run follows the first child in file
+  order, every other child starts a run of its own, `from` the entry that holds its parent record.
+  Runs come parents first. The decomposition is not canonical: a writer and a reader may cut the same
+  tree differently; the set of paths from the first entry to a leaf is.
+- **Claude Code and Pi** group the off-path user and assistant records by `parentUuid` / `parentId`
+  (`src/reader/branches.rs`). **Codex** has no tree: a rollback (`thread_rolled_back { num_turns }`) drops
+  the last `num_turns` user turns of what Codex had so far, and an earlier file of a redone thread holds
+  records past the cut its page continues from; each such run is a branch from the record before it.
+- **The dump document** gains `branches: [{from, messages}]` (the messages as the top level, `from`
+  the id of a message, null for the start); absent when empty. `from_document` reads it.
+- **Planning** (`writer::plan::plan`): each branch is planned with the path it shares and judged as
+  that whole conversation: its first blocks must equal the plan of the path alone, and the strict gate
+  (§7) must pass. A branch that fails, whose `from` is not in the session, or that hangs off a branch
+  that failed, is dropped. `Plan.branches` holds the kept ones with the block they leave from.
+- **Writers**, by `Writer::keeps_branches`:
+
+| destination | `BranchKeeping` | written as |
+|---|---|---|
+| Claude Code | `Tree` | one file; each row names its `parentUuid`; a branch follows the row it leaves from, the active path ends the file; `last-prompt.leafUuid` is the active leaf |
+| Pi | `Tree` | `id` / `parentId` entries, the same order; the last entry is the leaf |
+| Codex | `Rollbacks` | the branch, then `event_msg thread_rolled_back { num_turns }` for the user-role messages it wrote; only a branch whose first block is a user turn |
+| OpenCode, Hermes, DeepSeek Harness | `None` | all dropped |
+
+- **Manifest.** `counts.branches_kept`, `counts.branches_dropped`; one loss line when any is dropped.
+  `--compaction native` writes no branches (all counted dropped).
+- **Open [U].** Whether Claude Code 2.1.322 resumes the intended leaf of a mukade-written file with
+  several leaves (needs a load without a prompt); whether Codex counts the user-role messages mukade
+  writes inside a turn (a tool result written as text) as user turns when it rolls back.
 
 ## 4. Compaction between hops (optional)
 
@@ -768,7 +814,8 @@ above zero also has a `losses` line.**
 |---|---|
 | `tools_omitted` | calls omitted with their results (`--without-tools`) |
 | `reasoning_dropped` | reasoning blocks not carried (§3.3) |
-| `dropped_off_branch` | records of a branch the source left (rewind, edited prompt, Pi tree navigation) |
+| `dropped_off_branch` | records of a branch the source left (rewind, edited prompt, Pi tree navigation) that were not asked for (`--all-branches`) |
+| `branches_kept`, `branches_dropped` | with `--all-branches`: the branches written to the destination, and those left out (one conversation only, not placeable, or refused with the path they share); a loss line when any is dropped (§3.4) |
 | `dropped_interrupted_steps` | steps of unfinished turns, with `interrupted: drop` (§5) |
 
 **Counts: what was repaired or lost**

@@ -407,6 +407,31 @@ mukade dump deepseek_harness NEW_SESSION_ID | Select-String 'tool'
 
 ---
 
+## 18. Claude Code resumes the right leaf of a hopped tree (5 min) 🟢
+
+New: `hop --all-branches` writes a session with several leaves. mukade reads it back; whether Claude
+Code opens the intended leaf is not checked. No prompt is sent.
+
+**Needs:** a Claude Code session that has a rewound branch (`mukade dump claude_code ID --all-branches`
+shows a non-empty `branches`), and a scratch config folder.
+
+**Do**
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = 'C:\work\rehearsal\claude'
+mukade hop claude_code YOUR_CLAUDE_SESSION_ID claude_code --all-branches --root "$HOME\.claude" --cwd 'C:\work\my-project'
+cd 'C:\work\my-project'; claude --resume NEW_SESSION_ID     # send nothing; open /rewind or scroll the transcript
+```
+
+**Pass if**
+
+- [ ] The conversation shown ends at the same turn the source session ends at (the active path), not at a branch.
+- [ ] `mukade dump claude_code NEW_SESSION_ID --all-branches` still shows the same branches afterwards.
+
+**Write down:** what Claude Code showed, and its version.
+
+---
+
 ## When you are done
 
 Send back the ticked list and the "Write down" values. Each passed block becomes a dated line in

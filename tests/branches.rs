@@ -721,3 +721,101 @@ fn a_destination_with_one_conversation_gets_the_active_path_and_a_count() {
     );
     assert_eq!(manifest["counts"]["messages_out"], 4);
 }
+
+// ---------------------------------------------------------------------------------------------
+// the command line
+
+#[test]
+fn dump_carries_the_branches_and_write_keeps_them_where_the_destination_has_a_tree() {
+    let scratch = staged_claude_tree("branches-dump-write");
+    let (code, stdout, stderr) =
+        support::cli_code(&scratch, &["dump", "claude_code", "s-1", "--all-branches"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let doc: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(texts(&doc["messages"]), ["q1", "r1", "q2", "r2"]);
+    assert_eq!(doc["branches"].as_array().unwrap().len(), 2, "{doc}");
+    // Without the flag there are none, and the off-branch records are not in the document.
+    let (code, plain, stderr) = support::cli_code(&scratch, &["dump", "claude_code", "s-1"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    let plain: Value = serde_json::from_str(&plain).unwrap();
+    assert!(plain.get("branches").is_none());
+
+    let file = scratch.join("tree.json");
+    std::fs::write(&file, &stdout).unwrap();
+    let (code, stdout, stderr) = support::cli_code(
+        &scratch,
+        &["write", "pi", file.to_str().unwrap(), "--cwd", "/work"],
+    );
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    let receipt: Value = serde_json::from_str(stdout.trim().lines().last().unwrap()).unwrap();
+    assert_eq!(
+        receipt["manifest"]["counts"]["branches_kept"], 2,
+        "{receipt}"
+    );
+    let written = mukade::reader::pi::read_file_all_branches(Path::new(
+        receipt["location"].as_str().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(written.branches.len(), 2);
+}
+
+#[test]
+fn a_source_that_keeps_one_branch_refuses_the_flag_on_hop_and_document() {
+    let scratch = staged_claude_tree("branches-refused");
+    for command in [
+        vec!["hop", "opencode", "x", "pi", "--all-branches"],
+        vec![
+            "document",
+            "opencode",
+            "hermes",
+            "x",
+            "--all-branches",
+            "--cwd",
+            "/work",
+        ],
+    ] {
+        let (code, _, stderr) = support::cli_code(&scratch, &command);
+        assert_eq!(code, Some(2), "{command:?}: {stderr}");
+        assert!(stderr.contains("--all-branches"), "{command:?}: {stderr}");
+    }
+}
+
+#[test]
+fn document_takes_the_flag_for_a_tree_source_and_counts_what_opencode_cannot_keep() {
+    let scratch = staged_claude_tree("branches-document");
+    let (code, stdout, stderr) = support::cli_code(
+        &scratch,
+        &[
+            "document",
+            "opencode",
+            "claude_code",
+            "s-1",
+            "--all-branches",
+            "--cwd",
+            "/work",
+            "--project-id",
+            "p1",
+            "--model-provider",
+            "anthropic",
+            "--model",
+            "claude-x",
+        ],
+    );
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    let out: Value = serde_json::from_str(stdout.trim().lines().last().unwrap()).unwrap();
+    // OpenCode keeps one conversation: the two branches are not in the document, and are said so.
+    assert_eq!(
+        out["document"]["messages"].as_array().unwrap().len(),
+        4,
+        "{out}"
+    );
+    assert!(
+        out["losses"].as_array().unwrap().iter().any(|loss| loss
+            .as_str()
+            .unwrap()
+            .starts_with("branches of the source not written")
+            && loss.as_str().unwrap().ends_with("(2)")
+            && !loss.as_str().unwrap().contains("  ")),
+        "{out}"
+    );
+}

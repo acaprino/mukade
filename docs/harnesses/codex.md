@@ -456,9 +456,14 @@ empty catalogue, and the rollouts are listed as before.
   `archived_sessions/` (an archived page may continue from a base still under `sessions/`); a copy
   beside the home is never taken.
 - Each earlier file's conversation records past its cut become `MetaKind::OffBranch`, counted
-  (`dropped_off_branch`).
-- `--all-branches` (`Branches::All`, `src/hop.rs` `export_all_branches()`) reads every file of the
-  thread whole, the first one first. Codex only; another harness is refused (exit 2).
+  (`dropped_off_branch`). A fork that continues its origin by reference reads the origin's prefix
+  only: what the origin did after the cut is the origin's.
+- `thread_rolled_back` drops the last `num_turns` user turns before it, with what followed them; the
+  records are `Meta(OffBranch)` too.
+- `--all-branches` (`Branches::All`, `src/hop.rs` `export_all_branches()`): the same records are
+  `Session.branches` instead, each from the record before the dropped turns (a rollback) or before
+  the cut (an earlier file), and the fingerprint covers every file whole. Before 2026-11-12 this was
+  one linear splice of every file (abandoned turns, then the redo); that is gone.
 - A missing base, or an offset that does not end a record → an error with the reason. The
   fingerprint covers the bytes read, in order.
 
