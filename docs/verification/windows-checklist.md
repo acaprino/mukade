@@ -245,7 +245,8 @@ new session sits in the source's project folder, not in the one step 9 removes.
 
 ## 9. Claude Code: remove the old test sessions (1 min) 🟢
 
-**Do:** delete the folder `…-scratchpad-live-claude-work` under `%USERPROFILE%\.claude\projects\`.
+**Do:** delete the folder `…-scratchpad-live-claude-work` under `%USERPROFILE%\.claude\projects\`, and
+the three `D--mukade-test-scratch-fork-*` folders the [fork check](2026-11-12-fork-link-live.md) left.
 
 - [ ] Done. No real project folder touched.
 

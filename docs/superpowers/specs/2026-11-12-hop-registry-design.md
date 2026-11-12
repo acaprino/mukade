@@ -119,7 +119,8 @@ so a new parent copy takes new child copies.
 - Forks: hop a Claude Code origin into Claude Code, then its fork: the fork's prefix rows carry
   `forkedFrom` with the origin copy's id and the mapped uuid; Pi: `parentSession`; fork first, then
   origin: no link, a loss line.
-- Live [U]: Claude Code shows the written fork under its origin; Codex resumes a fork written with
+- Live: Claude Code opens the written fork and lists it as it lists its own `/branch`, a row of its
+  own (2026-11-12, [record](../../verification/2026-11-12-fork-link-live.md)); [U]: Codex resumes a fork written with
   `forked_from_id`.
 
 Size: medium. Order: §4.1–4.2, then 4.3 per destination (Pi, Claude Code, Codex, OpenCode), then 4.4.

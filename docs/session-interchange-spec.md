@@ -220,7 +220,7 @@ receives on resume.
 | new | `claude -p "<prompt>"` | JSON result carries `session_id` |
 | resume + prompt | `claude -p --resume <id> "<prompt>"` | same id, appends to the same file (cautions: §5) |
 | compaction | `claude -p --resume <id> "/compact"` | trigger `manual`; result text `Compacted …` |
-| fork | add `--fork-session` | new id; `/branch` writes `forkedFrom` on each copied row, `--fork-session` [U] |
+| fork | add `--fork-session` | new id; `/branch` writes `forkedFrom` on each copied row, `--fork-session` writes none (2.1.322) |
 
 **Store [V].** `<CLAUDE_CONFIG_DIR>\projects\<cwd with every non-alphanumeric char → ->\<uuid>.jsonl`
 (a folder name over 200 characters is cut and suffixed with `-` and a base-36 hash of the path:

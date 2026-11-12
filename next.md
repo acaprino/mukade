@@ -63,7 +63,8 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 **Cleanup, speed, real life**
 
-7. **Remove the old Claude Code test sessions** [9]: folder `…-scratchpad-live-claude-work`.
+7. **Remove the old Claude Code test sessions** [9]: folder `…-scratchpad-live-claude-work`, and the
+   three `D--mukade-test-scratch-fork-*` folders of the [fork check](docs/verification/2026-11-12-fork-link-live.md).
 8. **Listing cache on a cold disk** [12] [U]: warm 65–72 ms measured; cold 11 s not reproduced.
 9. **100 MB session speed** [13]: 1, 10, 30 MB were re-measured, 100 MB not.
 10. **Real-life shapes** [14] [U]: auto-compaction by threshold, a second compaction, rewind or
@@ -89,8 +90,8 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 **Forks, left open** ([design](docs/superpowers/specs/2026-11-12-forks-branches-design.md)).
 
 - *Branches, written:* whether Claude Code 2.1.322 resumes the intended leaf of a mukade-written file with several leaves, and whether Codex counts the user-role messages mukade writes inside a turn (a tool result written as text) when it rolls back, are **[U]** (a live load without a prompt would settle them); a paginated Codex fork or redo page is read, never written; OpenCode keeps no branches (its `revert` is not read).
-- *Fork links through a hop:* written into Claude Code (`forkedFrom`) and Pi (`parentSession`) when the origin was hopped there first ([registry](docs/superpowers/specs/2026-11-12-hop-registry-design.md)). Not yet: Codex (`forked_from_id` and the ordinal in the written rollout), OpenCode (`fork` through `session import` [U]); whether Claude Code shows a mukade-written fork under its origin [U].
-- *Claude Code `--fork-session`* [U]: whether its rows carry `forkedFrom`. The leaf flags of 2.1.322 are not read: they sit on `last-prompt` rows (`leafUuid`, `explicit`, `rewound`, `cutUuid`); in the binary, an explicit rewound checkpoint marks `cutUuid` and its ancestors hidden until a later row descends from them (`noteCheckpoint`/`noteRow`), and a `leafUuid: null` with `explicit` clears the leaf. A real rewound transcript is needed to implement it against.
+- *Fork links through a hop:* written into Claude Code (`forkedFrom`) and Pi (`parentSession`) when the origin was hopped there first ([registry](docs/superpowers/specs/2026-11-12-hop-registry-design.md)). Not yet: Codex (`forked_from_id` and the ordinal in the written rollout), OpenCode (`fork` through `session import` [U]). Claude Code: checked live on 2026-11-12 ([record](docs/verification/2026-11-12-fork-link-live.md)): a `/branch` hopped after its origin names the origin's copy and opens; `/resume` lists it as a row of its own, as it lists its own `/branch` (the picker groups by session id, never a fork under its origin).
+- *Claude Code `--fork-session`:* its rows carry **no** `forkedFrom` (2.1.322, live): the origin's uuids under the new `sessionId`, so `list` shows such a fork as a root; only shared uuids would tell it. The leaf flags of 2.1.322 are not read: they sit on `last-prompt` rows (`leafUuid`, `explicit`, `rewound`, `cutUuid`); in the binary, an explicit rewound checkpoint marks `cutUuid` and its ancestors hidden until a later row descends from them (`noteCheckpoint`/`noteRow`), and a `leafUuid: null` with `explicit` clears the leaf. A real rewound transcript is needed to implement it against.
 - *Codex:* a thread that survives only as a database row cannot be told as a fork (no fork column); a paginated fork is read, never written.
 - *DeepSeek Harness:* a fork made in dsh's web UI (0.2.2-rc.1, `forkSession`) writes `isSeeded: true` and **no `parentSession`**, so its parent is not recorded and it lists as a root; its `at` is set only where a header names the parent. Hermes `/branch` has no `at` (the copy boundary is not recorded).
 
