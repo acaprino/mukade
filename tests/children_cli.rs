@@ -84,14 +84,13 @@ fn dump_children_of_a_subagent_lists_what_hangs_below_it() {
 #[test]
 fn children_is_refused_where_it_means_nothing() {
     let scratch = staged("cc-refuse");
-    for args in [&["document", "claude_code", "opencode", "x", "--children"][..]] {
-        let (code, _, stderr) = cli_code(&scratch, args);
-        assert_eq!(code, Some(1), "{args:?}: {stderr}");
-        assert!(
-            stderr.contains("--children is supported only by list, dump, hop and write"),
-            "{stderr}"
-        );
-    }
+    let args = ["document", "claude_code", "opencode", "x", "--children"];
+    let (code, _, stderr) = cli_code(&scratch, &args);
+    assert_eq!(code, Some(1), "{args:?}: {stderr}");
+    assert!(
+        stderr.contains("--children is supported only by list, dump, hop and write"),
+        "{stderr}"
+    );
     let (code, _, stderr) = cli_code(
         &scratch,
         &[

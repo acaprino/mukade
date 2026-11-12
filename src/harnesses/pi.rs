@@ -316,6 +316,11 @@ impl Destination for Pi {
         false
     }
 
+    /// A fork's header names its origin's file (`parentSession`), as Pi's `/fork` writes it.
+    fn links_forks(&self) -> bool {
+        true
+    }
+
     fn image_in_result(&self, image: &Image) -> Value {
         crate::writer::pi::image_block(image)
     }

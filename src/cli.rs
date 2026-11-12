@@ -968,6 +968,20 @@ fn deliver(result: Result<Receipt, HopError>, manifest: Option<&str>) -> Result<
             }
         );
     }
+    if let Some(earlier) = receipt.manifest.get("earlier") {
+        eprintln!(
+            "mukade: this session was already written here, unchanged, as {} ({}, {}); this is a new copy",
+            earlier["dest_id"].as_str().unwrap_or("?"),
+            earlier["location"].as_str().unwrap_or("?"),
+            earlier["time"].as_str().unwrap_or("?"),
+        );
+    }
+    if let Some(error) = receipt.manifest["registry"]["error"].as_str() {
+        eprintln!(
+            "mukade: the hop registry was not updated ({error}); set {}=off to turn it off",
+            crate::registry::ENV
+        );
+    }
     println!(
         "{}",
         json!({
@@ -1288,6 +1302,7 @@ impl Flags {
                 _ => None,
             },
             subagents: Default::default(),
+            fork_of: None,
         })
     }
 

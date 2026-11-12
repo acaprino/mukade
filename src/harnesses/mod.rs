@@ -233,6 +233,12 @@ pub trait Destination: Send + Sync {
         false
     }
 
+    /// Whether a fork written here can name its origin's copy in this destination
+    /// ([`crate::writer::WriteOpts::fork_of`]): Claude Code `forkedFrom`, Pi `parentSession`.
+    fn links_forks(&self) -> bool {
+        false
+    }
+
     /// Whether `id` has this harness's own session id shape, so its verdict on the id is the one
     /// given before the destination is known.
     fn claims_id(&self, _id: &str) -> bool {

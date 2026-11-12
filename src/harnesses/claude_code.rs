@@ -247,6 +247,11 @@ impl Destination for ClaudeCode {
         true
     }
 
+    /// A fork's copied rows carry `forkedFrom`, as `/branch` writes them.
+    fn links_forks(&self) -> bool {
+        true
+    }
+
     fn interchange_document(&self) -> Option<&'static dyn InterchangeDocument> {
         None
     }

@@ -80,6 +80,7 @@ impl Writer for Codex {
         write_jsonl(&file, &rows)?;
 
         Ok(Written {
+            records: Vec::new(),
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
             resume: crate::catalog::resume(

@@ -463,6 +463,7 @@ pub fn opts(harness: HarnessId, scratch: &Path) -> WriteOpts {
         exe: Some(mukade::exe::binary_name(harness).to_string()),
         native_budget: None,
         subagents: Default::default(),
+        fork_of: None,
     }
 }
 

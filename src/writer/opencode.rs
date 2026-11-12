@@ -197,6 +197,7 @@ impl Writer for Opencode {
         }
 
         Ok(Written {
+            records: Vec::new(),
             id: imported.clone(),
             // The store the session now lives in: the import document is gone by now.
             location: match opts.roots.opencode_db.as_ref() {

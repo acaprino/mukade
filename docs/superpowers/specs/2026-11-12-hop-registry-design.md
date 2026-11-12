@@ -1,7 +1,11 @@
 # Hop registry, fork links and `write --children` — design
 
-Status: **decided** 2026-11-12: the design below, with the user's two choices in §5 (a new copy
-with a notice; the registry on by default). Everything below
+Status: **implemented** 2026-11-12 (`src/registry.rs`, `hop.rs` `Registered`), with the user's two
+choices in §5 (a new copy with a notice; the registry on by default). What the implementation
+changed from the text below: the shared prefix of a fork and its origin's copy is found by block
+fingerprints alone (`registry::shared_prefix`), so `at` need not be mapped and the origin is not
+read again; `PlannedBlock` carries no source id; links are written for Claude Code and Pi only, and
+Codex and OpenCode stay as open items in `next.md`. Everything below
 marked [V] was read in this repository's code on 2026-11-12; [U] is not verified against a harness.
 
 ## 1. Problem
@@ -103,7 +107,7 @@ same destination store, the fork is written with the destination's own link:
 The registry also tells when the same source content (`content_sha256`) was already written to
 the same destination store and is still there. Then mukade writes a new copy, as
 today, and prints a notice naming the earlier one (`mukade: <source id> was already written to
-<dest> as <id> on <time>; this is a new copy`); the receipt carries it as `earlier`. A child is never
+<dest> as <id> on <time>; this is a new copy`); the manifest carries it as `earlier`. A child is never
 reused on its own: in Claude Code and OpenCode a child belongs to the parent it was written under,
 so a new parent copy takes new child copies.
 

@@ -75,6 +75,7 @@ impl Writer for DeepSeekHarness {
         write_bytes(&file, &bytes)?;
 
         Ok(Written {
+            records: Vec::new(),
             id: id.clone(),
             location: file.to_string_lossy().into_owned(),
             resume: crate::catalog::resume(
