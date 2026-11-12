@@ -520,6 +520,14 @@ fn open_read_only(path: &Path) -> Result<rusqlite::Connection> {
     Ok(db)
 }
 
+fn has_column(db: &rusqlite::Connection, table: &str, column: &str) -> bool {
+    db.prepare(&format!(
+        "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+    ))
+    .and_then(|mut query| query.exists([column]))
+    .unwrap_or(false)
+}
+
 fn has_table(db: &rusqlite::Connection, table: &str) -> bool {
     db.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -589,13 +597,30 @@ fn session_rows(
     } else {
         format!("WHERE {} ", conditions.join(" AND "))
     };
+    // A fork names its source in `fork_session_id`, read as one with its `fork_boundary`; a table
+    // without the two columns records no fork.
+    let forks = has_column(db, table, "fork_session_id") && has_column(db, table, "fork_boundary");
+    let fork_columns = if forks {
+        "fork_session_id, fork_boundary"
+    } else {
+        "NULL, NULL"
+    };
     let sql = format!(
-        "SELECT id, title, directory, time_updated, time_archived, parent_id FROM {table} \
-         {filter}ORDER BY time_updated DESC, id ASC"
+        "SELECT id, title, directory, time_updated, time_archived, parent_id, {fork_columns} \
+         FROM {table} {filter}ORDER BY time_updated DESC, id ASC"
     );
     let mut query = db.prepare(&sql)?;
     let rows = query.query_map([], |row| {
         let updated: Option<i64> = row.get(3)?;
+        let spawner: Option<String> = row.get::<_, Option<String>>(5)?.filter(|p| !p.is_empty());
+        let fork_source: Option<String> =
+            row.get::<_, Option<String>>(6)?.filter(|p| !p.is_empty());
+        let bounded = row.get_ref(7)?.data_type() != rusqlite::types::Type::Null;
+        let (parent, parent_kind) = match (spawner, fork_source) {
+            (Some(parent), _) => (Some(parent), Some(ParentKind::spawn())),
+            (None, Some(source)) if bounded => (Some(source), Some(ParentKind::Fork)),
+            _ => (None, None),
+        };
         Ok((
             updated.unwrap_or(0),
             SessionInfo {
@@ -607,10 +632,8 @@ fn session_rows(
                     .map(|time| time.to_rfc3339()),
                 archived: row.get::<_, Option<i64>>(4)?.is_some(),
                 path: path.to_string_lossy().into_owned(),
-                parent_kind: row
-                    .get::<_, Option<String>>(5)?
-                    .map(|_| ParentKind::spawn()),
-                parent: row.get(5)?,
+                parent,
+                parent_kind,
                 ..Default::default()
             },
         ))

@@ -16,7 +16,7 @@ use crate::hop::{
     Compaction, HopError, ImportOpts, KeepFrom, Receipt, SessionRef, SourceFacts, SummarySource,
     WriteDetails,
 };
-use crate::model::{HarnessId, Protocol};
+use crate::model::{HarnessId, ParentKind, Protocol};
 use crate::native_compaction::NativeBudget;
 use crate::policy::ReasoningPolicy;
 use crate::roots::StoreRoots;
@@ -107,6 +107,8 @@ options:
                            branch the harness resumes
   --archived <bool>        list: true (default) includes the sessions the harness marked archived,
                            false leaves them out; the same for every harness
+  --children               list: also the subagent sessions (Claude Code, Codex, OpenCode); a
+                           row with a parent names it and its kind, spawn or fork
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
   --timing                 print where the time went, phase by phase, on stderr
@@ -191,6 +193,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "--from-file" => flags.from_file = Some(next(rest, &mut i)?),
             "--all-branches" => flags.all_branches = true,
             "--archived" => flags.archived = Some(next(rest, &mut i)?),
+            "--children" => flags.children = true,
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--output" => flags.output = Some(next(rest, &mut i)?),
             "--timing" => crate::timing::enable(),
@@ -215,6 +218,9 @@ pub fn run(args: &[String]) -> Result<()> {
 
     if flags.archived.is_some() && command != "list" {
         anyhow::bail!("--archived is supported only by list");
+    }
+    if flags.children && command != "list" {
+        anyhow::bail!("--children is supported only by list");
     }
     // Every harness alike: the sessions its store marks archived are kept or left out.
     let with_archived = match flags.archived.as_deref() {
@@ -459,24 +465,34 @@ pub fn run(args: &[String]) -> Result<()> {
         "list" => {
             no_more(operands, 0)?;
             let reader = crate::reader::for_harness(harness)?;
-            for info in reader
-                .list(&roots)?
+            let sessions = if flags.children {
+                reader.list_all(&roots)?
+            } else {
+                reader.list(&roots)?
+            };
+            for info in sessions
                 .into_iter()
                 .filter(|info| with_archived || !info.archived)
             {
-                println!(
-                    "{}",
-                    json!({
-                        "id": info.id,
-                        "title": info.title,
-                        "cwd": info.cwd,
-                        "timestamp": info.updated,
-                        "location": info.path,
-                        "archived": info.archived,
-                        "unreadable": info.unreadable,
-                        "live": info.live,
-                    })
-                );
+                let mut row = json!({
+                    "id": info.id,
+                    "title": info.title,
+                    "cwd": info.cwd,
+                    "timestamp": info.updated,
+                    "location": info.path,
+                    "archived": info.archived,
+                    "unreadable": info.unreadable,
+                    "live": info.live,
+                });
+                // Only a session with a parent has the two keys: a root's row is as it was.
+                if let (Some(parent), Some(object)) = (info.parent, row.as_object_mut()) {
+                    object.insert("parent".into(), json!(parent));
+                    object.insert(
+                        "kind".into(),
+                        json!(info.parent_kind.as_ref().map(ParentKind::name)),
+                    );
+                }
+                println!("{row}");
             }
         }
         "dump" => {
@@ -919,6 +935,7 @@ struct Flags {
     from_file: Option<String>,
     all_branches: bool,
     archived: Option<String>,
+    children: bool,
     manifest: Option<String>,
     output: Option<String>,
     root: Option<String>,

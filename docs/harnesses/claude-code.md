@@ -7,16 +7,16 @@ Anthropic's agentic coding tool: it reads a codebase, edits files, runs commands
 | | |
 |---|---|
 | mukade name | `claude_code` |
-| Read (`list`, `dump`) | ✅ every `projects/*/*.jsonl`, plus sessions known only from `history.jsonl` or a running process (`unreadable`), with a `live` flag |
+| Read (`list`, `dump`) | ✅ every `projects/*/*.jsonl`, plus sessions known only from `history.jsonl` or a running process (`unreadable`), with a `live` flag; with `list --children`, every subagent session that has a transcript (`<parent-id>.<agentId>`) |
 | Write | ✅ a new `<uuid>.jsonl` that Claude Code resumes by id; no index file needed [1][5] |
 | Hop as source | ✅ the branch Claude Code resumes. ⚠️ `--all-branches` is refused (Codex only) |
 | Hop as destination | ✅ resumed live, signed and redacted thinking included (2.1.312) [43]. ⚠️ a `PowerShell` call is text form where the installation does not run the `PowerShell` tool |
 | Resume | ✅ `claude -p --resume <id> "<prompt>"` (the receipt's `resume`, plus a prompt) or `claude --resume <id>` interactive: same id, same file [1] |
 | Summary by its own model | ✅ `--compaction summary`: `claude -p` with no tools and no transcript; the source is left as it was [27] |
 | Native compaction | ✅ read (`compact_boundary`); written by `hop --compaction native`, resumed live on 2.1.318 [42] |
-| Notable gaps | subagent transcripts are not listed or carried; a fork has no recorded parent; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
+| Notable gaps | a hop does not carry a session's subagents; a fork has no recorded parent; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
 
-**Versions checked.** Page updated 2026-11-11.
+**Versions checked.** Page updated 2026-11-12.
 
 | Version | Checked on it |
 |---|---|
@@ -141,7 +141,7 @@ JSON Lines, one record per line. Anthropic publishes no versioned schema: treat 
 | Path | Holds |
 |---|---|
 | `<config>/projects/<project>/<session-id>.jsonl` | the transcript |
-| `<config>/projects/<project>/<session-id>/subagents/` | subagent transcripts, same format |
+| `<config>/projects/<project>/<session-id>/subagents/` | `agent-<agentId>.jsonl`, a subagent's transcript in the same format, and `agent-<agentId>.meta.json` (Subagents, below) |
 | `<config>/projects/<project>/<session-id>/tool-results/` | large tool outputs |
 | `<config>/file-history/<session-id>/` | pre-edit snapshots for `/rewind`, the 100 most recent checkpoints |
 | `<config>/history.jsonl` | every typed prompt, all sessions (below) |
@@ -157,7 +157,7 @@ JSON Lines, one record per line. Anthropic publishes no versioned schema: treat 
 | `user` | a prompt; tool results as `tool_result` blocks; slash-command rows (`<command-name>`, `<local-command-stdout>`, `<local-command-caveat>`, with `isMeta`); the compaction summary | `message.content`, `isMeta`, `isVisibleInTranscriptOnly`, `isCompactSummary`, `tool_use_id`, `is_error` |
 | `assistant` | **one row per content block**, sharing `message.id`, chained by `parentUuid`; blocks `thinking` (with `signature`), `redacted_thinking` (with `data`), `text`, `tool_use` | `message.id`, `message.model`, `message.stop_reason` |
 | `system` | notably `subtype: "compact_boundary"` | `subtype`, `compactMetadata` |
-| `attachment` | files re-injected after a compaction | kept, not conversation |
+| `attachment` | files re-injected after a compaction; `queued_command` with `commandMode: "task-notification"`: a background task's notification (a subagent's report) as the model received it | `attachment.prompt` of a task notification; the rest kept, not conversation |
 | `custom-title`, `last-prompt` | the `/rename` name; the last prompt and its leaf | `customTitle`; `lastPrompt`, `leafUuid` |
 | others | request/cost/telemetry rows (`api-request` among them) | kept, not conversation |
 
@@ -169,7 +169,19 @@ Common fields: `uuid`, `parentUuid`, `logicalParentUuid`, `sessionId`, `cwd`, `g
 - A killed process leaves the user row; the next load adds a synthetic assistant `"No response requested."` (`model: "<synthetic>"`) [1]. An interrupted turn ends with a user row `[Request interrupted by user]` (`… for tool use]` beside a tool result).
 - A compaction restarts the chain: the boundary has `parentUuid: null` and `logicalParentUuid: <old leaf>` (see Compaction).
 
-**Lineage.** `--fork-session` gives a new id and writes **no lineage field** [1]: a fork is a session with no parent (catalog `lineage.recorded: false`). Subagents live in `subagents/` and as `isSidechain` rows.
+**Lineage.** `--fork-session` gives a new id and writes **no lineage field** [1]: a fork is a session with no parent (catalog `lineage.recorded: false`).
+
+**Subagents** (2.1.318, the author's store, 2026-11-12 [45]):
+
+| what | shape |
+|---|---|
+| transcript | `<session-id>/subagents/agent-<agentId>.jsonl`; every conversation row `isSidechain: true`, `agentId`, `sessionId` = the parent's; the first row (`parentUuid: null`) is the prompt the parent gave, `isMeta` in 18 of 825 |
+| agent id | `a` + 16 hex, or `a<name>-<16 hex>`; unique only inside its parent |
+| meta.json | `agentType`, `description`, `spawnDepth`, `requestShape` (`foreground`/`background`), `toolUseId` (the parent's `Agent` call; absent for an `in_process_teammate`); optional `parentAgentId` (a child of a child, filed flat in the root's folder), `isFork`, `model`, `finished`, `worktree*` |
+| without a transcript | 478 of 1300 meta.json files |
+| other files | `agent-<agentId>.forked-skill.json` and `.forked-skill.marker.json` (a skill run forked) |
+| a fork child (`agentType: fork`) | starts with a `fork-context-ref` row (`parentSessionId`, `parentLastUuid`, `contextLength`): its context is the parent's, not in the file |
+| the parent's call | `Agent` `{description, prompt, subagent_type, [model], [run_in_background]}`; its result's `toolUseResult.status`: `completed` (the report is the result), `async_launched` (the report comes later as a `<task-notification>`, a plain user row or an `attachment` row), `teammate_spawned`, `forked` |
 
 **Beside the transcript**:
 - `history.jsonl`: one line per prompt, `{display, pastedContents, project, sessionId, timestamp (ms)}`; it outlives a deleted session file. 2026-11-08: 261 sessions in it, 214 transcripts, 88 sessions without one, in 19 projects no transcript names [40].
@@ -278,7 +290,7 @@ Tool names are the exact strings used in permission rules, subagent tool lists a
 
 - **Checkpoints and rewind.** Each prompt that starts a turn checkpoints the files Claude edits; `/rewind` (or `Esc` twice on an empty prompt) restores code, conversation or both. Changes made only by Bash, and edits by subagents, are not tracked. Checkpoints are saved with the conversation, so `/rewind` works after a resume [19].
 - **Branching.** Rewound branches stay in the file and Claude Code resumes the last row's (see Ordering) [4]. `/branch`, or `claude --continue --fork-session`, keeps the original intact [19]; the fork records no parent [1].
-- **Subagents.** The `Agent` tool spawns a subagent with its own context. Its transcript lives in `<session>/subagents/` in the same format [18]; in the main file its rows are `isSidechain: true` [4]. Definitions: `agents/*.md` (project or global) or `--agents <json-or-file>` [9][18].
+- **Subagents.** The `Agent` tool spawns a subagent with its own context, in the foreground or the background; its transcript and meta.json are in `<session>/subagents/` (Session store) [18]. Definitions: `agents/*.md` (project or global) or `--agents <json-or-file>` [9][18].
 
 ### Models and providers
 
@@ -345,7 +357,7 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 
 **Limits, costliest first**:
 - **Only the branch Claude Code resumes travels.** Rows off it are kept as `Meta(OffBranch)` and counted as `dropped_off_branch`; `--all-branches` is refused for Claude Code (`src/hop.rs` `all_branches_supported()`).
-- **Subagent work does not travel.** `isSidechain` rows are kept, not conversation; `subagents/` folders are not listed.
+- **A session's subagents do not travel with it.** Each is a session of its own (below); what one reported to the parent travels in the parent.
 - **A process killed while the model was answering leaves no sign**: that reply reads as an ordinary one; `--interrupted drop` keeps it ([usage](../usage.md#a-session-with-interrupted-turns)).
 - **Not exercised by a bench run** (Open points 1): branch selection is covered by synthetic tests on hand-made records [1][4].
 - **A title can be missed.** In a file bigger than the two peek windows, a `custom-title` written between them is not seen; the name falls back to the last prompt or the first one.
@@ -368,6 +380,13 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 - `null`: no `sessions/` folder, or the registration's `pidDomain` is another platform, machine or pid namespace (a container).
 - Verified on Windows and on Linux (2.1.322, 2026-11-11: running → `true`, a changed `procStart` → `false`, another pid namespace → `null`) [41]. macOS: `ps -p`, `procStart` not compared **[U]**: a reused pid reads as live.
 
+**Subagent sessions** (`src/reader/claude_code/subagents.rs`; `src/reader/claude_code.rs` `list_all_cached()`, `read()`, `read_file()`):
+- Id `<parent-id>.<agentId>`; `read` matches it exactly, never by prefix. `list` is unchanged; `list_all` (`list --children`, the TUI) adds every child with a transcript, title = meta.json `description`, cached in `claude-subagents-<hash>.json`.
+- A child's file (by id or `--from-file`): its sidechain rows are its conversation; its opening row is its prompt even when `isMeta`. `parent` = meta.json `parentAgentId` as `<parent-id>.<parentAgentId>`, else `sessionId`; `parent_kind` = `Spawn { toolUseId, agentType }`; without meta.json, `Spawn` with neither.
+- Refused: a child with a row whose `parentUuid` is in a sibling agent's transcript (7 of 825 [45]: `missing Claude Code parent`); `--compaction summary` of a child (`claude --resume` takes a session's id, exit 2).
+- A fork child starts with its first reply: the parent's context it continues is not read.
+- In a session's own file, an older Claude Code's `isSidechain` rows stay `Meta`.
+
 **Reading one session** (`src/reader/claude_code.rs` `read()`, `parse_owned()`; `src/reader/claude_code/order.rs` `reconstruct()`):
 - `dump` and `hop` match the file name by prefix of the id; an ambiguous prefix is refused.
 - **Branch, order, refusals.** `last-prompt.leafUuid` is the checkpoint; the reader walks `parentUuid`, and `logicalParentUuid` across a compaction. Rows sharing `message.id` merge into one `Step`; results pair by `tool_use_id` (L5). Rules and refusals (missing parents, cycles, duplicate UUIDs, ambiguous records): [spec §2.1](../session-interchange-spec.md).
@@ -375,11 +394,11 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 - A last line cut off mid-write is kept as an unfinished record.
 
 **What rows become** (`src/reader/claude_code.rs` `class_of()`, `step_end()`):
-- **Kept as `Meta`, never conversation** (L5, [spec §8.1](../session-interchange-spec.md)): `<synthetic>` replies (`Meta(Synthetic)`); `isMeta`, `isVisibleInTranscriptOnly`, `<local-command-*>`, `<command-name>`, `<command-message>` rows (`Meta(Command)`); `attachment`, other `system`, unknown and subagent rows. Exception: the `isMeta` row after a prompt-type slash command is the expanded prompt, a user turn.
+- **Kept as `Meta`, never conversation** (L5, [spec §8.1](../session-interchange-spec.md)): `<synthetic>` replies (`Meta(Synthetic)`); `isMeta`, `isVisibleInTranscriptOnly`, `<local-command-*>`, `<command-name>`, `<command-message>` rows (`Meta(Command)`); `attachment`, other `system`, unknown and subagent rows. Exceptions, user turns: the `isMeta` row after a prompt-type slash command (the expanded prompt); an `attachment` task notification (its `prompt`, as the plain-row form already is).
 - **Interruptions** (L9): `[Request interrupted by user]` (and `… for tool use]`) is a marker, not a prompt; the reply it cut is `aborted`.
 - **Reasoning.** `thinking` keeps its `signature`; `redacted_thinking` keeps its `data` as the opaque payload; both are tagged `anthropic-messages` with the step's model.
 - **Step end** from `stop_reason`: `tool_use`; `end_turn`, `stop_sequence`, `max_tokens`, `length` → completed; `refusal` → error.
-- **Metadata** from the rows: `sessionId`, `cwd`, `gitBranch`, `version`, models; the title as in the listing; `parent` is always empty, as `--fork-session` leaves no lineage.
+- **Metadata** from the rows: `sessionId`, `cwd`, `gitBranch`, `version`, models; the title as in the listing; `parent` is empty for a session's own file, as `--fork-session` leaves no lineage (a child's: Subagent sessions).
 
 ## How mukade writes it
 
@@ -451,10 +470,11 @@ claude -p --tools "" --resume <id> --no-session-persistence --output-format json
 
 ## Open points
 
-1. **Real-life shapes** **[U]**: auto-compaction by threshold, a second compaction, a rewind or fork in a real source, subagent sessions, an image going to Claude Code. Settled by hopping one when it happens.
-2. **Signed thinking really validated** **[U]**: needs a source whose last assistant turn is a tool call with thinking; then the tampered copy must be refused [43].
-3. **macOS `live`** **[U]**: `procStart` is not compared there. Needs a macOS machine.
-4. **Listing on a cold disk with an empty cache** **[U]**: the 11 s cold figure was not reproduced.
+1. **Real-life shapes** **[U]**: auto-compaction by threshold, a second compaction, a rewind or fork in a real source, an image going to Claude Code. Settled by hopping one when it happens.
+2. **Subagents** **[U]**: whether Claude Code resumes a subagent written into `subagents/` (phase 2); reading a fork child's context from its parent; children linked across agent transcripts; `forked-skill` files and `workflows/`.
+3. **Signed thinking really validated** **[U]**: needs a source whose last assistant turn is a tool call with thinking; then the tampered copy must be refused [43].
+4. **macOS `live`** **[U]**: `procStart` is not compared there. Needs a macOS machine.
+5. **Listing on a cold disk with an empty cache** **[U]**: the 11 s cold figure was not reproduced.
 
 The rest, with the Windows checklist steps: [../../next.md](../../next.md). Every other **[U]** above names the run that would settle it.
 
@@ -511,3 +531,4 @@ Web:
 42. `docs/verification/native-compaction-live.md`: native compaction records resumed live, Claude Code 2.1.318 (2026-11-04).
 43. `docs/verification/live-hops-and-provider-reasoning.md`: live hops into Claude Code 2.1.312 with signed and redacted thinking, and the tampered-signature control (2026-10-28).
 44. Claude Code 2.1.322 code and docs, read only, 2026-11-12: the `Bash` and `PowerShell` tools, `CLAUDE_CODE_USE_POWERSHELL_TOOL`, the transcript's environment snapshot (`{"type":"attachment","attachment":{"type":"environment","snapshot":{"shell":…}}}`, values `PowerShell`, `PowerShell (primary); Bash tool also available …`, `bash`, `zsh (login shell: bash)`); 3086 snapshots on the test machine, all `PowerShell (primary)…`. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).
+45. The author's `projects/` folder, read only for shape (no content copied), 2026-11-12, Claude Code up to 2.1.318: 288 sessions, 152 with `subagents/`, 825 `agent-*.jsonl`, 1300 meta.json; every transcript read through `dump --from-file`. Decisions: [`docs/superpowers/specs/2026-11-12-subagents-design.md`](../superpowers/specs/2026-11-12-subagents-design.md).

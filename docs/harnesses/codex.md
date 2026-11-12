@@ -9,9 +9,9 @@ with Codex's own model and compacts natively.
 
 | | |
 |---|---|
-| Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`) |
+| Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`); subagent and guardian threads with `list --children` |
 | Write | ✅ a new rollout under `sessions/`; needs the destination's `cli_version` |
-| Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, subagent messages and threads, forks, compressed rollouts |
+| Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), subagent threads (each read on its own), forks, compressed rollouts |
 | Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form |
 | Resume | ✅ `codex exec resume <id>` (receipt) or `codex resume <id>`; live-verified on 0.166.0 [48] |
 | Summary by its own model | ⚠️ `--compaction summary` runs `codex exec fork … --ephemeral`; checked against a mock only **[U]** [27] |
@@ -19,7 +19,7 @@ with Codex's own model and compacts natively.
 | Versions | researched and readers verified on 0.164.0; writers live-tested on the installed 0.166.0 [48][49]; CLI 0.165.0 (published 2026-10-27) never exercised [17]; Desktop rollouts read up to 0.164.0-alpha.11.1 [21], 0.165.0-alpha.1.2 [26], 0.167.0 / 0.167.0-alpha.3.2 / 0.167.1 [50] |
 
 `[n]` = an entry in [Sources](#sources). **[U]** = not verified. Repository paths are relative to
-the repository root. Page updated 2026-11-11.
+the repository root. Page updated 2026-11-12.
 
 ## Quick start
 
@@ -139,15 +139,16 @@ Root `CODEX_HOME`, `~/.codex` by default [9][20]. Seen on disk with 0.164.0 unle
 
 | `type` | payloads seen | role |
 |---|---|---|
-| `session_meta` | `id` (the rollout's own thread), `session_id` in native rollouts [22] (the same id, except in a subagent's rollout, where it names the spawning thread [26]), `cwd`, `originator`, `source`, `cli_version`, `model_provider`, `git`, `base_instructions` | thread header; Codex refuses a rollout without `cli_version` [23] |
+| `session_meta` | `id` (the rollout's own thread), `session_id` in native rollouts [22] (the same id, except in a subagent's rollout, where it names the spawning thread [26]), `cwd`, `originator`, `source`, `cli_version`, `model_provider`, `git`, `base_instructions`; a subagent's (0.167 [53]): `parent_thread_id`, `thread_source` (`subagent`, `guardian_review`), `agent_role`, `agent_nickname`, `agent_path` | thread header; Codex refuses a rollout without `cli_version` [23] |
 | `response_item` | `message` (`user`/`assistant`/`developer`), `reasoning` (`summary`, `encrypted_content`), `function_call`/`function_call_output`, `custom_tool_call`/`custom_tool_call_output`, `local_shell_call`, `web_search_call` | the conversation |
 | `event_msg` | `task_started`, `task_complete`, `turn_aborted {reason:"interrupted"}`, `thread_settings_applied` | events about the conversation |
 | `turn_context` | `turn_id`, `model`, `cwd` | starts a turn |
 | `compacted` | see [Compaction](#compaction) | replaces history |
 | `world_state`, `token_usage_record` | — | events, not conversation |
 
-Also in 0.165 Desktop rollouts [26]: `response_item` `agent_message` (a subagent's message to the root
-agent: plain header, payload as `encrypted_content`), `inter_agent_communication_metadata`,
+Also in 0.165 Desktop rollouts [26]: `response_item` `agent_message` (a message from one agent of
+the spawn tree to another: `author`, `recipient`, `content` = an `input_text` header and usually an
+`encrypted_content` block; plain text only in 55 of 320 seen [53]), `inter_agent_communication_metadata`,
 `token_usage_record`, `world_state`, `event_msg/item_completed`.
 
 **Ordering** [19]
@@ -173,11 +174,14 @@ legacy sessions to "paginated thread history" [18]. Their on-disk form **[U]**.
 
 **Lineage**
 
-- Subagent: its own rollout, whose `session_meta.session_id` names the spawning thread [26]; Codex's
-  state database links them in `thread_spawn_edges`. Fork: how a forked rollout records its parent
-  **[U]**.
+- Subagent: its own rollout. 0.167 [53]: `session_meta.parent_thread_id` and
+  `source.subagent.thread_spawn {parent_thread_id, depth, agent_path, agent_nickname, agent_role}`
+  name the spawning thread (`session_id` too, at depth 1 [26]); a guardian review:
+  `source: {"subagent": {"other": "guardian"}}`, `thread_source: "guardian_review"`. Codex's state
+  database links spawns in `thread_spawn_edges` (not guardian reviews) and keeps `agent_role`.
+- Fork: how a forked rollout records its parent **[U]**.
 - `mukade harnesses` prints lineage `not recorded` for Codex from `catalog/harnesses.json`
-  (`lineage.recorded: false`), not from the reader, which does set a subagent's parent.
+  (`lineage.recorded: false`: forks), not from the reader, which does set a subagent's parent.
 
 ## Features
 
@@ -390,13 +394,13 @@ Code: `src/reader/codex.rs` [22], `src/reader/codex/exec.rs`, `src/reader/codex_
    never written as an empty user message: it is left out and counted
    (`dropped_unreadable_summaries`), and `--compaction portable` is refused, exit 2
    (`src/writer/plan.rs` `plan()`; `src/hop.rs` `select()`). The history around it travels.
-3. **Subagent messages are excluded.** An `agent_message` (a subagent writing to the
-   root agent) has a plain header (sender, recipient, task name) and an `encrypted_content` payload
-   only OpenAI can read; it reads as `Meta`, neither carried nor counted (223 in the 0.165 thread
-   seen [26]). The root agent's messages to subagents (`send_message`, `followup_task`,
+3. **Encrypted messages between agents are left out.** An `agent_message` with an
+   `encrypted_content` block (only OpenAI can read it) stays `Meta(SubagentMessage)`, counted
+   (`dropped_subagent_messages`); one with readable text only is a user turn where it was received
+   (`class_of()`). The root agent's messages to subagents (`send_message`, `followup_task`,
    `spawn_agent`, `message` encrypted the same way) travel as text form with that value replaced by
    `<encrypted by the source's provider, N chars>` (tables §3; `src/tools.rs` `without_encrypted()`).
-4. **Not converted:** subagent threads (each its own session), forks, and
+4. **Not converted:** a thread's subagent threads (each its own session, read by its id), forks, and
    compressed/migrated rollouts (only `*.jsonl` files are listed) **[U]** [19 §10].
 5. **`apply_patch` is read at translate time** (`src/tools/patch.rs` `view()`): one added file is a
    write, one updated file with one hunk an edit, several hunks a multi-edit (Pi only); anything
@@ -431,7 +435,9 @@ empty catalogue, and the rollouts are listed as before.
 
 - **Subagents:** `list` leaves out the threads Codex ran for another (`source` containing
   `subagent`, `thread_source` `guardian_review` or `subagent`, or a child in `thread_spawn_edges`):
-  7493 of the 8598 rows. `list_all` (the TUI) keeps them, with `parent` from `thread_spawn_edges`.
+  7493 of the 8598 rows. `list_all` (`list --children`, the TUI) keeps them, with `parent` from
+  `thread_spawn_edges` and `parent_kind` `Spawn { agent: agent_role }` (`guardian_review` for a
+  guardian review, which has no edge and so no parent).
 - **Title and time:** the row's `name`, else `title`, else the start of `preview` (one line, 120
   characters); `updated_at_ms`, else `updated_at` (seconds). Columns a Codex version lacks read as
   absent (`read_threads()`, `parent_links()`).
@@ -463,7 +469,7 @@ empty catalogue, and the rollouts are listed as before.
 | `reasoning` | `summary` text + `Opaque{openai-responses, model, encrypted_content}`; `content` is not read | `step_with()` |
 | `compacted` | `Compaction{summary: message, kept_from: next non-Meta entry, trigger: Unknown, tokens_before: latest_token_usage_record.usage.input_tokens}`; the step of the same `turn_id` that wrote the summary is folded in; `replacement_history` stays in `raw` only | `compacted()`, `finish()` |
 | `event_msg`, `turn_context`, `world_state`, `token_usage_record` | `Meta`, kept raw (`task_started`/`task_complete` → `Idle`, `thread_settings_applied` → `ModelChange`, the rest `Internal`); models from `thread_settings_applied` | `class_of()`, `push()` |
-| `session_meta` | id (`id`, else `session_id`), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title**: the newest `session_index.jsonl` `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent** = `session_id` when it differs from `id` (a subagent's rollout [26]); forks not linked | `MetaBuilder::observe()`, `finish()`, `indexed_name()` |
+| `session_meta` | id (`id`, else `session_id`), `cwd`, `cli_version` (harness version), `git.branch`; created/updated from the timestamps; **title**: the newest `session_index.jsonl` `thread_name` for the id (the name the Codex app shows), when the rollout is under `sessions/`; **parent** = `parent_thread_id` (top level, else `source.subagent.thread_spawn`), else `session_id` when it differs from `id`; `parent_kind` = `Spawn { agent }`: `agent_role`, or `guardian_review` [53]; forks not linked | `MetaBuilder::observe()`, `finish()`, `indexed_name()` |
 
 **Tool records**
 
@@ -643,3 +649,4 @@ files of `openai/codex` at that tag, under `codex-rs/`, at
 50. [`docs/verification/2026-11-11-codex-code-mode.md`](../verification/2026-11-11-codex-code-mode.md): read-only code-mode census of 2026-11-11 (34 rollouts of Codex 0.167.0, 0.167.0-alpha.3.2, 0.167.1; 981 `exec` calls, 725 split into 1,139 calls; per-destination counts).
 51. [`docs/verification/listing-coverage-2026-11-08.md`](../verification/listing-coverage-2026-11-08.md): listing coverage of 2026-11-08 (Codex 0.166; 8598 `threads` rows, none with an existing rollout; 1105 listed threads, 7493 subagent and guardian threads left out).
 52. Codex CLI 0.167.1 and Desktop 26.1106 code, read only, 2026-11-12: `shell_detect.rs` (the shell per platform), the `<environment_context>` and `world_state` shell names. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).
+53. The author's Codex home, read only for shape (no content copied), 2026-11-12, 0.167.0-alpha.3.2 to 0.167.1: 19 subagent and 6 guardian `session_meta` headers; `state_5.sqlite` columns (`agent_role`, `thread_source`) and `thread_spawn_edges`; 320 `agent_message` rows in 29 rollouts (265 with `encrypted_content`). Decisions: [`docs/superpowers/specs/2026-11-12-subagents-design.md`](../superpowers/specs/2026-11-12-subagents-design.md).

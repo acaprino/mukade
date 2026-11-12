@@ -316,10 +316,11 @@ developer message + `replacement_history` + later items + prompt; no `encrypted_
 - **Encrypted compaction summaries** (`compacted.message` empty; an item
   `{type:"compaction", encrypted_content}` in `replacement_history`): none is written as an empty
   message (`dropped_unreadable_summaries`); `Portable` from one is refused.
-- **Subagent messages to the root agent** (`agent_message`, `encrypted_content` payload) are
-  **excluded by decision** (2026-10-28): `Meta`, neither carried nor counted.
-- **Subagent rollouts** name their spawning thread in `session_meta.session_id`; the reader puts it
-  in `meta.parent` (never carried into a hop).
+- **Messages between agents** (`agent_message`): one with readable text is a `User` turn where the
+  receiving agent got it; one with an `encrypted_content` block stays `Meta(SubagentMessage)`,
+  counted (`dropped_subagent_messages`); 265 of 320 on the author's store were encrypted (2026-11-12).
+- **Subagent rollouts** name their spawning thread in `session_meta.parent_thread_id` (older ones
+  only in `session_id`): the reader's `meta.parent` (§3.1 Lineage).
 
 ### 2.3 OpenCode 2.1.4
 
@@ -412,8 +413,8 @@ each entry (nothing is lost by reading); the **target-specific** choices, made b
 ```rust
 pub struct Session {
     pub meta: Meta,                    // source harness + version, id, cwd, title, created/updated,
-                                       // model(s), git branch, parent (fork or Codex subagent; never
-                                       // carried into a hop), source path and SHA-256
+                                       // model(s), git branch, parent and parent_kind (never carried
+                                       // into a hop), source path and SHA-256
     pub entries: Vec<Entry>,           // in native order (seq / ordinal / parent chain), never by time
 }
 pub struct Entry { pub id: String, pub kind: Kind, pub raw: Vec<serde_json::Value> }  // raw = source record(s)
@@ -443,6 +444,19 @@ pub struct ChatReasoning { pub provider: Option<String>, pub details: Vec<serde_
 ```
 
 Code: `src/model/` (`mod.rs`, `kind.rs`, `tool.rs`, `reasoning.rs`, `harness.rs`).
+
+**Lineage.** `Meta.parent` (and `SessionInfo.parent` in a listing) is the session this one came
+from; `parent_kind` says how, and is set whenever `parent` is: `Fork` (a copy continued on its own)
+or `Spawn { call_id, agent }` (a subagent; the parent's spawning call and the agent type, where the
+source records them). The dump document carries both as `meta.parent` and
+`meta.parent_kind` (`{"kind":"fork"}`, `{"kind":"spawn","call_id":…,"agent":…}`).
+
+| harness | `parent` | `parent_kind` |
+|---|---|---|
+| Claude Code | a subagent session (`<parent-id>.<agentId>`): its meta.json `parentAgentId` as `<parent-id>.<parentAgentId>`, else the rows' `sessionId` | `Spawn { call_id: toolUseId, agent: agentType }` (meta.json); a session's own file: none |
+| Codex | `parent_thread_id` (top level or `source.subagent.thread_spawn`), else `session_id` ≠ `id`; listing: `thread_spawn_edges` | `Spawn { call_id: None, agent: agent_role }`; `agent: "guardian_review"` for a guardian review |
+| OpenCode | `parentID` (export) or `parent_id` (row); else a fork's `fork.sessionID` / `fork_session_id` with its boundary | `Spawn { None, None }`; a fork: `Fork` |
+| Pi | `parentSession` | `Fork` |
 
 ### 3.2 Why each part is there (evidence)
 
@@ -754,6 +768,7 @@ above zero also has a `losses` line.**
 | `dropped_attachments` | user attachments the destination cannot carry |
 | `dropped_result_blocks` | structured result blocks flattened for a text-only destination |
 | `dropped_unreadable_summaries` | a compaction summary with no readable text |
+| `dropped_subagent_messages` | a message between a subagent and its parent with no readable text (Codex's encrypted `agent_message`) |
 | `dropped_unfinished_lines` | a last source line cut off mid-write, kept as text and not read |
 | `aborted_steps_as_replies` | aborted or failed steps written as ordinary replies where the destination cannot mark them (Pi keeps the step's end) |
 
@@ -797,7 +812,7 @@ verification records.
 | id | requirement | evidence | acceptance | status |
 |---|---|---|---|---|
 | L4 | every reader turns the native compaction record into a `Compaction` entry (Claude `compact_boundary` + `isCompactSummary` row + `preservedSegment`; Codex `compacted` + `replacement_history`; OpenCode `compaction` + `metadata.keepID`; Pi `compaction` + `firstKeptEntryId`) | §2 | `Portable{SourceRecord}` works for all 12 pairs without a supplied summary | **built**: one test per reader (`tests/claude_code_reader.rs` `native_compaction_becomes_one_compaction_entry`, `tests/codex_reader.rs` `compaction_keeps_the_summary_and_folds_the_summary_turn`, OpenCode and Pi alike); a portable hop is tested Claude Code → Pi (`tests/hop.rs` `portable_carries_the_source_summary_and_the_tail_from_its_boundary`), not all 12 pairs. Codex 0.165 encrypted summaries: refused (§2.2) |
-| L5 | Claude reader: `isMeta`, `<local-command-*>`/`<command-name>` rows, `isCompactSummary`, `isVisibleInTranscriptOnly`, attachment rows → `Meta`; rows merged by `message.id`; results paired by `tool_use_id`, not by the parent chain | §2.1 | Claude → Pi tail strict clean; no `function_call "{}"` into Codex | **built**: `tests/claude_code_reader.rs` `results_are_paired_by_tool_use_id_not_by_parent_chain`, `transcript_only_and_internal_rows_are_meta` |
+| L5 | Claude reader: `isMeta`, `<local-command-*>`/`<command-name>` rows, `isCompactSummary`, `isVisibleInTranscriptOnly`, attachment rows (a `task-notification` one is a user turn) → `Meta`; rows merged by `message.id`; results paired by `tool_use_id`, not by the parent chain | §2.1 | Claude → Pi tail strict clean; no `function_call "{}"` into Codex | **built**: `tests/claude_code_reader.rs` `results_are_paired_by_tool_use_id_not_by_parent_chain`, `transcript_only_and_internal_rows_are_meta` |
 | L6 | readers keep `signature`/`encrypted` with protocol + model (`Opaque`) | §3.3 | OpenCode/Pi → Claude strict clean with `DropForeign` | **built**: `reasoning_keeps_its_opaque_payload` and the L6 tests of all four reader test files; `tests/reasoning_replay.rs` |
 | L9 | Codex `<turn_aborted>`/`turn_aborted` and a hard-killed last turn → `StepEnd::aborted`/`killed`; Claude `<synthetic>` reply and `[Request interrupted by user]` → `Meta`, the step it cut → `aborted`; OpenCode empty assistant without `finish` → `killed` | §2 | manifest `interrupted_last_turn`; no marker text in the destination; `interrupted: drop` leaves the turn's work out | **built**: `tests/codex_reader.rs` `a_reply_cut_by_an_abort_is_an_aborted_step`, `tests/opencode_reader.rs` `a_row_without_finish_is_a_killed_step_and_the_export_omits_it`, `killed_last_turn_is_a_user_entry_with_no_reply` (Claude Code, Pi) |
 | L10 | Codex Desktop code-mode `exec`: a script of only literal `text(await tools.X(...));` statements whose output holds the header and one text item per statement → those calls, each with its own result (first id the `exec` call's, then `<id>_<n>`; [rule](tool-conversion-tables.md#5-reading-codex-desktop-code-mode-exec)); any other script → one text-form call. `apply_patch` input → `Write` / `Edit` / multi-edit when it is one plain file section | census: 4844 of 4908 real Codex calls are `exec`; 2026-11-11: 725 of 981 scripts split (`docs/verification/2026-11-11-codex-code-mode.md`) | a Codex Desktop rollout converts with shell and patch calls translated | **built** 2026-11-11 (`src/reader/codex/exec.rs`, `src/tools/patch.rs`): `tests/codex_reader.rs` `a_sequence_reads_as_calls_with_their_own_results`, `tests/hop.rs` `a_code_mode_rollout_reaches_claude_and_pi_with_native_calls`, census `tests/codex_code_mode_census.rs` (ignored; reads a real `CODEX_HOME`). Live hop of a real Desktop thread: open (§10) |
@@ -874,7 +889,8 @@ Each item is **[U]** unless stated otherwise; step-by-step checks: `next.md`.
 - Auto-compaction by threshold; a second compaction.
 - A rewind or tree navigation in the source: readers follow the resumed branch, tested on
   hand-made records; Claude `--fork-session` and Pi fork shapes are recorded, not converted.
-- Subagent sessions.
+- Subagent sessions: read and listed (Claude Code children, Codex child rollouts, OpenCode child
+  sessions); a hop of a parent does not carry them yet.
 - Images and attachments: converted between the four shapes; only OpenCode's verified by a real import.
 - Sessions larger than a few turns.
 

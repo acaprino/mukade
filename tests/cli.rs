@@ -1446,6 +1446,13 @@ fn harnesses_lists_supported_binaries_stores_and_native_lineage_info() {
         "{stdout}"
     );
     assert!(stdout.contains("recorded: parentSession"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "not recorded (forks are not recorded; a subagent thread names the thread that \
+             spawned it (session_meta.parent_thread_id))"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("status:   recognized"), "{stdout}");
     assert!(stdout.contains("sessions: 1"), "{stdout}");
     assert!(
@@ -2191,5 +2198,129 @@ fn interrupted_drop_writes_the_prompts_without_the_cut_off_replies() {
             .iter()
             .any(|loss| loss.as_str().unwrap().contains("interrupted turns")),
         "{losses:?}"
+    );
+}
+
+/// The JSON rows `mukade list` printed.
+fn list_rows(stdout: &str) -> Vec<Value> {
+    stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
+        .collect()
+}
+
+/// `list --children` lists the subagent sessions too, each naming its parent and how it came from
+/// it; without the flag the rows are the roots, as before, with no `parent` or `kind` key.
+#[test]
+fn list_children_names_each_childs_parent_and_kind() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-list-children");
+    support::stage_claude_subagents(&scratch);
+    let parent = support::CLAUDE_PARENT;
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "claude_code"]);
+    assert!(ok, "{stderr}");
+    let roots = list_rows(&stdout);
+    assert_eq!(roots.len(), 1);
+    let keys: Vec<&String> = roots[0].as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        [
+            "id",
+            "title",
+            "cwd",
+            "timestamp",
+            "location",
+            "archived",
+            "unreadable",
+            "live"
+        ],
+        "a root without a parent prints the keys it always printed"
+    );
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "claude_code", "--children"]);
+    assert!(ok, "{stderr}");
+    let all = list_rows(&stdout);
+    assert_eq!(all.len(), 5, "{stdout}");
+    let row = |id: &str| all.iter().find(|r| r["id"] == id).unwrap().clone();
+    assert!(row(parent).get("parent").is_none());
+    let fg = row(&format!("{parent}.a1111111111111111"));
+    assert_eq!(fg["parent"], parent);
+    assert_eq!(fg["kind"], "spawn");
+    assert_eq!(fg["title"], "Read module A");
+    let deep = row(&format!("{parent}.a4444444444444444"));
+    assert_eq!(deep["parent"], format!("{parent}.a2222222222222222"));
+}
+
+/// A root that is a fork (a Pi `parentSession`) names its parent and `kind: fork` without the
+/// flag: the only change to `list` without `--children`.
+#[test]
+fn list_names_a_forks_parent() {
+    let scratch = support::scratch(HarnessId::Pi, "cli-list-fork");
+    stage_fixture(HarnessId::Pi, &scratch);
+    let fork = scratch.join("home/sessions/--pi-project--/2026-10-30T14-00-00-000Z_fork.jsonl");
+    std::fs::write(
+        fork,
+        "{\"type\":\"session\",\"version\":3,\"id\":\"fork\",\"parentSession\":\"parent\",\"cwd\":\"C:/work\"}\n",
+    )
+    .unwrap();
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "pi"]);
+
+    assert!(ok, "{stderr}");
+    let rows = list_rows(&stdout);
+    let fork = rows.iter().find(|r| r["id"] == "fork").unwrap();
+    assert_eq!(fork["parent"], "parent");
+    assert_eq!(fork["kind"], "fork");
+    let root = rows.iter().find(|r| r["id"] != "fork").unwrap();
+    assert!(
+        root.get("parent").is_none() && root.get("kind").is_none(),
+        "{root}"
+    );
+}
+
+/// An OpenCode fork (`fork_session_id` with its `fork_boundary`) is a root that names its source;
+/// a child (`parent_id`) is listed with `--children`.
+#[test]
+fn list_names_an_opencode_forks_source_and_a_childs_spawner() {
+    let scratch = support::scratch(HarnessId::OpenCode, "cli-list-oc-lineage");
+    let db_path = scratch.join("home/opencode.db");
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2 (
+             id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER,
+             time_archived INTEGER, parent_id TEXT, fork_session_id TEXT, fork_boundary TEXT
+         );
+         INSERT INTO session_v2 VALUES ('root', 'Root', 'D:/work', 1, NULL, NULL, NULL, NULL);
+         INSERT INTO session_v2 VALUES ('child', 'Child', 'D:/work', 2, NULL, 'root', NULL, NULL);
+         INSERT INTO session_v2 VALUES ('fork', 'Fork', 'D:/work', 3, NULL, NULL, 'root',
+             '{\"type\":\"through\",\"messageID\":\"msg_1\"}');",
+    )
+    .unwrap();
+    drop(db);
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "opencode"]);
+    assert!(ok, "{stderr}");
+    let rows = list_rows(&stdout);
+    let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["fork", "root"]);
+    assert_eq!(rows[0]["parent"], "root");
+    assert_eq!(rows[0]["kind"], "fork");
+
+    let (ok, stdout, stderr) = cli(&scratch, &["list", "opencode", "--children"]);
+    assert!(ok, "{stderr}");
+    let rows = list_rows(&stdout);
+    let child = rows.iter().find(|r| r["id"] == "child").unwrap();
+    assert_eq!(child["parent"], "root");
+    assert_eq!(child["kind"], "spawn");
+}
+
+#[test]
+fn children_is_a_list_option() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-children-only-list");
+    let (code, _, stderr) = cli_code(&scratch, &["dump", "claude_code", "x", "--children"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(
+        stderr.contains("--children is supported only by list"),
+        "{stderr}"
     );
 }

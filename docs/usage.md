@@ -268,6 +268,7 @@ Prints one JSON line per session.
 $env:CODEX_HOME = Join-Path $HOME '.codex';   mukade list codex
 mukade list --root 'D:\portable\pi\agent'                 # harness inferred from the folder
 mukade list codex --archived false                        # without the archived threads
+mukade list claude_code --children                        # with the subagent sessions
 ```
 
 #### The list output
@@ -284,13 +285,14 @@ mukade list codex --archived false                        # without the archived
 | `archived` | the harness marked it archived |
 | `unreadable` | `null` when nothing is known against reading it; otherwise **why `dump` and `hop` refuse it** (exit 2, same words) |
 | `live` | `true` when a process of the harness runs the session now; `false` when the store records running sessions and none runs it; `null` when the store does not say |
+| `parent`, `kind` | only on a row with a parent: the session it came from, and `spawn` (a subagent) or `fork`. Without `--children` only a fork can have them (Pi, OpenCode) |
 
 A harness forgets transcripts long before it forgets sessions, so `list` reports both. The
 `unreadable` rows are how a caller sees every project:
 
 | harness | an `unreadable` row is |
 |---|---|
-| Codex | a thread with a row in the home's newest `state_<n>.sqlite` whose rollout file is gone. `location` is the path the row records. Subagent and guardian threads are not listed |
+| Codex | a thread with a row in the home's newest `state_<n>.sqlite` whose rollout file is gone. `location` is the path the row records. Subagent and guardian threads are listed with `--children` only |
 | Claude Code | a session `history.jsonl` still has prompts for, whose session file is gone (`location` is `history.jsonl`; `title` is its first prompt); or a running session that has not written its transcript yet |
 | OpenCode | a session in another `opencode*.db` beside the selected one (read it by selecting that file), or one only in the legacy `session` table, which OpenCode cannot export |
 
@@ -312,6 +314,22 @@ also compares the process start time, so a reused process ID is not the session:
 time, Linux `/proc/<pid>/stat` (verified with Claude Code 2.1.322 on 2026-11-11). macOS does not
 compare it, so a reused ID reads as live. Codex, OpenCode and Pi keep no such record, so their `live`
 is `null`: **a cleaner must read `null` as "not known", not as "not running".**
+
+#### Subagent sessions
+
+`--children` lists every session the store holds, subagent sessions included; any other command
+given it is a command-line mistake (exit 1). `dump` and `hop` read a child by its `id` as listed.
+
+| harness | `--children` adds | child `id` | `parent` |
+|---|---|---|---|
+| Claude Code | each `subagents/agent-<agentId>.jsonl` (a meta.json without a transcript is not listed); `title` is its meta.json `description` | `<parent-id>.<agentId>`, matched exactly (no prefix) | the spawning session, or the spawning subagent for a child of a child |
+| Codex | the subagent and guardian threads of `state_<n>.sqlite` | the thread id | the thread that spawned it (`thread_spawn_edges`); none for a guardian review |
+| OpenCode | the child sessions (`parent_id`) | the session id | the spawning session |
+| Pi | nothing: no subagents | | |
+
+What `parent_kind` holds per harness: [spec §3.1](session-interchange-spec.md#31-the-librarys-own-model-session).
+A hop of a parent does not carry its children; what a child reported to its parent travels in the
+parent as a user turn ([Choose what travels](#subagents-and-what-they-reported)).
 
 #### Archived sessions
 
@@ -538,6 +556,7 @@ What the `losses` lines mean:
 | `orphan tool results dropped (n)` · `duplicate tool results dropped, the first answer kept (n)` | a result with no call, or a second answer to one call; a provider would refuse either |
 | `tool call ids rewritten to the destination's id pattern (n)` | Anthropic accepts only `[a-zA-Z0-9_-]` IDs; the call and its result were rewritten together |
 | `records of an abandoned branch … left behind (n)` | a rewind, an edited prompt, or the earlier file of a Codex paginated thread: only the resumed branch travelled. `--all-branches` carries a Codex thread whole |
+| `messages between a subagent and its parent with no readable text (encrypted by the source), not carried (n)` | Codex keeps most `agent_message` rows encrypted: no text to write. The readable ones travel as user turns |
 | `compaction summaries with no readable text (encrypted by the source's provider), not carried (n)` | Codex 0.165 keeps its compaction summary encrypted: no text to write, so it is left out rather than written as an empty message. The history before and after it travels |
 | `an unfinished last line of the source left unread (n)` | a hard kill cut the last line mid-write; the rest of the session was read |
 | `steps the source aborted or that failed, written as ordinary replies (n)` | the destination cannot mark a step as aborted (Pi can, and does). To leave them out, use `--interrupted drop` |
@@ -740,6 +759,21 @@ To carry **everything**, abandoned turns included (in file order, before the act
 ```powershell
 mukade hop codex YOUR_CODEX_THREAD_ID claude_code --cwd 'D:\Projects\my-project' --all-branches
 ```
+
+### Subagents and what they reported
+
+*The agent started subagents (Claude Code `Agent`, Codex `spawn_agent`, OpenCode `subagent`).* A hop
+carries the session itself: its spawn calls travel as text, and each report the parent's model
+received travels where it was received, as a user turn:
+
+| harness | the report in the parent |
+|---|---|
+| Claude Code | the `Agent` call's result (a foreground subagent); the `<task-notification>` that announces a background one, a plain row or an `attachment` row |
+| Codex | an `agent_message` with readable text; an encrypted one is counted (`dropped_subagent_messages`) |
+| OpenCode | the `synthetic` message with `metadata.source: "subagent"` |
+
+A subagent's own transcript is a session of its own: `list --children` finds it, `dump` and `hop`
+take it by its id ([Subagent sessions](#subagent-sessions)).
 
 ### Leave out tool calls
 

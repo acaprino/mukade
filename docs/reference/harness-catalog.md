@@ -66,7 +66,7 @@ These are fallbacks after `PATH`; order: [usage §7](../usage.md#7-stores-and-ex
 | harness | binary | store variable | default store | layout | lineage |
 |---|---|---|---|---|---|
 | Claude Code | `claude` | `CLAUDE_CONFIG_DIR` | `{home}/.claude` | `projects/<project>/<session-id>.jsonl` | not recorded (`claude --fork-session` writes no lineage field: a fork is a session with no parent) |
-| Codex CLI | `codex` | `CODEX_HOME` | `{home}/.codex` | `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl`, `session_index.jsonl` | not recorded (no cross-session parent; subagent threads not linked) |
+| Codex CLI | `codex` | `CODEX_HOME` | `{home}/.codex` | `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl`, `session_index.jsonl` | not recorded (forks are not recorded; a subagent thread names the thread that spawned it, `session_meta.parent_thread_id`) |
 | OpenCode | `opencode` | `OPENCODE_DB` | `{xdg_data_home}/opencode/opencode.db` | `opencode.db (SQLite; session_v2, session_message)` | `parent_id`, `fork_session_id`, `fork_boundary` |
 | Pi | `pi` | `PI_CODING_AGENT_DIR` | `{home}/.pi/agent` | `sessions/--<project>--/<stamp>_<session-id>.jsonl`, `models.json` | `parentSession` in the session header |
 

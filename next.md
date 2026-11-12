@@ -12,6 +12,7 @@ Its step numbers are in brackets below.
 
 | what | before | now |
 |---|---|---|
+| Subagent sessions, phase 1 ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)) | Claude Code children unreadable and never listed; OpenCode's `parentID` missed; `parent` meant fork for Pi, spawner for Codex and OpenCode, unsaid; what a child reported to its parent read as `Meta` and lost silently | `parent_kind` (fork / spawn with call and agent) on every parent; Claude children `<parent-id>.<agentId>` read and listed (`list --children`, the TUI); reports the parent received are user turns, an encrypted Codex one counted (`dropped_subagent_messages`) |
 | Destination shell (L11/L13) | without `--dest-shell` every shell call into Codex, OpenCode and Pi was text (0 of 696 real Desktop calls toward Codex); Claude's `PowerShell` never offered; TUI hops passed no shell | the destination's own: Codex by platform, OpenCode's `shell` or `$SHELL`, Pi's `shellPath`; Claude's `PowerShell` where the installation runs it; CLI and TUI; `--dest-shell none` names no dialect, so shell calls into Codex, OpenCode and Pi stay text as before, while Claude's offered set is unchanged ([tables §4.1](docs/tool-conversion-tables.md#41-shell)) |
 
 ## ✅ Done on 2026-11-11
@@ -45,7 +46,8 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 4. **Code mode on a real Desktop thread** [3]: the read-only census over 34 real rollouts passed
    (every split call has one result); a live hop of a real Desktop thread is not done yet.
-5. **Subagent parent on a real thread** [4].
+5. **Subagent parent on a real thread** [4]: read-only on 2026-11-12, all 25 child rollouts on the
+   author's store (19 subagent, 6 guardian) read with `parent` = `parent_thread_id`; a hand check is left.
 6. **Chain of pages** [5] [U]: one page in 982 rollouts, its base a plain file; never a chain.
 
 **Cleanup, speed, real life**
@@ -64,6 +66,20 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
     turn is a tool call with thinking; then the tampered copy must be refused.
 
 ## 🔵 Needs code (next)
+
+**Subagents, phase 2** ([spec](docs/superpowers/specs/2026-11-12-subagents-design.md)): `dump --children`
+puts each readable child in the document; `hop --children` writes each child as its own destination
+session after the parent, linked where the destination can (OpenCode `info.parentID`; Claude Code
+`subagents/` **[U]** whether it shows one), and the manifest maps source child → destination child.
+Left open by phase 1:
+
+- *Claude Code:* a fork child's context (its `fork-context-ref` into the parent) is not read; a
+  child whose chain continues in a sibling agent's transcript is refused (7 of 825 on the author's
+  store); `forked-skill` files and `workflows/` are not listed.
+- *Codex:* the encrypted prompts a parent sends its children stay encrypted; threads whose rollout
+  is gone are listed by `--children` as before.
+- *TUI:* children are flat rows; `R` on a Claude Code child runs `claude --resume <parent>.<agent>`,
+  which Claude Code cannot resume.
 
 **Shell dialects, left open** ([spec](docs/superpowers/specs/2026-11-12-destination-shell-design.md)).
 
@@ -93,8 +109,8 @@ Not bugs. Each is stated in the docs where it applies.
 
 **Codex**
 
-- **Subagent threads are not carried** with their root thread in a hop: each is its own session.
-  The parent is now known; carrying children needs a destination format for them.
+- **Subagent threads are not carried** with their root thread in a hop (phase 2 above): each is its
+  own session, `list --children` lists it.
 - **`apply_patch`** with several files, a delete, a move or an end-of-file anchor travels as text,
   and the patch form toward Codex is not written.
 - **Code-mode scripts with variables, `Promise.allSettled` or `ALL_TOOLS`** (256 of 981 real ones)

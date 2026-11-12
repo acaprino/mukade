@@ -15,9 +15,9 @@ it never writes OpenCode's SQLite database itself [1][10][27].
 | Resume | ✅ `<exe> run --standalone --session <id>`; mukade's TUI: `<exe> mini --standalone --session <id>` |
 | Summary by its own model | ✅ `--compaction summary`: a deny-all `run --fork`, the fork deleted afterwards [37] |
 | Native compaction | ⚠️ reads the source's `compaction` record; `--compaction native` writes one (live on 2.2.5, 2026-11-04 [27 §4.4][56]); OpenCode's own HTTP compaction is never run by mukade |
-| Gaps | ⚠️ child sessions not followed; sibling `opencode*.db` and legacy rows listed, not read; signed reasoning dropped unless `--dest-protocol` names the protocol |
+| Gaps | ⚠️ a hop does not carry a session's children (each is read on its own; `list --children` lists them); sibling `opencode*.db` and legacy rows listed, not read; signed reasoning dropped unless `--dest-protocol` names the protocol |
 
-**Versions** (harness facts as of 2026-11-01; mukade facts checked against the code on 2026-11-11):
+**Versions** (harness facts as of 2026-11-01; mukade facts checked against the code on 2026-11-12):
 - **2.1.4: verified** [1]: reader, writer, probes, on-disk facts.
 - **2.2.5: installed now** [39], newest release, published 2026-10-30 [47]. Only the native-compaction
   hop (2026-11-04) [56] and the listing check (2026-11-08) [55] ran on it.
@@ -198,6 +198,7 @@ All in `opencode --help` of 2.1.4 [1]; no `web` or `db` subcommand in this versi
 | `assistant` | **one model step**, parallel calls included | `content:[reasoning, text, tool…]`, `model{id, providerID}`, `finish`; each `tool` part holds the call and its result (`state{status, input, content}`); reasoning keeps `native.signature` |
 | `compaction` | a summary boundary | `status`, `reason`, `summary`, `metadata.keepID`, `tokens.input` |
 | `idle` | end of a turn (`{"type":"idle","outcome":"succeeded"}`) | none: not conversation |
+| `synthetic` | a message OpenCode adds for the model: `metadata.source: "subagent"` is a child's report (`text` = `<subagent sessionID=… state=…>…</subagent>`, `metadata{childID, agent, state}`); others a shell job's end, an instruction, a notice (2.2.5 [59]) | `text` of a subagent report |
 | interrupted turn | an assistant row with empty text and no `finish`; the export omits it | none |
 
 - **Order** is `seq`, never time [27 §2.3].
@@ -206,8 +207,12 @@ All in `opencode --help` of 2.1.4 [1]; no `web` or `db` subcommand in this versi
   `model{id, providerID}`). `session import` takes the same document and answers 409 to a second
   import of the same id [27 §1.3].
 - **Lineage:** a subagent's child session by `parent_id`; a fork (`run --fork`) by
-  `fork_session_id`/`fork_boundary` [1][28]. `session list` shows top-level sessions only;
-  `session delete` removes the children too [1].
+  `fork_session_id`/`fork_boundary` [1][28]. In an export, `info.parentID` and
+  `info.fork {sessionID, boundary}`, the fork set only with both columns (2.2.5 `session/info.ts` [59]).
+  `session list` shows top-level sessions only; `session delete` removes the children too [1].
+- **Subagent call** (2.2.5 [59]): a `tool` part `subagent` with `state.input {agent, description,
+  prompt, [background]}` and `state.metadata {sessionID, status}`; the child's report comes back as
+  the call's result, or later as a `synthetic` message (above).
 - **Agent loop:** the server calls the model, runs the requested tools and continues until the turn
   ends; the `context` hook "runs before each agent-loop model call, including tool-driven
   continuations" [22]. One model step is stored as one assistant message and an `idle` record ends
@@ -468,6 +473,8 @@ Code: `src/reader/opencode.rs` [31].
   `OPENCODE_DB is not set: no OpenCode store to list`. It opens the file read-only (2 s busy timeout)
   without starting OpenCode; returns root sessions (`parent_id IS NULL`), newest `time_updated`
   first, archived included (`archived` = `time_archived` set; `--archived false` leaves them out).
+  `list_all` (`list --children`, the TUI) adds the child sessions. `parent` = `parent_id` (spawn),
+  else `fork_session_id` with a `fork_boundary` (fork; read only where the table has both columns).
 - **`read`** (`dump`, a hop source) runs `<exe> session export <id> --standalone` (stdin closed, 120 s
   `EXPORT_TIMEOUT`) and parses `{info, messages}`. Stderr containing `not found` is a not-found
   error. The SHA-256 of the printed document is the source fingerprint (`--expect-sha256`).
@@ -499,7 +506,9 @@ Code: `src/reader/opencode.rs` [31].
 | `tool` part | `pending`/`running`: no result. `error`: result = `state.error.message` when there is no content, marked error. `state.metadata.truncated` kept |
 | interrupted turn | a step with no `finish` (`Killed`) or `finish:"aborted"` (`Aborted`). Travels by default; `--interrupted drop` leaves its steps and results out, its prompt stays |
 | `compaction`, `status:"completed"` | Compaction: `kept_from` = `metadata.keepID`, trigger from `reason` (`manual`, `auto`), tokens before from `tokens.input` |
-| failed `compaction`, `idle`, unknown types | Meta (not conversation) |
+| `synthetic` with `metadata.source: "subagent"` | User: its `text`, where the parent received it |
+| failed `compaction`, `idle`, other `synthetic`, unknown types | Meta (not conversation) |
+| `info.parentID` (export) / `parent_id` (row) | `parent`, `parent_kind` Spawn; else `info.fork.sessionID` / `fork_session_id` with its boundary: `parent`, `parent_kind` Fork |
 
 **Reasoning kept whole** (rules: [spec §3.3](../session-interchange-spec.md#33-reasoning)): the
 whole `native.reasoningDetails` array is kept in `Opaque.chat` with the source provider id (summary-first
@@ -510,8 +519,8 @@ formats). `format` gives the protocol: `anthropic-claude-v1` → Anthropic Messa
 `detail_protocol()`). Without details, the protocol comes from the message's `model.providerID`.
 
 **Limits, most costly first**
-- **Child sessions are not followed:** one session is read, its `parent_id` kept; subagent calls
-  travel as text form [30 §3][31].
+- **Child sessions are not followed:** one session is read, its parent kept; subagent calls
+  travel as text form [30 §3][31], the reports the parent received as user turns.
 - **Sessions in a sibling file or the legacy table** are listed, not read (above).
 - **No SQLite read of a transcript:** `list` reads the selected database's session table and its
   siblings read-only; `read` goes through `opencode session export` [31].
@@ -725,3 +734,4 @@ All accessed 2026-10-28 unless a source says otherwise.
 56. [`docs/verification/native-compaction-live.md`](../verification/native-compaction-live.md): the live native-compaction check of 2026-11-04 (OpenCode 2.2.5).
 57. [`docs/verification/2026-11-02-opaque-reasoning.md`](../verification/2026-11-02-opaque-reasoning.md): the opaque-reasoning check of 2026-11-02 (OpenCode 2.2.3 importer).
 58. OpenCode 2.2.5 code and docs, read only, 2026-11-12: the shell lookup (configuration `shell`, `$SHELL`, the Windows order) and the dialect by base name; the configuration sources and their merge order. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).
+59. OpenCode 2.2.5 source `packages/core/src/session/info.ts` (`fromRow`: `parentID`, `fork {sessionID, boundary}`) at tag `v2.2.5`, read 2026-11-12 (summarising fetch); the author's `opencode.db` read only for shape (no content copied), 2026-11-12: 145 `synthetic` rows, 46 of them `metadata.source: "subagent"` in 8 sessions. Decisions: [`docs/superpowers/specs/2026-11-12-subagents-design.md`](../superpowers/specs/2026-11-12-subagents-design.md).

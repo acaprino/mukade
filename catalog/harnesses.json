@@ -67,7 +67,7 @@
       "lineage": {
         "recorded": false,
         "fields": [],
-        "note": "a thread keeps no cross-session parent; subagent threads are not linked"
+        "note": "forks are not recorded; a subagent thread names the thread that spawned it (session_meta.parent_thread_id)"
       },
       "resume": ["{exe}", "exec", "resume", "{id}"],
       "interactive_resume": ["{exe}", "resume", "{id}"]
