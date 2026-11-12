@@ -995,3 +995,46 @@ fn a_code_mode_rollout_reaches_claude_and_pi_with_native_calls() {
         );
     }
 }
+
+/// What a destination does not take is refused with a reason (exit 2) before anything is planned:
+/// an id outside its own shape, and an agent or metadata only OpenCode takes.
+#[test]
+fn an_import_the_destination_cannot_take_is_refused_with_exit_2() {
+    let source = support::read_source(HarnessId::Pi);
+    for dest in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+        let scratch = support::scratch(dest, "hop-import-refused");
+        let base = support::opts(dest, &scratch);
+        let asks = [
+            (
+                "an invalid id",
+                mukade::WriteOpts {
+                    dest_id: Some("../not-an-id".into()),
+                    ..base.clone()
+                },
+            ),
+            (
+                "an agent",
+                mukade::WriteOpts {
+                    dest_agent: Some("build".into()),
+                    ..base.clone()
+                },
+            ),
+            (
+                "metadata",
+                mukade::WriteOpts {
+                    metadata: Some(Value::Object(Default::default())),
+                    ..base.clone()
+                },
+            ),
+        ];
+        for (asked, write_opts) in asks {
+            let opts = support::import_opts(&write_opts, &source, None);
+            let error = hop::import(dest, &source, &opts).expect_err(asked);
+            assert!(
+                matches!(error, HopError::Unsupported(_)),
+                "{dest}, {asked}: {error:?}"
+            );
+            assert_eq!(error.exit_code(), 2, "{dest}, {asked}: {error}");
+        }
+    }
+}
