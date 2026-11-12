@@ -1,35 +1,36 @@
-/* Mukade skin: Shinatama's, so the two apps look alike. Midnight navy, cobalt and ice lines, one
-   warm accent (pink). Warning, error and danger are states, not accents. No glow, no rounded
-   corners. Every chrome colour lives here; dark is the default, light follows the system (or the
+/* Mukade skin: Shinatama's structure (spacing, type, square corners), Mukade's own colours, taken
+   from the character: black and violet-graphite armour, the hot red glow as the one accent, the
+   electric violet-blue of the lightning for lines. Warning, error and danger are states, not
+   accents. No glow, no rounded corners. Every chrome colour lives here; dark is the default, light follows the system (or the
    Theme button: Auto, Light, Dark). */
 :root {
   color-scheme: dark;
-  --stage: #04070f;
-  --chrome: #070c18;
-  --chrome-2: #0a1120;
-  --surface: #0e1729;
-  --surface-2: #13203a;
-  --pane: #050912;
-  --line: #1c3563;
-  --line-strong: #4a78e6;
-  --ice: #a9c8ff;
-  --text: #e6f0ff;
-  --text-2: #b4c8e8;
-  --muted: #8fa6c9;
-  --accent: #f48fb8;
-  --accent-soft: #ffb3d0;
-  --accent-ink: #1c0811;
-  --live: #6fe3d2;
-  --warning: #e8bb72;
-  --error: #ff8495;
+  --stage: #060507;
+  --chrome: #111016;
+  --chrome-2: #16151c;
+  --surface: #1c1a23;
+  --surface-2: #26232f;
+  --pane: #0b0a0e;
+  --line: #2c2a44;
+  --line-strong: #6c6cf0;
+  --ice: #b3b5ff;
+  --text: #ecebf2;
+  --text-2: #c2bfcf;
+  --muted: #9a96aa;
+  --accent: #ff4a2e;
+  --accent-soft: #ff7a5c;
+  --accent-ink: #1a0503;
+  --live: #6fd6b0;
+  --warning: #e6c36a;
+  --error: #ff8a7a;
   --danger: #a0294e;
   --danger-line: #e35f87;
   --on-danger: #ffffff;
-  --selection: #2a4a8f;
-  --scrim: #02050bcc;
+  --selection: #2a2a66;
+  --scrim: #040305cc;
   --shadow: #000000aa;
-  --spawn: #7fb2ff;
-  --fork: #e8bb72;
+  --spawn: #9fa8ff;
+  --fork: #e6c36a;
   --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
   --display: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
   font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
@@ -38,22 +39,22 @@
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
-/* Light: paper-white panes on a cool grey stage, the same cobalt lines, a deeper pink. */
+/* Light: paper-white panes on a cool grey stage, the same violet-blue lines, a deeper red. */
 :root[data-theme='light'] {
-  --stage: #e9eef8; --chrome: #f5f8fd; --chrome-2: #edf1fa; --surface: #ffffff; --surface-2: #e3eaf8;
-  --pane: #fbfcff; --line: #c3d0ea; --line-strong: #3a62c4; --ice: #2b4fa6; --text: #0d1630;
-  --text-2: #2d3f66; --muted: #5b6f96; --accent: #c42a6b; --accent-soft: #a81e58; --accent-ink: #ffffff;
-  --live: #0e7a69; --warning: #8a5a00; --error: #b3223a; --danger: #a0294e; --danger-line: #7d1c3c;
-  --selection: #cddbf6; --scrim: #0d163066; --shadow: #0d163044; --spawn: #2b5fc4; --fork: #8a5a00;
+  --stage: #e9e8ee; --chrome: #f6f5f9; --chrome-2: #eeedf3; --surface: #ffffff; --surface-2: #e4e2ec;
+  --pane: #fcfbfe; --line: #cfccda; --line-strong: #4a4ad0; --ice: #3a3ab8; --text: #100f15;
+  --text-2: #3a3747; --muted: #6a6679; --accent: #c2260e; --accent-soft: #9e1c08; --accent-ink: #ffffff;
+  --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
+  --selection: #dedcf7; --scrim: #100f1566; --shadow: #100f1544; --spawn: #3a3ab8; --fork: #7a5600;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
     color-scheme: light;
-    --stage: #e9eef8; --chrome: #f5f8fd; --chrome-2: #edf1fa; --surface: #ffffff; --surface-2: #e3eaf8;
-    --pane: #fbfcff; --line: #c3d0ea; --line-strong: #3a62c4; --ice: #2b4fa6; --text: #0d1630;
-    --text-2: #2d3f66; --muted: #5b6f96; --accent: #c42a6b; --accent-soft: #a81e58; --accent-ink: #ffffff;
-    --live: #0e7a69; --warning: #8a5a00; --error: #b3223a; --danger: #a0294e; --danger-line: #7d1c3c;
-    --selection: #cddbf6; --scrim: #0d163066; --shadow: #0d163044; --spawn: #2b5fc4; --fork: #8a5a00;
+    --stage: #e9e8ee; --chrome: #f6f5f9; --chrome-2: #eeedf3; --surface: #ffffff; --surface-2: #e4e2ec;
+    --pane: #fcfbfe; --line: #cfccda; --line-strong: #4a4ad0; --ice: #3a3ab8; --text: #100f15;
+    --text-2: #3a3747; --muted: #6a6679; --accent: #c2260e; --accent-soft: #9e1c08; --accent-ink: #ffffff;
+    --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
+    --selection: #dedcf7; --scrim: #100f1566; --shadow: #100f1544; --spawn: #3a3ab8; --fork: #7a5600;
   }
 }
 

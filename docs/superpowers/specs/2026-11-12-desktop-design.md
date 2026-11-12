@@ -12,7 +12,7 @@ Reference app: `D:\Projects\shinatama\apps\desktop` (read only).
 | frontend | plain TypeScript, **no framework**; Vite `8.3.5`, TypeScript `7.0.2`, `@tauri-apps/api` `2.12.4`, `@tauri-apps/cli` `2.12.4`; one `<component>.ts` + `<component>.css` per view, as Shinatama |
 | files | `apps/desktop/{index.html, vite.config.ts, tsconfig.json, src/, src-tauri/, tests/}`; root `package.json` scripts `dev`, `build`, `desktop`, `desktop:build`, `test` |
 | backend | Tauri commands calling the `mukade` library only (never the CLI, never a store by hand); every per-harness answer from `harnesses::get(..)` (the architecture test scans `apps/desktop/src-tauri/src`) |
-| look | Shinatama's `styles.css` tokens (colors, spacing, type, radii); light and dark follow the system, with a toggle |
+| look | Shinatama's `styles.css` structure (spacing, type, radii, square corners) with Mukade's own colours, taken from the character: black and violet-graphite surfaces, hot red accent `#ff4a2e`, electric violet-blue lines `#6c6cf0` / `#b3b5ff`; no pink. Light and dark follow the system, with a toggle |
 
 ## 2. Window layout
 
