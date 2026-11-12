@@ -70,9 +70,11 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 
 **Cleanup, speed, real life**
 
-7. **Remove the old Claude Code test sessions** [9]: folder `…-scratchpad-live-claude-work`, and the
-   three `D--mukade-test-scratch-fork-*` folders of the [fork check](docs/verification/2026-11-12-fork-link-live.md),
-   `D--mukade-test-scratch-sub-check-work` and `D--mukade-test-scratch-shapes-work` ([record](docs/verification/windows-2026-11-12.md)).
+7. ✅ **Remove the old Claude Code test sessions** [9]: removed on 2026-11-12 (the
+   `…-scratchpad-live-claude-work` folder was already gone; the five `D--mukade-test-scratch-*`
+   folders of the [fork check](docs/verification/2026-11-12-fork-link-live.md) and the
+   [Windows record](docs/verification/windows-2026-11-12.md)). Left: their trust entries in
+   `%USERPROFILE%\.claude.json`, harmless; remove them with no Claude Code running.
 8. **Listing cache on a cold disk** [12] [U]: warm disk on 2026-11-12, 436 rows: 458 ms with the
    cache deleted, 189–197 ms after; cold 11 s not reproduced (needs a reboot).
 9. ✅ **100 MB session speed** [13]: 132 MB into Pi in 1638 ms (read 1008, write 183) on 2026-11-12.
