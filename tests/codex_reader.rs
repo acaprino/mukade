@@ -583,6 +583,17 @@ fn texts(s: &Session) -> Vec<String> {
         .collect()
 }
 
+fn texts_of(entries: &[mukade::model::Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|e| match &e.kind {
+            Kind::User { text, .. } => Some(text.clone()),
+            Kind::Step { text, .. } => Some(text.join("")),
+            _ => None,
+        })
+        .collect()
+}
+
 fn roots(home: &std::path::Path) -> mukade::roots::StoreRoots {
     mukade::roots::StoreRoots {
         codex_home: Some(home.to_path_buf()),
@@ -671,17 +682,20 @@ fn every_branch_of_a_paginated_thread_reads_with_branches_all() {
     let (home, base, page) = paginated_home("all", 0);
     let s =
         codex::read_with(THREAD, &roots(&home), codex::Branches::All).expect("the thread reads");
+    // The active path is the thread's latest version; what the base held past the cut is a branch
+    // that left after "one", not a part of the conversation.
+    assert_eq!(texts(&s), ["first", "one", "redo", "two"]);
+    assert_eq!(s.branches.len(), 1);
     assert_eq!(
-        texts(&s),
-        [
-            "first",
-            "one",
-            "abandoned",
-            "abandoned reply",
-            "redo",
-            "two"
-        ]
+        texts_of(&s.branches[0].entries),
+        ["abandoned", "abandoned reply"]
     );
+    let one = s
+        .entries
+        .iter()
+        .find(|e| matches!(&e.kind, Kind::Step { text, .. } if text.join("") == "one"))
+        .unwrap();
+    assert_eq!(s.branches[0].from.as_deref(), Some(one.id.as_str()));
     assert!(
         !s.entries.iter().any(|e| matches!(
             e.kind,
@@ -783,18 +797,17 @@ fn a_chain_of_pages_reads_as_its_latest_version() {
     let all = codex::read_with(THREAD, &roots(&home), codex::Branches::All).unwrap();
     assert_eq!(
         texts(&all),
-        [
-            "first",
-            "one",
-            "abandoned",
-            "abandoned reply",
-            "redo",
-            "two",
-            "abandoned again",
-            "reply again",
-            "again",
-            "three"
-        ]
+        ["first", "one", "redo", "two", "again", "three"]
+    );
+    // One branch per earlier file, each from where the next file continued.
+    assert_eq!(all.branches.len(), 2);
+    assert_eq!(
+        texts_of(&all.branches[0].entries),
+        ["abandoned", "abandoned reply"]
+    );
+    assert_eq!(
+        texts_of(&all.branches[1].entries),
+        ["abandoned again", "reply again"]
     );
     let every_byte = [
         base_text.as_bytes(),

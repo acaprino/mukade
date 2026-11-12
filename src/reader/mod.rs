@@ -1,5 +1,6 @@
 //! Readers: native session store → [`Session`] (docs/session-interchange-spec.md §8.1).
 
+mod branches;
 pub mod claude_code;
 mod claude_history;
 mod claude_live;
@@ -61,6 +62,17 @@ pub trait Reader {
     /// Read one session by its native id (an unambiguous prefix is accepted where the store's file
     /// names allow it).
     fn read(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<Session>;
+
+    /// [`Reader::read`] with every branch the session left carried as a [`crate::model::Branch`]
+    /// instead of left behind as off-branch records. `None`: a harness that keeps one branch only.
+    fn read_all_branches(&self, _id: &str, _roots: &StoreRoots) -> Option<anyhow::Result<Session>> {
+        None
+    }
+
+    /// [`Reader::read_all_branches`] for a session in a native file.
+    fn read_file_all_branches(&self, _path: &std::path::Path) -> Option<anyhow::Result<Session>> {
+        None
+    }
 }
 
 /// A session a reader could not hand back for a reason that is a refusal, not a file it failed to

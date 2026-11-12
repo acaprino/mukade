@@ -378,20 +378,23 @@ fn only_opencode_exports_an_interchange_document() {
 }
 
 #[test]
-fn only_codex_reads_every_branch() {
+fn only_the_harnesses_with_a_tree_or_pages_read_every_branch() {
     for id in WITH_FIXTURE {
         let adapter = get(id);
         let by_path = adapter.read_all_branches(&support::source_path(id));
         let by_id = adapter.read_all_branches_by_id("any-id", &StoreRoots::default());
-        if id == HarnessId::Codex {
+        if matches!(id, HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Pi) {
             let session = by_path
-                .expect("Codex reads every branch")
+                .unwrap_or_else(|| panic!("{id} reads every branch"))
                 .expect("the fixture reads");
             assert_eq!(session.meta.harness, id);
             let error = by_id
-                .expect("Codex reads every branch by id")
+                .unwrap_or_else(|| panic!("{id} reads every branch by id"))
                 .expect_err("no store");
-            assert!(error.to_string().contains("CODEX_HOME"), "{error:#}");
+            assert!(
+                error.to_string().contains(mukade::catalog::store_env(id)),
+                "{error:#}"
+            );
         } else {
             assert!(by_path.is_none(), "{id}");
             assert!(by_id.is_none(), "{id}");

@@ -28,6 +28,30 @@ pub struct Pi;
 
 /// Read one Pi session file (`<PI_CODING_AGENT_DIR>/sessions/<project>/<ts>_<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
+    read_file_with(path, false)
+}
+
+/// [`read_file`] with the branches the conversation left (`/tree`) carried as branches
+/// (`parentId` tree) instead of left behind as off-branch records.
+pub fn read_file_all_branches(path: &Path) -> Result<Session> {
+    read_file_with(path, true)
+}
+
+fn read_file_with(path: &Path, branches: bool) -> Result<Session> {
+    let mut session = read_one(path)?;
+    if branches {
+        super::branches::lift(&mut session, "id", "parentId", |rows| {
+            let mut b = Builder::default();
+            for (i, row) in rows.into_iter().enumerate() {
+                b.push(i, row, true);
+            }
+            Ok(b.finish(None)?.entries)
+        })?;
+    }
+    Ok(session)
+}
+
+fn read_one(path: &Path) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
     let _span = crate::timing::span("build entries");
     let mut session = parse_owned(file.rows, Some(path))?;
@@ -674,7 +698,22 @@ impl Reader for Pi {
         Ok(out)
     }
 
+    fn read_all_branches(&self, id: &str, roots: &StoreRoots) -> Option<Result<Session>> {
+        Some(read_in(id, roots, true))
+    }
+
+    fn read_file_all_branches(&self, path: &Path) -> Option<Result<Session>> {
+        Some(read_file_all_branches(path))
+    }
+
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
+        read_in(id, roots, false)
+    }
+}
+
+/// [`Reader::read`], with the branches asked for or not.
+fn read_in(id: &str, roots: &StoreRoots, branches: bool) -> Result<Session> {
+    {
         let Some(sessions) = roots.pi_sessions() else {
             return Err(super::Lookup::NoStore(
                 "PI_CODING_AGENT_DIR is not set: no Pi store to read".into(),
@@ -689,7 +728,7 @@ impl Reader for Pi {
             })
             .collect();
         match matches.as_slice() {
-            [one] => read_file(one),
+            [one] => read_file_with(one, branches),
             [] => Err(super::Lookup::NotFound(format!(
                 "no Pi session with id {id:?} under {}",
                 sessions.display()

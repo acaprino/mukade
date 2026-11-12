@@ -131,18 +131,18 @@ pub trait Harness: Send + Sync {
 
     /// Read one session from its native file with every branch the harness keeps, abandoned ones
     /// included. `None` is a harness that keeps one branch only.
-    fn read_all_branches(&self, _path: &Path) -> Option<anyhow::Result<Session>> {
-        None
+    fn read_all_branches(&self, path: &Path) -> Option<anyhow::Result<Session>> {
+        self.reader().read_file_all_branches(path)
     }
 
     /// [`Harness::read_all_branches`] for a session named by its id, read from the store in
     /// `roots`.
     fn read_all_branches_by_id(
         &self,
-        _id: &str,
-        _roots: &StoreRoots,
+        id: &str,
+        roots: &StoreRoots,
     ) -> Option<anyhow::Result<Session>> {
-        None
+        self.reader().read_all_branches(id, roots)
     }
 
     /// Why this harness cannot resume `info` in its own interface, or `None` when it can. A

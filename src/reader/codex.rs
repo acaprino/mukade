@@ -136,9 +136,10 @@ fn index_names(home: &Path) -> HashMap<String, String> {
 
 fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
+    let all = branches == Branches::All;
     let Some(base) = history_base(&file.rows) else {
         let _span = crate::timing::span("build entries");
-        let mut session = parse_owned(file.rows, Some(path))?;
+        let mut session = parse_owned_with(file.rows, Some(path), all)?;
         session.meta.source_sha256 = Some(file.sha256.wait());
         super::json::keep_unfinished(&mut session, file.unfinished);
         return Ok(session);
@@ -155,21 +156,46 @@ fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
     rows.extend(prefix.rows);
     rows.extend(own);
     let _span = crate::timing::span("build entries");
-    let mut session = parse_owned(rows, Some(path))?;
+    let combined = rows.len();
+    let mut session = parse_owned_with(rows, Some(path), all)?;
     // The fingerprint is that of the bytes read, in the order they were read: the earlier files
     // (their prefixes, or all of them), then the page.
     let mut digest = crate::sha256::Sha256::new();
     digest.update(&prefix.bytes);
     digest.update(file.source_bytes.as_bytes());
     session.meta.source_sha256 = Some(digest.finalize_hex());
-    for (index, row) in prefix.left.into_iter().enumerate() {
-        session.entries.push(Entry {
-            id: fallback_id("off-branch", index),
-            kind: Kind::Meta {
-                kind: MetaKind::OffBranch,
-            },
-            raw: vec![row],
-        });
+    // What the earlier files hold past their cuts: a branch each when asked for, else records of an
+    // abandoned branch.
+    if all {
+        let mut next = combined;
+        let mut groups = Vec::new();
+        for (cut, rows) in prefix.left {
+            let mut b = Builder::default();
+            for row in rows {
+                b.push(next, row);
+                next += 1;
+            }
+            groups.push(Group {
+                after: cut,
+                entries: b.finish(None)?.entries,
+            });
+        }
+        attach(&mut session, groups);
+    } else {
+        for (index, row) in prefix
+            .left
+            .into_iter()
+            .flat_map(|(_, rows)| rows)
+            .enumerate()
+        {
+            session.entries.push(Entry {
+                id: fallback_id("off-branch", index),
+                kind: Kind::Meta {
+                    kind: MetaKind::OffBranch,
+                },
+                raw: vec![row],
+            });
+        }
     }
     super::json::keep_unfinished(&mut session, file.unfinished);
     Ok(session)
@@ -232,7 +258,9 @@ fn history_base(rows: &[Value]) -> Option<HistoryBase> {
 struct BasePrefix {
     rows: Vec<Value>,
     bytes: Vec<u8>,
-    left: Vec<Value>,
+    /// The conversation records an earlier file holds past its cut, per file, with the ordinal of
+    /// the last record before the cut: the branch they were.
+    left: Vec<(Option<u64>, Vec<Value>)>,
     active_len: usize,
 }
 
@@ -349,6 +377,7 @@ fn base_prefix(
             active_len: 0,
         });
         out.active_len += head_rows.len();
+        let cut_ordinal = head_rows.last().and_then(ordinal);
         out.rows.extend(head_rows);
         // A fork continues its origin's file by reference: what the origin did after the cut is
         // the origin's own, never a branch of the fork, whichever branches were asked for.
@@ -361,17 +390,20 @@ fn base_prefix(
             Branches::Active if !of_this_thread => {
                 out.bytes.extend_from_slice(prefix);
             }
-            Branches::Active => {
-                out.bytes.extend_from_slice(prefix);
-                out.left.extend(
-                    tail_rows
-                        .into_iter()
-                        .filter(|row| !matches!(class_of(row), Class::Meta(_))),
-                );
-            }
-            Branches::All => {
-                out.bytes.extend_from_slice(&bytes);
-                out.rows.extend(tail_rows);
+            Branches::Active | Branches::All => {
+                // Asked for every branch, the fingerprint covers the whole file.
+                out.bytes.extend_from_slice(if branches == Branches::All {
+                    &bytes
+                } else {
+                    prefix
+                });
+                let tail: Vec<Value> = tail_rows
+                    .into_iter()
+                    .filter(|row| !matches!(class_of(row), Class::Meta(_)))
+                    .collect();
+                if !tail.is_empty() {
+                    out.left.push((cut_ordinal, tail));
+                }
             }
         }
         return Ok(out);
@@ -403,35 +435,130 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
 /// instead of being copied there.
 pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    parse_owned_with(rows, source_path, false)
+}
+
+/// [`parse_owned`], with what a rollback dropped carried as branches (`all`) or kept as records of
+/// an abandoned branch.
+pub fn parse_owned_with(
+    rows: Vec<Value>,
+    source_path: Option<&Path>,
+    all: bool,
+) -> Result<Session> {
     let rolled_back = rolled_back(&rows);
     let mut b = Builder::default();
-    let mut abandoned = Vec::new();
+    let mut abandoned: Vec<Vec<(usize, Value)>> = Vec::new();
+    let mut after: Vec<Option<u64>> = Vec::new();
+    let mut group_of: HashMap<usize, usize> = HashMap::new();
+    // The conversation records of the rows, so a branch can name the record it left from.
+    let ordinals: Vec<Option<u64>> = rows.iter().map(ordinal).collect();
+    let conversation: Vec<bool> = rows
+        .iter()
+        .map(|row| !matches!(class_of(row), Class::Meta(_)))
+        .collect();
     for (i, row) in rows.into_iter().enumerate() {
-        if rolled_back[i] {
-            abandoned.push(row);
-        } else {
-            b.push(i, row);
+        match rolled_back[i] {
+            Some(rollback) => {
+                let group = *group_of.entry(rollback).or_insert_with(|| {
+                    abandoned.push(Vec::new());
+                    // The last record before the dropped turns that was still there when the
+                    // rollback came: what the branch left.
+                    after.push((0..i).rev().find_map(|earlier| {
+                        let there = rolled_back[earlier].is_none_or(|later| later > rollback);
+                        (there && conversation[earlier]).then_some(ordinals[earlier])?
+                    }));
+                    abandoned.len() - 1
+                });
+                abandoned[group].push((i, row));
+            }
+            None => b.push(i, row),
         }
     }
     let mut session = b.finish(source_path)?;
-    // What a rollback dropped is kept, verbatim, as the branch it was.
-    for (index, row) in abandoned.into_iter().enumerate() {
-        session.entries.push(Entry {
-            id: fallback_id("rolled-back", index),
-            kind: Kind::Meta {
-                kind: MetaKind::OffBranch,
-            },
-            raw: vec![row],
-        });
+    if all {
+        let mut groups = Vec::new();
+        for (rows, after) in abandoned.into_iter().zip(after) {
+            let mut branch = Builder::default();
+            for (i, row) in rows {
+                branch.push(i, row);
+            }
+            groups.push(Group {
+                after,
+                entries: branch.finish(None)?.entries,
+            });
+        }
+        attach(&mut session, groups);
+    } else {
+        // What a rollback dropped is kept, verbatim, as the branch it was.
+        for (index, (_, row)) in abandoned.into_iter().flatten().enumerate() {
+            session.entries.push(Entry {
+                id: fallback_id("rolled-back", index),
+                kind: Kind::Meta {
+                    kind: MetaKind::OffBranch,
+                },
+                raw: vec![row],
+            });
+        }
     }
     Ok(session)
 }
 
-/// Which records a `thread_rolled_back { num_turns }` took out of the thread: Codex replays it by
-/// dropping the last `num_turns` user turns of what it had so far, with everything that followed
-/// them. Only conversation records are dropped; the bookkeeping between them stays where it is.
-fn rolled_back(rows: &[Value]) -> Vec<bool> {
-    let mut dropped = vec![false; rows.len()];
+/// A record's own ordinal in the thread.
+fn ordinal(row: &Value) -> Option<u64> {
+    row.get("ordinal").and_then(Value::as_u64)
+}
+
+/// A run of entries that left the thread after the record with ordinal `after`.
+struct Group {
+    after: Option<u64>,
+    entries: Vec<Entry>,
+}
+
+/// Hang each group off the entry that holds the record it left after, parents before the branches
+/// that hang off them (a record dropped by a later rollback is in a branch of its own).
+fn attach(session: &mut Session, groups: Vec<Group>) {
+    use crate::model::Branch;
+    let mut holder: HashMap<u64, String> = HashMap::new();
+    let note = |entries: &[Entry], holder: &mut HashMap<u64, String>| {
+        for entry in entries {
+            for row in &entry.raw {
+                if let Some(n) = ordinal(row) {
+                    holder.insert(n, entry.id.clone());
+                }
+            }
+        }
+    };
+    note(&session.entries, &mut holder);
+    for group in &groups {
+        note(&group.entries, &mut holder);
+    }
+    let mut pending: Vec<Branch> = groups
+        .into_iter()
+        .filter(|group| !group.entries.is_empty())
+        .map(|group| Branch {
+            from: group.after.and_then(|n| holder.get(&n).cloned()),
+            entries: group.entries,
+        })
+        .collect();
+    let mut known: std::collections::HashSet<String> =
+        session.entries.iter().map(|e| e.id.clone()).collect();
+    while !pending.is_empty() {
+        let at = pending
+            .iter()
+            .position(|branch| branch.from.as_ref().is_none_or(|from| known.contains(from)))
+            .unwrap_or(0);
+        let branch = pending.remove(at);
+        known.extend(branch.entries.iter().map(|e| e.id.clone()));
+        session.branches.push(branch);
+    }
+}
+
+/// Which records a `thread_rolled_back { num_turns }` took out of the thread, and by which
+/// rollback (its position): Codex replays it by dropping the last `num_turns` user turns of what
+/// it had so far, with everything that followed them. Only conversation records are dropped; the
+/// bookkeeping between them stays where it is.
+fn rolled_back(rows: &[Value]) -> Vec<Option<usize>> {
+    let mut dropped: Vec<Option<usize>> = vec![None; rows.len()];
     for (at, row) in rows.iter().enumerate() {
         let is_rollback = row.get("type").and_then(Value::as_str) == Some("event_msg")
             && row.pointer("/payload/type").and_then(Value::as_str) == Some("thread_rolled_back");
@@ -443,14 +570,16 @@ fn rolled_back(rows: &[Value]) -> Vec<bool> {
             continue;
         }
         let users: Vec<usize> = (0..at)
-            .filter(|&earlier| !dropped[earlier] && matches!(class_of(&rows[earlier]), Class::User))
+            .filter(|&earlier| {
+                dropped[earlier].is_none() && matches!(class_of(&rows[earlier]), Class::User)
+            })
             .collect();
         let Some(&first) = users.get(users.len().saturating_sub(turns)) else {
             continue;
         };
         for earlier in first..at {
-            if !dropped[earlier] && !matches!(class_of(&rows[earlier]), Class::Meta(_)) {
-                dropped[earlier] = true;
+            if dropped[earlier].is_none() && !matches!(class_of(&rows[earlier]), Class::Meta(_)) {
+                dropped[earlier] = Some(at);
             }
         }
     }

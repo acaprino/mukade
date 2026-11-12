@@ -1034,9 +1034,12 @@ fn all_branches_carries_a_paginated_codex_thread_whole() {
     for turn in ["KEPT-TURN", "ABANDONED-TURN", "ACTIVE-TURN"] {
         assert!(all.contains(turn), "{turn}: {all}");
     }
-    let (code, _, stderr) = cli_code(&scratch, &["dump", "claude_code", "x", "--all-branches"]);
-    assert_eq!(code, Some(2), "{stderr}");
-    assert!(stderr.contains("--all-branches"), "{stderr}");
+    // A harness that keeps one branch only (no tree, no pages) refuses the flag.
+    for harness in ["opencode", "hermes", "deepseek_harness"] {
+        let (code, _, stderr) = cli_code(&scratch, &["dump", harness, "x", "--all-branches"]);
+        assert_eq!(code, Some(2), "{harness}: {stderr}");
+        assert!(stderr.contains("--all-branches"), "{harness}: {stderr}");
+    }
 }
 
 /// Codex 0.165 keeps its compaction summary encrypted: `message` is empty and the summary is an

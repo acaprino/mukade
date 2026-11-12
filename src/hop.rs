@@ -1087,9 +1087,10 @@ pub(crate) fn classify_read(error: anyhow::Error) -> HopError {
 
 /// Read a session straight from a file, for a source that is not in a store (the spec's
 /// `SessionRef` may be "harness + native id (or file path)").
-/// [`export`] with every branch the source keeps: a Codex paginated thread is read whole (its base
-/// file, abandoned turns included, then its active page) instead of only the part Codex resumes.
-/// Only Codex is supported; another harness is refused before anything is read.
+/// [`export`] with every branch the source keeps, carried as [`crate::model::Branch`]es: a Claude
+/// Code or Pi session's tree, a Codex thread's redone pages and rolled-back turns. The session's
+/// `entries` stay the path the harness resumes. Only those three keep branches; another harness is
+/// refused before anything is read.
 pub fn export_all_branches(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
     let _span = crate::timing::span("read source");
     let read = crate::harnesses::get(source.harness).read_all_branches_by_id(&source.id, roots);
@@ -1114,8 +1115,8 @@ fn all_branches_supported(
     match read {
         Some(read) => read.map_err(classify_read),
         None => Err(HopError::Unsupported(format!(
-            "--all-branches (every branch, abandoned ones included) is read for a Codex paginated \
-             thread only; {} sessions are read as the branch the harness resumes",
+            "--all-branches (every branch, abandoned ones included) is read for Claude Code, Codex \
+             and Pi sessions only; {} sessions are read as the branch the harness resumes",
             harness.as_str()
         ))),
     }

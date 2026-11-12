@@ -254,6 +254,30 @@ fn peek_many(files: &[PathBuf], indexes: &[usize]) -> Vec<(usize, SessionInfo)> 
 
 /// Read one Claude Code session file (`<CLAUDE_CONFIG_DIR>/projects/<project>/<uuid>.jsonl`).
 pub fn read_file(path: &Path) -> Result<Session> {
+    read_file_with(path, false)
+}
+
+/// [`read_file`] with the branches the conversation left carried as branches (`parentUuid` tree)
+/// instead of left behind as off-branch records.
+pub fn read_file_all_branches(path: &Path) -> Result<Session> {
+    read_file_with(path, true)
+}
+
+fn read_file_with(path: &Path, branches: bool) -> Result<Session> {
+    let mut session = read_one(path)?;
+    if branches {
+        super::branches::lift(&mut session, "uuid", "parentUuid", |rows| {
+            let mut b = Builder::default();
+            for (i, row) in rows.into_iter().enumerate() {
+                b.push(i, row, true);
+            }
+            Ok(b.finish(None)?.entries)
+        })?;
+    }
+    Ok(session)
+}
+
+fn read_one(path: &Path) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
     let _span = crate::timing::span("build entries");
     let transcript = subagents::is_transcript(path);
@@ -1227,7 +1251,23 @@ impl Reader for ClaudeCode {
         list_all_cached(roots, crate::cache::dir().as_deref())
     }
 
+    fn read_all_branches(&self, id: &str, roots: &StoreRoots) -> Option<Result<Session>> {
+        Some(read_in(id, roots, true))
+    }
+
+    fn read_file_all_branches(&self, path: &Path) -> Option<Result<Session>> {
+        Some(read_file_all_branches(path))
+    }
+
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
+        read_in(id, roots, false)
+    }
+}
+
+/// [`Reader::read`], with the branches asked for or not.
+fn read_in(id: &str, roots: &StoreRoots, branches: bool) -> Result<Session> {
+    let read_file = |path: &Path| read_file_with(path, branches);
+    {
         let Some(projects) = roots.claude_projects() else {
             return Err(super::Lookup::NoStore(
                 "CLAUDE_CONFIG_DIR is not set: no Claude Code store to read".into(),
