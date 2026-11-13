@@ -291,12 +291,14 @@ struct MetaBuilder {
 }
 
 /// The rows that name a session, in the order Claude Code's own picker takes them: its custom
-/// title (`/rename`), else the `lastPrompt` of its last `last-prompt` row, else its first user
-/// prompt (docs/harnesses/claude-code.md §8, source [9]). A `slug` is Claude's anonymous internal
+/// title (`/rename`), else the `aiTitle` of its `ai-title` row (the name Claude Code's own model
+/// gives the conversation), else the `lastPrompt` of its last `last-prompt` row, else its first
+/// user prompt (docs/harnesses/claude-code.md §8, source [9]). A `slug` is Claude's anonymous internal
 /// name on a compact_boundary row: the last resort, and still a name where a bare uuid is not.
 #[derive(Default)]
 struct TitleBuilder {
     custom: Option<String>,
+    ai: Option<String>,
     last_prompt: Option<String>,
     first_prompt: Option<String>,
     slug: Option<String>,
@@ -312,6 +314,11 @@ impl TitleBuilder {
             "custom-title" => {
                 if let Some(title) = title_line(at("/customTitle")) {
                     self.custom = Some(title);
+                }
+            }
+            "ai-title" => {
+                if let Some(title) = title_line(at("/aiTitle")) {
+                    self.ai = Some(title);
                 }
             }
             "last-prompt" => {
@@ -337,11 +344,12 @@ impl TitleBuilder {
     fn pick(self) -> Option<String> {
         let Self {
             custom,
+            ai,
             last_prompt,
             first_prompt,
             slug,
         } = self;
-        custom.or(last_prompt).or(first_prompt).or(slug)
+        custom.or(ai).or(last_prompt).or(first_prompt).or(slug)
     }
 }
 
@@ -855,7 +863,8 @@ impl Reader for ClaudeCode {
 
 /// What a session file's two ends say about it, without reading the whole file
 /// (`super::json::peek_ends`): the head for the id, the directory and the first prompt, the tail
-/// for the rows Claude Code appends as the conversation goes on (`custom-title`, `last-prompt`).
+/// for the rows Claude Code appends as the conversation goes on (`custom-title`, `ai-title`,
+/// `last-prompt`).
 fn peek(file: &Path) -> SessionInfo {
     let mut info = SessionInfo::default();
     let mut titles = TitleBuilder::default();
