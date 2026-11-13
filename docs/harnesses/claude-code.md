@@ -159,7 +159,7 @@ JSON Lines, one record per line. Anthropic publishes no versioned schema: treat 
 | `assistant` | **one row per content block**, sharing `message.id`, chained by `parentUuid`; blocks `thinking` (with `signature`), `redacted_thinking` (with `data`), `text`, `tool_use` | `message.id`, `message.model`, `message.stop_reason` |
 | `system` | notably `subtype: "compact_boundary"` | `subtype`, `compactMetadata` |
 | `attachment` | files re-injected after a compaction; `queued_command` with `commandMode: "task-notification"` (a background task's notification, a subagent's report) or `commandMode: "prompt"` (a prompt typed while a turn ran), as the model received it | `attachment.prompt` as a user turn in place, once when a plain row repeats it next to it; the rest kept, not conversation |
-| `custom-title`, `last-prompt` | the `/rename` name; the last prompt and its leaf | `customTitle`; `lastPrompt`, `leafUuid` |
+| `custom-title`, `ai-title`, `last-prompt` | the `/rename` name; the name Claude Code's own model gives the conversation (appended again and again, so the tail holds it); the last prompt and its leaf | `customTitle`; `aiTitle`; `lastPrompt`, `leafUuid` |
 | others | request/cost/telemetry rows (`api-request` among them) | kept, not conversation |
 
 Common fields: `uuid`, `parentUuid`, `logicalParentUuid`, `sessionId`, `cwd`, `gitBranch`, `version`, `slug`, `timestamp`. Subagent rows carry `isSidechain: true`.
@@ -365,7 +365,7 @@ Code: `src/reader/claude_code.rs`, `src/reader/claude_code/order.rs`, `src/reade
 
 **Listing** (`src/reader/claude_code.rs` `list_cached()`, `peek()`):
 - Reads `projects/*/*.jsonl`: of each file the **head and tail**, 128 KiB then 384 KiB (a smaller file whole; `src/reader/json.rs` `peek_ends()`), as Claude Code's own picker does [9]: `sessionId`, `cwd`, timestamp, title.
-- Title = the picker's: the last `custom-title`, else the `lastPrompt` of the last `last-prompt` row, else the first user prompt (never a sidechain's, a command's or a summary row), else the `slug` of a compact_boundary row; one line, at most 200 characters (`src/reader/json.rs` `title_line()`). A session of bookkeeping rows only (`/help`, `/exit`, their `<local-command-*>` output) stays untitled; Claude Code drops it from its own list.
+- Title = the picker's: the last `custom-title`, else the `aiTitle` of the last `ai-title` row (the picker's own order is `customTitle ?? aiTitle ?? summary ?? firstPrompt`, read from Claude Code's JavaScript on 2026-11-13), else the `lastPrompt` of the last `last-prompt` row, else the first user prompt (never a sidechain's, a command's or a summary row), else the `slug` of a compact_boundary row; one line, at most 200 characters (`src/reader/json.rs` `title_line()`). A session of bookkeeping rows only (`/help`, `/exit`, their `<local-command-*>` output) stays untitled; Claude Code drops it from its own list.
 - Cache `mukade-data/cache/claude-list-<hash>.json` ([usage §10](../usage.md#10-where-its-files-go)); a file modified in the last 2 s is never kept (`SETTLED_AFTER`); changed files are read side by side.
 - Speed (release build, 2026-11-08, 214 files): 11 s cold and 0.5 s warm before the cache; with it 285 ms first, then 65–72 ms (303 rows) [40]. A cold disk with an empty mukade cache was not measured again **[U]**.
 - No archived flag in the store: every row is `"archived": false`.

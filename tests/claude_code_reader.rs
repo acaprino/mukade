@@ -700,7 +700,8 @@ fn a_dangling_or_cyclic_claude_chain_is_refused() {
 // The name a session is listed under.
 //
 // Claude Code's own /resume picker titles a session by its `custom-title` row (/rename), else by
-// the `lastPrompt` of its last `last-prompt` row, else by its first user prompt
+// the `aiTitle` of its `ai-title` row, else by the `lastPrompt` of its last `last-prompt` row, else
+// by its first user prompt
 // (docs/harnesses/claude-code.md, source [9]: the picker reads each file's head and tail, not the
 // whole file). A `slug` is Claude's anonymous internal name on a compact_boundary row, so it is
 // the last resort; a session with a prompt is never listed under its bare uuid.
@@ -785,6 +786,24 @@ fn a_custom_title_row_outnames_the_last_prompt() {
         listed_title(&roots).as_deref(),
         Some("Stampe Gmail anonime")
     );
+}
+
+#[test]
+fn an_ai_title_row_outnames_the_last_prompt_but_not_a_custom_title() {
+    let (roots, file) = staged_fixture("title-ai");
+    append_row(
+        &file,
+        serde_json::json!({"type": "ai-title", "aiTitle": "Uso di progetti, thread e tab", "sessionId": SESSION_ID}),
+    );
+    assert_eq!(
+        listed_title(&roots).as_deref(),
+        Some("Uso di progetti, thread e tab")
+    );
+    append_row(
+        &file,
+        serde_json::json!({"type": "custom-title", "customTitle": "Nome scelto", "sessionId": SESSION_ID}),
+    );
+    assert_eq!(listed_title(&roots).as_deref(), Some("Nome scelto"));
 }
 
 #[test]
