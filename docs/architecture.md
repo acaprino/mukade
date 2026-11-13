@@ -86,6 +86,91 @@ and from `writer::for_harness` a writer that refuses every write (exit 2) withou
 | `src/native_compaction.rs` | native compaction records, harness-neutral |
 | `src/catalog.rs` | reading `catalog/harnesses.json` |
 
+## Reading a session of any size
+
+[ADR-0004](adr/ADR-0004-size-agnostic-session-reads.md). A reader that decodes the whole file into
+`serde_json::Value`s before it builds holds about five times the file. Three more `Reader` methods
+(`overview`, `read_clipped`, `read_streamed`, with defaults over `list_all` and `read`) answer without
+that. Claude Code, Codex and Pi have their own. The shared code is `src/reader/clip.rs`; the guide for
+callers is [reading-large-sessions](reading-large-sessions.md).
+
+**The threshold.** `reader::STREAM_FROM_BYTES` is 16 MiB. A file at or under it is read as always
+(`json::read_jsonl`: `read_to_string`, lines decoded on up to 8 threads, the digest on another) and
+its records are then clipped in place. A file over it is read by `clip::decode_streaming`.
+
+**How the streaming decode clips.** The file is read with `BufRead::read_until(b'\n')` into one
+reused buffer. Each line is decoded by a `serde::de::DeserializeSeed` (`clip::Seed`) that builds the
+`Value` itself: when the decoder hands over a string longer than `max_string_bytes`, the seed keeps a
+prefix cut at a UTF-8 boundary and the rest is dropped, so the whole text is never held. Object keys
+keep their order (`preserve_order`). Numbers, booleans and nulls are copied. Paths a reader parses and
+must see whole (Codex's `payload.arguments` and `payload.input`) are in a keep list the seed does not
+cut; the whole-then-clip way applies the same list, so the two give the same records.
+`clip::tests::decoding_clipped_equals_decoding_whole_then_clipping` pins that.
+
+**Why the history is the same.** Clipping is done on the source records, before a reader reads them,
+and only shortens strings. The reconstruction and the build the full read runs (Claude Code:
+`order::reconstruct` and `Builder`; Pi: `active_branch` and `Builder`; Codex: `rolled_back` and
+`Builder`) look at the structure of the records: their types, ids, parent links, roles, and the start
+of a few texts. They run unchanged on the clipped records, so the same rows are on the resumed
+branch, in the same order, merged into the same entries, with the same ids. The tests compare entry
+counts, ids, kinds and order with the full read on every fixture, at several limits, with the streaming
+threshold forced to zero and not. A text a reader builds from several clipped blocks is shorter than
+the full one, never longer.
+
+**`source_sha256`.** The digest of the file's bytes, as the full read gives it. The streaming decode
+feeds every byte it reads, in order, to `sha256::Sha256` (`update` per line), so the fingerprint costs
+no second pass. A leading BOM is hashed, as the full read hashes it, and dropped before the first
+line is decoded.
+
+**A cut-off last line.** A line that does not parse is held until the next non-blank line shows whether
+it was the last. A later line makes it an error naming `<file>:<line>`, the full read's message; at the
+end it becomes the session's `Unfinished` entry, as text, clipped.
+
+**Memory.** Past the threshold the file's text is never held. What is held is the clipped records (a
+string is at most the limit; the structure is small), the entries built from them, and one line. The
+largest record, an image pasted into a prompt, bounds the buffer. In the 229 MiB measurement the
+clipped read peaks at 70 MiB against 612 MiB for the full read.
+
+**`overview`.** Claude Code, Codex and Pi find the one file from the id and run the listing's own
+code on it: `peek` (Claude Code, Pi) over `json::peek_ends` (first 128 KiB, last 384 KiB) or Codex's
+`list_in` limited to that thread (`only`), then the store's other facts the listing adds. The file name
+is matched exactly, the rows are not decoded beyond the windows. `reader::pick_overview` turns zero or
+several matches into `Lookup::NotFound` or `Lookup::Ambiguous`. The default is `list_all` and the same
+pick.
+
+**`read_streamed` and the re-read by offset.** Claude Code and Pi do two passes:
+
+1. A clipped pass, `clip::clipped_rows` at the smallest limit, which keeps each record's byte offset
+   (`ClippedRows::offsets`). `parse_planned` runs the full build on it, and returns, beside the
+   session, the `Plan`: the read order of the rows (`order`), which are on the branch (`on_branch`)
+   and, for Claude Code, how many `Relinked` entries follow.
+2. A second build with the same `Builder`, fed the **full** rows in the plan's order, each read back
+   by its offset (`clip::RowReader::row_at`, a seek only where the order jumps). After each row,
+   `Builder::take_final` hands over the entries no later row can change and leaves a placeholder, so
+   the builder's indexes stay valid. Only the entries still open stay: the step or results being
+   collected, a compaction waiting for its summary, and the last conversation entry, which an
+   interruption marker may mark aborted. A compaction's `kept_from`, which needs every later entry,
+   is taken from the clipped pass. Every handed-over entry's id is checked against the clipped
+   pass's: a mismatch is an error, not a wrong answer.
+
+A Pi session with `context_edit` records, which rewrite earlier records, and a Codex rollout, are read
+whole first and handed over entry by entry.
+
+**`wire::DocumentWriter`.** `to_document` projects a session into the interchange document in memory.
+`message_of(entry, n)` is its one-entry step (an entry is one message; `messages_of` is `message_of`
+over the conversation entries), and `DocumentWriter` writes the document around it to an `io::Write`:
+`{"meta":…,"library":…,"messages":[` at `new`, each message from `entry`, `entry_with` or `message`,
+then `]`, the branches if any, `}` at `finish`. The bytes are those of `to_writer(to_document(..))`; a
+test compares them on every fixture. The document opens with `meta`, which a streamed read has only at
+the end, so `Reader::read_streamed_with_meta` hands over the clipped pass's meta first (the first
+pass's records are clipped at 1 KiB: the same, unless a fact of the meta is longer) and `finish` checks
+it against the final one, refusing rather than closing a wrong document.
+
+**A boxed reader.** `reader::for_harness` boxes the adapters' `&'static dyn Reader`, and `impl Reader
+for &R` in `src/harnesses/mod.rs` forwards each method. A method added to `Reader` is forwarded there
+too, or a boxed reader runs the trait's default; `a_boxed_or_borrowed_reader_forwards_the_three_reads`
+holds it.
+
 ## Adding a harness
 
 Done for Hermes Agent and DeepSeek Harness on 2026-11-12; the steps that the first version of this

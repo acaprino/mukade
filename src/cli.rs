@@ -4,6 +4,7 @@
 //! ```text
 //! mukade list  <harness>
 //! mukade dump  <harness> <session-id>            â†’ the document on stdout
+//! mukade overview <harness> <session-id>         â†’ one session's listing row, from its file's two ends
 //! mukade write <harness> <document.json>         â†’ {"id","location","resume"} on stdout
 //! mukade detect <dir>                            â†’ which harness stores the directory holds
 //! ```
@@ -25,12 +26,16 @@ use crate::summary::SummarizeOpts;
 use crate::writer::WriteOpts;
 use anyhow::{Context, Result};
 use serde_json::json;
+use std::io::Write;
 
 pub const USAGE: &str = "\
 mukade harnesses
 mukade list  <harness> [options]
 mukade intents
 mukade dump  <harness> <session-id> [options]
+mukade dump  <harness> <session-id> --clip <bytes>      (a session of any size, long strings cut)
+mukade dump  <harness> <session-id> --stream            (every entry in full, one JSON line each)
+mukade overview <harness> <session-id>
 mukade document opencode <src-harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
@@ -41,6 +46,19 @@ mukade chat  start|status|stop|<operation> [options]    (mukade chat --help)
 `harnesses` lists every supported harness with the executable and store mukade finds on this
 machine, its version, session/fork counts and lineage support. Store reads are read-only; discovered
 executables are asked for `--version`.
+
+`overview` prints the listing's row for one session (the keys of a `list` row) read from the two
+ends of its file, never its conversation: its cost does not grow with the session. The id is the
+whole id a listing shows. A session that is not there, or an id that names several, is refused.
+
+`dump --clip <bytes>` never refuses a session for its size. Every string longer than <bytes> (at
+least 1024) is cut to a prefix, and the document is printed with a `clipped` key that says what was
+cut: {max_string_bytes, strings, bytes_dropped, streamed}. A file over 16 MiB is decoded one record at
+a time and never held whole. A clipped document is for showing and searching: `write` refuses it.
+`dump --stream` prints the session's entries in the order of a full read, one JSON object per line
+(`id`, `kind`, `raw`), each with its full text, then a last line `{\"meta\": ...}`; the session is
+not held whole. Both read a session of the store by id; they cannot go with --from-file, --children,
+--all-branches or a compaction.
 
 `intents` lists the editable summary prompts (name, path, builtin/custom) as JSON, without reading a
 session or starting a harness.
@@ -121,6 +139,10 @@ options:
                            write: write the document's `children` too, as hop does
   --manifest <path>        also write the manifest there
   --output <path>          dump: write the document to this file (UTF-8) instead of stdout
+  --clip <bytes>           dump: cut every string longer than this many bytes (at least 1024);
+                           reads a session of any size
+  --stream                 dump: one JSON line per entry, in full, then the meta; reads a session of
+                           any size
   --timing                 print where the time went, phase by phase, on stderr
   --root <dir>             the store directory to use, and to infer the harness from
   --dest-root <dir>        hop: the destination's store or installation folder
@@ -141,11 +163,13 @@ and its --<harness>-exe. A source OpenCode read spawns the binary its own resolu
 ";
 
 /// Parse and run the command line. `args` excludes the program name.
+#[cfg(feature = "chat")]
 pub mod chat;
 
 pub fn run(args: &[String]) -> Result<()> {
     let (command, rest) = args.split_first().context(USAGE)?;
     // Before anything is installed or read: `chat status` creates no file.
+    #[cfg(feature = "chat")]
     if command == "chat" {
         return chat::run(rest);
     }
@@ -217,6 +241,8 @@ pub fn run(args: &[String]) -> Result<()> {
             "--children" => flags.children = true,
             "--manifest" => flags.manifest = Some(next(rest, &mut i)?),
             "--output" => flags.output = Some(next(rest, &mut i)?),
+            "--clip" => flags.clip = Some(next(rest, &mut i)?),
+            "--stream" => flags.stream = true,
             "--timing" => crate::timing::enable(),
             "--reasoning" => flags.reasoning = Some(next(rest, &mut i)?),
             "--root" => flags.root = Some(next(rest, &mut i)?),
@@ -237,6 +263,37 @@ pub fn run(args: &[String]) -> Result<()> {
         i += 1;
     }
 
+    let clip = match flags.clip.as_deref() {
+        None => None,
+        Some(bytes) => Some(
+            bytes
+                .parse::<usize>()
+                .ok()
+                .filter(|bytes| *bytes > 0)
+                .with_context(|| format!("--clip takes a number of bytes, not {bytes:?}"))?,
+        ),
+    };
+    if (clip.is_some() || flags.stream) && command != "dump" {
+        anyhow::bail!("--clip and --stream are supported only by dump");
+    }
+    if clip.is_some() && flags.stream {
+        anyhow::bail!("--clip and --stream cannot go together");
+    }
+    if (clip.is_some() || flags.stream)
+        && (flags.from_file.is_some()
+            || flags.children
+            || flags.all_branches
+            || flags.compaction.is_some()
+            || flags.keep_turns.is_some()
+            || flags.intent.is_some()
+            || flags.summary_model.is_some()
+            || flags.summary_timeout.is_some())
+    {
+        anyhow::bail!(
+            "--clip and --stream read one session of the store by id: they cannot go with \
+             --from-file, --children, --all-branches or a compaction"
+        );
+    }
     if flags.archived.is_some() && command != "list" {
         anyhow::bail!("--archived is supported only by list");
     }
@@ -501,25 +558,60 @@ pub fn run(args: &[String]) -> Result<()> {
                 .into_iter()
                 .filter(|info| with_archived || !info.archived)
             {
-                let mut row = json!({
-                    "id": info.id,
-                    "title": info.title,
-                    "cwd": info.cwd,
-                    "timestamp": info.updated,
-                    "location": info.path,
-                    "archived": info.archived,
-                    "unreadable": info.unreadable,
-                    "live": info.live,
-                });
-                // Only a session with a parent has the two keys: a root's row is as it was.
-                if let (Some(parent), Some(object)) = (info.parent, row.as_object_mut()) {
-                    object.insert("parent".into(), json!(parent));
-                    object.insert(
-                        "kind".into(),
-                        json!(info.parent_kind.as_ref().map(ParentKind::name)),
-                    );
-                }
-                println!("{row}");
+                println!("{}", listing_row(info));
+            }
+        }
+        "overview" => {
+            no_more(operands, 1)?;
+            anyhow::ensure!(
+                flags.from_file.is_none(),
+                "overview reads a session of the store: it cannot go with --from-file"
+            );
+            let id = operands.first().context("overview needs a session id")?;
+            let reader = crate::reader::for_harness(harness)?;
+            println!(
+                "{}",
+                listing_row(
+                    reader
+                        .overview(id, &roots)
+                        .map_err(crate::hop::classify_read)?
+                )
+            );
+        }
+        "dump" if flags.stream => {
+            no_more(operands, 1)?;
+            let id = operands.first().context("dump needs a session id")?;
+            let reader = crate::reader::for_harness(harness)?;
+            let mut out = open_output(flags.output.as_deref())?;
+            let meta = reader
+                .read_streamed(id, &roots, &mut |entry| {
+                    serde_json::to_writer(&mut out, &entry)?;
+                    out.write_all(b"\n")?;
+                    Ok(())
+                })
+                .map_err(crate::hop::classify_read)?;
+            serde_json::to_writer(&mut out, &json!({ "meta": meta }))?;
+            out.write_all(b"\n")?;
+            out.flush()?;
+        }
+        "dump" if clip.is_some() => {
+            no_more(operands, 1)?;
+            let id = operands.first().context("dump needs a session id")?;
+            let reader = crate::reader::for_harness(harness)?;
+            let clipped = reader
+                .read_clipped(id, &roots, clip.unwrap_or_default())
+                .map_err(crate::hop::classify_read)?;
+            let mut doc = crate::hop::document(&clipped.session, None);
+            doc["clipped"] = json!({
+                "max_string_bytes": clipped.clipping.max_string_bytes,
+                "strings": clipped.clipping.strings,
+                "bytes_dropped": clipped.clipping.bytes_dropped,
+                "streamed": clipped.clipping.streamed,
+            });
+            let doc = serde_json::to_string_pretty(&doc)?;
+            match flags.output.as_deref() {
+                Some(path) => std::fs::write(path, doc).with_context(|| format!("write {path}"))?,
+                None => println!("{doc}"),
             }
         }
         "dump" => {
@@ -576,6 +668,11 @@ pub fn run(args: &[String]) -> Result<()> {
             let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
             let doc: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
                 .with_context(|| format!("parse {path}"))?;
+            anyhow::ensure!(
+                doc.get("clipped").is_none(),
+                "{path} is a clipped document (dump --clip): its strings are cut, so it is not \
+                 written to a harness"
+            );
             let session = crate::wire::from_document(&doc)?;
             if !flags.children
                 && let Some(children) = doc["children"].as_array().filter(|c| !c.is_empty())
@@ -1025,6 +1122,39 @@ fn next(rest: &[String], i: &mut usize) -> Result<String> {
 }
 
 /// No positional argument is left unread: a stray one is a mistake, not something to ignore.
+/// A `list` row, and an `overview`'s: the keys a caller of the CLI knows.
+fn listing_row(info: crate::reader::SessionInfo) -> serde_json::Value {
+    let mut row = json!({
+        "id": info.id,
+        "title": info.title,
+        "cwd": info.cwd,
+        "timestamp": info.updated,
+        "location": info.path,
+        "archived": info.archived,
+        "unreadable": info.unreadable,
+        "live": info.live,
+    });
+    // Only a session with a parent has the two keys: a root's row is as it was.
+    if let (Some(parent), Some(object)) = (info.parent, row.as_object_mut()) {
+        object.insert("parent".into(), json!(parent));
+        object.insert(
+            "kind".into(),
+            json!(info.parent_kind.as_ref().map(ParentKind::name)),
+        );
+    }
+    row
+}
+
+/// Where a streamed dump goes: the file `--output` names, else stdout, buffered.
+fn open_output(path: Option<&str>) -> Result<Box<dyn std::io::Write>> {
+    Ok(match path {
+        Some(path) => Box::new(std::io::BufWriter::new(
+            std::fs::File::create(path).with_context(|| format!("write {path}"))?,
+        )),
+        None => Box::new(std::io::BufWriter::new(std::io::stdout().lock())),
+    })
+}
+
 fn no_more(operands: &[&str], expected: usize) -> Result<()> {
     match operands.get(expected) {
         Some(extra) => anyhow::bail!("unexpected argument {extra}\n\n{USAGE}"),
@@ -1065,6 +1195,8 @@ struct Flags {
     children: bool,
     manifest: Option<String>,
     output: Option<String>,
+    clip: Option<String>,
+    stream: bool,
     root: Option<String>,
     dest_root: Option<String>,
     depth: Option<String>,

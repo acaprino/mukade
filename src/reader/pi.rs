@@ -11,6 +11,7 @@
 //! - a killed turn leaves only the user entry, so the last entry of a killed session is a user
 //!   turn with no reply (L9).
 
+use super::clip::{Clip, Clipped};
 use super::json::{result_content, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
@@ -60,11 +61,118 @@ fn read_file_with(path: &Path, branches: bool) -> Result<Session> {
 
 fn read_one(path: &Path) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
+    // The digest is computed on its own thread while the records are built.
+    read_one_from(path, file.rows, file.unfinished, || file.sha256.wait())
+}
+
+/// The session in `path` from its decoded records (clipped, or whole), the last line that did not
+/// parse, and the file's digest.
+fn read_one_from(
+    path: &Path,
+    rows: Vec<Value>,
+    unfinished: Option<String>,
+    sha256: impl FnOnce() -> String,
+) -> Result<Session> {
     let _span = crate::timing::span("build entries");
-    let mut session = parse_owned(file.rows, Some(path))?;
-    session.meta.source_sha256 = Some(file.sha256.wait());
-    super::json::keep_unfinished(&mut session, file.unfinished);
+    let mut session = parse_owned(rows, Some(path))?;
+    session.meta.source_sha256 = Some(sha256());
+    super::json::keep_unfinished(&mut session, unfinished);
     Ok(session)
+}
+
+/// [`read_file`] that never refuses for size: see [`Reader::read_clipped`].
+pub fn read_file_clipped(path: &Path, clip: &Clip) -> Result<Clipped> {
+    let clipped = super::clip::clipped_rows(path, clip, super::clip::KEEP_NONE)?;
+    let session = read_one_from(
+        path,
+        clipped.rows,
+        clipped.unfinished.map(|(text, _)| text),
+        || clipped.sha256,
+    )?;
+    Ok(Clipped {
+        session,
+        clipping: clipped.clipping,
+    })
+}
+
+/// [`read_file`], its entries handed to `on_entry` one at a time (see [`Reader::read_streamed`]).
+/// A first pass decodes the file one line at a time with every string clipped and keeps each
+/// record's byte offset; it gives which records are on the resumed branch. A second pass builds
+/// the entries with the same builder from the full records read back by offset, and hands each one
+/// over as soon as no later record can change it. A session with `context_edit` records, which
+/// rewrite earlier records' text, is read whole.
+pub fn read_file_streamed(
+    path: &Path,
+    on_entry: &mut dyn FnMut(Entry) -> Result<()>,
+) -> Result<Meta> {
+    read_file_streamed_with_meta(path, &mut |_| Ok(()), on_entry)
+}
+
+/// [`read_file_streamed`] that hands the session's [`Meta`] over **first**, once the clipped pass has
+/// it (see [`Reader::read_streamed_with_meta`]), and returns the final one.
+pub fn read_file_streamed_with_meta(
+    path: &Path,
+    on_meta: &mut dyn FnMut(&Meta) -> Result<()>,
+    on_entry: &mut dyn FnMut(Entry) -> Result<()>,
+) -> Result<Meta> {
+    let first =
+        super::clip::clipped_rows(path, &super::clip::STRUCTURE_PASS, super::clip::KEEP_NONE)?;
+    let sha256 = first.sha256;
+    let (offsets, unfinished) = (first.offsets, first.unfinished);
+    let (clipped, plan) = parse_planned(first.rows, Some(path))?;
+    if plan.edited {
+        let session = read_one(path)?;
+        on_meta(&session.meta)?;
+        for entry in session.entries {
+            on_entry(entry)?;
+        }
+        return Ok(session.meta);
+    }
+    {
+        // Built from clipped records: the same facts, but for one longer than the clip.
+        let mut early = clipped.meta.clone();
+        early.source_sha256 = Some(sha256.clone());
+        on_meta(&early)?;
+    }
+    let mut b = Builder::default();
+    let mut rows = super::clip::RowReader::open(path)?;
+    let mut delivered = 0usize;
+    let mut hand_over = |entries: Vec<Entry>| -> Result<()> {
+        for entry in entries {
+            let Some(shape) = clipped.entries.get(delivered) else {
+                anyhow::bail!("the streamed read built more entries than the clipped one");
+            };
+            anyhow::ensure!(
+                shape.id == entry.id,
+                "the streamed read disagrees with the clipped one at entry {delivered}: \
+                 {:?} against {:?}",
+                entry.id,
+                shape.id
+            );
+            delivered += 1;
+            on_entry(entry)?;
+        }
+        Ok(())
+    };
+    for (i, &offset) in offsets.iter().enumerate() {
+        b.push(i, rows.row_at(offset)?, plan.on_branch[i]);
+        hand_over(b.take_final(false))?;
+    }
+    hand_over(b.take_final(true))?;
+    anyhow::ensure!(
+        delivered == clipped.entries.len(),
+        "the streamed read built {delivered} entries, the clipped one {}",
+        clipped.entries.len()
+    );
+    let mut meta = b.finish(Some(path))?.meta;
+    if let Some((_, at)) = unfinished {
+        on_entry(super::json::unfinished_entry(
+            rows.text_at(at)?,
+            clipped.entries.len(),
+        ))?;
+    }
+    meta.source_sha256 = Some(sha256);
+    Ok(meta)
 }
 
 /// Read records that were already decoded.
@@ -74,9 +182,22 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 
 /// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
 /// instead of being copied there.
-pub fn parse_owned(mut rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    Ok(parse_planned(rows, source_path)?.0)
+}
+
+/// How a session's records were read: what a second pass over the same records needs.
+struct Plan {
+    on_branch: Vec<bool>,
+    /// Some record's text was replaced by a `context_edit`.
+    edited: bool,
+}
+
+/// [`parse_owned`], and the plan it followed.
+fn parse_planned(mut rows: Vec<Value>, source_path: Option<&Path>) -> Result<(Session, Plan)> {
     let on_branch = active_branch(&rows);
     let mut originals = apply_context_edits(&mut rows, &on_branch);
+    let edited = !originals.is_empty();
     let mut b = Builder::default();
     for (i, row) in rows.into_iter().enumerate() {
         b.push(i, row, on_branch[i]);
@@ -96,7 +217,7 @@ pub fn parse_owned(mut rows: Vec<Value>, source_path: Option<&Path>) -> Result<S
             }
         }
     }
-    Ok(session)
+    Ok((session, Plan { on_branch, edited }))
 }
 
 /// What the model is shown after Pi's `context_edit` entries (`buildSessionProjection`, Pi
@@ -296,6 +417,8 @@ fn step_end(stop: Option<&str>, has_calls: bool) -> StepEnd {
 struct Builder {
     entries: Vec<Entry>,
     meta: MetaBuilder,
+    /// Entries before this one were handed over by [`Builder::take_final`] and are placeholders.
+    taken: usize,
     /// The results entry currently being appended to.
     open_results: Option<usize>,
     model: Option<ModelRef>,
@@ -629,6 +752,35 @@ impl Builder {
         }
     }
 
+    /// The entries no later record can change, taken out of the builder in order: only the results
+    /// entry being collected (`open_results`) is ever changed after it is pushed. Each taken entry
+    /// leaves a placeholder, so the index `open_results` holds stays valid. `all` takes the rest.
+    fn take_final(&mut self, all: bool) -> Vec<Entry> {
+        let len = self.entries.len();
+        let held = match (all, self.open_results) {
+            (false, Some(open)) => open.min(len),
+            _ => len,
+        }
+        .max(self.taken);
+        let out = self.entries[self.taken..held]
+            .iter_mut()
+            .map(|entry| {
+                std::mem::replace(
+                    entry,
+                    Entry {
+                        id: String::new(),
+                        kind: Kind::Meta {
+                            kind: MetaKind::Internal,
+                        },
+                        raw: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        self.taken = held;
+        out
+    }
+
     fn finish(self, source_path: Option<&Path>) -> Result<Session> {
         let m = self.meta;
         Ok(Session {
@@ -720,10 +872,55 @@ impl Reader for Pi {
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         read_in(id, roots, false)
     }
+
+    fn overview(&self, id: &str, roots: &StoreRoots) -> Result<SessionInfo> {
+        let Some(sessions) = roots.pi_sessions() else {
+            return Err(super::Lookup::NoStore(
+                "PI_CODING_AGENT_DIR is not set: no Pi store to list".into(),
+            )
+            .into());
+        };
+        let listed = session_files(&sessions)?
+            .into_iter()
+            .filter(|file| pi_id(file) == id)
+            .map(|file| {
+                let mut info = peek(&file);
+                info.id = pi_id(&file);
+                info.path = file.to_string_lossy().into_owned();
+                info
+            })
+            .collect();
+        super::pick_overview(listed, id, HarnessId::Pi)
+    }
+
+    fn read_clipped(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        max_string_bytes: usize,
+    ) -> Result<Clipped> {
+        read_file_clipped(&locate(id, roots)?, &Clip::new(max_string_bytes))
+    }
+
+    fn read_streamed_with_meta(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        on_meta: &mut dyn FnMut(&Meta) -> Result<()>,
+        on_entry: &mut dyn FnMut(Entry) -> Result<()>,
+    ) -> Result<Meta> {
+        read_file_streamed_with_meta(&locate(id, roots)?, on_meta, on_entry)
+    }
 }
 
 /// [`Reader::read`], with the branches asked for or not.
 fn read_in(id: &str, roots: &StoreRoots, branches: bool) -> Result<Session> {
+    read_file_with(&locate(id, roots)?, branches)
+}
+
+/// The session file `id` names: the whole file stem, the id after its timestamp, or the start of
+/// that id.
+fn locate(id: &str, roots: &StoreRoots) -> Result<PathBuf> {
     {
         let Some(sessions) = roots.pi_sessions() else {
             return Err(super::Lookup::NoStore(
@@ -739,7 +936,7 @@ fn read_in(id: &str, roots: &StoreRoots, branches: bool) -> Result<Session> {
             })
             .collect();
         match matches.as_slice() {
-            [one] => read_file_with(one, branches),
+            [one] => Ok(one.clone()),
             [] => Err(super::Lookup::NotFound(format!(
                 "no Pi session with id {id:?} under {}",
                 sessions.display()
@@ -916,4 +1113,38 @@ fn session_files(sessions: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A streaming build hands its entries over as they settle: only a results entry still
+    /// collecting its tool results is held back.
+    #[test]
+    fn a_streaming_build_does_not_hold_the_session() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "fixtures/pi/source/2026-10-27T16-00-39-689Z_01a17e17-9f07-743d-8072-8b3b13d65ab5.jsonl",
+        );
+        let text = std::fs::read_to_string(path).expect("the fixture");
+        let rows: Vec<Value> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("a row"))
+            .collect();
+        let (session, plan) = parse_planned(rows.clone(), None).expect("the session");
+        let mut b = Builder::default();
+        let (mut delivered, mut peak) = (0usize, 0usize);
+        for (i, row) in rows.into_iter().enumerate() {
+            b.push(i, row, plan.on_branch[i]);
+            delivered += b.take_final(false).len();
+            peak = peak.max(b.entries.len() - b.taken);
+        }
+        delivered += b.take_final(true).len();
+        assert_eq!(delivered, session.entries.len());
+        assert!(
+            peak * 4 < delivered,
+            "held {peak} of {delivered} entries at once"
+        );
+    }
 }

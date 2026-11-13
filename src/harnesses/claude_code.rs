@@ -35,6 +35,7 @@ impl Harness for ClaudeCode {
         crate::reader::claude_code::read_file(path)
     }
 
+    #[cfg(feature = "chat")]
     fn chat_mcp_target(
         &self,
         vars: &crate::catalog::Vars,
@@ -59,6 +60,7 @@ impl Harness for ClaudeCode {
 
     /// Claude Code's hook output: extra context at session start and at each prompt; at a stop,
     /// `decision: block` with the reason, which Claude Code takes as what to do next.
+    #[cfg(feature = "chat")]
     fn chat_hook_output(
         &self,
         event: crate::chat::adapter::Event,
@@ -69,6 +71,7 @@ impl Harness for ClaudeCode {
 
     /// A plugin for one session (`claude --plugin-dir`): its hooks call `mukade chat hook` and
     /// its MCP entry names the running service. The user's own settings are not touched.
+    #[cfg(feature = "chat")]
     fn chat_launch(
         &self,
         kit: &crate::chat::adapter::Kit,

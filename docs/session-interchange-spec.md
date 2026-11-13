@@ -124,7 +124,20 @@ pub struct Receipt {
 pub trait Reader { fn harness(&self) -> HarnessId;
                    fn list(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>>;      // root sessions
                    fn list_all(&self, roots: &StoreRoots) -> anyhow::Result<Vec<SessionInfo>>;  // forks included
-                   fn read(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<Session>; }
+                   fn read(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<Session>;
+                   // ADR-0004: a session of any size (defaults over `list_all` and `read`; Claude Code, Codex, Pi stream)
+                   fn overview(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<SessionInfo>;  // one listing row, whole id
+                   fn read_clipped(&self, id: &str, roots: &StoreRoots, max_string_bytes: usize) -> anyhow::Result<Clipped>;
+                   fn read_streamed(&self, id: &str, roots: &StoreRoots,
+                                    on_entry: &mut dyn FnMut(Entry) -> anyhow::Result<()>) -> anyhow::Result<Meta>;
+                   fn read_streamed_with_meta(&self, id: &str, roots: &StoreRoots, on_meta: &mut dyn FnMut(&Meta) -> anyhow::Result<()>,
+                                              on_entry: &mut dyn FnMut(Entry) -> anyhow::Result<()>) -> anyhow::Result<Meta>; }  // on_meta before the first entry
+// src/wire.rs: the document, whole or one message at a time (the same bytes)
+pub fn to_document(s: &Session) -> Value;
+pub struct DocumentWriter<W: io::Write>;  // new(out, &Meta), entry(&Entry), entry_with(&Entry, change), message(&Value),
+                                          // finish(self, &Meta) -> Result<W>, finish_with_branches(self, &Meta, &[Branch])
+pub struct Clipped { pub session: Session, pub clipping: Clipping }  // not a Session: it is never written to a destination
+pub struct Clipping { pub max_string_bytes: usize, pub strings: u64, pub bytes_dropped: u64, pub streamed: bool }
 pub trait Writer { fn harness(&self) -> HarnessId; fn offered(&self) -> ToolSet;                  // tool tables §2/§6
                    fn write(&self, s: &Session, opts: &WriteOpts) -> anyhow::Result<Written>; }
 

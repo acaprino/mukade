@@ -26,6 +26,7 @@ run `index`; do not edit this block by hand.
 |---|---|---|---:|---|
 | [ADR-0001](<ADR-0001-installation-scan-in-library-and-cli.md>) | Installation scanning is a library capability the CLI exposes first | `src/detect.rs`, `src/cli.rs`, `mukade-tui/src/**`, `mukade::detect`, `mukade::cli`, `mukade-tui`, `installation-discovery` | 0 | `206932d8ac629f34b7c6e73822617d718903b23c` |
 | [ADR-0002](<ADR-0002-hermes-and-deepseek-harness-read-first.md>) | Hermes and DeepSeek Harness enter read-first; Hermes stays source-only (accepted with changes 2026-11-12: both are destinations) | `src/model/harness.rs`, `catalog/harnesses.json`, `src/reader/**`, `src/writer/**`, `src/hop.rs`, `src/cli.rs`, `src/dest.rs`, `mukade::model`, `mukade::reader`, `mukade::writer`, `mukade::hop`, `harness-support` | 0 | `879368a78a440c417fb047dbe17913bd1605a4ad` |
+| [ADR-0004](<ADR-0004-size-agnostic-session-reads.md>) | No session is too large to read; the readers answer an overview, a clipped read and a streamed read, and the chat service becomes a cargo feature | `src/reader/**`, `src/chat/**`, `src/cli.rs`, `src/harnesses/**`, `Cargo.toml`, `mukade::reader`, `mukade::chat`, `session-reading`, `dependency-policy` | 0 | accepted 2026-11-13, commit pending |
 
 ## Proposed
 

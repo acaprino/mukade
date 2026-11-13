@@ -30,6 +30,7 @@ impl Harness for Codex {
         crate::reader::codex::read_file(path)
     }
 
+    #[cfg(feature = "chat")]
     fn chat_mcp_target(
         &self,
         vars: &crate::catalog::Vars,
@@ -53,6 +54,7 @@ impl Harness for Codex {
     }
 
     /// Codex reads the same hook output as Claude Code.
+    #[cfg(feature = "chat")]
     fn chat_hook_output(
         &self,
         event: crate::chat::adapter::Event,
@@ -67,6 +69,7 @@ impl Harness for Codex {
     ///
     /// Codex runs a hook only once the user has trusted it (`/hooks`); trust follows the hook's
     /// content, which is the same for every launch, so it is given once.
+    #[cfg(feature = "chat")]
     fn chat_launch(
         &self,
         kit: &crate::chat::adapter::Kit,
@@ -106,6 +109,7 @@ impl Harness for Codex {
     /// each hook with its key and content hash, and `config/value/write` records the hash under
     /// `hooks.state` in the user's `config.toml`, as `/hooks` does. No other hook is touched.
     /// Trust follows content, and the content holds this mukade executable's path.
+    #[cfg(feature = "chat")]
     fn chat_trust(
         &self,
         kit: &crate::chat::adapter::Kit,
@@ -465,6 +469,7 @@ mod tests {
 }
 
 /// A TOML string, quoted and escaped, for a `-c key=value` override.
+#[cfg(feature = "chat")]
 fn toml_text(text: &str) -> String {
     toml_edit::Value::from(text).to_string().trim().to_string()
 }
@@ -472,6 +477,7 @@ fn toml_text(text: &str) -> String {
 /// mukade's three chat hooks as Codex `-c` overrides: (key, TOML value, the command line). They
 /// are the same for every launch, so trust given once holds. Codex on Windows runs a hook with
 /// PowerShell, which needs the call operator.
+#[cfg(feature = "chat")]
 fn chat_hooks(kit: &crate::chat::adapter::Kit) -> Vec<(String, String, String)> {
     [
         ("hooks.SessionStart", "session-start", 30),
@@ -497,6 +503,7 @@ fn chat_hooks(kit: &crate::chat::adapter::Kit) -> Vec<(String, String, String)> 
 /// Trust, through Codex's own server, the hooks of `hooks` that Codex lists as session flags.
 /// Every one of them must be listed, or nothing is written; one already trusted is left as it is;
 /// any other hook, of the user or of a plugin, is neither read nor written.
+#[cfg(feature = "chat")]
 fn trust_hooks(
     rpc: &mut dyn crate::chat::adapter::Rpc,
     hooks: &[(String, String, String)],
@@ -563,7 +570,7 @@ fn trust_hooks(
     }))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "chat"))]
 mod trust_tests {
     use super::trust_hooks;
     use crate::bus::ChatError;
