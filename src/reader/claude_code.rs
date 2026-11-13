@@ -19,6 +19,7 @@ use crate::model::{
     CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
     Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
 };
+use crate::reader::clip::{Clip, Clipped};
 use crate::reader::{Reader, SessionInfo};
 use crate::roots::StoreRoots;
 use anyhow::{Context, Result};
@@ -359,40 +360,177 @@ fn continues(child: &Value, parent: &Value) -> bool {
 
 fn read_one(path: &Path) -> Result<Session> {
     let file = super::json::read_jsonl(path)?;
+    // The digest is computed on its own thread while the records are built.
+    read_one_from(path, file.rows, file.unfinished, || file.sha256.wait())
+}
+
+/// The session in `path` from its decoded records (clipped, or whole), the last line that did not
+/// parse, and the file's digest: what [`read_one`] and [`read_file_clipped`] share.
+fn read_one_from(
+    path: &Path,
+    rows: Vec<Value>,
+    unfinished: Option<String>,
+    sha256: impl FnOnce() -> String,
+) -> Result<Session> {
     let _span = crate::timing::span("build entries");
     let transcript = subagents::is_transcript(path);
-    let mut session = parse_owned(file.rows, Some(path)).map_err(|error| {
+    let mut session = parse_owned(rows, Some(path)).map_err(|error| {
         if transcript {
             // A resumed agent's transcript points at rows in another agent's file.
-            error.context(
-                "this subagent's transcript continues another agent's (a resumed agent); mukade \
-                 does not read it yet",
-            )
+            error.context(RESUMED_AGENT)
         } else {
             error
         }
     })?;
-    session.meta.source_sha256 = Some(file.sha256.wait());
-    super::json::keep_unfinished(&mut session, file.unfinished);
+    session.meta.source_sha256 = Some(sha256());
+    super::json::keep_unfinished(&mut session, unfinished);
+    adopt_transcript_lineage(path, transcript, &mut session.meta);
+    Ok(session)
+}
+
+const RESUMED_AGENT: &str = "this subagent's transcript continues another agent's (a resumed \
+                             agent); mukade does not read it yet";
+
+/// A subagent's transcript read by path: the id, parent and title its listing gives.
+fn adopt_transcript_lineage(path: &Path, transcript: bool, meta: &mut Meta) {
     if let (true, Some(session_id), Some(agent)) = (
         transcript,
-        session.meta.parent.clone(),
+        meta.parent.clone(),
         subagents::agent_id_of(path),
     ) {
         // The listing names a child by its file; reading it by path gives the same id.
-        session.meta.id = subagents::qualified(&session_id, agent);
+        meta.id = subagents::qualified(&session_id, agent);
     }
-    if transcript && let Some(session_id) = session.meta.parent.clone() {
+    if transcript && let Some(session_id) = meta.parent.clone() {
         // A subagent's transcript: its meta.json names the call, the agent and the task.
-        let meta = subagents::agent_meta(path);
-        let (parent, kind) = subagents::lineage(&session_id, meta.as_ref());
-        session.meta.parent = Some(parent);
-        session.meta.parent_kind = Some(kind);
-        if let Some(description) = meta.and_then(|m| m.description) {
-            session.meta.title = Some(description);
+        let agent = subagents::agent_meta(path);
+        let (parent, kind) = subagents::lineage(&session_id, agent.as_ref());
+        meta.parent = Some(parent);
+        meta.parent_kind = Some(kind);
+        if let Some(description) = agent.and_then(|m| m.description) {
+            meta.title = Some(description);
         }
     }
-    Ok(session)
+}
+
+/// [`read_file`] that never refuses for size: see [`Reader::read_clipped`].
+pub fn read_file_clipped(path: &Path, clip: &Clip) -> Result<Clipped> {
+    let clipped = super::clip::clipped_rows(path, clip, super::clip::KEEP_NONE)?;
+    let session = read_one_from(
+        path,
+        clipped.rows,
+        clipped.unfinished.map(|(text, _)| text),
+        || clipped.sha256,
+    )?;
+    Ok(Clipped {
+        session,
+        clipping: clipped.clipping,
+    })
+}
+
+/// [`read_file`], its entries handed to `on_entry` one at a time (see [`Reader::read_streamed`]).
+///
+/// A first pass decodes the file one line at a time with every string clipped, keeping each
+/// record's byte offset, and runs the ordinary reconstruction and build on those clipped records:
+/// that gives the order of the history, which records the resumed branch holds, and how a
+/// compaction's `kept_from` resolves. A second pass builds the entries again with the same
+/// builder, from the full records read back by offset in that order, and hands each entry over as
+/// soon as no later record can change it. What memory holds besides one record is the clipped
+/// pass's entries and the entries still being built.
+pub fn read_file_streamed(
+    path: &Path,
+    on_entry: &mut dyn FnMut(Entry) -> Result<()>,
+) -> Result<Meta> {
+    read_file_streamed_with_meta(path, &mut |_| Ok(()), on_entry)
+}
+
+/// [`read_file_streamed`] that hands the session's [`Meta`] over **first**, once the clipped pass has
+/// it (see [`Reader::read_streamed_with_meta`]), and returns the final one.
+pub fn read_file_streamed_with_meta(
+    path: &Path,
+    on_meta: &mut dyn FnMut(&Meta) -> Result<()>,
+    on_entry: &mut dyn FnMut(Entry) -> Result<()>,
+) -> Result<Meta> {
+    let transcript = subagents::is_transcript(path);
+    let first =
+        super::clip::clipped_rows(path, &super::clip::STRUCTURE_PASS, super::clip::KEEP_NONE)?;
+    let sha256 = first.sha256;
+    let (offsets, unfinished) = (first.offsets, first.unfinished);
+    let (clipped, plan) = parse_planned(first.rows, Some(path)).map_err(|error| {
+        if transcript {
+            error.context(RESUMED_AGENT)
+        } else {
+            error
+        }
+    })?;
+    let built = clipped.entries.len() - plan.relinked;
+    {
+        // The clipped pass built the session's facts from clipped records: the same, but for a
+        // fact longer than the clip (a working directory of over a kilobyte).
+        let mut early = clipped.meta.clone();
+        early.source_sha256 = Some(sha256.clone());
+        adopt_transcript_lineage(path, transcript, &mut early);
+        on_meta(&early)?;
+    }
+    let mut b = Builder {
+        sidechain: plan.sidechain,
+        ..Builder::default()
+    };
+    b.meta.title.sidechain = plan.sidechain;
+    let mut rows = super::clip::RowReader::open(path)?;
+    let mut delivered = 0usize;
+    let mut hand_over = |entries: Vec<Entry>| -> Result<()> {
+        for mut entry in entries {
+            let Some(shape) = clipped.entries.get(delivered) else {
+                anyhow::bail!("the streamed read built more entries than the clipped one");
+            };
+            anyhow::ensure!(
+                shape.id == entry.id,
+                "the streamed read disagrees with the clipped one at entry {delivered}: \
+                 {:?} against {:?}",
+                entry.id,
+                shape.id
+            );
+            // A compaction's `kept_from` is resolved over every entry, later ones too: the
+            // clipped pass has them all.
+            if let (
+                Kind::Compaction { kept_from, .. },
+                Kind::Compaction {
+                    kept_from: resolved,
+                    ..
+                },
+            ) = (&mut entry.kind, &shape.kind)
+            {
+                kept_from.clone_from(resolved);
+            }
+            delivered += 1;
+            on_entry(entry)?;
+        }
+        Ok(())
+    };
+    for &i in &plan.order {
+        b.push(i, rows.row_at(offsets[i])?, plan.on_branch[i]);
+        hand_over(b.take_final(false))?;
+    }
+    b.flush();
+    hand_over(b.take_final(true))?;
+    anyhow::ensure!(
+        delivered == built,
+        "the streamed read built {delivered} entries, the clipped one {built}"
+    );
+    let mut meta = b.finish(Some(path))?.meta;
+    for relinked in &clipped.entries[built..] {
+        on_entry(relinked.clone())?;
+    }
+    if let Some((_, at)) = unfinished {
+        on_entry(super::json::unfinished_entry(
+            rows.text_at(at)?,
+            clipped.entries.len(),
+        ))?;
+    }
+    meta.source_sha256 = Some(sha256);
+    adopt_transcript_lineage(path, transcript, &mut meta);
+    Ok(meta)
 }
 
 /// Read records that were already decoded (the CLI and the tests both come through here).
@@ -403,6 +541,21 @@ pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
 /// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
 /// instead of being copied there.
 pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    Ok(parse_planned(rows, source_path)?.0)
+}
+
+/// How a session's records were ordered and read: what a second pass over the same records needs.
+struct Plan {
+    /// Source row indexes in the order the builder reads them.
+    order: Vec<usize>,
+    on_branch: Vec<bool>,
+    sidechain: bool,
+    /// How many `Meta(Relinked)` entries follow the built ones.
+    relinked: usize,
+}
+
+/// [`parse_owned`], and the plan it followed.
+fn parse_planned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<(Session, Plan)> {
     let sidechain = is_subagent_transcript(&rows);
     let reconstruction = {
         let _span = crate::timing::span("resumed branch");
@@ -430,7 +583,7 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
     {
         let _span = crate::timing::span("entries");
         let mut source: Vec<Option<Value>> = rows.into_iter().map(Some).collect();
-        for i in reconstruction.order {
+        for &i in &reconstruction.order {
             b.push(
                 i,
                 source[i].take().expect("each source row is used once"),
@@ -440,6 +593,12 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
     }
     let _span = crate::timing::span("finish");
     let mut session = b.finish(source_path)?;
+    let plan = Plan {
+        order: reconstruction.order,
+        on_branch: reconstruction.on_branch,
+        sidechain,
+        relinked: relinked.len(),
+    };
     for link in relinked {
         session.entries.push(Entry {
             id: super::json::fallback_id("relinked", session.entries.len()),
@@ -449,7 +608,7 @@ pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Sessi
             raw: vec![link],
         });
     }
-    Ok(session)
+    Ok((session, plan))
 }
 
 /// A subagent's transcript: its conversation rows are all `isSidechain`. A session's own file
@@ -710,6 +869,8 @@ struct Builder {
     after_prompt_command: bool,
     /// The rows are a subagent's transcript: its sidechain rows are its conversation.
     sidechain: bool,
+    /// Entries before this one were handed over by [`Builder::take_final`] and are placeholders.
+    taken: usize,
 }
 
 struct OpenStep {
@@ -1106,6 +1267,48 @@ impl Builder {
             && (is_queued_command(row) || last.raw.first().is_some_and(is_queued_command))
     }
 
+    /// The entries no later row can change, taken out of the builder in order (a streaming read
+    /// hands them over as they come). Every later row touches only: the step or results being
+    /// collected (`open_step`, `open_results`), a compaction still waiting for its summary
+    /// (`unsummarized`), and the last conversation entry (an interruption marks it aborted, a
+    /// queued command is compared with it). Each taken entry leaves a placeholder, so every index
+    /// the builder holds stays valid. `all` takes the rest, once the builder is flushed.
+    fn take_final(&mut self, all: bool) -> Vec<Entry> {
+        let len = self.entries.len();
+        let held = if all {
+            len
+        } else {
+            let last_conversation = self
+                .entries
+                .iter()
+                .rposition(|entry| !matches!(entry.kind, Kind::Meta { .. }));
+            [
+                self.open_step.as_ref().map(|step| step.index),
+                self.open_results,
+                self.unsummarized,
+                last_conversation,
+            ]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(len)
+        };
+        let held = held.min(len).max(self.taken);
+        let placeholder = || Entry {
+            id: String::new(),
+            kind: Kind::Meta {
+                kind: MetaKind::Internal,
+            },
+            raw: Vec::new(),
+        };
+        let out = self.entries[self.taken..held]
+            .iter_mut()
+            .map(|entry| std::mem::replace(entry, placeholder()))
+            .collect();
+        self.taken = held;
+        out
+    }
+
     fn flush(&mut self) {
         self.flush_step();
         self.open_results = None;
@@ -1420,11 +1623,84 @@ impl Reader for ClaudeCode {
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         read_in(id, roots, false)
     }
+
+    fn overview(&self, id: &str, roots: &StoreRoots) -> Result<SessionInfo> {
+        overview_of(id, roots)
+    }
+
+    fn read_clipped(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        max_string_bytes: usize,
+    ) -> Result<Clipped> {
+        read_file_clipped(&locate(id, roots)?, &Clip::new(max_string_bytes))
+    }
+
+    fn read_streamed_with_meta(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        on_meta: &mut dyn FnMut(&Meta) -> Result<()>,
+        on_entry: &mut dyn FnMut(Entry) -> Result<()>,
+    ) -> Result<Meta> {
+        read_file_streamed_with_meta(&locate(id, roots)?, on_meta, on_entry)
+    }
+}
+
+/// [`Reader::overview`]: the listing's row for `id`, made from that session's file alone (its
+/// head and tail), then given what the listing adds from the store's other records (`live`, a
+/// transcript that is gone).
+fn overview_of(id: &str, roots: &StoreRoots) -> Result<SessionInfo> {
+    let (Some(config), Some(projects)) =
+        (roots.claude_config_dir.as_deref(), roots.claude_projects())
+    else {
+        return Err(super::Lookup::NoStore(
+            "CLAUDE_CONFIG_DIR is not set: no Claude Code store to list".into(),
+        )
+        .into());
+    };
+    let mut listed = if let Some((session, agent)) = subagents::split(id) {
+        let files = subagents::find(&projects, session, agent);
+        let metas = agent_metas(&files, &projects, None);
+        peek_files(&files, "", None)
+            .into_iter()
+            .zip(&files)
+            .zip(metas)
+            .map(|((mut info, file), meta)| {
+                let agent = subagents::agent_id_of(file).unwrap_or_default();
+                let (parent, kind) = subagents::lineage(session, meta.as_ref());
+                info.id = subagents::qualified(session, agent);
+                info.title = meta.and_then(|m| m.description).or(info.title);
+                info.parent = Some(parent);
+                info.parent_kind = Some(kind);
+                info
+            })
+            .collect()
+    } else {
+        let files: Vec<PathBuf> = session_files(&projects)?
+            .into_iter()
+            .filter(|file| file.file_stem().and_then(|stem| stem.to_str()) == Some(id))
+            .collect();
+        peek_files(&files, "", None)
+    };
+    add_what_the_transcripts_do_not_say(&mut listed, config);
+    match listed.iter().filter(|info| info.id == id).count() {
+        // A session whose rows name another id than its file does: the listing is the answer.
+        0 => super::pick_overview(list_all_cached(roots, None)?, id, HarnessId::ClaudeCode),
+        _ => super::pick_overview(listed, id, HarnessId::ClaudeCode),
+    }
 }
 
 /// [`Reader::read`], with the branches asked for or not.
 fn read_in(id: &str, roots: &StoreRoots, branches: bool) -> Result<Session> {
-    let read_file = |path: &Path| read_file_with(path, branches);
+    read_file_with(&locate(id, roots)?, branches)
+}
+
+/// The session file `id` names: a subagent's qualified id exactly, a root session by the start of
+/// its file's name.
+fn locate(id: &str, roots: &StoreRoots) -> Result<PathBuf> {
+    let read_file = |path: &Path| Ok(path.to_path_buf());
     {
         let Some(projects) = roots.claude_projects() else {
             return Err(super::Lookup::NoStore(
@@ -1654,4 +1930,41 @@ fn session_files(projects: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A streaming build hands its entries over as they settle: it never holds more than the few
+    /// the next record can still change, however long the session is.
+    #[test]
+    fn a_streaming_build_does_not_hold_the_session() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/claude_code/source/c45db7bc-542c-4201-89de-b590c6fdb797.jsonl");
+        let text = std::fs::read_to_string(path).expect("the fixture");
+        let rows: Vec<Value> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("a row"))
+            .collect();
+        let (session, plan) = parse_planned(rows.clone(), None).expect("the session");
+        let mut b = Builder {
+            sidechain: plan.sidechain,
+            ..Builder::default()
+        };
+        let (mut delivered, mut peak) = (0usize, 0usize);
+        for &i in &plan.order {
+            b.push(i, rows[i].clone(), plan.on_branch[i]);
+            delivered += b.take_final(false).len();
+            peak = peak.max(b.entries.len() - b.taken);
+        }
+        b.flush();
+        delivered += b.take_final(true).len();
+        assert_eq!(delivered, session.entries.len() - plan.relinked);
+        assert!(
+            peak * 4 < delivered,
+            "held {peak} of {delivered} entries at once"
+        );
+    }
 }

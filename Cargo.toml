@@ -19,17 +19,23 @@ anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
-rmcp = { version = "=2.2.0", default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
-tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "signal", "process", "sync", "time", "net"] }
-tokio-util = "=0.7.20"
-axum = "=0.8.9"
-reqwest = { version = "=0.13.5", default-features = false, features = ["json", "stream"] }
+rmcp = { version = "=2.2.0", optional = true, default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "=1.54.1", optional = true, features = ["rt-multi-thread", "macros", "signal", "process", "sync", "time", "net"] }
+tokio-util = { version = "=0.7.20", optional = true }
+axum = { version = "=0.8.9", optional = true }
+reqwest = { version = "=0.13.5", optional = true, default-features = false, features = ["json", "stream"] }
 toml_edit = "=0.25.19"
-subtle = "=2.6.1"
-futures-util = "=0.3.34"
+subtle = { version = "=2.6.1", optional = true }
+futures-util = { version = "=0.3.34", optional = true }
 # Decodes the frames of a DeepSeek Harness session log. Without its `hash` feature: the content
 # checksum is compared by `reader::zstd_frames`, which carries its own XXH64.
 ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
+
+[features]
+# The local chat service (MCP server and client, HTTP, async runtime). The session readers and
+# writers need none of it: `default-features = false` keeps their small dependency set.
+default = ["chat"]
+chat = ["dep:rmcp", "dep:tokio", "dep:tokio-util", "dep:axum", "dep:reqwest", "dep:subtle", "dep:futures-util"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

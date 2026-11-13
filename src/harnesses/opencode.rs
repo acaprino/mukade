@@ -33,6 +33,7 @@ impl Harness for OpenCode {
         crate::reader::opencode::read_file(path)
     }
 
+    #[cfg(feature = "chat")]
     fn chat_mcp_target(
         &self,
         vars: &crate::catalog::Vars,
@@ -58,6 +59,7 @@ impl Harness for OpenCode {
 
     /// The plugin hands the answer over itself (a synthetic message), so it reads mukade's own
     /// plugin format.
+    #[cfg(feature = "chat")]
     fn chat_hook_output(
         &self,
         event: crate::chat::adapter::Event,
@@ -71,6 +73,7 @@ impl Harness for OpenCode {
     /// The plugin runs in OpenCode's server, so the instance runs a private one (`--standalone`)
     /// that has this environment; the shared background service would not. The credential stays
     /// in the environment (`{env:…}`).
+    #[cfg(feature = "chat")]
     fn chat_launch(
         &self,
         kit: &crate::chat::adapter::Kit,
@@ -879,6 +882,7 @@ fn web_fetch(input: &Value) -> Translation {
 /// The configuration document a launched OpenCode reads on top of the user's own: the chat
 /// plugin's folder and the MCP entry. A document the caller already set in
 /// `OPENCODE_CONFIG_CONTENT` is kept, with the two added to it.
+#[cfg(feature = "chat")]
 fn chat_config(existing: Option<&str>, plugin: &Path, endpoint: &str) -> Result<String, String> {
     let mut document = match existing.filter(|text| !text.trim().is_empty()) {
         None => serde_json::json!({}),
@@ -915,6 +919,7 @@ fn chat_config(existing: Option<&str>, plugin: &Path, endpoint: &str) -> Result<
 
 /// The harness arguments with `--standalone` where OpenCode reads it: after `run` or `mini`, else
 /// first (the full-screen interface).
+#[cfg(feature = "chat")]
 fn standalone_args(args: &[String]) -> Vec<String> {
     if args.iter().any(|a| a == "--standalone") {
         return args.to_vec();

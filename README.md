@@ -120,6 +120,35 @@ fn main() -> Result<(), mukade::HopError> {
 
 The example reads the source and destination store paths from the harnesses' environment variables. The crate also exposes `export`, `import`, and `hop_into` for hosts that manage their own stores. [Host options](docs/usage.md#6-host-and-automation-options) · [Rust API specification](docs/session-interchange-spec.md#12-rust-surface)
 
+### Reading a session of any size
+
+No session is too large to read. Through `mukade::reader::Reader`, or the command line:
+
+| you want | call | command |
+|---|---|---|
+| one session's id, project, title, time, parent | `overview(id, &roots)`: the two ends of its file, constant time | `mukade overview <harness> <id>` |
+| the conversation, long texts cut | `read_clipped(id, &roots, 4096)`: a file up to 16 MiB is read whole and clipped; a bigger one is decoded one record at a time and the text is never held | `mukade dump <harness> <id> --clip 4096` |
+| every word, in order, for search or export | `read_streamed(id, &roots, &mut on_entry)`: the full entries one at a time | `mukade dump <harness> <id> --stream` |
+| the interchange document of a huge session | `wire::DocumentWriter` fed by `read_streamed_with_meta`: the bytes `to_document` gives, one message at a time | `mukade dump <harness> <id>` (whole) |
+
+The clipped read has the entries, ids, kinds and order of the full read; every cut string is a prefix
+of the full one. Claude Code, Codex and Pi have their own code; the other harnesses read whole. A
+229 MiB session: the whole read peaks at 612 MiB, the clipped one at 70 MiB, the streamed one at 50 MiB.
+[Guide](docs/reading-large-sessions.md) · [How it works](docs/architecture.md#reading-a-session-of-any-size)
+
+### The `chat` feature
+
+The local chat service (MCP server and client, HTTP, an async runtime) is the cargo feature `chat`,
+on by default. A program that only reads and writes sessions leaves it out, with its dependencies:
+
+```toml
+mukade = { git = "https://github.com/acaprino/mukade.git", default-features = false }
+```
+
+That leaves `anyhow`, `chrono`, `rusqlite`, `ruzstd`, `serde`, `serde_json`, `toml_edit`, `uuid` and
+`windows-sys` (`libc` elsewhere). The `chat` module and the `mukade chat` command need the feature.
+
+
 ## Ecosystem
 
 | Project | Role |

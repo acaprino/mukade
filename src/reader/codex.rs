@@ -22,6 +22,7 @@
 
 mod exec;
 
+use super::clip::{Clip, Clipped, Keep};
 use super::json::{blocks_text, fallback_id, str_at};
 use super::{Reader, SessionInfo};
 use crate::model::{
@@ -48,6 +49,33 @@ pub enum Branches {
     Active,
     /// Everything: every file of the thread whole, the first one first, abandoned turns included.
     All,
+}
+
+/// What a clipped read leaves whole: the text of a tool call that the reader parses (the JSON
+/// `arguments` of a function call, the script `input` of a custom tool call such as code mode's
+/// `exec`). A model wrote them, so they are bounded; the bulk of a session is tool output, which
+/// is clipped.
+const KEEP_WHOLE: Keep = &[&["payload", "arguments"], &["payload", "input"]];
+
+/// [`read_file`] that never refuses for size: see [`Reader::read_clipped`]. A page of a
+/// paginated thread, which is read together with the earlier files it continues, is read whole
+/// and then clipped.
+pub fn read_file_clipped(path: &Path, clip: &Clip) -> Result<Clipped> {
+    if peek_first_row(path).is_some_and(|first| history_base(&[first]).is_some()) {
+        return super::clip::clip_session(&read_file(path)?, clip.max_string_bytes);
+    }
+    let clipped = super::clip::clipped_rows(path, clip, KEEP_WHOLE)?;
+    let _span = crate::timing::span("build entries");
+    let mut session = parse_owned_with(clipped.rows, Some(path), false)?;
+    session.meta.source_sha256 = Some(clipped.sha256);
+    super::json::keep_unfinished(&mut session, clipped.unfinished.map(|(text, _)| text));
+    if session.meta.title.is_none() {
+        session.meta.title = indexed_name(path, &session.meta.id);
+    }
+    Ok(Clipped {
+        session,
+        clipping: clipped.clipping,
+    })
 }
 
 /// A thread redone more often than this is not followed further.
@@ -1246,15 +1274,28 @@ impl Reader for Codex {
     }
 
     fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
-        list_in(roots, false)
+        list_in(roots, false, None)
     }
 
     fn list_all(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
-        list_in(roots, true)
+        list_in(roots, true, None)
     }
 
     fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
         read_with(id, roots, Branches::Active)
+    }
+
+    fn overview(&self, id: &str, roots: &StoreRoots) -> Result<SessionInfo> {
+        super::pick_overview(list_in(roots, true, Some(id))?, id, HarnessId::Codex)
+    }
+
+    fn read_clipped(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        max_string_bytes: usize,
+    ) -> Result<Clipped> {
+        read_file_clipped(&locate(id, roots)?, &Clip::new(max_string_bytes))
     }
 }
 
@@ -1265,7 +1306,13 @@ impl Reader for Codex {
 /// listed as unreadable, so its project is still seen. `with_subagents` keeps the threads Codex
 /// ran for another thread (spawned subagents, guardian reviews), which are not roots: `list`
 /// leaves them out once the database says what they are.
-fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>> {
+///
+/// `only` limits the listing to that one thread: the other rollouts are not opened.
+fn list_in(
+    roots: &StoreRoots,
+    with_subagents: bool,
+    only: Option<&str>,
+) -> Result<Vec<SessionInfo>> {
     let Some(home) = roots.codex_home.as_deref() else {
         return Err(
             super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to list".into()).into(),
@@ -1276,7 +1323,7 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
     let mut latest: HashMap<String, (PathBuf, bool)> = HashMap::new();
     for (file, archived) in store_rollouts(roots)? {
         let id = rollout_id(&file);
-        if id.is_empty() {
+        if id.is_empty() || only.is_some_and(|only| only != id) {
             continue;
         }
         match latest.get(&id) {
@@ -1311,6 +1358,9 @@ fn list_in(roots: &StoreRoots, with_subagents: bool) -> Result<Vec<SessionInfo>>
     let catalogue = super::codex_state::catalogue(home);
     let database = catalogue.database_name();
     for thread in catalogue.threads {
+        if only.is_some_and(|only| only != thread.id) {
+            continue;
+        }
         if thread.subagent && !with_subagents {
             listed.remove(&thread.id);
             continue;
@@ -1425,6 +1475,12 @@ fn peek_cwd(file: &Path) -> Option<String> {
 /// Read the thread `id` (an unambiguous prefix is enough) from the store, choosing which branches
 /// of a paginated thread to carry.
 pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Session> {
+    read_file_with(&locate(id, roots)?, branches)
+}
+
+/// The rollout file that holds thread `id` (an unambiguous prefix is enough): the latest page of a
+/// paginated thread, or the file the state database points at.
+fn locate(id: &str, roots: &StoreRoots) -> Result<PathBuf> {
     let Some(sessions) = roots.codex_sessions() else {
         return Err(
             super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to read".into()).into(),
@@ -1445,11 +1501,11 @@ pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Ses
             .iter()
             .max_by(|a, b| a.file_name().cmp(&b.file_name()))
             .expect("not empty");
-        return read_file_with(latest, branches);
+        return Ok(latest.clone());
     }
     match matches.as_slice() {
-        [one] => read_file_with(one, branches),
-        [] => read_through_catalogue(id, roots, &sessions, branches),
+        [one] => Ok(one.clone()),
+        [] => read_through_catalogue(id, roots, &sessions),
         many => Err(super::Lookup::Ambiguous(format!(
             "{id:?} matches {} Codex rollouts",
             many.len()
@@ -1461,12 +1517,7 @@ pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Ses
 /// No rollout under `sessions/` carries `id`: the state database may still know the thread. A row
 /// whose rollout lies elsewhere (Codex moves archived threads out of `sessions/`) is read at that
 /// file; one whose rollout is gone is refused with the reason.
-fn read_through_catalogue(
-    id: &str,
-    roots: &StoreRoots,
-    sessions: &Path,
-    branches: Branches,
-) -> Result<Session> {
+fn read_through_catalogue(id: &str, roots: &StoreRoots, sessions: &Path) -> Result<PathBuf> {
     let not_found = || {
         super::Lookup::NotFound(format!(
             "no Codex rollout with id {id:?} under {}",
@@ -1485,7 +1536,7 @@ fn read_through_catalogue(
     match known.as_slice() {
         [] => Err(not_found().into()),
         [thread] => match thread.rollout.as_deref().filter(|file| file.is_file()) {
-            Some(file) => read_file_with(file, branches),
+            Some(file) => Ok(file.to_path_buf()),
             None => Err(super::Lookup::NotFound(format!(
                 "Codex thread {} has no rollout any more: its row in {} points at {}, which does not exist",
                 thread.id,

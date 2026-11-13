@@ -13,6 +13,7 @@
 pub mod bus;
 pub mod cache;
 pub mod catalog;
+#[cfg(feature = "chat")]
 pub mod chat;
 pub mod children;
 pub mod cli;

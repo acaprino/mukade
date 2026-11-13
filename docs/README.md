@@ -8,6 +8,7 @@ New here: the [project README](../README.md), then the [usage guide](usage.md).
 |---|---|
 | [Project README](../README.md) | you want the matrix, quick start, library, commands |
 | [Command-line usage](usage.md) | you run `mukade`: setup, commands, compaction, intents, troubleshooting |
+| [Reading a session of any size](reading-large-sessions.md) | you read a huge session: which call, the commands, measured memory |
 | [Sessions TUI](../mukade-tui/README.md) | you want the terminal explorer: keys, resume, hop, export, import |
 | [Open points](../next.md) | you want the status board: done, to verify, known limits |
 | [Windows checklist](verification/windows-checklist.md) | you settle an open check: steps, pass criterion |

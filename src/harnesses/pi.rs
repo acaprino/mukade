@@ -30,6 +30,7 @@ impl Harness for Pi {
         crate::reader::pi::read_file(path)
     }
 
+    #[cfg(feature = "chat")]
     fn chat_mcp_target(
         &self,
         vars: &crate::catalog::Vars,
@@ -57,6 +58,7 @@ impl Harness for Pi {
 
     /// The extension hands the answer over itself (a message with the turn, or a continuation),
     /// so it reads mukade's own plugin format.
+    #[cfg(feature = "chat")]
     fn chat_hook_output(
         &self,
         event: crate::chat::adapter::Event,
@@ -68,6 +70,7 @@ impl Harness for Pi {
     /// An extension for one run (`pi -e`): it registers the MCP entry for this session and runs
     /// the hooks at session start, at each prompt and before a run settles. Nothing of the
     /// user's is written; the credential stays in the environment.
+    #[cfg(feature = "chat")]
     fn chat_launch(
         &self,
         kit: &crate::chat::adapter::Kit,
@@ -500,6 +503,7 @@ fn ls(input: &Value) -> Translation {
 }
 
 /// A path without Windows's `\\?\` prefix, which Pi's extension loader would not take.
+#[cfg(feature = "chat")]
 fn plain(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {

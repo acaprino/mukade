@@ -137,13 +137,20 @@ pub fn read_jsonl(path: &std::path::Path) -> Result<Jsonl> {
 /// Keep a cut-off last line at the end of a session, as text.
 pub fn keep_unfinished(session: &mut Session, line: Option<String>) {
     if let Some(line) = line {
-        session.entries.push(Entry {
-            id: fallback_id("unfinished", session.entries.len()),
-            kind: Kind::Meta {
-                kind: MetaKind::Unfinished,
-            },
-            raw: vec![Value::String(line)],
-        });
+        session
+            .entries
+            .push(unfinished_entry(line, session.entries.len()));
+    }
+}
+
+/// The entry a cut-off last line becomes, placed after `before` entries.
+pub fn unfinished_entry(line: String, before: usize) -> Entry {
+    Entry {
+        id: fallback_id("unfinished", before),
+        kind: Kind::Meta {
+            kind: MetaKind::Unfinished,
+        },
+        raw: vec![Value::String(line)],
     }
 }
 

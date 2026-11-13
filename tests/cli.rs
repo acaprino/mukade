@@ -2525,3 +2525,219 @@ fn dump_names_the_fork_a_summary_left_in_the_source_store() {
         "the document names it too"
     );
 }
+
+// --- the reads of a session of any size (docs/adr/ADR-0004) -------------------------------------
+
+const SOURCES: [(HarnessId, &str); 3] = [
+    (
+        HarnessId::ClaudeCode,
+        "c45db7bc-542c-4201-89de-b590c6fdb797",
+    ),
+    (HarnessId::Codex, "01a17e07-93f7-7a73-85c7-9f0205836600"),
+    (HarnessId::Pi, "01a17e17-9f07-743d-8072-8b3b13d65ab5"),
+];
+
+#[test]
+fn overview_prints_the_row_list_prints_for_that_session() {
+    for (harness, id) in SOURCES {
+        let scratch = support::scratch(harness, "cli-overview");
+        let _ = stage_fixture(harness, &scratch);
+        let (ok, listed, stderr) = cli(&scratch, &["list", harness.as_str()]);
+        assert!(ok, "{harness}: {stderr}");
+        let row: Value = listed
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|row| row["id"] == id)
+            .expect("the listing has the session");
+        let (ok, stdout, stderr) = cli(&scratch, &["overview", harness.as_str(), id]);
+        assert!(ok, "{harness}: {stderr}");
+        let printed: Value = serde_json::from_str(stdout.trim()).expect("one JSON row");
+        assert_eq!(printed, row, "{harness}");
+    }
+}
+
+#[test]
+fn overview_refuses_a_missing_session_a_prefix_and_extra_arguments() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-overview-refuse");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    for args in [
+        ["overview", "claude_code", "no-such-session"],
+        ["overview", "claude_code", "c45db7bc"],
+    ] {
+        let (code, _, stderr) = cli_code(&scratch, &args);
+        assert_eq!(code, Some(2), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("no Claude Code session") || stderr.contains("claude_code session"),
+            "{stderr}"
+        );
+    }
+    let (code, _, stderr) = cli_code(&scratch, &["overview", "claude_code"]);
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("overview needs a session id"), "{stderr}");
+}
+
+#[test]
+fn dump_clip_prints_the_document_with_what_was_cut() {
+    for (harness, id) in SOURCES {
+        let scratch = support::scratch(harness, "cli-clip");
+        let _ = stage_fixture(harness, &scratch);
+        let (ok, whole, stderr) = cli(&scratch, &["dump", harness.as_str(), id]);
+        assert!(ok, "{stderr}");
+        let whole: Value = serde_json::from_str(&whole).unwrap();
+        let (ok, clipped, stderr) =
+            cli(&scratch, &["dump", harness.as_str(), id, "--clip", "1024"]);
+        assert!(ok, "{harness}: {stderr}");
+        let clipped: Value = serde_json::from_str(&clipped).expect("one JSON document");
+        assert_eq!(clipped["clipped"]["max_string_bytes"], 1024, "{harness}");
+        assert_eq!(clipped["clipped"]["streamed"], false, "{harness}");
+        assert_eq!(
+            clipped["messages"].as_array().unwrap().len(),
+            whole["messages"].as_array().unwrap().len()
+        );
+        // Without its `clipped` key a document with nothing cut is the plain document.
+        if clipped["clipped"]["strings"] == 0 {
+            let mut same = clipped.clone();
+            same.as_object_mut().unwrap().remove("clipped");
+            assert_eq!(same, whole, "{harness}");
+        }
+    }
+}
+
+#[test]
+fn a_clipped_document_is_not_written_to_a_harness() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-clip-write");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let (ok, doc, stderr) = cli(
+        &scratch,
+        &["dump", "claude_code", "c45db7bc", "--clip", "1024"],
+    );
+    assert!(ok, "{stderr}");
+    let file = scratch.join("clipped.json");
+    std::fs::write(&file, doc).unwrap();
+    let (code, _, stderr) = cli_code(&scratch, &["write", "pi", file.to_str().unwrap()]);
+    assert_ne!(code, Some(0));
+    assert!(stderr.contains("is a clipped document"), "{stderr}");
+}
+
+#[test]
+fn dump_stream_prints_every_entry_in_full_then_the_meta() {
+    for (harness, id) in SOURCES {
+        let scratch = support::scratch(harness, "cli-stream");
+        let roots = stage_fixture(harness, &scratch);
+        let full = for_harness(harness)
+            .unwrap()
+            .read(&roots, &support::roots(&scratch))
+            .unwrap();
+        let (ok, stdout, stderr) = cli(&scratch, &["dump", harness.as_str(), id, "--stream"]);
+        assert!(ok, "{harness}: {stderr}");
+        let lines: Vec<Value> = stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one JSON value per line"))
+            .collect();
+        let (meta, entries) = lines.split_last().expect("a meta line");
+        assert_eq!(
+            meta["meta"],
+            serde_json::to_value(&full.meta).unwrap(),
+            "{harness}"
+        );
+        assert_eq!(entries.len(), full.entries.len(), "{harness}");
+        for (line, entry) in entries.iter().zip(&full.entries) {
+            assert_eq!(line, &serde_json::to_value(entry).unwrap(), "{harness}");
+        }
+        // The same to a file.
+        let out = scratch.join("stream.jsonl");
+        let (ok, stdout, stderr) = cli(
+            &scratch,
+            &[
+                "dump",
+                harness.as_str(),
+                id,
+                "--stream",
+                "--output",
+                out.to_str().unwrap(),
+            ],
+        );
+        assert!(ok && stdout.is_empty(), "{harness}: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap().lines().count(),
+            entries.len() + 1
+        );
+    }
+}
+
+#[test]
+fn clip_and_stream_are_refused_where_they_make_no_sense() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-clip-refuse");
+    let _ = stage_fixture(HarnessId::ClaudeCode, &scratch);
+    let cases: [(&[&str], &str); 7] = [
+        (
+            &["dump", "claude_code", "c45db7bc", "--clip", "abc"],
+            "--clip takes a number of bytes",
+        ),
+        (
+            &["dump", "claude_code", "c45db7bc", "--clip", "0"],
+            "--clip takes a number of bytes",
+        ),
+        (
+            &[
+                "dump",
+                "claude_code",
+                "c45db7bc",
+                "--clip",
+                "2048",
+                "--stream",
+            ],
+            "cannot go together",
+        ),
+        (
+            &["list", "claude_code", "--clip", "2048"],
+            "supported only by dump",
+        ),
+        (
+            &[
+                "dump",
+                "claude_code",
+                "c45db7bc",
+                "--stream",
+                "--all-branches",
+            ],
+            "cannot go with",
+        ),
+        (
+            &[
+                "dump",
+                "claude_code",
+                "c45db7bc",
+                "--clip",
+                "2048",
+                "--compaction",
+                "none",
+            ],
+            "cannot go with",
+        ),
+        (
+            &["dump", "claude_code", "--from-file", "x.jsonl", "--stream"],
+            "cannot go with",
+        ),
+    ];
+    for (args, expected) in cases {
+        let (code, stdout, stderr) = cli_code(&scratch, args);
+        assert_ne!(code, Some(0), "{args:?}");
+        assert!(stdout.is_empty(), "{args:?}: {stdout}");
+        assert!(stderr.contains(expected), "{args:?}: {stderr}");
+    }
+}
+
+#[test]
+fn the_help_names_the_new_commands_and_options() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "cli-help-reads");
+    let (ok, help, _) = cli(&scratch, &["--help"]);
+    assert!(ok);
+    for word in [
+        "mukade overview <harness> <session-id>",
+        "--clip <bytes>",
+        "--stream",
+    ] {
+        assert!(help.contains(word), "the help lacks {word}");
+    }
+}

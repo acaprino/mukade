@@ -21,6 +21,8 @@ continues it **as one of its own sessions**.
 | find every installation below a folder, portable ones too | [`mukade scan <dir>`](#mukade-scan) |
 | know which harness a folder belongs to | [`mukade detect <dir>`](#mukade-detect) |
 | find a session ID | [`mukade list <harness>`](#mukade-list) |
+| see one session's title, project and time without reading it | [`mukade overview <harness> <id>`](#mukade-overview) |
+| read a session of any size | [`dump --clip` and `dump --stream`](#a-session-of-any-size) ([guide](reading-large-sessions.md)) |
 
 **Move**
 
@@ -114,8 +116,11 @@ Always true:
 | `mukade scan <dir> [--depth <n>]` | every installation below a folder | JSON |
 | `mukade detect <dir>` | which harness stores a folder holds | JSON |
 | `mukade list <harness> [options]` | the sessions, one per line | JSON lines |
+| `mukade overview <harness> <session-id>` | one session's listing row, from the two ends of its file | JSON |
 | `mukade intents` | the editable summary prompts | JSON |
 | `mukade dump <harness> <session-id> [options]` | export a session as one harness-neutral document | JSON document |
+| `mukade dump <harness> <session-id> --clip <bytes>` | the document of a session of any size, long strings cut | JSON document |
+| `mukade dump <harness> <session-id> --stream` | every entry of a session in full, one per line | JSON lines |
 | `mukade write <harness> <document.json> [options]` | import a document as a new session | receipt |
 | `mukade hop <src-harness> <session-id> <dst-harness> [options]` | read the source and write the destination in one process | receipt |
 | `mukade document opencode <src-harness> <session-id> [options]` | OpenCode's import document, nothing written | JSON |
@@ -365,6 +370,28 @@ mukade list codex | jq -c 'select(.archived) | {id, title, location}'
 mukade list codex --archived false | jq -r '.cwd' | sort -u
 ```
 
+### `mukade overview`
+
+Prints the [`list`](#the-list-output) row of **one** session, without listing the others and without
+reading the conversation: the file is opened at its first 128 KiB and last 384 KiB, so the cost does
+not grow with the session. Use it to resume or name a session whose size you do not want to pay for.
+
+```powershell
+$env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude'
+mukade overview claude_code c45db7bc-542c-4201-89de-b590c6fdb797
+```
+
+```json
+{"id":"c45db7bc-542c-4201-89de-b590c6fdb797","title":"H27-T3 after compaction","cwd":"C:\\Users\\you\\work","timestamp":"2026-10-27T15:29:05.240Z","location":"C:\\Users\\you\\.claude\\projects\\work\\c45db7bc-….jsonl","archived":false,"unreadable":null,"live":null}
+```
+
+- The id is the **whole id** a listing shows; a prefix is refused like a missing session (exit 2); an unreadable session is exit 5, as for `dump`.
+  A subagent session is named by its qualified id, `<parent>.<agent>`.
+- The row has the keys of a `list` row, and the same values: `overview` equals the row `list` prints
+  for that id (a subagent's row, with `--children`, too).
+- It does not take `--from-file`. Claude Code, Codex and Pi read the one file; the other harnesses
+  list their store and pick the row.
+
 ### `mukade intents`
 
 Lists the editable summary prompts as JSON, without reading a session or starting a harness. It
@@ -411,6 +438,52 @@ mukade dump codex --from-file 'C:\path\rollout.jsonl' --output C:\work\session.j
   is harness-neutral. It does not take `--interrupted` or `--without-tools`.
 - `--children` adds the session's subagent sessions to the document, in `children`
   ([Carry the subagent sessions](#carry-the-subagent-sessions)).
+
+### A session of any size
+
+`dump` reads the whole session and holds about five times its size. For a session you cannot afford
+that for, two options of `dump` never refuse it for its size. They read one session of the store by
+id and do not take `--from-file`, `--children`, `--all-branches` or a compaction.
+[The guide](reading-large-sessions.md) says which one to use and shows the library calls.
+
+**`mukade dump <harness> <session-id> --clip <bytes>`**: the document `dump` prints, with every
+string longer than `<bytes>` cut to a prefix (at least 1024; a smaller number is raised to it). Up to
+16 MiB the file is read whole and clipped; above it, it is decoded one record at a time and never
+held. The messages are the full dump's, in its order. A `clipped` key says what was cut.
+
+```powershell
+mukade dump claude_code YOUR_ID --clip 4096 --output C:\work\view.json
+```
+
+```json
+{"meta":{…},"library":{…},"messages":[…],
+ "clipped":{"max_string_bytes":4096,"strings":81,"bytes_dropped":189497,"streamed":false}}
+```
+
+`write` refuses a document with a `clipped` key: its strings are cut, so it is not a session to put
+in a harness.
+
+**`mukade dump <harness> <session-id> --stream`**: the entries of the session in full, in the order
+of a full read, **one JSON object per line** (`id`, `kind`, `raw`: the source records), then a last
+line `{"meta": …}`. The session is not held whole: each entry is written as soon as it is built.
+Use it to search or export every word of a huge session. `--output <file>` writes the lines to a
+file.
+
+```powershell
+mukade dump claude_code YOUR_ID --stream --output C:\work\entries.jsonl
+```
+
+```json
+{"id":"row-0","kind":{"meta":{"kind":"internal"}},"raw":[{"type":"queue-operation",…}]}
+{"id":"fa9e158b-…","kind":{"user":{"text":"H27-TOOLS read alpha.txt and beta.txt","attachments":[]}},"raw":[{…}]}
+{"meta":{"harness":"claude_code","id":"c45db7bc-…","source_sha256":"…"}}
+```
+
+- `--clip` and `--stream` go with `dump` only, and not with each other.
+- Both work for every harness; Claude Code, Codex and Pi do it without holding the session, the
+  others read it whole first.
+- A bad line in the middle of the file is an error naming it (`<file>:<line>`); a last line cut off
+  by a hard kill is kept as text. Neither is a size refusal.
 
 ### `mukade write`
 
@@ -1090,6 +1163,13 @@ command does, with typed errors (`HopError::ResumeFailed` carries the written se
 the CLI refuses it); `mukade::hop::reads_all_branches(harness)` says whether a source can take it,
 without reading anything, so a host offers the option only there: the TUI's `branches` field, the
 desktop app's `all_branches` on each installation.
+A host that shows or searches a session it cannot afford to hold whole asks the reader for less:
+`Reader::overview` (one session's listing row, from the two ends of its file), `Reader::read_clipped`
+(the full read with every string longer than a limit cut, never refused for size; past 16 MiB the file
+is decoded one record at a time) and `Reader::read_streamed` (the full entries, one at a time).
+Claude Code, Codex and Pi have their own; the others read whole. The chat service is the cargo feature
+`chat` (default on); `default-features = false` leaves the readers and writers.
+[ADR-0004](adr/ADR-0004-size-agnostic-session-reads.md).
 See the [README](../README.md#rust-library).
 
 | option | rule |
@@ -1389,6 +1469,11 @@ serialize + write file             5.2 ms
 write files                        5.8 ms
 total                             16.2 ms
 ```
+
+A session too large for that is read with [`dump --clip` or `--stream`](#a-session-of-any-size). Measured
+on a synthetic Claude Code session of 229 MiB, release build, one process per read: the whole read 1.1 s
+and 612 MiB; `--clip 4096` 1.0 s and 70 MiB; `--stream` 1.4 s and 50 MiB
+([measurements](reading-large-sessions.md#measured)).
 
 What makes it fast, and what you can do:
 

@@ -31,101 +31,104 @@ use serde_json::{Value, json};
 /// The library name and version a document states, so a reader knows what wrote it.
 pub const LIBRARY: &str = "mukade";
 
-/// Project a session into its document form.
 /// The messages of a run of entries: the conversation among them, Meta left out.
 fn messages_of<'a>(entries: impl Iterator<Item = &'a Entry>) -> Vec<Value> {
-    let mut messages = Vec::new();
-    for (n, entry) in entries
+    entries
         .filter(|e| !matches!(e.kind, Kind::Meta { .. }))
         .enumerate()
-    {
-        let timestamp = timestamp_of(entry);
-        match &entry.kind {
-            Kind::User { text, attachments } => {
-                let mut content = vec![json!({"type": "text", "text": text})];
-                for attachment in attachments {
-                    content.push(json!({
-                        "type": "attachment",
-                        "kind": attachment.kind,
-                        "path": attachment.path,
-                        "raw": attachment.raw,
-                    }));
-                }
-                messages.push(json!({"role": "user", "id": entry.id, "timestamp": timestamp, "content": content}));
-            }
-            Kind::Step {
-                model,
-                reasoning,
-                text,
-                calls,
-                end,
-            } => {
-                let mut content = Vec::new();
-                for r in reasoning {
-                    content.push(json!({
-                        "type": "thinking",
-                        "thinking": r.text,
-                        "opaque": r.opaque,
-                    }));
-                }
-                for t in text {
-                    content.push(json!({"type": "text", "text": t}));
-                }
-                for call in calls {
-                    content.push(json!({
-                        "type": "tool_use",
-                        "id": call.id,
-                        "name": call.source_name,
-                        "input": call.input,
-                        "canonical": call.canonical,
-                    }));
-                }
-                messages.push(json!({
-                    "role": "assistant",
-                    "id": entry.id,
-                    "timestamp": timestamp,
-                    "model": model.as_ref().map(|m| m.id.clone()),
-                    "provider": model.as_ref().and_then(|m| m.provider.clone()),
-                    "end": end,
-                    "content": content,
-                }));
-            }
-            Kind::Results { results } => {
-                let mut content = Vec::new();
-                for result in results {
-                    content.push(json!({
-                        "type": "tool_result",
-                        "tool_use_id": result.call_id,
-                        "content": result.content,
-                        "is_error": result.is_error,
-                        "truncated_by_source": result.truncated_by_source,
-                    }));
-                }
-                messages.push(json!({"role": "user", "id": entry.id, "timestamp": timestamp, "content": content}));
-            }
-            Kind::Compaction {
-                summary,
-                kept_from,
-                trigger,
-                tokens_before,
-            } => messages.push(json!({
-                "role": "user",
-                "id": entry.id,
-                "timestamp": timestamp,
-                "content": [{"type": "text", "text": summary}],
-                "compaction": {
-                    "kept_from": kept_from,
-                    "trigger": trigger,
-                    "tokens_before": tokens_before,
-                    "entry": n,
-                },
-            })),
-            Kind::Meta { .. } => {}
-        }
-    }
-    messages
+        .filter_map(|(n, entry)| message_of(entry, n))
+        .collect()
 }
 
+/// The message one entry makes: one entry, one message, `None` for a Meta entry. `n` is the entry's
+/// place among the conversation entries of its run (a compaction states it).
+pub fn message_of(entry: &Entry, n: usize) -> Option<Value> {
+    let timestamp = timestamp_of(entry);
+    Some(match &entry.kind {
+        Kind::User { text, attachments } => {
+            let mut content = vec![json!({"type": "text", "text": text})];
+            for attachment in attachments {
+                content.push(json!({
+                    "type": "attachment",
+                    "kind": attachment.kind,
+                    "path": attachment.path,
+                    "raw": attachment.raw,
+                }));
+            }
+            json!({"role": "user", "id": entry.id, "timestamp": timestamp, "content": content})
+        }
+        Kind::Step {
+            model,
+            reasoning,
+            text,
+            calls,
+            end,
+        } => {
+            let mut content = Vec::new();
+            for r in reasoning {
+                content.push(json!({
+                    "type": "thinking",
+                    "thinking": r.text,
+                    "opaque": r.opaque,
+                }));
+            }
+            for t in text {
+                content.push(json!({"type": "text", "text": t}));
+            }
+            for call in calls {
+                content.push(json!({
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.source_name,
+                    "input": call.input,
+                    "canonical": call.canonical,
+                }));
+            }
+            json!({
+                "role": "assistant",
+                "id": entry.id,
+                "timestamp": timestamp,
+                "model": model.as_ref().map(|m| m.id.clone()),
+                "provider": model.as_ref().and_then(|m| m.provider.clone()),
+                "end": end,
+                "content": content,
+            })
+        }
+        Kind::Results { results } => {
+            let mut content = Vec::new();
+            for result in results {
+                content.push(json!({
+                    "type": "tool_result",
+                    "tool_use_id": result.call_id,
+                    "content": result.content,
+                    "is_error": result.is_error,
+                    "truncated_by_source": result.truncated_by_source,
+                }));
+            }
+            json!({"role": "user", "id": entry.id, "timestamp": timestamp, "content": content})
+        }
+        Kind::Compaction {
+            summary,
+            kept_from,
+            trigger,
+            tokens_before,
+        } => json!({
+            "role": "user",
+            "id": entry.id,
+            "timestamp": timestamp,
+            "content": [{"type": "text", "text": summary}],
+            "compaction": {
+                "kept_from": kept_from,
+                "trigger": trigger,
+                "tokens_before": tokens_before,
+                "entry": n,
+            },
+        }),
+        Kind::Meta { .. } => return None,
+    })
+}
+
+/// Project a session into its document form.
 pub fn to_document(session: &Session) -> Value {
     let messages = messages_of(session.entries.iter());
     let mut doc = json!({
@@ -146,6 +149,119 @@ pub fn to_document(session: &Session) -> Value {
         );
     }
     doc
+}
+
+/// The document of a session written **one message at a time**, to any `io::Write`: the bytes
+/// `serde_json::to_writer(out, &to_document(&session))` writes (compact; no caller needs another
+/// form: the CLI pretty-prints a document it has whole), without holding the session. One entry is
+/// one message, so the writer holds none: each message is built, written and dropped.
+///
+/// A document states its `meta` first, so it is given up front. [`Reader::read_streamed_with_meta`]
+/// hands it over before the first entry; [`DocumentWriter::finish`] takes the final one and refuses
+/// to close a document whose opening `meta` was not it.
+///
+/// ```ignore
+/// let mut writer = None;
+/// let meta = reader.read_streamed_with_meta(id, &roots,
+///     &mut |meta| { writer = Some(DocumentWriter::new(File::create(path)?, meta)?); Ok(()) },
+///     &mut |entry| writer.as_mut().unwrap().entry(&entry))?;
+/// writer.unwrap().finish(&meta)?;
+/// ```
+///
+/// A caller that changes each message before it is written (removing reasoning, redacting) uses
+/// [`DocumentWriter::entry_with`].
+///
+/// [`Reader::read_streamed_with_meta`]: crate::reader::Reader::read_streamed_with_meta
+pub struct DocumentWriter<W: std::io::Write> {
+    out: W,
+    /// The `meta` the document opened with, as written.
+    meta: Value,
+    /// Messages written.
+    messages: usize,
+    /// Conversation entries seen: what a compaction states as its `entry`.
+    conversation: usize,
+}
+
+impl<W: std::io::Write> DocumentWriter<W> {
+    /// Start a document for a session whose meta is `meta`.
+    pub fn new(mut out: W, meta: &Meta) -> Result<Self> {
+        let meta = serde_json::to_value(meta).unwrap_or(Value::Null);
+        out.write_all(b"{\"meta\":")?;
+        serde_json::to_writer(&mut out, &meta)?;
+        out.write_all(b",\"library\":")?;
+        serde_json::to_writer(
+            &mut out,
+            &json!({"name": LIBRARY, "version": env!("CARGO_PKG_VERSION")}),
+        )?;
+        out.write_all(b",\"messages\":[")?;
+        Ok(DocumentWriter {
+            out,
+            meta,
+            messages: 0,
+            conversation: 0,
+        })
+    }
+
+    /// The message of the next entry, as [`to_document`] makes it. A Meta entry makes none.
+    pub fn entry(&mut self, entry: &Entry) -> Result<()> {
+        self.entry_with(entry, &mut |_| Ok(()))
+    }
+
+    /// [`DocumentWriter::entry`], handing the message to `change` before it is written.
+    pub fn entry_with(
+        &mut self,
+        entry: &Entry,
+        change: &mut dyn FnMut(&mut Value) -> Result<()>,
+    ) -> Result<()> {
+        let Some(mut message) = message_of(entry, self.conversation) else {
+            return Ok(());
+        };
+        self.conversation += 1;
+        change(&mut message)?;
+        self.message(&message)
+    }
+
+    /// Write one message as it is: the lower level of [`DocumentWriter::entry_with`], for a caller
+    /// that builds its messages itself.
+    pub fn message(&mut self, message: &Value) -> Result<()> {
+        if self.messages > 0 {
+            self.out.write_all(b",")?;
+        }
+        serde_json::to_writer(&mut self.out, message)?;
+        self.messages += 1;
+        Ok(())
+    }
+
+    /// Close the document. `meta` is the session's final one: it must be the one the document
+    /// opened with, or nothing is closed and the error says so.
+    pub fn finish(self, meta: &Meta) -> Result<W> {
+        self.finish_with_branches(meta, &[])
+    }
+
+    /// [`DocumentWriter::finish`] for a session that carries branches (`read_all_branches`): each
+    /// is written whole, as [`to_document`] writes it. A branch is held by its caller already.
+    pub fn finish_with_branches(mut self, meta: &Meta, branches: &[Branch]) -> Result<W> {
+        let last = serde_json::to_value(meta).unwrap_or(Value::Null);
+        anyhow::ensure!(
+            last == self.meta,
+            "the session's meta changed after the document opened with it: the document is not \
+             closed"
+        );
+        self.out.write_all(b"]")?;
+        if !branches.is_empty() {
+            let branches: Vec<Value> = branches
+                .iter()
+                .map(|branch| {
+                    json!({"from": branch.from, "messages": messages_of(branch.entries.iter())})
+                })
+                .collect();
+            self.out.write_all(b",\"branches\":")?;
+            serde_json::to_writer(&mut self.out, &branches)?;
+        }
+        self.out.write_all(b"}")?;
+        self.out.flush()?;
+        Ok(self.out)
+    }
 }
 
 /// Rebuild a session from its document form.

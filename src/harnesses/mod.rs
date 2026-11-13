@@ -64,6 +64,7 @@ pub trait Harness: Send + Sync {
 
     /// What a chat hook prints for this harness: `delivery` in the harness's own hook output
     /// format for `event` (`None`: this harness has no chat adapter).
+    #[cfg(feature = "chat")]
     fn chat_hook_output(
         &self,
         _event: crate::chat::adapter::Event,
@@ -74,6 +75,7 @@ pub trait Harness: Send + Sync {
 
     /// The command that starts this harness as a member of a chat room, after writing the
     /// launch files `kit` names (`Ok(None)`: this harness has no chat adapter).
+    #[cfg(feature = "chat")]
     fn chat_launch(
         &self,
         _kit: &crate::chat::adapter::Kit,
@@ -84,6 +86,7 @@ pub trait Harness: Send + Sync {
     /// Record, in the harness's own trust store, that the chat hooks `kit` names may run, for a
     /// harness that runs a hook only once it is trusted. `dry_run` reports without writing.
     /// `Ok(None)`: this harness asks for no trust.
+    #[cfg(feature = "chat")]
     fn chat_trust(
         &self,
         _kit: &crate::chat::adapter::Kit,
@@ -94,6 +97,7 @@ pub trait Harness: Send + Sync {
 
     /// Where this harness keeps its user-scope MCP servers, and the entry that names the
     /// local chat service there (`None`: mukade writes no such configuration for it).
+    #[cfg(feature = "chat")]
     fn chat_mcp_target(
         &self,
         _vars: &crate::catalog::Vars,
@@ -500,6 +504,38 @@ impl<R: Reader + ?Sized> Reader for &R {
 
     fn reads_all_branches(&self) -> bool {
         (**self).reads_all_branches()
+    }
+
+    fn overview(&self, id: &str, roots: &StoreRoots) -> anyhow::Result<SessionInfo> {
+        (**self).overview(id, roots)
+    }
+
+    fn read_clipped(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        max_string_bytes: usize,
+    ) -> anyhow::Result<crate::reader::Clipped> {
+        (**self).read_clipped(id, roots, max_string_bytes)
+    }
+
+    fn read_streamed(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        on_entry: &mut dyn FnMut(crate::model::Entry) -> anyhow::Result<()>,
+    ) -> anyhow::Result<crate::model::Meta> {
+        (**self).read_streamed(id, roots, on_entry)
+    }
+
+    fn read_streamed_with_meta(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        on_meta: &mut dyn FnMut(&crate::model::Meta) -> anyhow::Result<()>,
+        on_entry: &mut dyn FnMut(crate::model::Entry) -> anyhow::Result<()>,
+    ) -> anyhow::Result<crate::model::Meta> {
+        (**self).read_streamed_with_meta(id, roots, on_meta, on_entry)
     }
 }
 
