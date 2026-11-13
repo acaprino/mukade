@@ -1,3 +1,5 @@
 #sessions .row { min-height: 30px; }
 #sessions .row.child .grow { color: var(--text-2); }
 #sessions .row[aria-selected='true'].child .grow { color: var(--text); }
+#sessions .row:not(.child) .grow { font: 500 13px var(--display); color: var(--text); }
+#sessions .row.untitled .grow { font: 12px var(--mono); color: var(--muted); }

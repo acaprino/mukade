@@ -16,6 +16,7 @@ import { folderKey, renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
 import { toTranscript } from './transcript.ts';
 import { ancestors, folders } from './tree.ts';
+import { initializeWindow, tintWindow } from './window.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 const columns = { installations: $('installations'), sessions: $('sessions'), detail: $('detail') };
@@ -375,6 +376,7 @@ function applyTheme(theme: (typeof THEMES)[number]): void {
   $('theme-name').textContent = theme[0].toUpperCase() + theme.slice(1);
   $('theme').title = theme === 'auto' ? 'Theme: follows the system' : `Theme: ${theme}`;
   try { localStorage.setItem('mukade.theme', theme); } catch { /* private window: the theme is not kept */ }
+  tintWindow(theme);
 }
 
 // --- columns: widths kept, drawers when narrow --------------------------------------------------
@@ -574,6 +576,8 @@ function wire(): void {
   applyTheme(THEMES.includes(theme) ? theme : 'auto');
   restoreWidths();
   wire();
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => tintWindow((document.documentElement.dataset.theme ?? 'auto') as (typeof THEMES)[number]));
+  void initializeWindow((error) => setStatus(errorText(error), true));
   drawAll();
   try {
     const startup = await api.startup();

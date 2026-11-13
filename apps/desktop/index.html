@@ -23,19 +23,44 @@
   </svg>
   <main id="app">
     <header class="titlebar">
-      <svg class="brand-mark icon" aria-hidden="true"><use href="#i-mark"/></svg>
-      <span class="wordmark">Mukade</span><span class="version" id="version"></span>
-      <nav class="tabs" role="tablist" aria-label="Views">
+      <div class="titlebar-drag" data-tauri-drag-region>
+        <svg class="brand-mark icon" aria-hidden="true"><use href="#i-mark"/></svg>
+        <svg class="wordmark" viewBox="0 0 89 10" role="img" aria-label="Mukade">
+          <path d="M.8 10V1L7 7l6.2-6v9"/>
+          <path transform="translate(17)" d="M.8 0v8.2l1 1h8.4l1-1V0"/>
+          <path transform="translate(32)" d="M.8 0v10M11.2 0 .8 5l10.4 5"/>
+          <path transform="translate(47)" d="m.5 10 5.500-9.400 5.500 9.400M2.600 6.600h6.800"/>
+          <path transform="translate(62)" d="M.8.800h8.400l2 2v4.400l-2 2H.8z"/>
+          <path transform="translate(77)" d="M11.200.800H.8v8.400h10.400M.8 5h8.400"/>
+        </svg><span class="version" id="version"></span>
+        <span class="title-description">harness sessions</span>
+      </div>
+      <div class="window-controls" role="group" aria-label="Window controls">
+        <button id="window-minimize" type="button" aria-label="Minimize window" title="Minimize" disabled>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.500h10"/></svg>
+        </button>
+        <button id="window-maximize" type="button" aria-label="Maximize window" title="Maximize" disabled>
+          <svg class="maximize-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.500" y="3.500" width="9" height="9"/></svg>
+          <svg class="restore-icon" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M5.500 5.500v-3h8v8h-3"/><rect x="2.500" y="5.500" width="8" height="8"/></svg>
+        </button>
+        <button id="window-close" type="button" aria-label="Close window" title="Close" disabled>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+    </header>
+    <nav class="toolbar" aria-label="Views and commands">
+      <div class="tabs" role="tablist" aria-label="Views">
         <button type="button" role="tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions</button>
         <button type="button" role="tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>c</kbd></button>
-      </nav>
-      <span class="spring"></span>
+      </div>
+      <span class="toolbar-divider"></span>
       <input type="search" id="search" aria-label="Filter sessions" placeholder="Filter by title, id, folder   /" autocomplete="off" spellcheck="false">
+      <span class="spring"></span>
       <button type="button" id="scan" title="Look for portable or custom installations in a folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Scan folder <kbd>o</kbd></button>
       <button type="button" id="import" title="Write a dump document into an installation"><svg class="icon" aria-hidden="true"><use href="#i-import"/></svg>Import <kbd>i</kbd></button>
       <button type="button" id="reload" title="Read every store again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Reload <kbd>r</kbd></button>
       <button type="button" id="theme" title="Theme: follows the system" aria-label="Theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-name">Auto</span></button>
-    </header>
+    </nav>
     <section id="view-sessions" class="view" aria-label="Sessions" data-focus="installations">
       <aside id="installations" class="column" aria-label="Installations and folders"></aside>
       <div class="resizer" id="resize-installations" role="separator" aria-orientation="vertical" aria-label="Resize the installations column" title="Drag to resize · double-click to reset"></div>

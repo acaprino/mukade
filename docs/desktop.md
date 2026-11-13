@@ -61,20 +61,29 @@ The window refuses to close while a hop or import runs, and asks first.
 
 ## Look and desktop behaviour
 
-The skin is Mukade's palette on Shinatama's structure, including its glass: the bars and the
-columns are translucent over a still ambient field, dialogs and their scrim blur what is under
-them, and a dialog opens by drawing its top edge. As in Shinatama, this is CSS. Shinatama's
-acrylic window effect sits under an opaque stage, so it is almost never seen; Mukade keeps the
-operating system's window frame instead (snap layouts, the system menu, double-click to
-maximize), following `.claude/skills/tauri-native-desktop`.
+The window follows Shinatama's: only the colours are Mukade's own (the black and violet armour,
+the red glow as the one accent).
 
-From that skill's audit:
+| part | how |
+|---|---|
+| Frame | no system frame: a 34 px title bar (mark, drawn wordmark, version, description, minimize, maximize, close) that drags the window and maximizes on double-click, then a 44 px toolbar with the views, the filter and the commands (`src/window.ts`) |
+| Glass | the window is transparent over the system's acrylic, tinted for the theme in use; bars, sidebar and panes are the skin's chrome at rising density; dialogs and their scrim blur what is under them, and a dialog opens by drawing its top edge |
+| Layout | the installations are a sidebar flush with the frame; the sessions and the session are panes beside it |
+| Text | Segoe for titles and text; monospace only for ids, counts, times, paths in code, commands and markers |
+| Selection | the selected row is outlined in the accent on a raised surface (in the line colour when its column is not the one in use) |
+
+Without the system frame the window has no snap-layouts flyout on its maximize button and no
+system menu on its icon; win+arrows, edge snapping, resizing by the borders and Alt+F4 work. In
+the browser (`npm run dev`, the smoke test) there is no acrylic and no window buttons: the page
+keeps an opaque stage.
+
+From the audit of `.claude/skills/tauri-native-desktop`:
 
 | surface | state | how |
 |---|---|---|
 | Open, save, folder | OS dialogs | `tauri-plugin-dialog`, from the backend |
 | Hop, import, receipt, export, keys, close confirmation | surfaces inside the main window | they belong to it; long content scrolls and the actions stay in reach at the minimum window size |
-| Window close | refused while a hop or import runs, with a confirmation | `CloseRequested` in `main.rs`; covers the X button and Alt+F4 |
+| Window close | refused while a hop or import runs, with a confirmation | `CloseRequested` in `main.rs`; covers the title bar's close button and Alt+F4 |
 | F5, ctrl+R | read the stores again (as `r`) | a page reload would drop the window's state mid-hop |
 | ctrl+P, ctrl+S, ctrl+O, ctrl+U, ctrl+J, and devtools in a release build | do nothing | page commands a desktop window does not have; zoom (ctrl +/−) stays |
 | Context menu | the WebView's only where text is edited or selected | the page menu (Back, Reload, Print) has no meaning here |

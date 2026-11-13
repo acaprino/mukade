@@ -18,7 +18,10 @@
         "height": 860,
         "minWidth": 900,
         "minHeight": 560,
-        "backgroundColor": "#060507"
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "windowEffects": { "effects": ["acrylic"], "color": [10, 8, 16, 84] }
       }
     ],
     "security": {

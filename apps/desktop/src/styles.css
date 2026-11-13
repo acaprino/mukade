@@ -43,6 +43,7 @@
   --fast: 120ms;
   --base: 180ms;
   --slow: 320ms;
+  --titlebar-height: 34px;
   --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
   --display: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
   font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
@@ -108,19 +109,40 @@ input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }
 input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
 input::placeholder { color: var(--muted); }
 
-/* Shell */
-#app { display: grid; grid-template-rows: 44px minmax(0, 1fr) 28px; }
-.titlebar { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--chrome); }
+/* Shell: Shinatama's frame. A 34 px title bar the window is dragged by, a 44 px toolbar, the
+   views, the status bar. */
+#app { display: grid; grid-template-rows: var(--titlebar-height) 44px minmax(0, 1fr) 28px; }
+.titlebar { position: relative; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); font: 12px var(--mono); }
+.titlebar-drag { display: flex; align-items: center; flex: 1; gap: 12px; height: 100%; min-width: 0; margin-left: -14px; padding-left: 14px; user-select: none; }
+.titlebar-drag > * { pointer-events: none; }
 .brand-mark { width: 18px; height: 18px; color: var(--accent); }
-.wordmark { font: 600 14px var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--ice); }
-.version { padding-left: 10px; margin-right: 8px; border-left: 1px solid var(--line); color: var(--muted); font: 12px var(--mono); }
-.views { display: flex; gap: 0; }
-.views button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
-.views button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
+.wordmark { height: 12px; width: 107px; flex: none; color: var(--ice); fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: miter; stroke-linecap: butt; }
+.version { padding-left: 12px; border-left: 1px solid var(--line); color: var(--muted); }
+.version:empty { display: none; }
+.title-description { position: absolute; left: 50%; transform: translateX(-50%); color: var(--text-2); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.window-controls { display: flex; align-self: stretch; margin-right: -14px; }
+.window-controls button { width: 44px; height: 100%; min-height: 0; padding: 0; border: 0; color: var(--muted); background: transparent; }
+.window-controls button:hover { color: var(--ice); background: var(--surface-2); }
+.window-controls button:active { color: var(--text); background: var(--line); }
+.window-controls button:focus-visible { outline-offset: -3px; }
+.window-controls #window-close:hover { color: var(--accent-ink); background: var(--accent); }
+.window-controls svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: square; }
+/* Outside the desktop window (the browser) there is no window to control. */
+.window-controls button:disabled { display: none; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
+.toolbar-divider { width: 1px; height: 22px; margin: 0 4px; background: var(--line); flex: none; }
+.toolbar .tabs { align-self: stretch; align-items: flex-end; }
+.toolbar .tabs button { min-height: 36px; }
 .view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 0; position: relative; }
 #view-chat { gap: 8px; }
+/* The installations are a sidebar flush with the frame (Shinatama's threads); the sessions and
+   the session are panes beside it. */
+#view-sessions { padding: 0; }
+#view-sessions > #installations { border-width: 0 1px 0 0; background: var(--chrome); }
+#view-sessions > #sessions, #view-sessions > #detail { margin: 8px 0; }
+#view-sessions > #detail { margin-right: 8px; }
 .column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-top-width: 2px; background: var(--pane); overflow: hidden; }
-.column.focused { border-top-color: var(--accent); }
+.column.focused { border-color: var(--line-strong); border-top-color: var(--accent); }
 #installations { flex: 0 0 var(--w-installations, 248px); }
 #sessions { flex: 0 0 var(--w-sessions, clamp(340px, 34%, 520px)); }
 #detail { flex: 1 1 0; }
@@ -130,7 +152,7 @@ input::placeholder { color: var(--muted); }
 .resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background-color 120ms; }
 .resizer:hover::after, .resizer:active::after { background: var(--line-strong); }
 .back-column { display: none; }
-#search { flex: 0 1 300px; min-width: 140px; }
+#search { flex: 0 1 320px; min-width: 140px; }
 #search:disabled { opacity: .5; }
 .hints { display: flex; gap: 12px; overflow: hidden; }
 .hints b { font-weight: 400; color: var(--ice); }
@@ -161,16 +183,18 @@ button.ghost:hover { color: var(--text); }
   #view-sessions[data-focus='sessions'] #sessions,
   #view-sessions[data-focus='detail'] #detail { display: flex !important; flex: 1 1 auto; position: static; width: auto; transform: none; box-shadow: none; }
   #view-sessions:not([data-focus='installations']) .back-column { display: inline-flex; position: absolute; left: 12px; bottom: 12px; z-index: 6; background: var(--chrome); }
-  .titlebar { flex-wrap: wrap; height: auto; padding: 6px 10px; }
-  #app { grid-template-rows: auto minmax(0, 1fr) 28px; }
+  .toolbar { flex-wrap: wrap; height: auto; padding: 6px 10px; }
+  #app { grid-template-rows: var(--titlebar-height) auto minmax(0, 1fr) 28px; }
+  .title-description { display: none; }
+  #view-sessions > .column { margin: 8px; border-width: 2px 1px 1px; }
   .hints { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { #view-sessions #detail { transition: none; } }
-.column-head { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
-.column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .09em; text-transform: uppercase; color: var(--text-2); }
+.column-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 12px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
+.column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--text); }
 .column-head small { font: 12px var(--mono); color: var(--muted); }
 .column-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
-.statusbar { display: flex; align-items: center; gap: 12px; padding: 0 10px; overflow: hidden; border-top: 1px solid var(--line); background: var(--chrome); font: 12px var(--mono); color: var(--text-2); white-space: nowrap; }
+.statusbar { display: flex; align-items: center; gap: 15px; padding: 0 10px; overflow: hidden; border-top: 1px solid var(--line); background: var(--chrome); font: 12px var(--mono); color: var(--text-2); white-space: nowrap; }
 .statusbar i { display: inline-block; width: 6px; height: 6px; background: var(--live); }
 .statusbar.busy i { background: var(--accent); animation: pulse 900ms ease-in-out infinite alternate; }
 .statusbar.error i { background: var(--error); }
@@ -190,12 +214,13 @@ button.ghost:hover { color: var(--text); }
    floats over content blurs what is under it. Corners stay square and nothing glows: depth comes
    from blur, a dark drop shadow and one drawn top edge. */
 body { background: radial-gradient(1100px 640px at 6% -14%, var(--ambient-a), transparent 64%), radial-gradient(900px 620px at 106% 112%, var(--ambient-b), transparent 62%), var(--stage); }
-.titlebar, .statusbar { background: var(--glass-bar); backdrop-filter: var(--glass-blur); }
+.titlebar, .toolbar, .statusbar { background: var(--glass-bar); backdrop-filter: var(--glass-blur); }
+#view-sessions > #installations { background: var(--glass-bar); }
 .view { background: transparent; }
 .column { background: var(--glass-pane); transition: border-color var(--base) var(--ease-out); }
 .column-head { background: color-mix(in srgb, var(--chrome-2) 82%, transparent); }
 button { transition: background-color var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), color var(--fast) var(--ease-out), scale var(--fast) var(--ease-out); }
-.titlebar button:active:not(:disabled), .dialog button:active:not(:disabled), .actions button:active:not(:disabled) { scale: .96; }
+.toolbar button:active:not(:disabled), .dialog button:active:not(:disabled), .actions button:active:not(:disabled) { scale: .96; }
 /* The one cut corner pair marks the primary action. The focus ring moves inside the cut. */
 button.primary { clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
 button.primary:focus-visible { outline-color: var(--accent-ink); outline-offset: -4px; }
@@ -207,9 +232,29 @@ button.primary:focus-visible { outline-color: var(--accent-ink); outline-offset:
    the reader, the detail, fields and code stays selectable. */
 html, body { overscroll-behavior: none; }
 .column-body, .pane-body, .reader-scroll, .dialog-body, .messages-body { overscroll-behavior: contain; }
-.titlebar, .statusbar, .column-head, .tabs, .dialog-head, .dialog-foot, button, .row, .label { -webkit-user-select: none; user-select: none; }
+.titlebar, .toolbar, .statusbar, .column-head, .tabs, .dialog-head, .dialog-foot, button, .row, .label { -webkit-user-select: none; user-select: none; }
 button { cursor: default; }
 .entry .what, dl.kv dd, .code, .msg .body, .note, input, textarea { -webkit-user-select: text; user-select: text; }
+
+/* Native glass (the desktop window only, set in window.ts): the window is transparent over the
+   system's acrylic, as Shinatama's. One material in the skin's own colours: the chrome with a
+   measure of the line colour, denser from the panes to the bars to what floats. */
+:root.native-glass, .native-glass body, .native-glass #app, .native-glass .view { background: transparent; }
+.native-glass {
+  --tint: color-mix(in srgb, var(--chrome-2) 84%, var(--line-strong));
+  --glass: color-mix(in srgb, var(--tint) 66%, transparent);
+  --glass-strong: color-mix(in srgb, var(--tint) 84%, transparent);
+  --glass-bar: color-mix(in srgb, color-mix(in srgb, var(--chrome) 90%, var(--line-strong)) 66%, transparent);
+  --glass-pane: color-mix(in srgb, color-mix(in srgb, var(--pane) 92%, var(--line-strong)) 78%, transparent);
+}
+/* Seams stay, in the line colour, thinned so they read as light on glass. On body because the
+   theme writes its tokens on the root element. */
+.native-glass body { --line: color-mix(in srgb, var(--line-strong) 40%, transparent); }
+.native-glass .titlebar { background: color-mix(in srgb, color-mix(in srgb, var(--stage) 92%, var(--line-strong)) 76%, transparent); }
+.native-glass .titlebar, .native-glass .toolbar, .native-glass .statusbar { backdrop-filter: none; }
+.native-glass .column-head { background: transparent; }
+.native-glass .scrim { background: color-mix(in srgb, var(--stage) 36%, transparent); }
+.native-glass #app { outline: 1px solid color-mix(in srgb, var(--line-strong) 60%, transparent); outline-offset: -1px; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
