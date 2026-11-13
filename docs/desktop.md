@@ -61,8 +61,8 @@ The window refuses to close while a hop or import runs, and asks first.
 
 ## Look and desktop behaviour
 
-The window follows Shinatama's: only the colours are Mukade's own (the black and violet armour,
-the red glow as the one accent).
+The window follows Shinatama's: only the colours are Mukade's own (black, graphite grey, and
+the violet of the armour as the one accent).
 
 | part | how |
 |---|---|

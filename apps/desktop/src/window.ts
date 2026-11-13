@@ -6,7 +6,7 @@ import { inTauri } from './api.ts';
 
 type Tint = [number, number, number, number];
 // The stage of each theme, thin enough for the acrylic to show through the chrome.
-const TINT: Record<'dark' | 'light', Tint> = { dark: [10, 8, 16, 84], light: [233, 232, 238, 150] };
+const TINT: Record<'dark' | 'light', Tint> = { dark: [8, 8, 10, 84], light: [233, 233, 236, 150] };
 
 export async function initializeWindow(reportError: (error: unknown) => void): Promise<void> {
   if (!inTauri) return;

@@ -21,7 +21,7 @@
         "decorations": false,
         "transparent": true,
         "backgroundColor": "#00000000",
-        "windowEffects": { "effects": ["acrylic"], "color": [10, 8, 16, 84] }
+        "windowEffects": { "effects": ["acrylic"], "color": [8, 8, 10, 84] }
       }
     ],
     "security": {

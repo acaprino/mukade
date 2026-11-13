@@ -1,35 +1,35 @@
-/* Mukade skin: Shinatama's structure (spacing, type, square corners), Mukade's own colours, taken
-   from the character: black and violet-graphite armour, the hot red glow as the one accent, the
-   electric violet-blue of the lightning for lines. Warning, error and danger are states, not
-   accents. No glow, no rounded corners. Every chrome colour lives here; dark is the default, light follows the system (or the
-   Theme button: Auto, Light, Dark). */
+/* Mukade skin: Shinatama's structure (frame, spacing, type, square corners), Mukade's own colours,
+   taken from the character: black, graphite grey, and the violet of the armour as the one accent
+   and the tint of the lines. Warning, error and danger are states, not accents. No glow, no
+   rounded corners. Every chrome colour lives here; dark is the default, light follows the system
+   (or the Theme button: Auto, Light, Dark). */
 :root {
   color-scheme: dark;
-  --stage: #060507;
-  --chrome: #111016;
-  --chrome-2: #16151c;
-  --surface: #1c1a23;
-  --surface-2: #26232f;
-  --pane: #0b0a0e;
-  --line: #2c2a44;
-  --line-strong: #6c6cf0;
-  --ice: #b3b5ff;
-  --text: #ecebf2;
-  --text-2: #c2bfcf;
-  --muted: #9a96aa;
-  --accent: #ff4a2e;
-  --accent-soft: #ff7a5c;
-  --accent-ink: #1a0503;
+  --stage: #050506;
+  --chrome: #0e0e11;
+  --chrome-2: #141418;
+  --surface: #1b1b20;
+  --surface-2: #25252c;
+  --pane: #09090b;
+  --line: #2e2d36;
+  --line-strong: #756e8c;
+  --ice: #cbc5dc;
+  --text: #ececf0;
+  --text-2: #c0bfc8;
+  --muted: #95939f;
+  --accent: #9d6bff;
+  --accent-soft: #b794ff;
+  --accent-ink: #0d0618;
   --live: #6fd6b0;
   --warning: #e6c36a;
   --error: #ff8a7a;
   --danger: #a0294e;
   --danger-line: #e35f87;
   --on-danger: #ffffff;
-  --selection: #2a2a66;
-  --scrim: #040305cc;
+  --selection: #33264f;
+  --scrim: #030304cc;
   --shadow: #000000aa;
-  --spawn: #9fa8ff;
+  --spawn: #b9a6ff;
   --fork: #e6c36a;
   /* Glass, as Shinatama's: every value derives from the skin tokens, so each theme gets its own. */
   --glass: color-mix(in srgb, var(--chrome-2) 74%, transparent);
@@ -52,22 +52,22 @@
 }
 :root[data-theme='light'] { color-scheme: light; }
 :root[data-theme='dark'] { color-scheme: dark; }
-/* Light: paper-white panes on a cool grey stage, the same violet-blue lines, a deeper red. */
+/* Light: paper-white panes on a grey stage, the same grey-violet lines, a deeper violet. */
 :root[data-theme='light'] {
-  --stage: #e9e8ee; --chrome: #f6f5f9; --chrome-2: #eeedf3; --surface: #ffffff; --surface-2: #e4e2ec;
-  --pane: #fcfbfe; --line: #cfccda; --line-strong: #4a4ad0; --ice: #3a3ab8; --text: #100f15;
-  --text-2: #3a3747; --muted: #6a6679; --accent: #c2260e; --accent-soft: #9e1c08; --accent-ink: #ffffff;
+  --stage: #e9e9ec; --chrome: #f5f5f7; --chrome-2: #ededf0; --surface: #ffffff; --surface-2: #e3e2e8;
+  --pane: #fbfbfc; --line: #cfced6; --line-strong: #6a6480; --ice: #4b3f78; --text: #101012;
+  --text-2: #3a3942; --muted: #686670; --accent: #6a35d9; --accent-soft: #5426b8; --accent-ink: #ffffff;
   --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
-  --selection: #dedcf7; --scrim: #100f1566; --shadow: #100f1544; --spawn: #3a3ab8; --fork: #7a5600;
+  --selection: #e4dcf7; --scrim: #10101266; --shadow: #10101244; --spawn: #5a3fc0; --fork: #7a5600;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
     color-scheme: light;
-    --stage: #e9e8ee; --chrome: #f6f5f9; --chrome-2: #eeedf3; --surface: #ffffff; --surface-2: #e4e2ec;
-    --pane: #fcfbfe; --line: #cfccda; --line-strong: #4a4ad0; --ice: #3a3ab8; --text: #100f15;
-    --text-2: #3a3747; --muted: #6a6679; --accent: #c2260e; --accent-soft: #9e1c08; --accent-ink: #ffffff;
+    --stage: #e9e9ec; --chrome: #f5f5f7; --chrome-2: #ededf0; --surface: #ffffff; --surface-2: #e3e2e8;
+    --pane: #fbfbfc; --line: #cfced6; --line-strong: #6a6480; --ice: #4b3f78; --text: #101012;
+    --text-2: #3a3942; --muted: #686670; --accent: #6a35d9; --accent-soft: #5426b8; --accent-ink: #ffffff;
     --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
-    --selection: #dedcf7; --scrim: #100f1566; --shadow: #100f1544; --spawn: #3a3ab8; --fork: #7a5600;
+    --selection: #e4dcf7; --scrim: #10101266; --shadow: #10101244; --spawn: #5a3fc0; --fork: #7a5600;
   }
 }
 
