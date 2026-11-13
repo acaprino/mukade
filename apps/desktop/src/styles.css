@@ -1,17 +1,17 @@
 /* Mukade skin: Shinatama's structure (frame, spacing, type, square corners), Mukade's own colours,
    taken from the character: black, graphite grey, and the violet of the armour as the one accent
-   and the tint of the lines. Warning, error and danger are states, not accents. No glow, no
-   rounded corners. Every chrome colour lives here; dark is the default, light follows the system
-   (or the Theme button: Auto, Light, Dark). */
+   and the tint of the lines. Warning, error and danger are states, not accents. The black is
+   lacquer: every bar, head and button carries one sheen and one lit top edge. No rounded corners.
+   Every chrome colour lives here; dark is the skin, light is the Theme button's other state. */
 :root {
   color-scheme: dark;
-  --stage: #050506;
-  --chrome: #0e0e11;
-  --chrome-2: #141418;
-  --surface: #1b1b20;
-  --surface-2: #25252c;
-  --pane: #09090b;
-  --line: #2e2d36;
+  --stage: #000000;
+  --chrome: #060607;
+  --chrome-2: #0a0a0c;
+  --surface: #131317;
+  --surface-2: #1c1c22;
+  --pane: #030304;
+  --line: #26252d;
   --line-strong: #756e8c;
   --ice: #cbc5dc;
   --text: #ececf0;
@@ -31,6 +31,11 @@
   --shadow: #000000aa;
   --spawn: #b9a6ff;
   --fork: #e6c36a;
+  /* Lacquer: a bright upper half that breaks at the middle, and the edge the light catches. */
+  --sheen: linear-gradient(180deg, #ffffff1c 0%, #ffffff0a 49%, #ffffff00 50%, #00000040 100%);
+  --sheen-soft: linear-gradient(180deg, #ffffff12 0%, #ffffff05 49%, #ffffff00 50%, #00000030 100%);
+  --edge: inset 0 1px 0 #ffffff26, inset 0 -1px 0 #000000a0;
+  --specular: linear-gradient(158deg, #ffffff12 0%, #ffffff05 14%, #ffffff00 30%);
   /* Glass, as Shinatama's: every value derives from the skin tokens, so each theme gets its own. */
   --glass: color-mix(in srgb, var(--chrome-2) 74%, transparent);
   --glass-strong: color-mix(in srgb, var(--chrome-2) 90%, transparent);
@@ -59,16 +64,10 @@
   --text-2: #3a3942; --muted: #686670; --accent: #6a35d9; --accent-soft: #5426b8; --accent-ink: #ffffff;
   --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
   --selection: #e4dcf7; --scrim: #10101266; --shadow: #10101244; --spawn: #5a3fc0; --fork: #7a5600;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    color-scheme: light;
-    --stage: #e9e9ec; --chrome: #f5f5f7; --chrome-2: #ededf0; --surface: #ffffff; --surface-2: #e3e2e8;
-    --pane: #fbfbfc; --line: #cfced6; --line-strong: #6a6480; --ice: #4b3f78; --text: #101012;
-    --text-2: #3a3942; --muted: #686670; --accent: #6a35d9; --accent-soft: #5426b8; --accent-ink: #ffffff;
-    --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
-    --selection: #e4dcf7; --scrim: #10101266; --shadow: #10101244; --spawn: #5a3fc0; --fork: #7a5600;
-  }
+  --sheen: linear-gradient(180deg, #ffffffcc 0%, #ffffff40 49%, #ffffff00 50%, #0000000d 100%);
+  --sheen-soft: linear-gradient(180deg, #ffffff99 0%, #ffffff26 49%, #ffffff00 50%, #0000000a 100%);
+  --edge: inset 0 1px 0 #ffffff, inset 0 -1px 0 #00000014;
+  --specular: linear-gradient(158deg, #ffffffb0 0%, #ffffff40 14%, #ffffff00 30%);
 }
 
 * { box-sizing: border-box; }
@@ -239,22 +238,35 @@ button { cursor: default; }
 /* Native glass (the desktop window only, set in window.ts): the window is transparent over the
    system's acrylic, as Shinatama's. One material in the skin's own colours: the chrome with a
    measure of the line colour, denser from the panes to the bars to what floats. */
-:root.native-glass, .native-glass body, .native-glass #app, .native-glass .view { background: transparent; }
+:root.native-glass, .native-glass body, .native-glass .view { background: transparent; }
+/* The stage itself holds the black: the system's tint alone leaves a light desktop showing. */
+.native-glass #app { background: color-mix(in srgb, var(--stage) 88%, transparent); }
 .native-glass {
-  --tint: color-mix(in srgb, var(--chrome-2) 84%, var(--line-strong));
-  --glass: color-mix(in srgb, var(--tint) 66%, transparent);
-  --glass-strong: color-mix(in srgb, var(--tint) 84%, transparent);
-  --glass-bar: color-mix(in srgb, color-mix(in srgb, var(--chrome) 90%, var(--line-strong)) 66%, transparent);
-  --glass-pane: color-mix(in srgb, color-mix(in srgb, var(--pane) 92%, var(--line-strong)) 78%, transparent);
+  --tint: color-mix(in srgb, var(--chrome-2) 95%, var(--line-strong));
+  --glass: color-mix(in srgb, var(--tint) 80%, transparent);
+  --glass-strong: color-mix(in srgb, var(--tint) 92%, transparent);
+  --glass-bar: color-mix(in srgb, color-mix(in srgb, var(--chrome) 97%, var(--line-strong)) 72%, transparent);
+  --glass-pane: color-mix(in srgb, var(--pane) 86%, transparent);
 }
 /* Seams stay, in the line colour, thinned so they read as light on glass. On body because the
    theme writes its tokens on the root element. */
 .native-glass body { --line: color-mix(in srgb, var(--line-strong) 40%, transparent); }
-.native-glass .titlebar { background: color-mix(in srgb, color-mix(in srgb, var(--stage) 92%, var(--line-strong)) 76%, transparent); }
+.native-glass .titlebar { background: color-mix(in srgb, var(--stage) 80%, transparent); }
 .native-glass .titlebar, .native-glass .toolbar, .native-glass .statusbar { backdrop-filter: none; }
 .native-glass .column-head { background: transparent; }
 .native-glass .scrim { background: color-mix(in srgb, var(--stage) 36%, transparent); }
 .native-glass #app { outline: 1px solid color-mix(in srgb, var(--line-strong) 60%, transparent); outline-offset: -1px; }
+
+/* Lacquer. `:root` lifts these over the backgrounds above, which only set the colour under it. */
+:root .titlebar, :root .toolbar, :root .statusbar, :root .column-head, :root .dialog-head, :root .dialog-foot { background-image: var(--sheen-soft); box-shadow: var(--edge); }
+:root .titlebar { background-image: var(--sheen); }
+:root .column, :root #view-sessions > #installations { background-image: var(--specular); background-repeat: no-repeat; }
+:root button:not(.ghost), :root input, :root select { background-image: var(--sheen-soft); box-shadow: var(--edge); }
+:root .window-controls button, :root .tabs button { background-image: none; box-shadow: none; }
+:root .tabs button[aria-selected='true'] { background-image: var(--sheen); box-shadow: var(--edge); }
+:root button.primary, :root button.danger { background-image: var(--sheen); box-shadow: inset 0 1px 0 #ffffff59, inset 0 -1px 0 #00000059; }
+:root #installations .pane.focused .column-head { box-shadow: inset 0 2px 0 var(--accent), var(--edge); }
+.row[aria-selected='true'] { background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 30%, transparent) 0%, color-mix(in srgb, var(--accent) 10%, transparent) 49%, transparent 50%); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent-soft) 45%, transparent); }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }

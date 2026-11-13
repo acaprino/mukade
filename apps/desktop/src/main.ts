@@ -370,11 +370,11 @@ function switchView(view: 'sessions' | 'chat'): void {
   drawStatus();
 }
 
-const THEMES = ['auto', 'light', 'dark'] as const;
+const THEMES = ['dark', 'light'] as const;
 function applyTheme(theme: (typeof THEMES)[number]): void {
-  if (theme === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.theme = theme;
   $('theme-name').textContent = theme[0].toUpperCase() + theme.slice(1);
-  $('theme').title = theme === 'auto' ? 'Theme: follows the system' : `Theme: ${theme}`;
+  $('theme').title = `Theme: ${theme}`;
   try { localStorage.setItem('mukade.theme', theme); } catch { /* private window: the theme is not kept */ }
   tintWindow(theme);
 }
@@ -541,8 +541,7 @@ function wire(): void {
   $('import').addEventListener('click', () => importDocument());
   $('reload').addEventListener('click', () => void loadInventory());
   $('theme').addEventListener('click', () => {
-    const current = (document.documentElement.dataset.theme ?? 'auto') as (typeof THEMES)[number];
-    applyTheme(THEMES[(THEMES.indexOf(current) + 1) % THEMES.length]);
+    applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
   });
   const search = $('search') as HTMLInputElement;
   search.addEventListener('input', () => {
@@ -571,12 +570,12 @@ function wire(): void {
 }
 
 (async () => {
-  let theme: (typeof THEMES)[number] = 'auto';
-  try { theme = (localStorage.getItem('mukade.theme') as typeof theme) || 'auto'; } catch { /* default */ }
-  applyTheme(THEMES.includes(theme) ? theme : 'auto');
+  // Dark is the skin; light only when it was chosen here.
+  let theme: string | null = null;
+  try { theme = localStorage.getItem('mukade.theme'); } catch { /* default */ }
+  applyTheme(theme === 'light' ? 'light' : 'dark');
   restoreWidths();
   wire();
-  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => tintWindow((document.documentElement.dataset.theme ?? 'auto') as (typeof THEMES)[number]));
   void initializeWindow((error) => setStatus(errorText(error), true));
   drawAll();
   try {

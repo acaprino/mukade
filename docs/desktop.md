@@ -67,7 +67,9 @@ the violet of the armour as the one accent).
 | part | how |
 |---|---|
 | Frame | no system frame: a 34 px title bar (mark, drawn wordmark, version, description, minimize, maximize, close) that drags the window and maximizes on double-click, then a 44 px toolbar with the views, the filter and the commands (`src/window.ts`) |
-| Glass | the window is transparent over the system's acrylic, tinted for the theme in use; bars, sidebar and panes are the skin's chrome at rising density; dialogs and their scrim blur what is under them, and a dialog opens by drawing its top edge |
+| Glass | the window is transparent over the system's acrylic, but the stage holds the black itself, so a light desktop never shows between the panes; bars, sidebar and panes are the skin's chrome at rising density; dialogs and their scrim blur what is under them, and a dialog opens by drawing its top edge |
+| Lacquer | the black is glossy: bars, heads and buttons carry one sheen that breaks at the middle and a lit top edge; the selected row takes the same sheen in violet |
+| Theme | dark is the skin and the default; the Theme button switches to light and back, and the system's setting is not followed |
 | Layout | the installations are a sidebar flush with the frame; the sessions and the session are panes beside it |
 | Text | Segoe for titles and text; monospace only for ids, counts, times, paths in code, commands and markers |
 | Selection | the selected row is outlined in the accent on a raised surface (in the line colour when its column is not the one in use) |

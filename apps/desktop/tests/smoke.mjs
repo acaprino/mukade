@@ -22,6 +22,7 @@ const expect = async (page, selector, what) => {
 try {
   for (const scheme of ['dark', 'light']) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
+    await page.addInitScript((theme) => localStorage.setItem('mukade.theme', theme), scheme);
     page.on('pageerror', (error) => failures.push(`${scheme}: ${error}`));
     page.on('console', (message) => { if (message.type() === 'error') failures.push(`${scheme}: ${message.text()}`); });
     await page.goto(url);

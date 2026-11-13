@@ -5,8 +5,8 @@
 import { inTauri } from './api.ts';
 
 type Tint = [number, number, number, number];
-// The stage of each theme, thin enough for the acrylic to show through the chrome.
-const TINT: Record<'dark' | 'light', Tint> = { dark: [8, 8, 10, 84], light: [233, 233, 236, 150] };
+// The stage of each theme. Dark is dense: the acrylic only softens a black that stays black.
+const TINT: Record<'dark' | 'light', Tint> = { dark: [0, 0, 0, 205], light: [233, 233, 236, 150] };
 
 export async function initializeWindow(reportError: (error: unknown) => void): Promise<void> {
   if (!inTauri) return;
@@ -35,10 +35,9 @@ export async function initializeWindow(reportError: (error: unknown) => void): P
   for (const control of [minimize, maximize, close]) control.disabled = false;
 }
 
-/** The acrylic takes the tint of the theme in use; `auto` follows the system. */
-export function tintWindow(theme: 'auto' | 'light' | 'dark'): void {
+/** The acrylic takes the tint of the theme in use. */
+export function tintWindow(theme: 'light' | 'dark'): void {
   if (!inTauri) return;
-  const light = theme === 'light' || (theme === 'auto' && matchMedia('(prefers-color-scheme: light)').matches);
   void import('@tauri-apps/api/window').then(({ getCurrentWindow, Effect }) =>
-    getCurrentWindow().setEffects({ effects: [Effect.Acrylic], color: TINT[light ? 'light' : 'dark'] })).catch(() => { /* the glass stays as it opened */ });
+    getCurrentWindow().setEffects({ effects: [Effect.Acrylic], color: TINT[theme] })).catch(() => { /* the glass stays as it opened */ });
 }
