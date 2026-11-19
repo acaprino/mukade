@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-77a98a" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-77a98a" alt="Apache-2.0 license"></a>
   <a href="#rust-library"><img src="https://img.shields.io/badge/Rust-CLI%20%2B%20library-c17451" alt="Rust CLI and library"></a>
 </p>
 
@@ -178,4 +178,4 @@ cargo test --locked --workspace
 
 ## License
 
-[MIT](LICENSE). The [harness marks](docs/assets/branding/harnesses/README.md) belong to their respective owners.
+[Apache-2.0](LICENSE). The [harness marks](docs/assets/branding/harnesses/README.md) belong to their respective owners.
