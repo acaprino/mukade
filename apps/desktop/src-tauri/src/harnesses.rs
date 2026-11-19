@@ -50,7 +50,7 @@ pub fn inventory(standard: &StoreRoots) -> Vec<HarnessView> {
             let entry = catalog::entry(harness);
             let (binary, source) = exe::resolve_source(harness, None);
             let found = source != Source::Name;
-            let store = standard.root(harness).cloned();
+            let store = standard.root(harness).map(Path::to_path_buf);
             HarnessView {
                 id: harness.as_str(),
                 display: entry.display.clone(),
