@@ -1,0 +1,466 @@
+{
+  "db": "C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\xdg\\data\\opencode\\opencode.db",
+  "sessionID": "ses_e82023514ffe02y4T8OoUu99VZ",
+  "session_v2": [
+    {
+      "id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "project_id": "b5f33cdec69affa5b2b40745a328fd191e95816f",
+      "workspace_id": null,
+      "parent_id": null,
+      "fork_session_id": null,
+      "fork_boundary": null,
+      "slug": "playful-river",
+      "directory": "C:/Users/alfio/AppData/Local/shinatama-verify/H27/opencode/work",
+      "path": "",
+      "title": "H27-opencode-source",
+      "version": "2.1.4",
+      "share_url": null,
+      "summary_additions": null,
+      "summary_deletions": null,
+      "summary_files": null,
+      "summary_diffs": null,
+      "metadata": null,
+      "cost": 0,
+      "tokens_input": 500,
+      "tokens_output": 100,
+      "tokens_reasoning": 0,
+      "tokens_cache_read": 0,
+      "tokens_cache_write": 0,
+      "revert": null,
+      "permission": null,
+      "agent": null,
+      "model": {
+        "id": "h27-mock",
+        "providerID": "anthropic"
+      },
+      "time_created": 1793115147395,
+      "time_updated": 1793115157925,
+      "time_idle": 1793115156393,
+      "time_viewed": null,
+      "idle_outcome": "succeeded",
+      "time_compacting": null,
+      "time_archived": null,
+      "time_suspended": 1793115157829,
+      "resume_attempts": 0
+    }
+  ],
+  "session_message": [
+    {
+      "id": "msg_17dfdcc9f001ktHKPQM0kS62og",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "user",
+      "seq": 5,
+      "time_created": 1793115147595,
+      "time_updated": 1793115147597,
+      "data": {
+        "time": {
+          "created": 1793115147595
+        },
+        "text": "H27-TOOLS read C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\alpha.txt and C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\beta.txt",
+        "files": []
+      }
+    },
+    {
+      "id": "msg_17dfdcd57001up0fzxg1Aa4ESg",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "assistant",
+      "seq": 6,
+      "time_created": 1793115147659,
+      "time_updated": 1793115147775,
+      "data": {
+        "time": {
+          "created": 1793115147659,
+          "streamed": 1793115147756,
+          "completed": 1793115147774
+        },
+        "agent": "build",
+        "model": {
+          "id": "h27-mock",
+          "providerID": "anthropic",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "reasoning",
+            "text": "H27-REASONING: the user wants two files; read them in parallel.",
+            "native": {
+              "signature": "h27-mock-signature"
+            },
+            "time": {
+              "created": 1793115147707,
+              "completed": 1793115147715
+            }
+          },
+          {
+            "type": "text",
+            "text": "H27-PRE: reading the files."
+          },
+          {
+            "type": "tool",
+            "id": "toolu_h27call1x0",
+            "name": "read",
+            "executed": false,
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\alpha.txt"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Read file C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\alpha.txt, lines 1-1\n1: ALPHA-CONTENT-42"
+                }
+              ],
+              "metadata": {
+                "truncated": false
+              }
+            },
+            "time": {
+              "created": 1793115147729,
+              "ran": 1793115147737,
+              "completed": 1793115147771
+            }
+          },
+          {
+            "type": "tool",
+            "id": "toolu_h27call1x1",
+            "name": "read",
+            "executed": false,
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\beta.txt"
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Read file C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\beta.txt, lines 1-1\n1: BETA-CONTENT-17"
+                }
+              ],
+              "metadata": {
+                "truncated": false
+              }
+            },
+            "time": {
+              "created": 1793115147740,
+              "ran": 1793115147746,
+              "completed": 1793115147766
+            }
+          }
+        ],
+        "finish": "tool-calls",
+        "rawFinish": "tool_use",
+        "cost": 0,
+        "tokens": {
+          "input": 100,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdce0e001krSnTaQBcqxJsb",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "assistant",
+      "seq": 21,
+      "time_created": 1793115147807,
+      "time_updated": 1793115147832,
+      "data": {
+        "time": {
+          "created": 1793115147807,
+          "streamed": 1793115147827,
+          "completed": 1793115147830
+        },
+        "agent": "build",
+        "model": {
+          "id": "h27-mock",
+          "providerID": "anthropic",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "H27-FINAL: both files were read."
+          }
+        ],
+        "finish": "stop",
+        "rawFinish": "end_turn",
+        "cost": 0,
+        "tokens": {
+          "input": 100,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdce3b001hmlXzB6kZKa0tc",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "idle",
+      "seq": 26,
+      "time_created": 1793115147835,
+      "time_updated": 1793115147836,
+      "data": {
+        "time": {
+          "created": 1793115147835
+        },
+        "outcome": "succeeded"
+      }
+    },
+    {
+      "id": "msg_17dfdd540001RR87DEFv6Bqy9B",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "user",
+      "seq": 29,
+      "time_created": 1793115149893,
+      "time_updated": 1793115149894,
+      "data": {
+        "time": {
+          "created": 1793115149893
+        },
+        "text": "H27-T2 say hello",
+        "files": []
+      }
+    },
+    {
+      "id": "msg_17dfdd653001BBAYXlKgdYOMjN",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "assistant",
+      "seq": 30,
+      "time_created": 1793115149959,
+      "time_updated": 1793115150012,
+      "data": {
+        "time": {
+          "created": 1793115149959,
+          "streamed": 1793115150008,
+          "completed": 1793115150011
+        },
+        "agent": "build",
+        "model": {
+          "id": "h27-mock",
+          "providerID": "anthropic",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "H27-REPLY: H27-T2 say hello"
+          }
+        ],
+        "finish": "stop",
+        "rawFinish": "end_turn",
+        "cost": 0,
+        "tokens": {
+          "input": 100,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdd6bf0012aRJBj9aCx81uI",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "idle",
+      "seq": 35,
+      "time_created": 1793115150015,
+      "time_updated": 1793115150016,
+      "data": {
+        "time": {
+          "created": 1793115150015
+        },
+        "outcome": "succeeded"
+      }
+    },
+    {
+      "id": "msg_17dfde103001VZhsCVAQ8a4ja0",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "compaction",
+      "seq": 39,
+      "time_created": 1793115153176,
+      "time_updated": 1793115153283,
+      "data": {
+        "metadata": {
+          "keepID": "msg_17dfdd540001RR87DEFv6Bqy9B"
+        },
+        "time": {
+          "created": 1793115153176
+        },
+        "status": "completed",
+        "reason": "manual",
+        "model": {
+          "id": "h27-mock",
+          "providerID": "anthropic",
+          "variant": "default"
+        },
+        "summary": "## Objective\n- H27-SUMMARY: the user asked to read alpha.txt and beta.txt; both were read; then said hello.\n\n## Work State\n### Completed\n- read alpha.txt and beta.txt\n\n## Next Move\n1. (none)",
+        "cost": 0,
+        "tokens": {
+          "input": 100,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "msg_17dfde387001ALWUu74LlVbw6y",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "idle",
+      "seq": 42,
+      "time_created": 1793115153287,
+      "time_updated": 1793115153287,
+      "data": {
+        "time": {
+          "created": 1793115153287
+        },
+        "outcome": "succeeded"
+      }
+    },
+    {
+      "id": "msg_17dfdede1001zoVub1bpnaJvNe",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "user",
+      "seq": 45,
+      "time_created": 1793115156314,
+      "time_updated": 1793115156315,
+      "data": {
+        "time": {
+          "created": 1793115156314
+        },
+        "text": "H27-T3 after compaction",
+        "files": []
+      }
+    },
+    {
+      "id": "msg_17dfdef62001Oue736yTXWu5bS",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "assistant",
+      "seq": 46,
+      "time_created": 1793115156353,
+      "time_updated": 1793115156390,
+      "data": {
+        "time": {
+          "created": 1793115156353,
+          "streamed": 1793115156388,
+          "completed": 1793115156390
+        },
+        "agent": "build",
+        "model": {
+          "id": "h27-mock",
+          "providerID": "anthropic",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "H27-REPLY: H27-T3 after compaction"
+          }
+        ],
+        "finish": "stop",
+        "rawFinish": "end_turn",
+        "cost": 0,
+        "tokens": {
+          "input": 100,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdefa9001Iqfv1oz11Dhd9H",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "idle",
+      "seq": 51,
+      "time_created": 1793115156393,
+      "time_updated": 1793115156393,
+      "data": {
+        "time": {
+          "created": 1793115156393
+        },
+        "outcome": "succeeded"
+      }
+    },
+    {
+      "id": "msg_17dfdf401001wjpxlceArdOaOS",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "user",
+      "seq": 54,
+      "time_created": 1793115157848,
+      "time_updated": 1793115157849,
+      "data": {
+        "time": {
+          "created": 1793115157848
+        },
+        "text": "H27-HANG",
+        "files": []
+      }
+    },
+    {
+      "id": "msg_17dfdf569001SnkOQ8Gd6w5kbJ",
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "type": "assistant",
+      "seq": 55,
+      "time_created": 1793115157908,
+      "time_updated": 1793115157930,
+      "data": {
+        "time": {
+          "created": 1793115157908
+        },
+        "agent": "build",
+        "model": {
+          "id": "h27-mock",
+          "providerID": "anthropic",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    }
+  ],
+  "session_inbox": [],
+  "session_pending": [],
+  "instruction_entry": [],
+  "instruction_state": [
+    {
+      "session_id": "ses_e82023514ffe02y4T8OoUu99VZ",
+      "epoch_start": 41,
+      "through_seq": 41,
+      "initial_values": {
+        "core/codemode": "e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b",
+        "core/skill-guidance": "8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9",
+        "core/date": "5f57e71ef7be84e378d5502b4b01d3b5276ee7daec6b747234aa1d19d68d2058",
+        "core/environment": "66fe99e0976628a8031895d90184414be3a687034b731e88743ac13db965f97c"
+      },
+      "current_values": {
+        "core/codemode": "e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b",
+        "core/skill-guidance": "8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9",
+        "core/date": "5f57e71ef7be84e378d5502b4b01d3b5276ee7daec6b747234aa1d19d68d2058",
+        "core/environment": "66fe99e0976628a8031895d90184414be3a687034b731e88743ac13db965f97c"
+      }
+    }
+  ],
+  "event": []
+}

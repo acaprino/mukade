@@ -1,0 +1,9 @@
+{
+  "agentType": "Explore",
+  "description": "Read module A",
+  "spawnDepth": 1,
+  "requestShape": "foreground",
+  "requestNonInteractive": false,
+  "toolUseId": "toolu_fg",
+  "finished": true
+}

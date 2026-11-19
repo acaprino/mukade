@@ -1,0 +1,662 @@
+//! The Codex CLI 0.164.0 writer.
+//!
+//! Shape it must produce (docs/session-interchange-spec.md §2.2, L7):
+//!
+//! - `sessions\YYYY\MM\DD\rollout-<local ts>-<uuid>.jsonl`, one JSON object per line with
+//!   `{timestamp, ordinal, type, payload}`;
+//! - `session_meta` carrying **Codex's own fields**: `originator`, the **destination's**
+//!   `cli_version` and the destination config's `model_provider` — the probe wrote the source's
+//!   `cli_version` and `model_provider: "openai"`, which is the bug L7 exists for (with no provider
+//!   stated or configured, Codex's own default `openai` is written: without one Codex refuses to
+//!   resume);
+//! - no `state_5.sqlite` row: `threads.rollout_path` wins over the file on disk, and a row pointing
+//!   at a missing file fails hard (P5). This writer never opens that database, and a fresh id
+//!   cannot have a stale row. Codex rebuilds its SQLite stores from the rollout by itself;
+//! - the conversation lives in `response_item` records; `turn_context` starts a turn.
+
+use super::media::Image;
+use super::plan::{self, PlannedBlock, PlannedResult};
+use super::{WriteOpts, Writer, Written, write_jsonl};
+use crate::model::{HarnessId, Reasoning, Session};
+use crate::native_compaction::{NativeItem, plan_native_items};
+use crate::policy::{Clock, ReasoningPlan};
+use anyhow::{Context, Result};
+use chrono::DateTime;
+use serde_json::{Map, Value, json};
+use std::path::PathBuf;
+
+/// The Codex CLI writer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Codex;
+
+/// The provider Codex runs when its `config.toml` names none (`model_provider` defaults to
+/// `openai`).
+const CODEX_DEFAULT_PROVIDER: &str = "openai";
+
+impl Writer for Codex {
+    fn harness(&self) -> HarnessId {
+        HarnessId::Codex
+    }
+
+    /// A line with rollbacks: a branch is written and then rolled back.
+    fn keeps_branches(&self) -> plan::BranchKeeping {
+        plan::BranchKeeping::Rollbacks
+    }
+
+    fn write_planned(
+        &self,
+        session: &Session,
+        plan: &plan::Plan,
+        opts: &WriteOpts,
+    ) -> Result<Written> {
+        crate::harnesses::destination(HarnessId::Codex)?.validate_write(opts)?;
+        let root = opts
+            .roots
+            .codex_home
+            .clone()
+            .context("CODEX_HOME is not set: nowhere to write the Codex rollout")?;
+        let cwd = opts
+            .cwd
+            .clone()
+            .or_else(|| session.meta.cwd.clone())
+            .context("a working directory is required")?;
+        let id = opts
+            .dest_id
+            .clone()
+            .unwrap_or_else(crate::policy::new_session_id);
+        let mut clock = Clock::new(opts.now.as_deref());
+        let stamp = clock.base_millis();
+        let (date, file_stamp) = rollout_stamp(stamp);
+        // Codex refuses a rollout whose `session_meta` has no `cli_version` ([V] 2026-10-28: the
+        // same file resumes as soon as the key is there), so the destination's version is required,
+        // not optional.
+        let version = opts
+            .dest_version
+            .clone()
+            .context("Codex needs the destination's cli_version (`--dest-version`): it refuses a rollout whose session_meta has none")?;
+
+        let dir = root.join("sessions").join(date);
+        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+        let file = opts
+            .dest_path
+            .clone()
+            .unwrap_or_else(|| dir.join(format!("rollout-{file_stamp}-{id}.jsonl")));
+
+        let rows = rows(plan, session, &id, &cwd, opts, &version, &mut clock);
+        write_jsonl(&file, &rows)?;
+
+        Ok(Written {
+            records: Vec::new(),
+            id: id.clone(),
+            location: file.to_string_lossy().into_owned(),
+            resume: crate::catalog::resume(
+                HarnessId::Codex,
+                opts.exe.as_deref().unwrap_or("codex"),
+                &id,
+                None,
+            ),
+        })
+    }
+}
+
+/// The date folder and the file-name stamp for a rollout, both derived from one instant.
+fn rollout_stamp(millis: i64) -> (PathBuf, String) {
+    let Some(dt) = DateTime::from_timestamp_millis(millis) else {
+        return (PathBuf::from("1970/01/01"), "1970-01-01T00-00-00".into());
+    };
+    let date = PathBuf::from(dt.format("%Y").to_string())
+        .join(dt.format("%m").to_string())
+        .join(dt.format("%d").to_string());
+    (date, dt.format("%Y-%m-%dT%H-%M-%S").to_string())
+}
+
+/// Where a rollout is, as it is written: its records, the next ordinal, the turn it is in, and how
+/// many user-role messages it has written (what a rollback counts).
+struct Lay {
+    out: Vec<Value>,
+    ordinal: u64,
+    turn: u64,
+    user_rows: u64,
+    /// The thread id the screen's events name.
+    thread: String,
+    /// The `cwd` of a drawn command, as Codex writes it (a `file://` URL).
+    cwd_url: String,
+    /// The shell a drawn command names before its text.
+    shell: Vec<&'static str>,
+    /// The turn begun and not yet ended, with the text it last answered.
+    open_turn: Option<(String, String)>,
+    /// The `exec_command` calls waiting for their result, by call id: what the screen draws as
+    /// `Ran <command>`.
+    commands: std::collections::HashMap<String, String>,
+}
+
+impl Lay {
+    /// End the open turn: a turn without `task_complete` is drawn `Conversation interrupted`.
+    fn close_turn(&mut self, clock: &mut Clock) {
+        if let Some((turn_id, last)) = self.open_turn.take() {
+            push(
+                &mut self.out,
+                &mut self.ordinal,
+                "event_msg",
+                json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":last}),
+                clock,
+            );
+        }
+    }
+
+    /// One thing the screen draws: Codex 0.167 rebuilds a resumed `paginated` thread's screen from
+    /// these events alone, never from the response items the model reads.
+    fn draw(&mut self, item: Value, clock: &mut Clock) {
+        let at = clock.next_millis();
+        push(
+            &mut self.out,
+            &mut self.ordinal,
+            "event_msg",
+            json!({
+                "type": "item_completed",
+                "thread_id": self.thread,
+                "turn_id": format!("turn-{}", self.turn),
+                "item": item,
+                "started_at_ms": at,
+                "completed_at_ms": at,
+            }),
+            clock,
+        );
+    }
+
+    /// A user message the model reads, drawn as Codex draws a prompt.
+    fn draw_user(&mut self, text: &str, clock: &mut Clock) {
+        self.draw(
+            json!({
+                "type": "UserMessage",
+                "id": crate::policy::new_session_id(),
+                "content": [{"type": "text", "text": text, "text_elements": []}],
+            }),
+            clock,
+        );
+    }
+}
+
+/// What the screen draws for a command's result, and its exit code. Codex records the result of
+/// its own `exec_command` as a unified-exec envelope (`chunk_id`, `exit_code`, `output`, …), and
+/// draws only the output inside it; any other result is drawn whole, with 0, or 1 for a failed
+/// call (the source keeps no code).
+fn drawn_output(text: &str, is_error: bool) -> (String, i64) {
+    let implied = i64::from(is_error);
+    if let Ok(Value::Object(envelope)) = serde_json::from_str::<Value>(text)
+        && envelope.contains_key("chunk_id")
+        && let Some(output) = envelope.get("output").and_then(Value::as_str)
+    {
+        let code = envelope
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .unwrap_or(implied);
+        return (output.to_string(), code);
+    }
+    (text.to_string(), implied)
+}
+
+/// A working directory as Codex's command items carry it: `file:///D:/work`, `file:///home/x`.
+fn file_url(cwd: &str) -> String {
+    let path = cwd.replace('\\', "/");
+    format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" })
+}
+
+fn push(out: &mut Vec<Value>, ordinal: &mut u64, kind: &str, payload: Value, clock: &mut Clock) {
+    let mut row = Map::new();
+    row.insert("timestamp".into(), Value::String(clock.next_iso()));
+    row.insert("ordinal".into(), Value::from(*ordinal));
+    row.insert("type".into(), Value::String(kind.to_string()));
+    row.insert("payload".into(), payload);
+    *ordinal += 1;
+    out.push(Value::Object(row));
+}
+
+/// Lay out the blocks of one chain of the plan (0 is the active path), and the branches that
+/// leave from them.
+fn lay(
+    st: &mut Lay,
+    plan: &plan::Plan,
+    session: &Session,
+    opts: &WriteOpts,
+    cwd: &str,
+    clock: &mut Clock,
+    chain: usize,
+) {
+    for (index, block) in plan.chain(chain).iter().enumerate() {
+        match block {
+            PlannedBlock::User { text, attachments } => {
+                // The turn before ended when the user wrote again.
+                st.close_turn(clock);
+                st.turn += 1;
+                st.user_rows += 1;
+                let turn_id = format!("turn-{}", st.turn);
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "event_msg",
+                    json!({"type":"task_started", "turn_id":turn_id}),
+                    clock,
+                );
+                st.open_turn = Some((turn_id, String::new()));
+                let mut content = vec![json!({"type": "input_text", "text": text})];
+                content.extend(
+                    attachments
+                        .iter()
+                        .filter_map(|a| (!a.raw.is_null()).then_some(a.raw.clone())),
+                );
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "response_item",
+                    json!({"type": "message", "id": local_message_id(), "role": "user", "content": content}),
+                    clock,
+                );
+                st.draw_user(text, clock);
+            }
+            PlannedBlock::Compaction { summary: text } => {
+                st.user_rows += 1;
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "response_item",
+                    user_message(text),
+                    clock,
+                );
+                st.draw_user(text, clock);
+            }
+            PlannedBlock::Step(step) => {
+                let turn_id = format!("turn-{}", st.turn);
+                let model = plan::model_id(step, session, opts);
+                let mut context = Map::new();
+                context.insert("turn_id".into(), Value::String(turn_id.clone()));
+                if let Some(model) = model.as_ref() {
+                    context.insert("model".into(), Value::String(model.clone()));
+                }
+                context.insert("cwd".into(), Value::String(cwd.to_string()));
+                push(
+                    &mut st.out,
+                    &mut st.ordinal,
+                    "turn_context",
+                    Value::Object(context),
+                    clock,
+                );
+
+                for reasoning in &step.reasoning {
+                    if let ReasoningPlan::Native(Reasoning { text, opaque }) = reasoning {
+                        push(
+                            &mut st.out,
+                            &mut st.ordinal,
+                            "response_item",
+                            json!({
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": text}],
+                                "content": null,
+                                "encrypted_content": opaque.as_ref().and_then(|o| o.encrypted.clone()),
+                            }),
+                            clock,
+                        );
+                    }
+                }
+                if !step.text.is_empty() {
+                    let content: Vec<Value> = step
+                        .text
+                        .iter()
+                        .map(|t| json!({"type": "output_text", "text": t}))
+                        .collect();
+                    let phase = if matches!(step.end, crate::model::StepEnd::Completed) {
+                        "final_answer"
+                    } else {
+                        "commentary"
+                    };
+                    let id = assistant_message_id();
+                    push(
+                        &mut st.out,
+                        &mut st.ordinal,
+                        "response_item",
+                        json!({"type": "message", "role": "assistant", "phase": phase, "content": content, "id": id}),
+                        clock,
+                    );
+                    let drawn: Vec<Value> = step
+                        .text
+                        .iter()
+                        .map(|t| json!({"type": "Text", "text": t}))
+                        .collect();
+                    st.draw(
+                        json!({"type": "AgentMessage", "id": id, "content": drawn, "phase": phase}),
+                        clock,
+                    );
+                    if let Some((_, last)) = st.open_turn.as_mut() {
+                        *last = step.text.join("\n");
+                    }
+                }
+                for call in &step.calls {
+                    if call.name == "exec_command"
+                        && let Some(command) = call.input.get("cmd").and_then(Value::as_str)
+                    {
+                        st.commands.insert(call.id.clone(), command.to_string());
+                    }
+                    push(
+                        &mut st.out,
+                        &mut st.ordinal,
+                        "response_item",
+                        json!({
+                            "type": "function_call",
+                            "name": call.name,
+                            "arguments": serde_json::to_string(&call.input).unwrap_or_else(|_| "{}".into()),
+                            "call_id": call.id,
+                        }),
+                        clock,
+                    );
+                }
+                if matches!(step.end, crate::model::StepEnd::Completed) {
+                    push(
+                        &mut st.out,
+                        &mut st.ordinal,
+                        "event_msg",
+                        json!({"type":"task_complete", "turn_id":turn_id, "last_agent_message":step.text.join("\n")}),
+                        clock,
+                    );
+                    st.open_turn = None;
+                }
+            }
+            PlannedBlock::Results { results } => {
+                for result in results {
+                    match result {
+                        PlannedResult::Native {
+                            call_id,
+                            content,
+                            is_error,
+                        } => {
+                            let output = content.text();
+                            push(
+                                &mut st.out,
+                                &mut st.ordinal,
+                                "response_item",
+                                json!({"type": "function_call_output", "call_id": call_id, "output": output}),
+                                clock,
+                            );
+                            if let Some(command) = st.commands.remove(call_id) {
+                                let mut argv: Vec<Value> =
+                                    st.shell.iter().map(|part| json!(part)).collect();
+                                argv.push(json!(command));
+                                let (drawn, exit_code) = drawn_output(&output, *is_error);
+                                let item = json!({
+                                    "type": "CommandExecution",
+                                    "id": call_id,
+                                    "command": argv,
+                                    "cwd": st.cwd_url,
+                                    "parsed_cmd": [{"type": "unknown", "cmd": command}],
+                                    "source": "unified_exec_startup",
+                                    "status": if *is_error { "failed" } else { "completed" },
+                                    "aggregated_output": drawn,
+                                    "exit_code": exit_code,
+                                    "duration": {"secs": 0, "nanos": 0},
+                                });
+                                st.draw(item, clock);
+                            }
+                        }
+                        // A call that travelled as text answers with text, in the same place.
+                        PlannedResult::Text(t) => {
+                            st.user_rows += 1;
+                            push(
+                                &mut st.out,
+                                &mut st.ordinal,
+                                "response_item",
+                                user_message(t),
+                                clock,
+                            );
+                            st.draw_user(t, clock);
+                        }
+                    }
+                }
+            }
+        }
+        // The branches that leave right after this block, each written from here and then rolled
+        // back, so the thread goes on from this block.
+        for n in plan.branches_after(Some((chain, index))) {
+            lay_branch(st, plan, session, opts, cwd, clock, n + 1);
+        }
+    }
+}
+
+/// Write branch `chain` from where the rollout is, then roll back its user turns: the records
+/// stay in the file, and Codex replays the thread as it was before them.
+fn lay_branch(
+    st: &mut Lay,
+    plan: &plan::Plan,
+    session: &Session,
+    opts: &WriteOpts,
+    cwd: &str,
+    clock: &mut Clock,
+    chain: usize,
+) {
+    let before = st.user_rows;
+    lay(st, plan, session, opts, cwd, clock, chain);
+    let turns = st.user_rows - before;
+    push(
+        &mut st.out,
+        &mut st.ordinal,
+        "event_msg",
+        json!({"type": "thread_rolled_back", "num_turns": turns}),
+        clock,
+    );
+    st.user_rows = before;
+}
+
+fn rows(
+    plan: &plan::Plan,
+    session: &Session,
+    id: &str,
+    cwd: &str,
+    opts: &WriteOpts,
+    version: &str,
+    clock: &mut Clock,
+) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut ordinal = 0u64;
+    let turn = 0u64;
+
+    // L7: the destination's own session metadata. The key set is the one Codex itself accepts for
+    // a hand-written rollout: `base_instructions` (null — we do not invent a system prompt) and
+    // **no `session_id`** ([V]: with the probe's nine rollouts, and re-probed on 0.164.0 on
+    // 2026-10-28 — the file is refused with `does not start with session metadata` without it).
+    let mut meta = Map::new();
+    meta.insert("base_instructions".into(), Value::Null);
+    meta.insert("id".into(), Value::String(id.to_string()));
+    meta.insert("timestamp".into(), Value::String(clock.next_iso()));
+    meta.insert("cwd".into(), Value::String(cwd.to_string()));
+    meta.insert("originator".into(), Value::String("codex_cli_rs".into()));
+    meta.insert("source".into(), Value::String("cli".into()));
+    meta.insert("cli_version".into(), Value::String(version.to_string()));
+    // A rollout without a provider is indexed under the empty one, and Codex 0.167.2 refuses to
+    // resume it; with none stated or configured, Codex itself runs its default.
+    let provider = opts
+        .model_provider
+        .as_deref()
+        .unwrap_or(CODEX_DEFAULT_PROVIDER);
+    meta.insert("model_provider".into(), Value::String(provider.to_string()));
+    // The thread keeps its screen in `item_completed` events (below), as Codex 0.167's own threads
+    // do; a thread without this mode is drawn from events the writer does not write.
+    meta.insert("history_mode".into(), Value::String("paginated".into()));
+    if let Some(branch) = session.meta.git_branch.as_ref() {
+        meta.insert("git".into(), json!({"branch": branch}));
+    }
+    push(
+        &mut out,
+        &mut ordinal,
+        "session_meta",
+        Value::Object(meta),
+        clock,
+    );
+
+    // The environment block a native rollout carries at the top of the conversation: it states the
+    // working directory and **the shell commands run with**, which is what lets a later read know
+    // the dialect of this session's calls (L13).
+    let mut environment = format!("<environment_context>\n  <cwd>{cwd}</cwd>\n");
+    if let Some(shell) = opts.dest_shell {
+        let name = match shell {
+            crate::tools::Shell::Posix => "bash",
+            crate::tools::Shell::PowerShell => "powershell",
+        };
+        environment.push_str(&format!("  <shell>{name}</shell>\n"));
+    }
+    environment.push_str("</environment_context>");
+    push(
+        &mut out,
+        &mut ordinal,
+        "response_item",
+        json!({
+            "type": "message",
+            "id": local_message_id(),
+            "role": "user",
+            "content": [{"type": "input_text", "text": environment}],
+        }),
+        clock,
+    );
+
+    let shell = match opts.dest_shell {
+        Some(crate::tools::Shell::PowerShell) => vec!["pwsh", "-Command"],
+        Some(crate::tools::Shell::Posix) => vec!["bash", "-lc"],
+        None => Vec::new(),
+    };
+    let mut st = Lay {
+        out,
+        ordinal,
+        turn,
+        user_rows: 0,
+        thread: id.to_string(),
+        cwd_url: file_url(cwd),
+        shell,
+        open_turn: None,
+        commands: std::collections::HashMap::new(),
+    };
+    // A branch that leaves before the first block comes first.
+    for n in plan.branches_after(None) {
+        lay_branch(&mut st, plan, session, opts, cwd, clock, n + 1);
+    }
+    lay(&mut st, plan, session, opts, cwd, clock, 0);
+    let (mut out, mut ordinal) = (st.out, st.ordinal);
+
+    // §4.4: the rollout keeps every generated row; Codex's own `compacted` record is appended with
+    // the retained response items as its replacement history.
+    let boundary = opts.native_budget.as_ref().and_then(|budget| {
+        let response_items: Vec<&Value> = out
+            .iter()
+            .filter(|row| row["type"] == "response_item")
+            .map(|row| &row["payload"])
+            .collect();
+        let user_texts: Vec<Option<String>> = response_items
+            .iter()
+            .map(|payload| user_text(payload))
+            .collect();
+        let items: Vec<NativeItem> = response_items
+            .iter()
+            .zip(&user_texts)
+            .map(|(payload, text)| NativeItem {
+                id: payload["id"].as_str(),
+                json: *payload,
+                user_text: text.as_deref(),
+            })
+            .collect();
+        let report = plan_native_items(&items, budget)?;
+        // Codex replays `replacement_history`, not the record's `message`; the summary therefore
+        // travels as its own user input item, as in Codex's own compacted records.
+        let mut replacement_history = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": report.summary}],
+        })];
+        replacement_history.extend(
+            response_items[report.start..]
+                .iter()
+                .map(|item| without_input_id(item)),
+        );
+        Some(json!({
+            "message": report.summary,
+            "replacement_history": replacement_history,
+        }))
+    });
+    if let Some(payload) = boundary {
+        push(&mut out, &mut ordinal, "compacted", payload, clock);
+    }
+    out
+}
+
+/// Codex's Responses API refuses user-supplied input item IDs in a compacted replacement history.
+/// The rollout rows keep their own ids; only what the boundary replays is stripped.
+fn without_input_id(payload: &Value) -> Value {
+    let mut payload = payload.clone();
+    if let Some(map) = payload.as_object_mut() {
+        map.remove("id");
+    }
+    payload
+}
+
+/// The text of a Codex user response item, without the writer's own environment-context message.
+fn user_text(payload: &Value) -> Option<String> {
+    if payload["type"] != "message" || payload["role"] != "user" {
+        return None;
+    }
+    let text = payload["content"]
+        .as_array()?
+        .iter()
+        .filter(|block| matches!(block["type"].as_str(), Some("input_text" | "text")))
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() || text.starts_with("<environment_context>") {
+        return None;
+    }
+    Some(text)
+}
+
+fn user_message(text: &str) -> Value {
+    json!({
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": text}],
+    })
+}
+
+fn assistant_message_id() -> String {
+    local_message_id()
+}
+
+/// A rollout row id in the shape Codex generates for its own local items (`msg_<uuid v7>`).
+/// Codex 0.166 strips ids it recognises as its own before replaying a resumed thread to the
+/// Responses API, but forwards anything else: an id in a foreign shape makes the resume fail
+/// with `This request does not support user-supplied input item IDs.` (live-verified 2026-11-04;
+/// both this shape and no id at all resume, `msg_<uuid v4 simple>` does not).
+fn local_message_id() -> String {
+    format!("msg_{}", uuid::Uuid::now_v7())
+}
+
+/// An image as Codex holds it, in a user turn or a tool result (OpenAI responses).
+pub(crate) fn image_block(image: &Image) -> Value {
+    json!({
+        "type": "input_image",
+        "image_url": format!("data:{};base64,{}", image.mime, image.data),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Codex records a command's result as its unified-exec envelope; its screen draws the
+    /// output and the exit code inside it.
+    #[test]
+    fn a_unified_exec_result_is_drawn_as_its_output_and_exit_code() {
+        let envelope = r#"{"chunk_id":"70781c","wall_time_seconds":0.3,"exit_code":2,"original_token_count":4,"output":"no such file\n"}"#;
+        assert_eq!(drawn_output(envelope, false), ("no such file\n".to_string(), 2));
+    }
+
+    /// Any other result is drawn as it is, with the code the call's outcome implies.
+    #[test]
+    fn a_plain_result_is_drawn_as_it_is() {
+        assert_eq!(drawn_output("total 0\n", false), ("total 0\n".to_string(), 0));
+        assert_eq!(drawn_output("boom", true), ("boom".to_string(), 1));
+        assert_eq!(drawn_output(r#"{"output":"x"}"#, false), (r#"{"output":"x"}"#.to_string(), 0));
+    }
+}

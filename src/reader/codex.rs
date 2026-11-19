@@ -1,0 +1,1616 @@
+//! The Codex CLI 0.164.0 reader.
+//!
+//! Facts this reader depends on (docs/session-interchange-spec.md §2.2):
+//!
+//! - a rollout is JSON Lines of `{timestamp, ordinal, type, payload}`, ordered by `ordinal`;
+//! - the conversation lives in `response_item` records only; `event_msg`, `turn_context`,
+//!   `world_state` and `token_usage_record` are events about it, not conversation;
+//! - reasoning is `{"type":"reasoning","summary":[…],"encrypted_content":…}` — the encrypted
+//!   payload is stored, the plain `content` is not;
+//! - parallel calls are consecutive `function_call` records, answered by `function_call_output`
+//!   records paired by `call_id`;
+//! - `compacted` replaces the history: `replacement_history` is the new base, and the assistant
+//!   record that *produced* the summary is the compaction's own turn, not conversation;
+//! - a graceful interrupt writes a user message carrying `<turn_aborted>` plus an
+//!   `event_msg/turn_aborted`; a hard kill leaves the user message and nothing else (L9);
+//! - Codex 0.165 may keep one thread over several files (`history_mode: "paginated"`): a later
+//!   page, named `rollout-<ts>-<thread>_<page>.jsonl`, starts with a `session_meta` whose
+//!   `history_base` says it continues the thread from the first `end_ordinal_exclusive` records
+//!   (`end_byte_offset` bytes) of an earlier file, itself a page when the thread was redone more
+//!   than once; ordinals run on across the files. Codex's own state names the latest page as the
+//!   thread's rollout; each earlier file's records past its cut are a branch the thread left.
+
+mod exec;
+
+use super::clip::{Clip, Clipped, Keep};
+use super::json::{blocks_text, fallback_id, str_at};
+use super::{Reader, SessionInfo};
+use crate::model::{
+    CanonicalTool, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Opaque, ParentKind, Protocol,
+    Reasoning, ResultContent, Session, StepEnd, ToolCall, ToolResult, Trigger,
+};
+use crate::roots::StoreRoots;
+use anyhow::{Context, Result};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+/// The Codex CLI reader.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Codex;
+
+/// Which records of a paginated thread a read carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Branches {
+    /// The latest version, what Codex resumes: each earlier file up to the point the next one
+    /// continues from, then the latest page. What the earlier files hold past those points is
+    /// left behind and counted (the default).
+    #[default]
+    Active,
+    /// Everything: every file of the thread whole, the first one first, abandoned turns included.
+    All,
+}
+
+/// What a clipped read leaves whole: the text of a tool call that the reader parses (the JSON
+/// `arguments` of a function call, the script `input` of a custom tool call such as code mode's
+/// `exec`). A model wrote them, so they are bounded; the bulk of a session is tool output, which
+/// is clipped.
+const KEEP_WHOLE: Keep = &[&["payload", "arguments"], &["payload", "input"]];
+
+/// [`read_file`] that never refuses for size: see [`Reader::read_clipped`]. A page of a
+/// paginated thread, which is read together with the earlier files it continues, is read whole
+/// and then clipped.
+pub fn read_file_clipped(path: &Path, clip: &Clip) -> Result<Clipped> {
+    if peek_first_row(path).is_some_and(|first| history_base(&[first]).is_some()) {
+        return super::clip::clip_session(&read_file(path)?, clip.max_string_bytes);
+    }
+    let clipped = super::clip::clipped_rows(path, clip, KEEP_WHOLE)?;
+    let _span = crate::timing::span("build entries");
+    let mut session = parse_owned_with(clipped.rows, Some(path), false)?;
+    session.meta.source_sha256 = Some(clipped.sha256);
+    super::json::keep_unfinished(&mut session, clipped.unfinished.map(|(text, _)| text));
+    if session.meta.title.is_none() {
+        session.meta.title = indexed_name(path, &session.meta.id);
+    }
+    Ok(Clipped {
+        session,
+        clipping: clipped.clipping,
+    })
+}
+
+/// A thread redone more often than this is not followed further.
+const MAX_PAGES: usize = 64;
+
+/// Read one Codex rollout file (`<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`).
+/// A page of a paginated thread is read with the part of the earlier files it continues from.
+pub fn read_file(path: &Path) -> Result<Session> {
+    read_file_with(path, Branches::Active)
+}
+
+/// [`read_file`], choosing which branches of a paginated thread to carry.
+pub fn read_file_with(path: &Path, branches: Branches) -> Result<Session> {
+    let mut session = read_rollout(path, branches)?;
+    if session.meta.title.is_none() {
+        session.meta.title = indexed_name(path, &session.meta.id);
+    }
+    Ok(session)
+}
+
+/// The thread's name in `<CODEX_HOME>/session_index.jsonl`, the append-only catalogue of
+/// `{id, thread_name, updated_at}` the Codex app names its threads from: the newest entry wins
+/// (by `updated_at`, then by place in the file). None when the rollout is not under a
+/// `sessions/` folder, the catalogue is missing, or it does not name the thread.
+fn indexed_name(rollout: &Path, id: &str) -> Option<String> {
+    index_names(index_home(rollout)?).get(id).cloned()
+}
+
+/// The folder a rollout's catalogue lives in: the parent of the `sessions/` folder the rollout is
+/// under. None when it is not under one.
+fn index_home(rollout: &Path) -> Option<&Path> {
+    rollout
+        .ancestors()
+        .find(|dir| dir.file_name().and_then(|n| n.to_str()) == Some("sessions"))?
+        .parent()
+}
+
+/// Every thread name in `<home>/session_index.jsonl`, the newest entry per id winning (by
+/// `updated_at`, then by place in the file). Empty when the catalogue is missing; a line that is
+/// not JSON, names no thread or carries no name is skipped.
+fn index_names(home: &Path) -> HashMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(home.join("session_index.jsonl")) else {
+        return HashMap::new();
+    };
+    // id → (updated_at, place in the file, name).
+    let mut newest: HashMap<String, (String, usize, String)> = HashMap::new();
+    for (place, line) in text.lines().enumerate() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = entry
+            .get("thread_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let candidate = (
+            entry
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            place,
+            name.to_string(),
+        );
+        let supersedes = match newest.get(id) {
+            Some((updated, known_place, _)) => {
+                (updated.as_str(), *known_place) < (candidate.0.as_str(), candidate.1)
+            }
+            None => true,
+        };
+        if supersedes {
+            newest.insert(id.to_string(), candidate);
+        }
+    }
+    newest
+        .into_iter()
+        .map(|(id, (_, _, name))| (id, name))
+        .collect()
+}
+
+fn read_rollout(path: &Path, branches: Branches) -> Result<Session> {
+    let file = super::json::read_jsonl(path)?;
+    let all = branches == Branches::All;
+    let Some(base) = history_base(&file.rows) else {
+        let _span = crate::timing::span("build entries");
+        let mut session = parse_owned_with(file.rows, Some(path), all)?;
+        session.meta.source_sha256 = Some(file.sha256.wait());
+        super::json::keep_unfinished(&mut session, file.unfinished);
+        return Ok(session);
+    };
+    let prefix = base_prefix(path, &base, branches, &mut vec![path.to_path_buf()])?;
+    // A fork's own header names the session, not the origin's records it continues from.
+    let mut rows = Vec::with_capacity(prefix.rows.len() + file.rows.len());
+    let mut own = file.rows.into_iter();
+    if base.thread != rollout_id(path)
+        && let Some(header) = own.next()
+    {
+        rows.push(header);
+    }
+    rows.extend(prefix.rows);
+    rows.extend(own);
+    let _span = crate::timing::span("build entries");
+    let combined = rows.len();
+    let mut session = parse_owned_with(rows, Some(path), all)?;
+    // The fingerprint is that of the bytes read, in the order they were read: the earlier files
+    // (their prefixes, or all of them), then the page.
+    let mut digest = crate::sha256::Sha256::new();
+    digest.update(&prefix.bytes);
+    digest.update(file.source_bytes.as_bytes());
+    session.meta.source_sha256 = Some(digest.finalize_hex());
+    // What the earlier files hold past their cuts: a branch each when asked for, else records of an
+    // abandoned branch.
+    if all {
+        let mut next = combined;
+        let mut groups = Vec::new();
+        for (cut, rows) in prefix.left {
+            let mut b = Builder::default();
+            for row in rows {
+                b.push(next, row);
+                next += 1;
+            }
+            groups.push(Group {
+                after: cut,
+                entries: b.finish(None)?.entries,
+            });
+        }
+        attach(&mut session, groups);
+    } else {
+        for (index, row) in prefix
+            .left
+            .into_iter()
+            .flat_map(|(_, rows)| rows)
+            .enumerate()
+        {
+            session.entries.push(Entry {
+                id: fallback_id("off-branch", index),
+                kind: Kind::Meta {
+                    kind: MetaKind::OffBranch,
+                },
+                raw: vec![row],
+            });
+        }
+    }
+    super::json::keep_unfinished(&mut session, file.unfinished);
+    Ok(session)
+}
+
+/// What a `session_meta` says about the thread it was forked from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Fork {
+    thread: String,
+    /// The origin's last record the copy holds: one before `forked_from_ordinal_exclusive`, else
+    /// before the end of the `history_base` a referenced fork continues from. `None` when nothing
+    /// was copied or the source does not say.
+    ordinal: Option<u64>,
+}
+
+impl Fork {
+    fn of(payload: &Value) -> Option<Fork> {
+        let thread = str_at(payload, "/forked_from_id").filter(|s| !s.is_empty())?;
+        let ordinal = payload
+            .get("forked_from_ordinal_exclusive")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .pointer("/history_base/end_ordinal_exclusive")
+                    .and_then(Value::as_u64)
+            })
+            .and_then(|exclusive| exclusive.checked_sub(1));
+        Some(Fork { thread, ordinal })
+    }
+
+    fn kind(&self) -> ParentKind {
+        ParentKind::Fork {
+            at: self.ordinal.map(|ordinal| ordinal.to_string()),
+        }
+    }
+}
+
+/// Where a page continues its thread from (`session_meta.payload.history_base`).
+struct HistoryBase {
+    thread: String,
+    end_ordinal: u64,
+    end_byte: usize,
+}
+
+fn history_base(rows: &[Value]) -> Option<HistoryBase> {
+    let first = rows.first()?;
+    if first.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    let base = first.pointer("/payload/history_base")?;
+    Some(HistoryBase {
+        thread: base.get("thread_id")?.as_str()?.to_string(),
+        end_ordinal: base.get("end_ordinal_exclusive")?.as_u64()?,
+        end_byte: usize::try_from(base.get("end_byte_offset")?.as_u64()?).ok()?,
+    })
+}
+
+/// What a page continues from, through every earlier page down to the thread's first file: the
+/// records to read before the page's own, the bytes they came from, the conversation records the
+/// earlier files hold past their cuts (the branches the thread left), and how many records the
+/// thread's latest version has before the page (equal to `rows.len()` unless `Branches::All`).
+struct BasePrefix {
+    rows: Vec<Value>,
+    bytes: Vec<u8>,
+    /// The conversation records an earlier file holds past its cut, per file, with the last
+    /// conversation record before the cut: the branch they were.
+    left: Vec<(Option<Value>, Vec<Value>)>,
+    active_len: usize,
+}
+
+/// The folders the other files of `page`'s thread can be in. A page in a Codex home (under its
+/// `sessions/` or `archived_sessions/`) looks in both of that home's folders and nowhere else: a
+/// copy beside the home is not the thread's. A page outside any home (a file named directly)
+/// looks four levels up, the depth of `sessions/YYYY/MM/DD/`.
+fn page_folders(page: &Path) -> Vec<PathBuf> {
+    let home = page
+        .ancestors()
+        .find(|dir| {
+            matches!(
+                dir.file_name().and_then(|n| n.to_str()),
+                Some("sessions" | "archived_sessions")
+            )
+        })
+        .and_then(Path::parent);
+    match home {
+        Some(home) => vec![home.join("sessions"), home.join("archived_sessions")],
+        None => vec![
+            page.ancestors()
+                .nth(4)
+                .unwrap_or(Path::new("."))
+                .to_path_buf(),
+        ],
+    }
+}
+
+/// The base a page continues from: the other rollout of its thread whose first `end_byte` bytes
+/// end with record `end_ordinal - 1`, counting the records of the files before it when it is a
+/// page itself. `chain` holds the files already in the chain, the page first.
+fn base_prefix(
+    page: &Path,
+    base: &HistoryBase,
+    branches: Branches,
+    chain: &mut Vec<PathBuf>,
+) -> Result<BasePrefix> {
+    if chain.len() > MAX_PAGES {
+        anyhow::bail!(
+            "{}: thread {} has more than {MAX_PAGES} pages; not followed further",
+            page.display(),
+            base.thread
+        );
+    }
+    let folders = page_folders(page);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for folder in &folders {
+        candidates.extend(
+            rollout_files(folder)?
+                .into_iter()
+                .filter(|file| !chain.contains(file) && rollout_id(file) == base.thread),
+        );
+    }
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "{}: its history_base continues thread {} from its first {} records, and no other \
+             rollout of that thread is under {}",
+            page.display(),
+            base.thread,
+            base.end_ordinal,
+            folders
+                .iter()
+                .map(|folder| folder.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" or ")
+        );
+    }
+    // Why an earlier page could not be followed, should no candidate fit.
+    let mut earlier_failure: Option<anyhow::Error> = None;
+    for candidate in &candidates {
+        let bytes =
+            std::fs::read(candidate).with_context(|| format!("read {}", candidate.display()))?;
+        let Some(prefix) = bytes.get(..base.end_byte) else {
+            continue;
+        };
+        if !(prefix.is_empty() || prefix.ends_with(b"\n")) {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        let (head, tail) = text.split_at(base.end_byte);
+        let (head_rows, _) = super::json::rows_from_lines(head, &candidate.display().to_string())?;
+        // An earlier page: its own records start where the files before it leave off.
+        let earlier = match history_base(&head_rows) {
+            Some(inner) => {
+                chain.push(candidate.clone());
+                match base_prefix(candidate, &inner, branches, chain) {
+                    Ok(earlier) => Some(earlier),
+                    Err(error) => {
+                        chain.pop();
+                        earlier_failure = Some(error);
+                        continue;
+                    }
+                }
+            }
+            None => None,
+        };
+        let ordinal = |row: &Value| row.get("ordinal").and_then(Value::as_u64);
+        let before = earlier.as_ref().map_or(0, |e| e.active_len);
+        let fits = (before + head_rows.len()) as u64 == base.end_ordinal
+            && head_rows.last().and_then(ordinal) == base.end_ordinal.checked_sub(1);
+        if !fits {
+            if earlier.is_some() {
+                chain.pop();
+            }
+            continue;
+        }
+        let (tail_rows, _) = super::json::rows_from_lines(tail, &candidate.display().to_string())?;
+        let mut out = earlier.unwrap_or(BasePrefix {
+            rows: Vec::new(),
+            bytes: Vec::new(),
+            left: Vec::new(),
+            active_len: 0,
+        });
+        out.active_len += head_rows.len();
+        let cut = head_rows
+            .iter()
+            .rev()
+            .find(|row| !matches!(class_of(row), Class::Meta(_)))
+            .cloned();
+        out.rows.extend(head_rows);
+        // A fork continues its origin's file by reference: what the origin did after the cut is
+        // the origin's own, never a branch of the fork, whichever branches were asked for.
+        let of_this_thread = rollout_id(page) == base.thread;
+        match if of_this_thread {
+            branches
+        } else {
+            Branches::Active
+        } {
+            Branches::Active if !of_this_thread => {
+                out.bytes.extend_from_slice(prefix);
+            }
+            Branches::Active | Branches::All => {
+                // Asked for every branch, the fingerprint covers the whole file.
+                out.bytes.extend_from_slice(if branches == Branches::All {
+                    &bytes
+                } else {
+                    prefix
+                });
+                let tail: Vec<Value> = tail_rows
+                    .into_iter()
+                    .filter(|row| !matches!(class_of(row), Class::Meta(_)))
+                    .collect();
+                if !tail.is_empty() {
+                    out.left.push((cut, tail));
+                }
+            }
+        }
+        return Ok(out);
+    }
+    let message = format!(
+        "{}: its history_base end_byte_offset {} does not end record {} of any other rollout of \
+         thread {} (looked at {})",
+        page.display(),
+        base.end_byte,
+        base.end_ordinal.saturating_sub(1),
+        base.thread,
+        candidates
+            .iter()
+            .map(|c| c.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Err(match earlier_failure {
+        Some(error) => error.context(message),
+        None => anyhow::anyhow!(message),
+    })
+}
+
+/// Read records that were already decoded.
+pub fn parse(rows: &[Value], source_path: Option<&Path>) -> Result<Session> {
+    parse_owned(rows.to_vec(), source_path)
+}
+
+/// [`parse`] for records the caller no longer needs: each one moves into its entry's `raw`
+/// instead of being copied there.
+pub fn parse_owned(rows: Vec<Value>, source_path: Option<&Path>) -> Result<Session> {
+    parse_owned_with(rows, source_path, false)
+}
+
+/// [`parse_owned`], with what a rollback dropped carried as branches (`all`) or kept as records of
+/// an abandoned branch.
+pub fn parse_owned_with(
+    rows: Vec<Value>,
+    source_path: Option<&Path>,
+    all: bool,
+) -> Result<Session> {
+    let rolled_back = rolled_back(&rows);
+    let mut b = Builder::default();
+    let mut abandoned: Vec<Vec<(usize, Value)>> = Vec::new();
+    let mut after: Vec<Option<Value>> = Vec::new();
+    let mut group_of: HashMap<usize, usize> = HashMap::new();
+    // For each rollback, the last conversation record before the turns it dropped that was still
+    // there when it came: what the branch left. Found by position, so a rollout whose records
+    // carry no `ordinal` places its branches too.
+    let conversation: Vec<bool> = rows
+        .iter()
+        .map(|row| !matches!(class_of(row), Class::Meta(_)))
+        .collect();
+    let mut left_from: HashMap<usize, Option<Value>> = HashMap::new();
+    for (i, dropped) in rolled_back.iter().enumerate() {
+        let Some(rollback) = *dropped else {
+            continue;
+        };
+        left_from.entry(rollback).or_insert_with(|| {
+            (0..i)
+                .rev()
+                .find(|&earlier| {
+                    conversation[earlier]
+                        && rolled_back[earlier].is_none_or(|later| later > rollback)
+                })
+                .map(|earlier| rows[earlier].clone())
+        });
+    }
+    for (i, row) in rows.into_iter().enumerate() {
+        match rolled_back[i] {
+            Some(rollback) => {
+                let group = *group_of.entry(rollback).or_insert_with(|| {
+                    abandoned.push(Vec::new());
+                    after.push(left_from.remove(&rollback).flatten());
+                    abandoned.len() - 1
+                });
+                abandoned[group].push((i, row));
+            }
+            None => b.push(i, row),
+        }
+    }
+    let mut session = b.finish(source_path)?;
+    if all {
+        let mut groups = Vec::new();
+        for (rows, after) in abandoned.into_iter().zip(after) {
+            let mut branch = Builder::default();
+            for (i, row) in rows {
+                branch.push(i, row);
+            }
+            groups.push(Group {
+                after,
+                entries: branch.finish(None)?.entries,
+            });
+        }
+        attach(&mut session, groups);
+    } else {
+        // What a rollback dropped is kept, verbatim, as the branch it was.
+        for (index, (_, row)) in abandoned.into_iter().flatten().enumerate() {
+            session.entries.push(Entry {
+                id: fallback_id("rolled-back", index),
+                kind: Kind::Meta {
+                    kind: MetaKind::OffBranch,
+                },
+                raw: vec![row],
+            });
+        }
+    }
+    Ok(session)
+}
+
+/// A run of entries that left the thread after the record `after` (`None`: before the first).
+struct Group {
+    after: Option<Value>,
+    entries: Vec<Entry>,
+}
+
+/// Hang each group off the conversation entry that holds the record it left after, parents before
+/// the branches that hang off them (a record dropped by a later rollback is in a branch of its own).
+fn attach(session: &mut Session, groups: Vec<Group>) {
+    use crate::model::Branch;
+    let holder = |entries: &[Entry], row: &Value| {
+        entries
+            .iter()
+            .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+            .find(|entry| entry.raw.iter().any(|raw| raw == row))
+            .map(|entry| entry.id.clone())
+    };
+    let froms: Vec<Option<String>> = groups
+        .iter()
+        .map(|group| {
+            let row = group.after.as_ref()?;
+            holder(&session.entries, row)
+                .or_else(|| groups.iter().find_map(|other| holder(&other.entries, row)))
+        })
+        .collect();
+    let mut pending: Vec<Branch> = groups
+        .into_iter()
+        .zip(froms)
+        .filter(|(group, _)| !group.entries.is_empty())
+        .map(|(group, from)| Branch {
+            from,
+            entries: group.entries,
+        })
+        .collect();
+    let mut known: std::collections::HashSet<String> =
+        session.entries.iter().map(|e| e.id.clone()).collect();
+    while !pending.is_empty() {
+        let at = pending
+            .iter()
+            .position(|branch| branch.from.as_ref().is_none_or(|from| known.contains(from)))
+            .unwrap_or(0);
+        let branch = pending.remove(at);
+        known.extend(branch.entries.iter().map(|e| e.id.clone()));
+        session.branches.push(branch);
+    }
+}
+
+/// Which records a `thread_rolled_back { num_turns }` took out of the thread, and by which
+/// rollback (its position): Codex replays it by dropping the last `num_turns` user turns of what
+/// it had so far, with everything that followed them. Only conversation records are dropped; the
+/// bookkeeping between them stays where it is.
+fn rolled_back(rows: &[Value]) -> Vec<Option<usize>> {
+    let mut dropped: Vec<Option<usize>> = vec![None; rows.len()];
+    for (at, row) in rows.iter().enumerate() {
+        let is_rollback = row.get("type").and_then(Value::as_str) == Some("event_msg")
+            && row.pointer("/payload/type").and_then(Value::as_str) == Some("thread_rolled_back");
+        let turns = row
+            .pointer("/payload/num_turns")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        if !is_rollback || turns == 0 {
+            continue;
+        }
+        let users: Vec<usize> = (0..at)
+            .filter(|&earlier| {
+                dropped[earlier].is_none() && matches!(class_of(&rows[earlier]), Class::User)
+            })
+            .collect();
+        let Some(&first) = users.get(users.len().saturating_sub(turns)) else {
+            continue;
+        };
+        for earlier in first..at {
+            if dropped[earlier].is_none() && !matches!(class_of(&rows[earlier]), Class::Meta(_)) {
+                dropped[earlier] = Some(at);
+            }
+        }
+    }
+    dropped
+}
+
+/// What `row.get("payload")` is for a record without one.
+static NO_PAYLOAD: Value = Value::Null;
+
+// ---------------------------------------------------------------------------------------------
+
+enum Class {
+    /// A model output record; records of one response stay in one step.
+    StepPart,
+    /// A `function_call_output` record.
+    Result,
+    /// A user turn.
+    User,
+    /// The `<turn_aborted>` marker.
+    Abort,
+    /// `compacted`.
+    Compacted,
+    /// `turn_context`: a turn starts here, so an open step ends here.
+    TurnBoundary,
+    Meta(MetaKind),
+}
+
+fn class_of(row: &Value) -> Class {
+    let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+    let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+    match row.get("type").and_then(Value::as_str).unwrap_or("") {
+        "compacted" => Class::Compacted,
+        "turn_context" => Class::TurnBoundary,
+        "event_msg" => match item_type {
+            "turn_aborted" => Class::Abort,
+            "task_started" | "task_complete" => Class::Meta(MetaKind::Idle),
+            "thread_settings_applied" => Class::Meta(MetaKind::ModelChange),
+            _ => Class::Meta(MetaKind::Internal),
+        },
+        "response_item" => match item_type {
+            "reasoning" | "function_call" | "custom_tool_call" | "local_shell_call"
+            | "web_search_call" => Class::StepPart,
+            "function_call_output" | "custom_tool_call_output" => Class::Result,
+            // What another agent of the spawn tree sent this one (a subagent's report, a
+            // parent's task): a user turn where its text is readable. Codex encrypts most of
+            // them: those stay records, counted as left behind.
+            "agent_message" => {
+                let content = payload.get("content").and_then(Value::as_array);
+                let encrypted = content.is_some_and(|blocks| {
+                    blocks.iter().any(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("encrypted_content")
+                    })
+                });
+                let readable = content.is_some_and(|blocks| !blocks_text(blocks).trim().is_empty());
+                match (encrypted, readable) {
+                    (true, _) => Class::Meta(MetaKind::SubagentMessage),
+                    (false, true) => Class::User,
+                    (false, false) => Class::Meta(MetaKind::Internal),
+                }
+            }
+            "message" => match payload.get("role").and_then(Value::as_str).unwrap_or("") {
+                "assistant" => Class::StepPart,
+                "developer" | "system" => Class::Meta(MetaKind::SystemPrompt),
+                "user" => {
+                    let text = payload
+                        .get("content")
+                        .and_then(super::json::text_of_content)
+                        .unwrap_or_default();
+                    // Codex's own records start with their tag; a prompt that only mentions one
+                    // is the user's words.
+                    let text = text.trim_start();
+                    if text.starts_with("<turn_aborted>") {
+                        Class::Abort
+                    } else if text.starts_with("<environment_context>")
+                        || text.starts_with("<skills_instructions>")
+                        // Codex Desktop 0.165 sends the project's AGENTS.md as a user message.
+                        || text.starts_with("# AGENTS.md instructions for ")
+                    {
+                        Class::Meta(MetaKind::SystemPrompt)
+                    } else if text.starts_with("<external_codex_apps_open_page>") {
+                        // An event of the Desktop app, recorded as a user message.
+                        Class::Meta(MetaKind::Internal)
+                    } else {
+                        Class::User
+                    }
+                }
+                _ => Class::Meta(MetaKind::Internal),
+            },
+            _ => Class::Meta(MetaKind::Internal),
+        },
+        _ => Class::Meta(MetaKind::Internal),
+    }
+}
+
+fn step_end(finish: Option<&str>, has_calls: bool) -> StepEnd {
+    match finish {
+        Some("tool_use") | Some("tool-calls") => StepEnd::ToolUse,
+        Some("aborted") => StepEnd::Aborted,
+        Some(_) => StepEnd::Completed,
+        None if has_calls => StepEnd::ToolUse,
+        None => StepEnd::Completed,
+    }
+}
+
+#[derive(Default)]
+struct Builder {
+    entries: Vec<Entry>,
+    meta: MetaBuilder,
+    /// The step currently being appended to, and the turn it belongs to.
+    open_step: Option<(usize, String)>,
+    /// The last step read, and its turn: the one an abort marker may have cut.
+    last_step: Option<(usize, String)>,
+    /// The results entry currently being appended to.
+    open_results: Option<usize>,
+    model: Option<ModelRef>,
+    /// The shell the harness runs commands with, as its own `<environment_context>` states it.
+    /// It decides whether `exec_command` reads as the canonical `Bash` or `PowerShell` (L13).
+    env_shell: Option<CanonicalTool>,
+    /// The shell in effect where each code-mode `exec` call was made (spec L10, L13).
+    exec_shells: HashMap<String, Option<CanonicalTool>>,
+}
+
+#[derive(Default)]
+struct MetaBuilder {
+    id: Option<String>,
+    /// `session_meta.session_id`: the thread's own id, except in a subagent's rollout, where it
+    /// names the thread that spawned it.
+    session_id: Option<String>,
+    /// `session_meta.parent_thread_id` (or `source.subagent.thread_spawn.parent_thread_id`): the
+    /// thread that spawned this one, preferred to `session_id` (the same thread at depth 1).
+    parent_thread_id: Option<String>,
+    /// The first `session_meta` names `forked_from_id`: a subagent spawned with the parent's
+    /// turns (`fork_turns`), whose rollout copies them before its own.
+    forked: bool,
+    /// The thread the first `session_meta` says it was forked from (`forked_from_id`), and the
+    /// ordinal of the origin's record the copy ends before.
+    forked_from: Option<Fork>,
+    /// The role a spawned subagent ran as (`agent_role`), or `guardian_review` for a guardian
+    /// review (`thread_source`, or `source.subagent.other: "guardian"`).
+    agent: Option<String>,
+    cwd: Option<String>,
+    version: Option<String>,
+    created: Option<String>,
+    updated: Option<String>,
+    models: Vec<ModelRef>,
+    git_branch: Option<String>,
+}
+
+impl MetaBuilder {
+    fn observe(&mut self, row: &Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+        if row.get("type").and_then(Value::as_str) == Some("session_meta") {
+            if self.id.is_none() {
+                // Only the rollout's own (first) `session_meta`: a forked subagent's rollout
+                // carries its parent's next.
+                self.forked_from = Fork::of(payload);
+                self.forked = self.forked_from.is_some();
+                // `id` is the rollout's own thread; a subagent's `session_id` names the thread
+                // that spawned it. A hand-written rollout may carry only one of the two.
+                self.id = str_at(payload, "/id")
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| str_at(payload, "/session_id"))
+                    .filter(|s| !s.is_empty());
+            }
+            if self.session_id.is_none() {
+                self.session_id = str_at(payload, "/session_id").filter(|s| !s.is_empty());
+            }
+            if self.parent_thread_id.is_none() {
+                self.parent_thread_id = str_at(payload, "/parent_thread_id")
+                    .or_else(|| str_at(payload, "/source/subagent/thread_spawn/parent_thread_id"))
+                    .filter(|s| !s.is_empty());
+            }
+            if self.agent.is_none() {
+                let guardian = str_at(payload, "/thread_source").as_deref()
+                    == Some("guardian_review")
+                    || str_at(payload, "/source/subagent/other").as_deref() == Some("guardian");
+                self.agent = if guardian {
+                    Some("guardian_review".into())
+                } else {
+                    str_at(payload, "/agent_role")
+                        .or_else(|| str_at(payload, "/source/subagent/thread_spawn/agent_role"))
+                        .filter(|s| !s.is_empty())
+                };
+            }
+            if self.cwd.is_none() {
+                self.cwd = str_at(payload, "/cwd");
+            }
+            if self.version.is_none() {
+                self.version = str_at(payload, "/cli_version");
+            }
+            if self.created.is_none() {
+                self.created = str_at(payload, "/timestamp");
+            }
+            if self.git_branch.is_none() {
+                self.git_branch = str_at(payload, "/git/branch");
+            }
+        }
+        if let Some(ts) = str_at(row, "/timestamp") {
+            if self.updated.as_deref().is_none_or(|u| ts.as_str() > u) {
+                self.updated = Some(ts.clone());
+            }
+            if self.created.as_deref().is_none_or(|c| ts.as_str() < c) {
+                self.created = Some(ts);
+            }
+        }
+    }
+}
+
+impl Builder {
+    fn push(&mut self, index: usize, row: Value) {
+        self.meta.observe(&row);
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+        // The environment block states the shell commands run with; it arrives before any call.
+        if let Some(text) = payload
+            .get("content")
+            .and_then(super::json::text_of_content)
+            && let Some(shell) = shell_declared(&text)
+        {
+            self.env_shell = Some(shell);
+        }
+        if row.get("type").and_then(Value::as_str) == Some("event_msg")
+            && payload.get("type").and_then(Value::as_str) == Some("thread_settings_applied")
+            && let Some(settings) = payload.get("thread_settings")
+        {
+            let model = ModelRef {
+                provider: str_at(settings, "/model_provider_id"),
+                id: str_at(settings, "/model").unwrap_or_default(),
+            };
+            if !model.id.is_empty() && !self.meta.models.iter().any(|m| m.id == model.id) {
+                self.meta.models.push(model.clone());
+            }
+            self.model = Some(model);
+        }
+        match class_of(&row) {
+            Class::StepPart => {
+                self.open_results = None;
+                self.step_with(index, row);
+            }
+            Class::Result => {
+                self.open_step = None;
+                self.results_with(index, row);
+            }
+            Class::User => {
+                self.flush();
+                self.entries.push(Entry {
+                    id: id_of(payload, index),
+                    kind: Kind::User {
+                        text: payload
+                            .get("content")
+                            .and_then(super::json::text_of_content)
+                            .unwrap_or_default(),
+                        attachments: payload
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .map(|blocks| super::json::attachments(blocks))
+                            .unwrap_or_default(),
+                    },
+                    raw: vec![row],
+                });
+            }
+            Class::Abort => {
+                self.abort_step(payload);
+                self.flush();
+                self.entries.push(Entry {
+                    id: id_of(payload, index),
+                    kind: Kind::Meta {
+                        kind: MetaKind::TurnAborted,
+                    },
+                    raw: vec![row],
+                });
+            }
+            Class::Compacted => self.compacted(index, row),
+            Class::TurnBoundary => {
+                // A new turn starts here: the step and any results entry that was still open
+                // belong to the turn that just ended.
+                self.open_step = None;
+                self.open_results = None;
+                self.entries.push(Entry {
+                    id: id_of(payload, index),
+                    kind: Kind::Meta {
+                        kind: MetaKind::Internal,
+                    },
+                    raw: vec![row],
+                });
+            }
+            Class::Meta(kind) => {
+                self.entries.push(Entry {
+                    id: id_of(payload, index),
+                    kind: Kind::Meta { kind },
+                    raw: vec![row],
+                });
+            }
+        }
+    }
+
+    /// The `compacted` record. The summary the model wrote in the turn it names is folded into
+    /// this entry: it is not part of the history the destination replays.
+    fn compacted(&mut self, index: usize, row: Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+        let compaction_turn = str_at(payload, "/latest_token_usage_record/turn_id");
+        let fold = match (&self.open_step, &compaction_turn) {
+            (Some((i, turn)), Some(t)) if turn == t => Some(*i),
+            _ => None,
+        };
+        let kind = Kind::Compaction {
+            summary: str_at(payload, "/message").unwrap_or_default(),
+            kept_from: None, // resolved at the end: the first conversation entry after this one
+            trigger: Trigger::Unknown, // Codex records no trigger field
+            tokens_before: payload
+                .pointer("/latest_token_usage_record/usage/input_tokens")
+                .and_then(Value::as_u64),
+        };
+        self.open_step = None;
+        self.open_results = None;
+        match fold {
+            // Replace the summary turn in place, so the entry stays where its first record is.
+            Some(i) => {
+                let entry = &mut self.entries[i];
+                entry.raw.push(row);
+                entry.kind = kind;
+            }
+            None => self.entries.push(Entry {
+                id: id_of(payload, index),
+                kind,
+                raw: vec![row],
+            }),
+        }
+    }
+
+    fn flush(&mut self) {
+        self.open_step = None;
+        self.open_results = None;
+    }
+
+    /// L9: the reply an interrupt cut. The step the aborted turn was writing keeps what it holds
+    /// and says how it ended, unless something (a result, a later prompt) came after it. An abort
+    /// that names another turn cut nothing here.
+    fn abort_step(&mut self, payload: &Value) {
+        let Some((index, step_turn)) = self.last_step.clone() else {
+            return;
+        };
+        let turn = str_at(payload, "/turn_id")
+            .or_else(|| {
+                str_at(
+                    payload,
+                    "/internal_chat_message_metadata_passthrough/turn_id",
+                )
+            })
+            .unwrap_or_default();
+        if !turn.is_empty() && !step_turn.is_empty() && turn != step_turn {
+            return;
+        }
+        let last = self
+            .entries
+            .iter()
+            .rposition(|entry| !matches!(entry.kind, Kind::Meta { .. }));
+        if last != Some(index) {
+            return;
+        }
+        if let Kind::Step { end, .. } = &mut self.entries[index].kind {
+            *end = StepEnd::Aborted;
+        }
+    }
+
+    fn step_with(&mut self, index: usize, row: Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+        let turn = str_at(
+            payload,
+            "/internal_chat_message_metadata_passthrough/turn_id",
+        )
+        .unwrap_or_default();
+        // A record of a different turn is a different model response, even when only events sit
+        // between them: the reader must not merge two answers into one step.
+        if self
+            .open_step
+            .as_ref()
+            .is_some_and(|(_, open_turn)| *open_turn != turn)
+        {
+            self.open_step = None;
+        }
+        if self.open_step.is_none() {
+            let id = id_of(payload, index);
+            self.entries.push(Entry {
+                id,
+                kind: Kind::Step {
+                    model: self.model.clone(),
+                    reasoning: Vec::new(),
+                    text: Vec::new(),
+                    calls: Vec::new(),
+                    end: StepEnd::Unknown,
+                },
+                raw: Vec::new(),
+            });
+            self.open_step = Some((self.entries.len() - 1, turn));
+            self.last_step = self.open_step.clone();
+        }
+        let (i, _) = *self.open_step.as_ref().expect("just opened");
+        let entry = &mut self.entries[i];
+        let model_id = self.model.as_ref().map(|m| m.id.clone());
+        let Kind::Step {
+            reasoning,
+            text,
+            calls,
+            end,
+            ..
+        } = &mut entry.kind
+        else {
+            entry.raw.push(row);
+            return;
+        };
+        let item_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+        match item_type {
+            "reasoning" => reasoning.push(Reasoning {
+                text: payload
+                    .get("summary")
+                    .and_then(Value::as_array)
+                    .map(|s| blocks_text(s))
+                    .unwrap_or_default(),
+                opaque: Some(Opaque {
+                    chat: None,
+                    protocol: Protocol::OpenaiResponses,
+                    model: model_id,
+                    signature: None,
+                    encrypted: str_at(payload, "/encrypted_content"),
+                }),
+            }),
+            "message" => {
+                if let Some(blocks) = payload.get("content").and_then(Value::as_array) {
+                    let t = blocks_text(blocks);
+                    if !t.is_empty() {
+                        text.push(t);
+                    }
+                }
+            }
+            "function_call" | "custom_tool_call" | "local_shell_call" | "web_search_call" => {
+                // `local_shell_call` and `web_search_call` have no name or arguments: what they
+                // did is in `action`, and a web search has no `call_id` (it has no output record).
+                let (name, input) = match item_type {
+                    "local_shell_call" => ("local_shell".to_string(), action_of(payload)),
+                    "web_search_call" => ("web_search".to_string(), action_of(payload)),
+                    // A code-mode `exec` script is read once its output is known (L10,
+                    // `exec::split_code_mode`).
+                    _ => (
+                        str_at(payload, "/name").unwrap_or_default(),
+                        arguments_of(payload),
+                    ),
+                };
+                let id = str_at(payload, "/call_id")
+                    .or_else(|| str_at(payload, "/id"))
+                    .unwrap_or_else(|| id_of(payload, index));
+                if name == "exec" {
+                    self.exec_shells.insert(id.clone(), self.env_shell.clone());
+                }
+                calls.push(ToolCall {
+                    id,
+                    canonical: Some(canonical_call(&name, &input, self.env_shell.clone())),
+                    source_name: name,
+                    input,
+                });
+            }
+            _ => {}
+        }
+        *end = step_end(None, !calls.is_empty());
+        entry.raw.push(row);
+    }
+
+    fn results_with(&mut self, index: usize, row: Value) {
+        let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+        let result = ToolResult {
+            call_id: str_at(payload, "/call_id").unwrap_or_default(),
+            content: match payload.get("output") {
+                Some(Value::String(s)) => ResultContent::Text(s.clone()),
+                // Content items (an image, an MCP result) stay structured.
+                Some(Value::Array(items)) => {
+                    super::json::result_content(&items.iter().map(output_item).collect::<Vec<_>>())
+                }
+                Some(other) => ResultContent::Text(other.to_string()),
+                None => ResultContent::Text(String::new()),
+            },
+            is_error: false,
+            truncated_by_source: false,
+        };
+        match self.open_results {
+            Some(i) => {
+                let entry = &mut self.entries[i];
+                entry.raw.push(row);
+                if let Kind::Results { results } = &mut entry.kind {
+                    results.push(result);
+                }
+            }
+            None => {
+                self.entries.push(Entry {
+                    id: id_of(payload, index),
+                    kind: Kind::Results {
+                        results: vec![result],
+                    },
+                    raw: vec![row],
+                });
+                self.open_results = Some(self.entries.len() - 1);
+            }
+        }
+    }
+
+    fn finish(mut self, source_path: Option<&Path>) -> Result<Session> {
+        self.flush();
+        exec::split_code_mode(&mut self.entries, &self.exec_shells);
+        for i in 0..self.entries.len() {
+            if !matches!(
+                self.entries[i].kind,
+                Kind::Compaction {
+                    kept_from: None,
+                    ..
+                }
+            ) {
+                continue;
+            }
+            let next = self.entries[i + 1..]
+                .iter()
+                .find(|e| !matches!(e.kind, Kind::Meta { .. }))
+                .map(|e| e.id.clone());
+            if let Kind::Compaction { kept_from, .. } = &mut self.entries[i].kind {
+                *kept_from = next;
+            }
+        }
+        let m = self.meta;
+        // A subagent's rollout names the thread that spawned it in `parent_thread_id`; an older
+        // one only in `session_id`, which is the thread's own id in a root thread.
+        let parent = m.parent_thread_id.or_else(|| {
+            m.session_id
+                .filter(|session| m.id.as_deref().is_some_and(|id| id != session))
+        });
+        let spawned = parent.as_ref().map(|_| ParentKind::Spawn {
+            call_id: None,
+            agent: m.agent,
+            inherits_context: m.forked,
+        });
+        // A thread forked from another that no spawn started is a fork; a forked subagent is a
+        // spawn, the relation that matters (its inherited turns are kept either way).
+        let (parent, parent_kind) = match (parent, spawned, m.forked_from) {
+            (Some(parent), kind, _) => (Some(parent), kind),
+            (None, _, Some(fork)) => (Some(fork.thread.clone()), Some(fork.kind())),
+            (None, _, None) => (None, None),
+        };
+        Ok(Session {
+            meta: Meta {
+                harness: HarnessId::Codex,
+                harness_version: m.version.unwrap_or_else(|| "unknown".into()),
+                id: m.id.unwrap_or_else(|| "unknown".into()),
+                cwd: m.cwd,
+                title: None,
+                created: m.created,
+                updated: m.updated,
+                models: m.models,
+                git_branch: m.git_branch,
+                parent,
+                parent_kind,
+                source_path: source_path.map(|p| p.to_string_lossy().into_owned()),
+                source_sha256: None,
+            },
+            entries: self.entries,
+            branches: Vec::new(),
+        })
+    }
+}
+
+/// What a `local_shell_call` or `web_search_call` did.
+fn action_of(payload: &Value) -> Value {
+    payload.get("action").cloned().unwrap_or(Value::Null)
+}
+
+/// A tool output content item, with its text as a plain text block.
+fn output_item(item: &Value) -> Value {
+    match item.get("type").and_then(Value::as_str) {
+        Some("input_text" | "output_text") => serde_json::json!({
+            "type": "text",
+            "text": item.get("text").cloned().unwrap_or(Value::String(String::new())),
+        }),
+        _ => item.clone(),
+    }
+}
+
+/// A tool call's arguments: Codex stores them as a JSON *string*.
+fn arguments_of(payload: &Value) -> Value {
+    match payload.get("arguments") {
+        Some(Value::String(s)) => {
+            serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone()))
+        }
+        Some(other) => other.clone(),
+        None => payload.get("input").cloned().unwrap_or(Value::Null),
+    }
+}
+
+/// The shell an `<environment_context>` declares (`<shell>…</shell>`), as the canonical tool its
+/// command lines are written for. A shell of no dialect mukade translates (`cmd`, `fish`) is
+/// `Other` with its name: its calls are not read as `Bash`.
+fn shell_declared(text: &str) -> Option<CanonicalTool> {
+    let start = text.find("<shell>")? + "<shell>".len();
+    let end = text[start..].find("</shell>")? + start;
+    shell_tool(text[start..end].trim())
+}
+
+/// The canonical tool of a shell named by its program or path (`pwsh`, `/bin/bash`,
+/// `C:\Windows\System32\cmd.exe`, `git-bash`). `None`: no name.
+fn shell_tool(name: &str) -> Option<CanonicalTool> {
+    if name.is_empty() {
+        return None;
+    }
+    if matches!(name.to_ascii_lowercase().as_str(), "posix" | "git-bash") {
+        return Some(CanonicalTool::Bash);
+    }
+    Some(match crate::tools::shell_named(name) {
+        Some(crate::tools::Shell::Posix) => CanonicalTool::Bash,
+        Some(crate::tools::Shell::PowerShell) => CanonicalTool::PowerShell,
+        None => CanonicalTool::Other(name.to_string()),
+    })
+}
+
+/// The canonical form of a Codex call. `exec_command` inherits the harness's shell dialect unless
+/// the call names one itself (by name or by path); the dialect is what decides whether a hop may
+/// keep a shell call or has to carry it as text (L13). A shell of no dialect mukade translates
+/// leaves the call as Codex's own tool, which travels as text. When nothing states the shell, the
+/// command line is read as the canonical `Bash`, which is what that name means in this vocabulary.
+fn canonical_call(name: &str, input: &Value, env_shell: Option<CanonicalTool>) -> CanonicalTool {
+    if !matches!(name, "exec_command" | "local_shell") {
+        return CanonicalTool::from_codex(name);
+    }
+    let own = input
+        .get("shell")
+        .and_then(Value::as_str)
+        .and_then(shell_tool);
+    match own.or(env_shell) {
+        Some(CanonicalTool::Other(_)) => CanonicalTool::Other(name.to_string()),
+        Some(shell) => shell,
+        None => CanonicalTool::Bash,
+    }
+}
+
+/// The record's own id, or a stable one derived from its position.
+fn id_of(payload: &Value, index: usize) -> String {
+    str_at(payload, "/id")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fallback_id("ord", index))
+}
+
+// ---------------------------------------------------------------------------------------------
+
+impl Reader for Codex {
+    fn harness(&self) -> HarnessId {
+        HarnessId::Codex
+    }
+
+    fn list(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
+        list_in(roots, false, None)
+    }
+
+    fn list_all(&self, roots: &StoreRoots) -> Result<Vec<SessionInfo>> {
+        list_in(roots, true, None)
+    }
+
+    fn read(&self, id: &str, roots: &StoreRoots) -> Result<Session> {
+        read_with(id, roots, Branches::Active)
+    }
+
+    fn overview(&self, id: &str, roots: &StoreRoots) -> Result<SessionInfo> {
+        super::pick_overview(list_in(roots, true, Some(id))?, id, HarnessId::Codex)
+    }
+
+    fn read_clipped(
+        &self,
+        id: &str,
+        roots: &StoreRoots,
+        max_string_bytes: usize,
+    ) -> Result<Clipped> {
+        read_file_clipped(&locate(id, roots)?, &Clip::new(max_string_bytes))
+    }
+}
+
+/// The threads of a Codex home: the rollouts under `sessions/` and `archived_sessions/` (archived
+/// by their folder), and the threads Codex's state database still has a row for. A rollout stays
+/// the transcript and takes what it lacks (the time, the archived flag, the parent) from its row.
+/// A row whose rollout lies elsewhere is listed at that file; a row whose rollout is gone is
+/// listed as unreadable, so its project is still seen. `with_subagents` keeps the threads Codex
+/// ran for another thread (spawned subagents, guardian reviews), which are not roots: `list`
+/// leaves them out once the database says what they are.
+///
+/// `only` limits the listing to that one thread: the other rollouts are not opened.
+fn list_in(
+    roots: &StoreRoots,
+    with_subagents: bool,
+    only: Option<&str>,
+) -> Result<Vec<SessionInfo>> {
+    let Some(home) = roots.codex_home.as_deref() else {
+        return Err(
+            super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to list".into()).into(),
+        );
+    };
+    // One entry per thread, at its latest file: the active page of a paginated thread. A thread
+    // found in both folders is at its copy under `sessions/`.
+    let mut latest: HashMap<String, (PathBuf, bool)> = HashMap::new();
+    for (file, archived) in store_rollouts(roots)? {
+        let id = rollout_id(&file);
+        if id.is_empty() || only.is_some_and(|only| only != id) {
+            continue;
+        }
+        match latest.get(&id) {
+            Some((known, known_archived))
+                if (!known_archived, known.file_name()) >= (!archived, file.file_name()) => {}
+            _ => {
+                latest.insert(id, (file, archived));
+            }
+        }
+    }
+    // The catalogue is read once for the whole list: a rollout never carries its thread's name.
+    let names = index_names(home);
+    let mut listed: HashMap<String, SessionInfo> = latest
+        .into_iter()
+        .map(|(id, (file, archived))| {
+            let header = peek_header(&file);
+            let info = SessionInfo {
+                id: id.clone(),
+                title: names.get(&id).cloned(),
+                cwd: header.cwd,
+                parent: header.parent,
+                parent_kind: header.parent_kind,
+                // A rollout is only ever appended to: its last write is the thread's last activity.
+                updated: super::json::modified_rfc3339(&file),
+                archived,
+                path: file.to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            (id, info)
+        })
+        .collect();
+    let catalogue = super::codex_state::catalogue(home);
+    let database = catalogue.database_name();
+    for thread in catalogue.threads {
+        if only.is_some_and(|only| only != thread.id) {
+            continue;
+        }
+        if thread.subagent && !with_subagents {
+            listed.remove(&thread.id);
+            continue;
+        }
+        let parent_kind = thread.parent_kind();
+        if let Some(info) = listed.get_mut(&thread.id) {
+            info.title = info.title.take().or(thread.title);
+            info.cwd = info.cwd.take().or(thread.cwd);
+            // The database's own `updated_at` is the thread's; the file time stands in without it.
+            info.updated = thread.updated.or(info.updated.take());
+            // Archived when either says so: the folder the rollout sits in, or its row.
+            info.archived |= thread.archived;
+            // The database names a spawner; a fork is only in the rollout's own header.
+            if thread.parent.is_some() {
+                info.parent = thread.parent;
+                info.parent_kind = parent_kind;
+            }
+            continue;
+        }
+        let on_disk = thread.rollout.as_deref().filter(|file| file.is_file());
+        let info = SessionInfo {
+            title: names.get(&thread.id).cloned().or(thread.title.clone()),
+            cwd: on_disk.and_then(peek_cwd).or(thread.cwd.clone()),
+            updated: thread.updated.clone(),
+            archived: thread.archived,
+            path: thread
+                .rollout
+                .as_deref()
+                .map(|file| file.to_string_lossy().into_owned())
+                .unwrap_or_else(|| database.clone()),
+            parent: thread.parent.clone(),
+            parent_kind,
+            unreadable: on_disk.is_none().then(|| {
+                format!("rollout file is gone; the thread survives only as a row in {database}")
+            }),
+            id: thread.id.clone(),
+            ..Default::default()
+        };
+        listed.insert(thread.id, info);
+    }
+    let mut out: Vec<SessionInfo> = listed.into_values().collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
+    Ok(out)
+}
+
+/// What a rollout's header says without reading the rest.
+#[derive(Default)]
+struct Header {
+    cwd: Option<String>,
+    parent: Option<String>,
+    parent_kind: Option<ParentKind>,
+}
+
+/// The header of a rollout: its folder, and the thread it was spawned or forked from. A rollout
+/// whose header is missing or damaged is still listed.
+fn peek_header(file: &Path) -> Header {
+    let Some(row) = peek_first_row(file) else {
+        return Header::default();
+    };
+    let payload = row.get("payload").unwrap_or(&NO_PAYLOAD);
+    let fork = Fork::of(payload);
+    let spawner = str_at(payload, "/parent_thread_id")
+        .or_else(|| str_at(payload, "/source/subagent/thread_spawn/parent_thread_id"))
+        .filter(|s| !s.is_empty());
+    let (parent, parent_kind) = match (spawner, fork) {
+        (Some(parent), fork) => (
+            Some(parent),
+            Some(ParentKind::Spawn {
+                call_id: None,
+                agent: str_at(payload, "/agent_role")
+                    .or_else(|| str_at(payload, "/source/subagent/thread_spawn/agent_role")),
+                inherits_context: fork.is_some(),
+            }),
+        ),
+        (None, Some(fork)) => (Some(fork.thread.clone()), Some(fork.kind())),
+        (None, None) => (None, None),
+    };
+    Header {
+        cwd: str_at(payload, "/cwd"),
+        parent,
+        parent_kind,
+    }
+}
+
+/// A rollout's first record when it is a `session_meta` that is not larger than a megabyte.
+fn peek_first_row(file: &Path) -> Option<Value> {
+    use std::io::{BufRead, Read};
+
+    const MAX_HEADER_BYTES: usize = 1024 * 1024;
+
+    let handle = std::fs::File::open(file).ok()?;
+    let mut header = String::new();
+    // The extra byte distinguishes an oversized line from a complete header at the limit.
+    std::io::BufReader::new(handle.take((MAX_HEADER_BYTES + 1) as u64))
+        .read_line(&mut header)
+        .ok()?;
+    if header.len() > MAX_HEADER_BYTES {
+        return None;
+    }
+    let row: Value = serde_json::from_str(header.trim_start_matches('\u{feff}').trim()).ok()?;
+    if row.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return None;
+    }
+    Some(row)
+}
+
+/// Read only the native header; missing or damaged metadata does not hide the rollout.
+fn peek_cwd(file: &Path) -> Option<String> {
+    peek_header(file).cwd
+}
+
+/// Read the thread `id` (an unambiguous prefix is enough) from the store, choosing which branches
+/// of a paginated thread to carry.
+pub fn read_with(id: &str, roots: &StoreRoots, branches: Branches) -> Result<Session> {
+    read_file_with(&locate(id, roots)?, branches)
+}
+
+/// The rollout file that holds thread `id` (an unambiguous prefix is enough): the latest page of a
+/// paginated thread, or the file the state database points at.
+fn locate(id: &str, roots: &StoreRoots) -> Result<PathBuf> {
+    let Some(sessions) = roots.codex_sessions() else {
+        return Err(
+            super::Lookup::NoStore("CODEX_HOME is not set: no Codex store to read".into()).into(),
+        );
+    };
+    let matches: Vec<PathBuf> = store_rollouts(roots)?
+        .into_iter()
+        .map(|(file, _)| file)
+        .filter(|f| rollout_id(f).starts_with(id))
+        .collect();
+    // The pages of one paginated thread share its id: the latest page is the thread.
+    let one_thread = matches
+        .first()
+        .map(|file| rollout_id(file))
+        .is_some_and(|first| matches.iter().all(|f| rollout_id(f) == first));
+    if matches.len() > 1 && one_thread {
+        let latest = matches
+            .iter()
+            .max_by(|a, b| a.file_name().cmp(&b.file_name()))
+            .expect("not empty");
+        return Ok(latest.clone());
+    }
+    match matches.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => read_through_catalogue(id, roots, &sessions),
+        many => Err(super::Lookup::Ambiguous(format!(
+            "{id:?} matches {} Codex rollouts",
+            many.len()
+        ))
+        .into()),
+    }
+}
+
+/// No rollout under `sessions/` carries `id`: the state database may still know the thread. A row
+/// whose rollout lies elsewhere (Codex moves archived threads out of `sessions/`) is read at that
+/// file; one whose rollout is gone is refused with the reason.
+fn read_through_catalogue(id: &str, roots: &StoreRoots, sessions: &Path) -> Result<PathBuf> {
+    let not_found = || {
+        super::Lookup::NotFound(format!(
+            "no Codex rollout with id {id:?} under {}",
+            sessions.display()
+        ))
+    };
+    let Some(home) = roots.codex_home.as_deref() else {
+        return Err(not_found().into());
+    };
+    let catalogue = super::codex_state::catalogue(home);
+    let known: Vec<&super::codex_state::Thread> = catalogue
+        .threads
+        .iter()
+        .filter(|thread| !id.is_empty() && thread.id.starts_with(id))
+        .collect();
+    match known.as_slice() {
+        [] => Err(not_found().into()),
+        [thread] => match thread.rollout.as_deref().filter(|file| file.is_file()) {
+            Some(file) => Ok(file.to_path_buf()),
+            None => Err(super::Lookup::NotFound(format!(
+                "Codex thread {} has no rollout any more: its row in {} points at {}, which does not exist",
+                thread.id,
+                catalogue.database_name(),
+                thread
+                    .rollout
+                    .as_deref()
+                    .map(|file| file.display().to_string())
+                    .unwrap_or_else(|| "no file".into()),
+            ))
+            .into()),
+        },
+        many => Err(super::Lookup::Ambiguous(format!(
+            "{id:?} matches {} Codex threads",
+            many.len()
+        ))
+        .into()),
+    }
+}
+
+/// The uuid a rollout file name ends with: `rollout-<ts>-<uuid>.jsonl`, or the thread's uuid for
+/// a page of a paginated thread, `rollout-<ts>-<uuid>_<page uuid>.jsonl`. A uuid is five dash
+/// separated groups, so the id is the last five of the name's parts.
+fn rollout_id(file: &Path) -> String {
+    let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let stem = match name.rsplit_once('_') {
+        Some((thread, _page)) if name.starts_with("rollout-") => thread,
+        _ => name,
+    };
+    let parts: Vec<&str> = stem.split('-').collect();
+    if stem.starts_with("rollout-") && parts.len() >= 5 {
+        parts[parts.len() - 5..].join("-")
+    } else {
+        stem.to_string()
+    }
+}
+
+/// Every rollout of the store, each with whether it is archived: those under `sessions/`, then
+/// those `codex archive` moved to `archived_sessions/`.
+fn store_rollouts(roots: &StoreRoots) -> Result<Vec<(PathBuf, bool)>> {
+    let mut out = Vec::new();
+    for (dir, archived) in [
+        (roots.codex_sessions(), false),
+        (roots.codex_archived_sessions(), true),
+    ] {
+        if let Some(dir) = dir {
+            out.extend(
+                rollout_files(&dir)?
+                    .into_iter()
+                    .map(|file| (file, archived)),
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Every rollout under `<CODEX_HOME>/sessions/YYYY/MM/DD/`.
+fn rollout_files(sessions: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut dirs = vec![sessions.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                dirs.push(entry.path());
+            } else if entry.path().extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                out.push(entry.path());
+            }
+        }
+    }
+    Ok(out)
+}

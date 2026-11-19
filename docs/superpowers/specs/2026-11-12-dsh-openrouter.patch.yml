@@ -1,0 +1,10 @@
+# mukade test: route dsh through OpenRouter's free model (no DeepSeek key on this machine).
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        apiKeyEnv: OPENROUTER_API_KEY
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: cohere/north-mini-code:free

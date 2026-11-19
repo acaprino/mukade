@@ -1,0 +1,9 @@
+{
+  "agentType": "general-purpose",
+  "description": "Read module B",
+  "spawnDepth": 1,
+  "requestShape": "background",
+  "requestNonInteractive": false,
+  "toolUseId": "toolu_bg",
+  "finished": true
+}

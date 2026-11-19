@@ -1,0 +1,8 @@
+{
+  "agentType": "Explore",
+  "description": "Never started",
+  "spawnDepth": 1,
+  "requestShape": "background",
+  "requestNonInteractive": false,
+  "toolUseId": "toolu_never"
+}

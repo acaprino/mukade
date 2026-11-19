@@ -1,0 +1,1327 @@
+//! One hop, end to end (Â§1.2): read a source session, apply the compaction policy, plan, check the
+//! strict gate, write, and report what happened in a [`Manifest`].
+//!
+//! `hop` is the whole pipeline; [`import`] is the second half alone, for a caller that already holds
+//! a [`Session`]; [`export`] is the first half alone.
+
+use crate::manifest::Manifest;
+use crate::model::{Entry, HarnessId, Kind, Protocol, Session};
+use crate::policy::ReasoningPolicy;
+use crate::roots::StoreRoots;
+use crate::sha256::records_sha256;
+use crate::strict::check_plan;
+use crate::summary::{MODEL_SUMMARY_HANDOFF, SummarizeOpts, Summary, SummaryFacts};
+use crate::tools::{Shell, ToolSet};
+use crate::writer::{self, Subagents, WriteOpts, Written, plan};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+
+/// The text every portable hop writes before the source's own summary (Â§4.2, verbatim).
+pub const PORTABLE_HANDOFF: &str = "[mukade handoff v1] Summary of the earlier conversation, written by the source agent's own compaction:";
+
+/// Which session to read: its native id, or a file that holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRef {
+    pub harness: HarnessId,
+    pub id: String,
+}
+
+impl SessionRef {
+    pub fn id(harness: HarnessId, id: impl Into<String>) -> Self {
+        SessionRef {
+            harness,
+            id: id.into(),
+        }
+    }
+}
+
+/// Where the summary of a portable hop comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SummarySource {
+    /// The source's own native compaction record (L4).
+    SourceRecord,
+    /// Text the caller supplies, e.g. written by a cheaper model.
+    Supplied(String),
+    /// Ask the source harness's own model for it now ([`compact`] runs it, `crate::summary`).
+    SourceModel(SummarizeOpts),
+    /// What the source harness's model wrote: [`compact`] turns a `SourceModel` into this.
+    Generated(Summary),
+}
+
+/// Where the tail of a portable hop starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeepFrom {
+    /// The boundary the source's own compaction recorded.
+    SourceBoundary,
+    /// The last `n` user turns of the selection.
+    LastTurns(usize),
+    /// A named entry; an unambiguous prefix is accepted.
+    Message(String),
+}
+
+/// What to do with the source's compaction (Â§4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Compaction {
+    /// The whole selected history (Â§4.1).
+    #[default]
+    None,
+    /// The summary as one user message, then the tail from the boundary (Â§4.2).
+    Portable {
+        summary: SummarySource,
+        keep_from: KeepFrom,
+    },
+    /// The whole history, then the destination's own deterministic compaction record (Â§4.4).
+    /// No source or destination model is called.
+    Native(crate::native_compaction::NativeBudget),
+    /// The whole history, then the destination's own compaction (Â§4.3). The compaction itself is
+    /// run by the caller, as the bench does: it needs the destination's environment.
+    DestinationNative,
+}
+
+impl Compaction {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Compaction::None => "none",
+            Compaction::Portable {
+                summary: SummarySource::SourceModel(_) | SummarySource::Generated(_),
+                ..
+            } => "summary",
+            Compaction::Portable { .. } => "portable",
+            Compaction::Native(_) => "native",
+            Compaction::DestinationNative => "destination_native",
+        }
+    }
+}
+
+/// Ask the destination to resume, and keep its reply for the receipt (Â§5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumePrompt {
+    pub text: String,
+    pub timeout: Duration,
+}
+
+impl ResumePrompt {
+    pub fn new(text: impl Into<String>) -> Self {
+        ResumePrompt {
+            text: text.into(),
+            timeout: Duration::from_secs(300),
+        }
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+}
+
+/// The destination-side facts a writer needs that the spec's Â§1.2 leaves to [`WriteOpts`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WriteDetails {
+    pub dest_version: Option<String>,
+    pub dest_protocol: Option<Protocol>,
+    pub dest_shell: Option<Shell>,
+    pub offered: Option<ToolSet>,
+    pub model_provider: Option<String>,
+    pub model: Option<String>,
+    pub project_id: Option<String>,
+    pub dest_id: Option<String>,
+    pub dest_path: Option<std::path::PathBuf>,
+    pub dest_agent: Option<String>,
+    pub metadata: Option<Value>,
+    pub tool_map: Vec<(String, String, serde_json::Value, serde_json::Value)>,
+    pub without_tools: bool,
+    pub interrupted: crate::writer::Interrupted,
+    pub now: Option<String>,
+    /// The destination harness's executable override (`crate::exe` resolves the default).
+    pub exe: Option<String>,
+}
+
+/// What the manifest says the source was.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceFacts {
+    pub harness: String,
+    pub version: Option<String>,
+    pub session_id: String,
+    pub content_sha256: String,
+    /// The session the source was forked or spawned from, and how.
+    pub parent: Option<String>,
+    pub parent_kind: Option<crate::model::ParentKind>,
+}
+
+impl SourceFacts {
+    /// The facts of a session we hold: its own metadata, and its fingerprint: the SHA-256 of the
+    /// source's own bytes when the reader hashed them, else that of its records.
+    pub fn of(session: &Session) -> Self {
+        let content_sha256 = match &session.meta.source_sha256 {
+            Some(digest) => digest.clone(),
+            None => {
+                let _span = crate::timing::span("fingerprint");
+                records_sha256(session.entries.iter().flat_map(|entry| entry.raw.iter()))
+            }
+        };
+        SourceFacts {
+            harness: session.meta.harness.as_str().to_string(),
+            version: Some(session.meta.harness_version.clone()).filter(|v| !v.is_empty()),
+            session_id: session.meta.id.clone(),
+            content_sha256,
+            parent: session.meta.parent.clone(),
+            parent_kind: session.meta.parent_kind.clone(),
+        }
+    }
+}
+
+/// A whole hop request (Â§1.2).
+#[derive(Debug, Clone)]
+pub struct HopRequest {
+    pub source: SessionRef,
+    pub dest: HarnessId,
+    pub cwd: Option<String>,
+    pub compaction: Compaction,
+    pub resume: Option<ResumePrompt>,
+    pub reasoning: ReasoningPolicy,
+    pub roots: StoreRoots,
+    pub write: WriteDetails,
+    /// Carry the source's subagent sessions too ([`crate::children::import_with_children`]).
+    pub children: bool,
+    /// Read the source with every branch it keeps ([`export_all_branches`], the CLI's
+    /// `--all-branches`). A source whose harness keeps one branch only is refused before anything
+    /// is read; [`reads_all_branches`] answers that up front. A summary from the source's model
+    /// (`SummarySource::SourceModel`) does not go with it, and is refused the same way.
+    pub all_branches: bool,
+}
+
+impl HopRequest {
+    /// A hop of `source` into `dest` with every option at its default: the session alone, whole,
+    /// reasoning as [`ReasoningPolicy::default`], no resume prompt. Set the fields to change that.
+    pub fn new(source: SessionRef, dest: HarnessId, roots: StoreRoots) -> Self {
+        HopRequest {
+            source,
+            dest,
+            cwd: None,
+            compaction: Compaction::None,
+            resume: None,
+            reasoning: ReasoningPolicy::default(),
+            roots,
+            write: WriteDetails::default(),
+            children: false,
+            all_branches: false,
+        }
+    }
+}
+
+/// The second half of a hop: write a session we already hold into a destination.
+#[derive(Debug, Clone)]
+pub struct ImportOpts {
+    pub cwd: Option<String>,
+    pub roots: StoreRoots,
+    pub reasoning: ReasoningPolicy,
+    pub write: WriteDetails,
+    pub resume: Option<ResumePrompt>,
+    /// What the manifest states about the source.
+    pub source_facts: SourceFacts,
+    /// `none` | `portable` | `summary` | `native` | `destination_native`, as requested.
+    pub compaction: String,
+    /// The summary the source's model wrote, when the history travels as one.
+    pub summary: Option<SummaryFacts>,
+    /// §4.4: destination-model facts for a native boundary. The whole history is written.
+    pub native_budget: Option<crate::native_compaction::NativeBudget>,
+}
+
+/// What a hop produced (Â§1.2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Receipt {
+    pub dest_id: String,
+    pub location: String,
+    pub resume_command: Vec<String>,
+    pub manifest: Value,
+    /// The destination's reply, when a resume prompt was given.
+    pub resume_output: Option<String>,
+}
+
+/// The failures a hop can report, mapped to the command line's exit codes (technical design 5.5.2:
+/// 0 done, 2 refused with a reason, 3 needs the user, 4 failed and nothing changed, 5 failed and
+/// recovery is needed).
+#[derive(Debug, Clone, PartialEq)]
+pub enum HopError {
+    /// The source is not there, or its store is not configured. Nothing was written.
+    NotFound(String),
+    /// The captured source does not match the fingerprint reviewed by the caller.
+    SourceChanged { expected: String, actual: String },
+    /// A pair or an option this library does not do. Nothing was written.
+    Unsupported(String),
+    /// The destination refused the write, or we could not write it. Nothing changed.
+    WriteFailed(String),
+    /// A destination may have committed before its import process failed; reconcile this ID.
+    WriteUncertain {
+        reason: String,
+        dest_id: String,
+        location: Option<String>,
+    },
+    /// The source could not be read as the harness it claims to be.
+    VerifyFailed(String),
+    /// The write happened but the caller cannot use it (a resume that failed, a timed out prompt).
+    ResumeFailed {
+        reason: String,
+        receipt: Box<Receipt>,
+    },
+    /// The plan would produce a request a real provider refuses (Â§7). Nothing was written.
+    StrictCheckFailed(Vec<String>),
+    /// The source harness could not write the summary asked of it. Nothing was written.
+    SummaryFailed(String),
+    /// The session was written, and a subagent session of it was not (`--children`): the receipt
+    /// and its manifest say which children were.
+    ChildWriteFailed {
+        reason: String,
+        receipt: Box<Receipt>,
+    },
+}
+
+impl HopError {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            HopError::NotFound(_) | HopError::SourceChanged { .. } | HopError::Unsupported(_) => 2,
+            HopError::WriteFailed(_)
+            | HopError::StrictCheckFailed(_)
+            | HopError::SummaryFailed(_) => 4,
+            // The session is written: recovery is the caller's, as after a failed resume.
+            HopError::VerifyFailed(_)
+            | HopError::ResumeFailed { .. }
+            | HopError::ChildWriteFailed { .. }
+            | HopError::WriteUncertain { .. } => 5,
+        }
+    }
+}
+
+impl std::fmt::Display for HopError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HopError::NotFound(what) => write!(f, "not found: {what}"),
+            HopError::SourceChanged { expected, actual } => write!(
+                f,
+                "source changed: expected sha256 {expected}, found {actual}"
+            ),
+            HopError::Unsupported(what) => write!(f, "unsupported: {what}"),
+            HopError::WriteFailed(what) => write!(f, "write failed: {what}"),
+            HopError::WriteUncertain {
+                reason,
+                dest_id,
+                location,
+            } => write!(
+                f,
+                "write outcome unknown for session {dest_id}{}: {reason}",
+                location
+                    .as_ref()
+                    .map(|value| format!(" in {value}"))
+                    .unwrap_or_default()
+            ),
+            HopError::VerifyFailed(what) => write!(f, "could not read the source: {what}"),
+            HopError::SummaryFailed(what) => write!(f, "summary failed: {what}"),
+            HopError::ChildWriteFailed { reason, receipt } => write!(
+                f,
+                "a subagent session was not written: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
+                receipt.location
+            ),
+            HopError::ResumeFailed { reason, receipt } => write!(
+                f,
+                "resume failed: {reason} (the session was written: {}; the receipt and manifest are included in this error)",
+                receipt.location
+            ),
+            HopError::StrictCheckFailed(violations) => {
+                write!(
+                    f,
+                    "the plan would be refused by a provider: {}",
+                    violations.join("; ")
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for HopError {}
+
+/// Read a session with its harness's reader and rules (Â§8.1).
+pub fn export(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
+    let reader = crate::reader::for_harness(source.harness)
+        .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
+    let _span = crate::timing::span("read source");
+    reader.read(&source.id, roots).map_err(classify_read)
+}
+
+/// Write a session we hold into a destination.
+pub fn import(dest: HarnessId, session: &Session, opts: &ImportOpts) -> Result<Receipt, HopError> {
+    import_inner(dest, session, opts, &Subagents::default(), None).map(|done| done.receipt)
+}
+
+/// What [`import_inner`] hands back: the receipt, what was written, and which destination call
+/// each spawn call of the session became, when it was written as a tool call.
+pub(crate) struct Imported {
+    pub(crate) receipt: Receipt,
+    pub(crate) written: Written,
+    pub(crate) spawn_calls: HashMap<String, String>,
+}
+
+/// What the subagent sessions of a session came to, for its manifest.
+#[derive(Default)]
+pub(crate) struct ChildrenDone {
+    pub(crate) entries: Vec<Value>,
+    pub(crate) losses: Vec<String>,
+    /// Why a child was not written: the parent stays written, the hop reports a failed write.
+    pub(crate) failure: Option<String>,
+}
+
+/// The subagent step of a write: given where the session landed and which destination call each of
+/// its spawn calls became, write its children.
+pub(crate) type ChildrenStep<'a> =
+    &'a mut dyn FnMut(&Written, &HashMap<String, String>) -> ChildrenDone;
+
+pub(crate) fn import_inner(
+    dest: HarnessId,
+    session: &Session,
+    opts: &ImportOpts,
+    subagents: &Subagents,
+    children: Option<ChildrenStep<'_>>,
+) -> Result<Imported, HopError> {
+    let destination = crate::harnesses::destination(dest)?;
+    let dest_writer = destination.writer();
+    let mut write_opts = WriteOpts {
+        roots: opts.roots.clone(),
+        cwd: opts.cwd.clone().or_else(|| session.meta.cwd.clone()),
+        dest_version: opts.write.dest_version.clone(),
+        dest_protocol: opts.write.dest_protocol.clone(),
+        dest_shell: opts.write.dest_shell,
+        offered: opts.write.offered,
+        model_provider: opts.write.model_provider.clone(),
+        model: opts.write.model.clone(),
+        project_id: opts.write.project_id.clone(),
+        dest_id: opts.write.dest_id.clone(),
+        dest_path: opts.write.dest_path.clone(),
+        dest_agent: opts.write.dest_agent.clone(),
+        metadata: opts.write.metadata.clone(),
+        tool_map: opts.write.tool_map.clone(),
+        without_tools: opts.write.without_tools,
+        interrupted: opts.write.interrupted,
+        reasoning: opts.reasoning,
+        title: session.meta.title.clone(),
+        now: opts.write.now.clone(),
+        exe: opts.write.exe.clone(),
+        native_budget: opts.native_budget.clone(),
+        subagents: subagents.clone(),
+        fork_of: None,
+    };
+    // What the destination does not take is refused before anything is planned.
+    destination
+        .validate_write(&write_opts)
+        .map_err(|error| HopError::Unsupported(format!("{error:#}")))?;
+    if opts.compaction == "native" && opts.native_budget.is_none() {
+        return Err(HopError::Unsupported(
+            "compaction native needs --context-window and its optional budget flags".into(),
+        ));
+    }
+    if opts.compaction != "native" && opts.native_budget.is_some() {
+        return Err(HopError::Unsupported(
+            "a native budget goes with compaction native".into(),
+        ));
+    }
+
+    if let Some(prompt) = opts.resume.as_ref() {
+        check_resume_prompt(&prompt.text, dest, write_opts.exe.as_deref())?;
+    }
+
+    // Â§7: the gate runs on the plan the writer will use, before anything reaches the store.
+    let plan_span = crate::timing::span("plan");
+    let plan = plan::plan(session, dest, &write_opts);
+    drop(plan_span);
+    let dest_protocol = write_opts
+        .dest_protocol
+        .clone()
+        .or_else(|| crate::policy::destination_protocol(dest));
+    let violations = {
+        let _span = crate::timing::span("strict check");
+        check_plan(&plan, dest_protocol.as_ref())
+    };
+    if !violations.is_empty() {
+        return Err(HopError::StrictCheckFailed(violations));
+    }
+
+    // What the registry knows: the copy of this fork's origin here, and an earlier copy of this
+    // very session (docs/superpowers/specs/2026-11-12-hop-registry-design.md).
+    let registry = Registered::look_up(dest, session, opts, subagents, &plan);
+    write_opts.fork_of = registry.fork_of.clone();
+
+    let write_span = crate::timing::span("write files");
+    let written: Written = dest_writer
+        .write_planned(session, &plan, &write_opts)
+        .map_err(
+            |error| match error.downcast_ref::<writer::WriteOutcomeUnknown>() {
+                Some(unknown) => HopError::WriteUncertain {
+                    reason: unknown.reason.clone(),
+                    dest_id: unknown.id.clone(),
+                    location: unknown.location.clone(),
+                },
+                None => HopError::WriteFailed(format!("{error:#}")),
+            },
+        )?;
+    drop(write_span);
+    let registry_error = registry.remember(&written);
+    let spawn_calls = native_spawn_calls(session, &plan, subagents);
+
+    let mut receipt = Receipt {
+        dest_id: written.id.clone(),
+        location: written.location.clone(),
+        resume_command: written.resume.clone(),
+        manifest: Value::Null,
+        resume_output: None,
+    };
+
+    // A summary written by the source's model has a loss line of its own, so it is not also said
+    // to be the source's compaction.
+    let mut losses = Manifest::losses_for(
+        &plan.counts,
+        session.interrupted_last_turn(),
+        opts.summary.is_none()
+            && plan
+                .blocks
+                .iter()
+                .any(|block| matches!(block, crate::writer::plan::PlannedBlock::Compaction { .. })),
+    );
+    losses.extend(registry.fork_loss.clone());
+    // The children are written before the destination is asked to resume, so it finds them.
+    let children_done = children.map(|step| step(&written, &spawn_calls));
+    let manifest = |losses: Vec<String>| {
+        let mut json = manifest_of(dest, session, opts, &written, &plan, losses).to_json();
+        if let Some(done) = &children_done {
+            attach_children(&mut json, done);
+        }
+        registry.attach(&mut json, registry_error.as_deref());
+        json
+    };
+    if let Some(reason) = children_done.as_ref().and_then(|done| done.failure.clone()) {
+        receipt.manifest = manifest(losses);
+        return Err(HopError::ChildWriteFailed {
+            reason,
+            receipt: Box::new(receipt),
+        });
+    }
+    if let Some(prompt) = opts.resume.as_ref() {
+        let cwd = write_opts.cwd.as_deref().map(Path::new);
+        let store = Some((dest, &write_opts.roots));
+        match run_resume_with(&written.resume, cwd, store, &prompt.text, prompt.timeout) {
+            Ok(output) => receipt.resume_output = Some(output),
+            Err(HopError::ResumeFailed { reason, .. }) => {
+                losses.push(format!("the resume prompt did not complete: {reason}"));
+                receipt.manifest = manifest(losses);
+                return Err(HopError::ResumeFailed {
+                    reason,
+                    receipt: Box::new(receipt),
+                });
+            }
+            Err(other) => return Err(other),
+        }
+    }
+
+    receipt.manifest = manifest(losses);
+    Ok(Imported {
+        receipt,
+        written,
+        spawn_calls,
+    })
+}
+
+/// What the hop registry says about one write, and the record it adds after it.
+struct Registered {
+    dir: Option<std::path::PathBuf>,
+    record: Option<crate::registry::Record>,
+    /// The copy of the fork's origin in this destination, when the fork is linked to it.
+    fork_of: Option<crate::writer::ForkOf>,
+    /// Why a fork is not linked, as a loss line.
+    fork_loss: Option<String>,
+    /// An earlier copy of this same, unchanged session in this destination.
+    earlier: Option<crate::registry::Record>,
+}
+
+impl Registered {
+    fn look_up(
+        dest: HarnessId,
+        session: &Session,
+        opts: &ImportOpts,
+        subagents: &Subagents,
+        plan: &plan::Plan,
+    ) -> Registered {
+        let mut out = Registered {
+            dir: crate::registry::enabled()
+                .then(crate::registry::dir)
+                .flatten(),
+            record: None,
+            fork_of: None,
+            fork_loss: None,
+            earlier: None,
+        };
+        let Some(dir) = out.dir.clone() else {
+            return out;
+        };
+        let store = crate::harnesses::get(dest)
+            .store_root(&opts.roots)
+            .map(|root| root.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let hashes = crate::registry::block_hashes(plan);
+        let written_as = if subagents.of.is_some() {
+            "child"
+        } else {
+            "session"
+        };
+        let source = session.meta.harness;
+        let links_forks = crate::harnesses::destination(dest)
+            .map(|destination| destination.links_forks())
+            .unwrap_or(false);
+        if let (Some(origin), Some(crate::model::ParentKind::Fork { .. }), true) = (
+            session.meta.parent.as_deref(),
+            &session.meta.parent_kind,
+            links_forks,
+        ) {
+            let copy = crate::registry::written_to(&dir, source, origin, dest, &store)
+                .into_iter()
+                .find(|record| record.written_as == "session");
+            match copy {
+                None => {
+                    out.fork_loss = Some(format!(
+                        "fork of {origin}: its origin was not written to this destination (or not since it was moved), so the fork is not linked to it"
+                    ));
+                }
+                Some(copy) => {
+                    let shared = crate::registry::shared_prefix(&hashes, &copy.blocks);
+                    if shared == 0 {
+                        out.fork_loss = Some(format!(
+                            "fork of {origin}: it shares no block with its origin's copy {}, so it is not linked to it",
+                            copy.dest.id
+                        ));
+                    } else {
+                        out.fork_of = Some(crate::writer::ForkOf {
+                            id: copy.dest.id.clone(),
+                            location: copy.dest.location.clone(),
+                            records: copy.blocks[..shared]
+                                .iter()
+                                .map(|block| block.records.clone())
+                                .collect(),
+                        });
+                    }
+                }
+            }
+        }
+        if written_as == "session" {
+            out.earlier = crate::registry::written_to(&dir, source, &session.meta.id, dest, &store)
+                .into_iter()
+                .find(|record| {
+                    record.written_as == "session"
+                        && record.source.sha256 == opts.source_facts.content_sha256
+                });
+        }
+        out.record = Some(crate::registry::Record {
+            time: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            source: crate::registry::Source {
+                harness: source.as_str().to_string(),
+                id: session.meta.id.clone(),
+                sha256: opts.source_facts.content_sha256.clone(),
+            },
+            dest: crate::registry::Dest {
+                harness: dest.as_str().to_string(),
+                store,
+                id: String::new(),
+                location: String::new(),
+            },
+            written_as: written_as.to_string(),
+            blocks: hashes
+                .into_iter()
+                .map(|hash| crate::registry::Block {
+                    hash,
+                    records: Vec::new(),
+                })
+                .collect(),
+        });
+        out
+    }
+
+    /// Add the record of what was just written. The error says why it could not be.
+    fn remember(&self, written: &Written) -> Option<String> {
+        let (dir, mut record) = (self.dir.as_ref()?, self.record.clone()?);
+        record.dest.id = written.id.clone();
+        record.dest.location = written.location.clone();
+        for (block, records) in record.blocks.iter_mut().zip(&written.records) {
+            block.records = records.clone();
+        }
+        crate::registry::add(dir, record).err()
+    }
+
+    /// The manifest's `dest.parent` (the origin's copy a fork was linked to), `earlier` (the
+    /// earlier copy of the same session here), and `registry.error` when it could not be written.
+    fn attach(&self, manifest: &mut Value, error: Option<&str>) {
+        if let Some(fork) = &self.fork_of {
+            manifest["dest"]["parent"] = Value::String(fork.id.clone());
+        }
+        if let Some(earlier) = &self.earlier {
+            manifest["earlier"] = serde_json::json!({
+                "dest_id": earlier.dest.id,
+                "location": earlier.dest.location,
+                "time": earlier.time,
+            });
+        }
+        if let Some(error) = error {
+            manifest["registry"] = serde_json::json!({"error": error});
+        }
+    }
+}
+
+/// The manifest's `children`, and the losses the children carry.
+fn attach_children(manifest: &mut Value, done: &ChildrenDone) {
+    manifest["children"] = Value::Array(done.entries.clone());
+    if let Some(losses) = manifest["losses"].as_array_mut() {
+        losses.extend(done.losses.iter().cloned().map(Value::String));
+    }
+}
+
+/// Which destination call each spawn call of `session` became, for a spawn call written as a tool
+/// call of the destination: the planned call with the same tool and input, in order.
+fn native_spawn_calls(
+    session: &Session,
+    plan: &plan::Plan,
+    subagents: &Subagents,
+) -> HashMap<String, String> {
+    let planned: Vec<&plan::PlannedCall> = plan
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            plan::PlannedBlock::Step(step) => Some(step.calls.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut taken = HashSet::new();
+    let mut out = HashMap::new();
+    for (call_id, _) in &subagents.spawned {
+        let call = session.entries.iter().find_map(|entry| match &entry.kind {
+            Kind::Step { calls, .. } => calls.iter().find(|call| &call.id == call_id),
+            _ => None,
+        });
+        let Some(call) = call else { continue };
+        let found = planned.iter().enumerate().position(|(index, planned)| {
+            !taken.contains(&index)
+                && planned.source_name == call.source_name
+                && planned.source_input == call.input
+        });
+        if let Some(index) = found {
+            taken.insert(index);
+            out.insert(call_id.clone(), planned[index].id.clone());
+        }
+    }
+    out
+}
+
+/// Read, plan, check, write: the whole pipeline of Â§1.
+pub fn hop(req: &HopRequest) -> Result<Receipt, HopError> {
+    hop_into(req, &req.roots)
+}
+
+/// [`hop`] into stores of its own: the source is read and compacted with `req.roots`, the
+/// destination written with `destination`. Two installations of one harness (an OpenCode and a
+/// portable JanuraCode, say) cannot share one [`StoreRoots`].
+pub fn hop_into(req: &HopRequest, destination: &StoreRoots) -> Result<Receipt, HopError> {
+    crate::harnesses::destination(req.dest)?;
+    // A summary the source's model writes stands for the branch the source resumes: refused before
+    // anything is read or a model is called, as the CLI refuses it.
+    if req.all_branches
+        && matches!(
+            req.compaction,
+            Compaction::Portable {
+                summary: SummarySource::SourceModel(_),
+                ..
+            }
+        )
+    {
+        return Err(HopError::Unsupported(
+            "a summary from the source's model with every branch: the summary stands for the \
+             branch the source resumes"
+                .into(),
+        ));
+    }
+    let source = if req.all_branches {
+        export_all_branches(&req.source, &req.roots)?
+    } else {
+        export(&req.source, &req.roots)?
+    };
+    let facts = SourceFacts::of(&source);
+    let (selection, summary) = compact(&source, &req.compaction, &req.roots)?;
+    let opts = ImportOpts {
+        cwd: req.cwd.clone(),
+        roots: destination.clone(),
+        reasoning: req.reasoning,
+        write: req.write.clone(),
+        resume: req.resume.clone(),
+        source_facts: facts,
+        compaction: req.compaction.name().to_string(),
+        summary,
+        native_budget: match &req.compaction {
+            Compaction::Native(budget) => Some(budget.clone()),
+            _ => None,
+        },
+    };
+    if req.children {
+        return crate::children::import_with_children(
+            req.dest, &selection, &source, &req.roots, &opts,
+        );
+    }
+    import(req.dest, &selection, &opts)
+}
+
+/// The interchange document of a session, as `mukade dump` writes it: the session's messages and,
+/// when its history travels as a summary the source's model wrote, who wrote it (`summary`), for
+/// the manifest a later [`import_document`] makes.
+pub fn document(session: &Session, summary: Option<&SummaryFacts>) -> Value {
+    let mut doc = crate::wire::to_document(session);
+    if let Some(facts) = summary.and_then(|facts| serde_json::to_value(facts).ok()) {
+        doc["summary"] = facts;
+    }
+    doc
+}
+
+/// Read an interchange document back into a session ([`crate::wire::from_document`]).
+pub fn read_document(doc: &Value) -> Result<Session, HopError> {
+    crate::wire::from_document(doc).map_err(|error| HopError::Unsupported(format!("{error:#}")))
+}
+
+/// Write a document [`document`] made as a new session of `dest`. `session` is
+/// [`read_document`]'s result for `doc`; `opts` are the destination's details. What only the
+/// document knows is filled in here: who wrote its summary, if it carries one, and its fingerprint,
+/// which is that of its own messages (a document holds no source records).
+pub fn import_document(
+    dest: HarnessId,
+    doc: &Value,
+    session: &Session,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
+    import(dest, session, &document_opts(doc, opts))
+}
+
+/// `opts` with what only a document knows: who wrote its summary, and its fingerprint.
+pub(crate) fn document_opts(doc: &Value, opts: &ImportOpts) -> ImportOpts {
+    let mut opts = opts.clone();
+    if let Some(facts) = doc
+        .get("summary")
+        .and_then(|facts| serde_json::from_value::<SummaryFacts>(facts.clone()).ok())
+    {
+        opts.summary = Some(facts);
+        opts.compaction = "summary".into();
+    }
+    opts.source_facts.content_sha256 = records_sha256(
+        doc.get("messages")
+            .and_then(Value::as_array)
+            .map(|messages| messages.iter())
+            .into_iter()
+            .flatten(),
+    );
+    opts
+}
+
+/// Apply compaction to a session already read from a file, then finish the normal import path.
+pub fn hop_session(
+    dest: HarnessId,
+    source: &Session,
+    compaction: &Compaction,
+    opts: &ImportOpts,
+) -> Result<Receipt, HopError> {
+    crate::harnesses::destination(dest)?;
+    let (selection, summary) = compact(source, compaction, &opts.roots)?;
+    let opts = ImportOpts {
+        native_budget: match compaction {
+            Compaction::Native(budget) => Some(budget.clone()),
+            _ => opts.native_budget.clone(),
+        },
+        ..opts.clone()
+    };
+    match summary {
+        Some(summary) => import(
+            dest,
+            &selection,
+            &ImportOpts {
+                summary: Some(summary),
+                ..opts
+            },
+        ),
+        None => import(dest, &selection, &opts),
+    }
+}
+
+/// The session a compaction policy hands to the writer, and the summary it carries when the source's
+/// model wrote one. A [`SummarySource::SourceModel`] is asked of the source harness here, once, so
+/// the selection itself stays a function of the session: what `dump` exports is what `hop` writes.
+pub fn compact<'a>(
+    source: &'a Session,
+    compaction: &Compaction,
+    roots: &StoreRoots,
+) -> Result<(std::borrow::Cow<'a, Session>, Option<SummaryFacts>), HopError> {
+    let resolved;
+    let compaction = match compaction {
+        Compaction::Portable {
+            summary: SummarySource::SourceModel(opts),
+            keep_from,
+        } => {
+            // The tail is checked before the source's model is paid to write the summary: a
+            // generated summary has no boundary of its own, so this is the cut `select` makes.
+            cut_index(source, keep_from, None)?;
+            resolved = Compaction::Portable {
+                summary: SummarySource::Generated(crate::summary::summarize(source, roots, opts)?),
+                keep_from: keep_from.clone(),
+            };
+            &resolved
+        }
+        other => other,
+    };
+    let selection = select(source, compaction)?;
+    let summary = match compaction {
+        Compaction::Portable {
+            summary: SummarySource::Generated(summary),
+            ..
+        } => Some(SummaryFacts {
+            summary: summary.clone(),
+            left_out: source.entries.len() + 1 - selection.entries.len(),
+        }),
+        _ => None,
+    };
+    Ok((selection, summary))
+}
+
+/// The session a compaction policy hands to the writer: the source itself when nothing is cut,
+/// so a whole-history hop copies nothing.
+fn select<'a>(
+    source: &'a Session,
+    compaction: &Compaction,
+) -> Result<std::borrow::Cow<'a, Session>, HopError> {
+    let _span = crate::timing::span("select");
+    match compaction {
+        Compaction::None | Compaction::Native(_) => Ok(std::borrow::Cow::Borrowed(source)),
+        Compaction::DestinationNative => Err(HopError::Unsupported(
+            "Compaction::DestinationNative: the destination's own compaction has to be triggered by the \
+             caller, inside the destination's own environment (a resume command, an HTTP endpoint or an \
+             RPC, one per harness); this library writes the whole history, which is what \
+             Compaction::None does"
+                .into(),
+        )),
+        Compaction::Portable { summary, keep_from } => {
+            let (text, trigger, tokens_before, boundary) = match summary {
+                SummarySource::Supplied(text) => (text.clone(), crate::model::Trigger::Unknown, None, None),
+                SummarySource::Generated(summary) => {
+                    (summary.text.clone(), crate::model::Trigger::Unknown, None, None)
+                }
+                SummarySource::SourceModel(_) => {
+                    return Err(HopError::Unsupported(
+                        "SummarySource::SourceModel has to be asked of the source first: use hop::compact"
+                            .into(),
+                    ));
+                }
+                SummarySource::SourceRecord => match source.last_compaction().map(|entry| &entry.kind) {
+                    Some(Kind::Compaction { summary, trigger, tokens_before, kept_from }) => (
+                        summary.clone(),
+                        trigger.clone(),
+                        *tokens_before,
+                        kept_from.clone(),
+                    ),
+                    _ => {
+                        return Err(HopError::Unsupported(
+                            "Compaction::Portable with SummarySource::SourceRecord, but the source has no native \
+                             compaction record to carry"
+                                .into(),
+                        ));
+                    }
+                },
+            };
+            if text.trim().is_empty() {
+                return Err(HopError::Unsupported(
+                    "Compaction::Portable: the source's last compaction summary has no readable text (Codex \
+                     0.165 keeps it encrypted by its provider), so there is nothing to carry; hop the whole \
+                     history instead, or supply a summary"
+                        .into(),
+                ));
+            }
+            // Â§4.2: one user message, the handoff line first, then the tail from the boundary.
+            let cut = cut_index(source, keep_from, boundary.as_deref())?;
+            let mut entries = vec![Entry {
+                id: "portable-handoff".into(),
+                kind: Kind::Compaction {
+                    summary: format!(
+                        "{}\n{text}",
+                        match summary {
+                            SummarySource::Generated(_) => MODEL_SUMMARY_HANDOFF,
+                            _ => PORTABLE_HANDOFF,
+                        }
+                    ),
+                    kept_from: source.entries.get(cut).map(|entry| entry.id.clone()),
+                    trigger,
+                    tokens_before,
+                },
+                raw: Vec::new(),
+            }];
+            // The source's own compaction record may sit in the tail (Claude's preserved segment,
+            // OpenCode's keepID and Pi's firstKeptEntryId all point before it); its summary
+            // already travels in the handoff, so it is not written a second time.
+            let carried = match summary {
+                SummarySource::SourceRecord => source.last_compaction().map(|entry| entry.id.clone()),
+                SummarySource::Supplied(_)
+                | SummarySource::SourceModel(_)
+                | SummarySource::Generated(_) => None,
+            };
+            entries.extend(
+                source
+                    .entries
+                    .get(cut..)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|entry| Some(&entry.id) != carried.as_ref())
+                    .cloned(),
+            );
+            Ok(std::borrow::Cow::Owned(Session {
+                meta: source.meta.clone(),
+                entries,
+                branches: Vec::new(),
+            }))
+        }
+    }
+}
+
+/// Where the tail starts, as an index into the source's entries.
+fn cut_index(
+    source: &Session,
+    keep_from: &KeepFrom,
+    boundary: Option<&str>,
+) -> Result<usize, HopError> {
+    match keep_from {
+        // No turns kept: the handoff alone.
+        KeepFrom::LastTurns(0) => Ok(source.entries.len()),
+        KeepFrom::LastTurns(turns) => {
+            let users: Vec<usize> = source
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| matches!(entry.kind, Kind::User { .. }))
+                .map(|(i, _)| i)
+                .collect();
+            users
+                .iter()
+                .rev()
+                .take(*turns)
+                .next_back()
+                .copied()
+                .ok_or_else(|| {
+                    HopError::Unsupported(
+                        "Compaction::Portable with KeepFrom::LastTurns, but the source has no user turn to keep from"
+                            .into(),
+                    )
+                })
+        }
+        KeepFrom::Message(id) => find_entry(source, id),
+        KeepFrom::SourceBoundary => {
+            if let Some(id) = boundary {
+                return find_entry(source, id).map_err(|_| {
+                    HopError::Unsupported(format!(
+                        "the source's compaction boundary {id:?} is missing or ambiguous; no tail was guessed"
+                    ))
+                });
+            }
+            // Codex keeps the boundary as "the first conversation entry after the compaction", and a
+            // boundary that names a row we folded into another entry lands here too.
+            source
+                .entries
+                .iter()
+                .rposition(|entry| matches!(entry.kind, Kind::Compaction { .. }))
+                .map(|index| index + 1)
+                .ok_or_else(|| {
+                    HopError::Unsupported(
+                        "Compaction::Portable with KeepFrom::SourceBoundary, but the source has no compaction \
+                         boundary to keep from"
+                            .into(),
+                    )
+                })
+        }
+    }
+}
+
+fn find_entry(source: &Session, id: &str) -> Result<usize, HopError> {
+    if let Some(index) = source.entries.iter().position(|entry| entry.id == id) {
+        return Ok(index);
+    }
+    let mut matches = source
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.id.starts_with(id));
+    let (index, _) = matches
+        .next()
+        .ok_or_else(|| HopError::Unsupported(format!("no entry {id:?} in the source")))?;
+    if let Some((_, entry)) = matches.next() {
+        return Err(HopError::Unsupported(format!(
+            "entry prefix {id:?} is ambiguous (also matches {:?})",
+            entry.id
+        )));
+    }
+    Ok(index)
+}
+
+fn manifest_of(
+    dest: HarnessId,
+    session: &Session,
+    opts: &ImportOpts,
+    written: &Written,
+    plan: &plan::Plan,
+    losses: Vec<String>,
+) -> Manifest {
+    let dest_version = opts.write.dest_version.clone();
+    let source_version = opts.source_facts.version.clone();
+    let at = |harness: &str, version: Option<&String>| match version {
+        Some(version) => format!("{harness}@{version}"),
+        None => harness.to_string(),
+    };
+    Manifest {
+        source_harness: opts.source_facts.harness.clone(),
+        source_version: opts.source_facts.version.clone(),
+        source_session_id: opts.source_facts.session_id.clone(),
+        source_content_sha256: opts.source_facts.content_sha256.clone(),
+        source_parent: opts.source_facts.parent.clone(),
+        source_parent_kind: opts.source_facts.parent_kind.clone(),
+        dest_harness: dest.as_str().to_string(),
+        dest_version: dest_version.clone(),
+        dest_session_id: written.id.clone(),
+        dest_location: written.location.clone(),
+        reader: at(&opts.source_facts.harness, source_version.as_ref()),
+        writer: at(dest.as_str(), dest_version.as_ref()),
+        compaction: opts.compaction.clone(),
+        summary: opts.summary.clone(),
+        reasoning: match opts.reasoning {
+            ReasoningPolicy::DropForeign => "drop_foreign",
+            ReasoningPolicy::AsText => "as_text",
+            ReasoningPolicy::Drop => "drop",
+        }
+        .to_string(),
+        resume_prompt: opts.resume.is_some(),
+        without_tools: opts.write.without_tools,
+        interrupted: opts.write.interrupted.as_str().to_string(),
+        counts: plan.counts.clone(),
+        losses: {
+            let mut losses = losses;
+            losses.extend(extra_losses(session, opts.summary.as_ref()));
+            losses
+        },
+        strict_checked: true,
+        strict_violations: Vec::new(),
+    }
+}
+
+/// Losses that belong to the selection rather than to the plan.
+fn extra_losses(session: &Session, summary: Option<&SummaryFacts>) -> Vec<String> {
+    let mut losses = Vec::new();
+    if let Some(facts) = summary {
+        let harness = facts.summary.harness.as_str();
+        let kept_from = match session.entries.first().map(|entry| &entry.kind) {
+            Some(Kind::Compaction { kept_from, .. }) => kept_from.clone(),
+            _ => None,
+        };
+        losses.push(match kept_from {
+            Some(id) => format!(
+                "the history before {id} ({} entries) travelled as a summary written by {harness}'s model",
+                facts.left_out
+            ),
+            None => format!(
+                "the whole history ({} entries) travelled as a summary written by {harness}'s model",
+                facts.left_out
+            ),
+        });
+        if let Some(command) = &facts.summary.leftover {
+            losses.push(format!(
+                "the summarizing run left a fork in the source store: run {command}"
+            ));
+        }
+        return losses;
+    }
+    let kept_from = match session.last_compaction().map(|entry| &entry.kind) {
+        Some(Kind::Compaction { kept_from, .. }) => Some(kept_from.clone()),
+        _ => None,
+    };
+    if let Some(kept_from) = kept_from {
+        let kept = session
+            .entries
+            .iter()
+            .rposition(|entry| matches!(entry.kind, Kind::Compaction { .. }))
+            .map(|index| session.entries[index + 1..].len())
+            .unwrap_or(0);
+        losses.push(format!(
+            "the source's own compaction is in the session (kept {kept} entries after the boundary{})",
+            kept_from.map(|id| format!(", from {id}")).unwrap_or_default()
+        ));
+    }
+    losses
+}
+
+fn resume_error(reason: String) -> HopError {
+    HopError::ResumeFailed {
+        reason,
+        receipt: Box::new(Receipt {
+            dest_id: String::new(),
+            location: String::new(),
+            resume_command: Vec::new(),
+            manifest: Value::Null,
+            resume_output: None,
+        }),
+    }
+}
+
+/// Run the destination's own resume command with the prompt as the last argument (Â§5), from the
+/// session's working directory when there is one: Claude Code stamps the rows it appends with the
+/// directory it runs in.
+///
+/// The command is the one the writer stated (`Written::resume`), so the caller decides the
+/// environment: pointing it at a scratch store and a mock is what keeps this free. A hop that asks
+/// for a resume without setting that environment resumes against the user's real configuration.
+pub fn run_resume(
+    argv: &[String],
+    cwd: Option<&Path>,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, HopError> {
+    run_resume_with(argv, cwd, None, prompt, timeout)
+}
+
+/// [`run_resume`], pointed at the store the session was written to: the destination's store
+/// variable is set to the root the write used, so the resume cannot land in another store.
+pub fn run_resume_with(
+    argv: &[String],
+    cwd: Option<&Path>,
+    store: Option<(HarnessId, &StoreRoots)>,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, HopError> {
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| resume_error("the destination stated no resume command".into()))?;
+    let mut command = Command::new(crate::exe::spawnable(program));
+    command.args(args).arg(prompt);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    if let Some((harness, roots)) = store {
+        roots.apply_to(harness, &mut command);
+    }
+    let finished = crate::exe::run_within(&mut command, timeout).map_err(|error| match cwd {
+        Some(cwd) => resume_error(format!("{program} (in {}): {error}", cwd.display())),
+        None => resume_error(format!("{program}: {error}")),
+    })?;
+    match finished.status {
+        Some(status) if status.success() => Ok(String::from_utf8_lossy(&finished.stdout)
+            .trim_end()
+            .to_string()),
+        Some(status) => Err(resume_error(format!(
+            "{} exited with {status}: {}",
+            argv.join(" "),
+            String::from_utf8_lossy(&finished.stderr).trim()
+        ))),
+        None => Err(resume_error(format!(
+            "{} did not finish within {timeout:?}",
+            argv.join(" ")
+        ))),
+    }
+}
+
+/// A resume prompt the destination would misread is refused before anything is written: one that
+/// starts with `-` is an option to every harness CLI, and Rust refuses to pass a line break to a
+/// Windows `.cmd` launcher.
+fn check_resume_prompt(prompt: &str, dest: HarnessId, exe: Option<&str>) -> Result<(), HopError> {
+    if prompt.starts_with('-') {
+        return Err(HopError::Unsupported(
+            "a resume prompt that starts with '-' would be read as an option by the destination"
+                .into(),
+        ));
+    }
+    let program = crate::exe::spawnable(
+        &exe.map(str::to_owned)
+            .unwrap_or_else(|| crate::exe::resolve(dest, None)),
+    );
+    if (prompt.contains('\n') || prompt.contains('\r')) && crate::exe::is_batch(&program) {
+        return Err(HopError::Unsupported(format!(
+            "a resume prompt with line breaks cannot be passed to the launcher {program}; name the \
+             destination's own binary, or send a one-line prompt"
+        )));
+    }
+    Ok(())
+}
+
+/// A read failure is a refusal when the session (or the store) is not there, and a verification
+/// failure when the harness is configured but what we found is not a session we understand.
+pub(crate) fn classify_read(error: anyhow::Error) -> HopError {
+    let message = format!("{error:#}");
+    let refused = error.chain().any(|cause| {
+        cause.downcast_ref::<crate::reader::Lookup>().is_some()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+    });
+    if refused {
+        HopError::NotFound(message)
+    } else {
+        HopError::VerifyFailed(message)
+    }
+}
+
+/// Read a session straight from a file, for a source that is not in a store (the spec's
+/// `SessionRef` may be "harness + native id (or file path)").
+/// [`export`] with every branch the source keeps, carried as [`crate::model::Branch`]es: a Claude
+/// Code or Pi session's tree, a Codex thread's redone pages and rolled-back turns. The session's
+/// `entries` stay the path the harness resumes. Only those three keep branches; another harness is
+/// refused before anything is read.
+pub fn export_all_branches(source: &SessionRef, roots: &StoreRoots) -> Result<Session, HopError> {
+    let _span = crate::timing::span("read source");
+    let read = crate::harnesses::get(source.harness).read_all_branches_by_id(&source.id, roots);
+    all_branches_supported(source.harness, read)
+}
+
+/// Whether `harness`'s sessions are read with every branch ([`export_all_branches`],
+/// [`HopRequest::all_branches`]), answered without reading anything.
+pub fn reads_all_branches(harness: HarnessId) -> bool {
+    crate::harnesses::get(harness).reads_all_branches()
+}
+
+/// [`export_path`] with every branch the source keeps (see [`export_all_branches`]).
+pub fn export_path_all_branches(
+    harness: HarnessId,
+    path: &std::path::Path,
+) -> Result<Session, HopError> {
+    let read = crate::harnesses::get(harness).read_all_branches(path);
+    all_branches_supported(harness, read)
+}
+
+/// What reading every branch came to: the session, or the refusal of a harness that keeps one
+/// branch only (the adapter answered `None`).
+fn all_branches_supported(
+    harness: HarnessId,
+    read: Option<anyhow::Result<Session>>,
+) -> Result<Session, HopError> {
+    match read {
+        Some(read) => read.map_err(classify_read),
+        None => {
+            let readers: Vec<&str> = HarnessId::ALL
+                .into_iter()
+                .filter(|&id| reads_all_branches(id))
+                .map(HarnessId::as_str)
+                .collect();
+            Err(HopError::Unsupported(format!(
+                "--all-branches (every branch, abandoned ones included) is read for {} sessions \
+                 only; {} sessions are read as the branch the harness resumes",
+                readers.join(", "),
+                harness.as_str()
+            )))
+        }
+    }
+}
+
+pub fn export_path(harness: HarnessId, path: &std::path::Path) -> Result<Session, HopError> {
+    crate::harnesses::get(harness)
+        .read_file(path)
+        .map_err(classify_read)
+}

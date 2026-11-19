@@ -1,0 +1,71 @@
+[package]
+name = "mukade"
+description = "Harness sessions manager for coding agents: move a session between Claude Code, Codex CLI, OpenCode and Pi, as one of the destination's own."
+version = "0.1.2"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/acaprino/mukade"
+readme = "README.md"
+keywords = ["session", "claude-code", "codex", "opencode", "harness"]
+categories = ["development-tools"]
+build = "build.rs"
+
+# Session interchange keeps its small dependency set. ADR-0003 permits the maintained
+# MCP SDK and its HTTP/runtime dependencies for the shared local chat service.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+uuid = { version = "1", features = ["v4", "v7"] }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+rmcp = { version = "=2.2.0", optional = true, default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "=1.54.1", optional = true, features = ["rt-multi-thread", "macros", "signal", "process", "sync", "time", "net"] }
+tokio-util = { version = "=0.7.20", optional = true }
+axum = { version = "=0.8.9", optional = true }
+reqwest = { version = "=0.13.5", optional = true, default-features = false, features = ["json", "stream"] }
+toml_edit = "=0.25.19"
+subtle = { version = "=2.6.1", optional = true }
+futures-util = { version = "=0.3.34", optional = true }
+# Decodes the frames of a DeepSeek Harness session log. Without its `hash` feature: the content
+# checksum is compared by `reader::zstd_frames`, which carries its own XXH64.
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
+
+[features]
+# The local chat service (MCP server and client, HTTP, async runtime). The session readers and
+# writers need none of it: `default-features = false` keeps their small dependency set.
+default = ["chat"]
+chat = ["dep:rmcp", "dep:tokio", "dep:tokio-util", "dep:axum", "dep:reqwest", "dep:subtle", "dep:futures-util"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tower = { version = "=0.5.3", features = ["util"] }
+http-body-util = "=0.1.5"
+sse-stream = "=0.2.6"
+
+[build-dependencies]
+embed-resource = "3"
+
+[[bin]]
+name = "mukade"
+path = "src/bin/mukade.rs"
+
+[workspace]
+members = ["mukade-tui", "apps/desktop/src-tauri"]
+default-members = ["."]
+resolver = "3"
+
+# The CLI stays the default build: `cargo build` and `cargo test` never pull the TUI's
+# dependencies. `cargo build -p mukade-tui` builds the terminal browser.
+
+# The binary is one file that is copied around: small and fast matter more than build time.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = "symbols"

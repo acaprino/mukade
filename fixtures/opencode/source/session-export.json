@@ -1,0 +1,324 @@
+{
+  "info": {
+    "id": "ses_e82023514ffe02y4T8OoUu99VZ",
+    "projectID": "b5f33cdec69affa5b2b40745a328fd191e95816f",
+    "model": {
+      "id": "h27-mock",
+      "providerID": "anthropic",
+      "variant": "default"
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 500,
+      "output": 100,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793115147395,
+      "updated": 1793115157925,
+      "idle": 1793115156393
+    },
+    "title": "H27-opencode-source",
+    "location": {
+      "directory": "C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_17dfdcc9f001ktHKPQM0kS62og",
+      "time": {
+        "created": 1793115147595
+      },
+      "text": "H27-TOOLS read C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\alpha.txt and C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\beta.txt",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_17dfdcd57001up0fzxg1Aa4ESg",
+      "time": {
+        "created": 1793115147659,
+        "streamed": 1793115147756,
+        "completed": 1793115147774
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "h27-mock",
+        "providerID": "anthropic",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "H27-REASONING: the user wants two files; read them in parallel.",
+          "native": {
+            "signature": "h27-mock-signature"
+          },
+          "time": {
+            "created": 1793115147707,
+            "completed": 1793115147715
+          }
+        },
+        {
+          "type": "text",
+          "text": "H27-PRE: reading the files."
+        },
+        {
+          "type": "tool",
+          "id": "toolu_h27call1x0",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\alpha.txt"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Read file C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\alpha.txt, lines 1-1\n1: ALPHA-CONTENT-42"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793115147729,
+            "ran": 1793115147737,
+            "completed": 1793115147771
+          }
+        },
+        {
+          "type": "tool",
+          "id": "toolu_h27call1x1",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\beta.txt"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Read file C:\\Users\\alfio\\AppData\\Local\\shinatama-verify\\H27\\opencode\\work\\beta.txt, lines 1-1\n1: BETA-CONTENT-17"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793115147740,
+            "ran": 1793115147746,
+            "completed": 1793115147766
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 100,
+        "output": 20,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdce0e001krSnTaQBcqxJsb",
+      "time": {
+        "created": 1793115147807,
+        "streamed": 1793115147827,
+        "completed": 1793115147830
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "h27-mock",
+        "providerID": "anthropic",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "H27-FINAL: both files were read."
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 100,
+        "output": 20,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdce3b001hmlXzB6kZKa0tc",
+      "time": {
+        "created": 1793115147835
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_17dfdd540001RR87DEFv6Bqy9B",
+      "time": {
+        "created": 1793115149893
+      },
+      "text": "H27-T2 say hello",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_17dfdd653001BBAYXlKgdYOMjN",
+      "time": {
+        "created": 1793115149959,
+        "streamed": 1793115150008,
+        "completed": 1793115150011
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "h27-mock",
+        "providerID": "anthropic",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "H27-REPLY: H27-T2 say hello"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 100,
+        "output": 20,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdd6bf0012aRJBj9aCx81uI",
+      "time": {
+        "created": 1793115150015
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "type": "compaction",
+      "id": "msg_17dfde103001VZhsCVAQ8a4ja0",
+      "metadata": {
+        "keepID": "msg_17dfdd540001RR87DEFv6Bqy9B"
+      },
+      "time": {
+        "created": 1793115153176
+      },
+      "status": "completed",
+      "reason": "manual",
+      "model": {
+        "id": "h27-mock",
+        "providerID": "anthropic",
+        "variant": "default"
+      },
+      "summary": "## Objective\n- H27-SUMMARY: the user asked to read alpha.txt and beta.txt; both were read; then said hello.\n\n## Work State\n### Completed\n- read alpha.txt and beta.txt\n\n## Next Move\n1. (none)",
+      "cost": 0,
+      "tokens": {
+        "input": 100,
+        "output": 20,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_17dfde387001ALWUu74LlVbw6y",
+      "time": {
+        "created": 1793115153287
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_17dfdede1001zoVub1bpnaJvNe",
+      "time": {
+        "created": 1793115156314
+      },
+      "text": "H27-T3 after compaction",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_17dfdef62001Oue736yTXWu5bS",
+      "time": {
+        "created": 1793115156353,
+        "streamed": 1793115156388,
+        "completed": 1793115156390
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "h27-mock",
+        "providerID": "anthropic",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "H27-REPLY: H27-T3 after compaction"
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 100,
+        "output": 20,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_17dfdefa9001Iqfv1oz11Dhd9H",
+      "time": {
+        "created": 1793115156393
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "msg_17dfdf401001wjpxlceArdOaOS",
+      "time": {
+        "created": 1793115157848
+      },
+      "text": "H27-HANG",
+      "files": [],
+      "type": "user"
+    }
+  ]
+}

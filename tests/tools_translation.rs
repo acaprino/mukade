@@ -1,0 +1,1850 @@
+//! Tool translation conformance (docs/tool-conversion-tables.md, spec L11–L14).
+
+mod support;
+
+use mukade::model::{CanonicalTool, HarnessId, ToolCall, ToolResult};
+use mukade::tools::{self, Shell, ToolSet, Translation, offered, translate, translate_with};
+use serde_json::{Value, json};
+
+fn call(canonical: CanonicalTool, source_name: &str, input: Value) -> ToolCall {
+    ToolCall {
+        id: "c1".into(),
+        source_name: source_name.into(),
+        canonical: Some(canonical),
+        input,
+    }
+}
+
+fn name_of(translation: &Translation) -> &'static str {
+    match translation {
+        Translation::Call { name, .. } => name,
+        Translation::Text { .. } => panic!("expected a translated call, got text form"),
+    }
+}
+
+fn input_of(translation: &Translation) -> &Value {
+    match translation {
+        Translation::Call { input, .. } => input,
+        Translation::Text { .. } => panic!("expected a translated call, got text form"),
+    }
+}
+
+// ------------------------------------------------------------------------------------- L11
+
+/// L11: no destination ever receives a tool name outside its offered set.
+#[test]
+fn every_translated_name_is_offered_by_its_destination() {
+    let calls = vec![
+        call(CanonicalTool::Bash, "Bash", json!({"command": "ls"})),
+        call(CanonicalTool::Read, "Read", json!({"file_path": "a.txt"})),
+        call(
+            CanonicalTool::Write,
+            "Write",
+            json!({"file_path": "a.txt", "content": "x"}),
+        ),
+        call(
+            CanonicalTool::Edit,
+            "Edit",
+            json!({"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
+        ),
+        call(CanonicalTool::Grep, "Grep", json!({"pattern": "x"})),
+        call(CanonicalTool::Glob, "Glob", json!({"pattern": "*.rs"})),
+        call(CanonicalTool::Ls, "LS", json!({"path": "src"})),
+        call(
+            CanonicalTool::WebFetch,
+            "WebFetch",
+            json!({"url": "https://example.org"}),
+        ),
+        call(
+            CanonicalTool::WebSearch,
+            "WebSearch",
+            json!({"query": "rust"}),
+        ),
+        call(CanonicalTool::Agent, "Agent", json!({"prompt": "x"})),
+        call(CanonicalTool::Skill, "Skill", json!({"skill": "x"})),
+        call(
+            CanonicalTool::AskUserQuestion,
+            "AskUserQuestion",
+            json!({"question": "x"}),
+        ),
+        call(
+            CanonicalTool::Mcp {
+                server: "s".into(),
+                tool: "t".into(),
+            },
+            "mcp__s__t",
+            json!({"a": 1}),
+        ),
+        call(
+            CanonicalTool::Other("StructuredOutput".into()),
+            "StructuredOutput",
+            json!({}),
+        ),
+    ];
+    for dest in HarnessId::ALL {
+        for call in &calls {
+            for shell in [Some(Shell::Posix), Some(Shell::PowerShell), None] {
+                if let Translation::Call { name, .. } = translate(call, dest, shell) {
+                    assert!(
+                        offered(dest).contains(name),
+                        "{} received {name}, which it does not offer",
+                        dest.as_str()
+                    );
+                }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------------------------- L12
+
+/// L12: Pi counts the timeout in seconds, the canonical form in milliseconds.
+#[test]
+fn shell_timeout_is_converted_for_pi_and_kept_in_milliseconds_elsewhere() {
+    let bash = call(
+        CanonicalTool::Bash,
+        "Bash",
+        json!({"command": "make", "timeout": 2500}),
+    );
+    let pi = translate(&bash, HarnessId::Pi, Some(Shell::Posix));
+    assert_eq!(name_of(&pi), "bash");
+    assert_eq!(
+        input_of(&pi)["timeout"],
+        json!(3),
+        "2500 ms rounds up to 3 s"
+    );
+
+    let opencode = translate(&bash, HarnessId::OpenCode, Some(Shell::Posix));
+    assert_eq!(name_of(&opencode), "shell");
+    assert_eq!(
+        input_of(&opencode)["timeout"],
+        json!(2500),
+        "OpenCode stays in milliseconds"
+    );
+
+    let claude = translate(&bash, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Bash");
+    assert_eq!(input_of(&claude)["timeout"], json!(2500));
+}
+
+// ------------------------------------------------------------------------------------- L13
+
+#[test]
+fn replace_all_blocks_pi_and_codex_and_travels_to_opencode() {
+    let edit = call(
+        CanonicalTool::Edit,
+        "Edit",
+        json!({"file_path": "a.txt", "old_string": "a", "new_string": "b", "replace_all": true}),
+    );
+    assert!(matches!(
+        translate(&edit, HarnessId::Pi, None),
+        Translation::Text { .. }
+    ));
+    assert!(matches!(
+        translate(&edit, HarnessId::Codex, Some(Shell::Posix)),
+        Translation::Text { .. }
+    ));
+    let opencode = translate(&edit, HarnessId::OpenCode, None);
+    assert_eq!(
+        input_of(&opencode),
+        &json!({"path": "a.txt", "oldString": "a", "newString": "b", "replaceAll": true})
+    );
+}
+
+#[test]
+fn an_ordinary_edit_reaches_pi_as_its_own_edits_array() {
+    let edit = call(
+        CanonicalTool::Edit,
+        "Edit",
+        json!({"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
+    );
+    let pi = translate(&edit, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "edit");
+    assert_eq!(
+        input_of(&pi),
+        &json!({"path": "a.txt", "edits": [{"oldText": "a", "newText": "b"}]})
+    );
+}
+
+#[test]
+fn read_pages_or_allow_large_has_no_counterpart() {
+    for input in [
+        json!({"file_path": "a.pdf", "pages": "1-2"}),
+        json!({"file_path": "a.txt", "allow_large": true}),
+    ] {
+        let read = call(CanonicalTool::Read, "Read", input);
+        assert!(matches!(
+            translate(&read, HarnessId::OpenCode, None),
+            Translation::Text { .. }
+        ));
+        assert!(matches!(
+            translate(&read, HarnessId::Pi, None),
+            Translation::Text { .. }
+        ));
+    }
+    let plain = call(
+        CanonicalTool::Read,
+        "Read",
+        json!({"file_path": "a.txt", "offset": 5, "limit": 10}),
+    );
+    assert_eq!(
+        input_of(&translate(&plain, HarnessId::Pi, None)),
+        &json!({"path": "a.txt", "offset": 5, "limit": 10})
+    );
+    assert_eq!(
+        input_of(&translate(&plain, HarnessId::ClaudeCode, None)),
+        &json!({"file_path": "a.txt", "offset": 5, "limit": 10})
+    );
+}
+
+#[test]
+fn codex_has_no_read_tool_so_a_read_is_text() {
+    let read = call(CanonicalTool::Read, "Read", json!({"file_path": "a.txt"}));
+    assert!(matches!(
+        translate(&read, HarnessId::Codex, None),
+        Translation::Text { .. }
+    ));
+}
+
+#[test]
+fn grep_translates_only_over_the_shared_subset() {
+    let plain = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "fn main", "path": "src", "-i": true}),
+    );
+    let opencode = translate(&plain, HarnessId::OpenCode, None);
+    assert_eq!(name_of(&opencode), "grep");
+    assert_eq!(
+        input_of(&opencode),
+        &json!({"pattern": "fn main", "path": "src", "caseSensitive": false})
+    );
+
+    let with_mode = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "x", "output_mode": "content"}),
+    );
+    assert!(matches!(
+        translate(&with_mode, HarnessId::OpenCode, None),
+        Translation::Text { .. }
+    ));
+    assert!(matches!(
+        translate(&with_mode, HarnessId::Pi, None),
+        Translation::Text { .. }
+    ));
+
+    let with_context = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "x", "-C": 3}),
+    );
+    assert!(matches!(
+        translate(&with_context, HarnessId::OpenCode, None),
+        Translation::Text { .. }
+    ));
+    // Pi has a `context` argument: with grep enabled the call reaches it, context renamed.
+    let pi_with_grep = ToolSet {
+        names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
+    };
+    assert_eq!(
+        input_of(&translate_with(
+            &with_context,
+            HarnessId::Pi,
+            None,
+            pi_with_grep
+        )),
+        &json!({"pattern": "x", "context": 3})
+    );
+}
+
+#[test]
+fn a_shell_call_of_the_other_dialect_is_text_form() {
+    let bash = call(CanonicalTool::Bash, "Bash", json!({"command": "ls -la"}));
+    assert!(matches!(
+        translate(&bash, HarnessId::Codex, Some(Shell::PowerShell)),
+        Translation::Text { .. }
+    ));
+    assert!(matches!(
+        translate(&bash, HarnessId::Codex, None),
+        Translation::Text { .. }
+    ));
+    let command = match translate(&bash, HarnessId::Codex, Some(Shell::Posix)) {
+        Translation::Call { input, .. } => input,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        command,
+        json!({"cmd": "ls -la"}),
+        "the command string is never rewritten"
+    );
+
+    let powershell = call(
+        CanonicalTool::PowerShell,
+        "PowerShell",
+        json!({"command": "Get-ChildItem"}),
+    );
+    assert!(matches!(
+        translate(&powershell, HarnessId::Codex, Some(Shell::Posix)),
+        Translation::Text { .. }
+    ));
+    assert_eq!(
+        input_of(&translate(
+            &powershell,
+            HarnessId::Codex,
+            Some(Shell::PowerShell)
+        )),
+        &json!({"cmd": "Get-ChildItem"})
+    );
+}
+
+#[test]
+fn background_execution_blocks_translation_where_it_does_not_exist() {
+    let background = call(
+        CanonicalTool::Bash,
+        "Bash",
+        json!({"command": "serve", "run_in_background": true}),
+    );
+    assert!(matches!(
+        translate(&background, HarnessId::Codex, Some(Shell::Posix)),
+        Translation::Text { .. }
+    ));
+    assert!(matches!(
+        translate(&background, HarnessId::Pi, Some(Shell::Posix)),
+        Translation::Text { .. }
+    ));
+    assert_eq!(
+        input_of(&translate(
+            &background,
+            HarnessId::OpenCode,
+            Some(Shell::Posix)
+        )),
+        &json!({"command": "serve", "background": true})
+    );
+}
+
+#[test]
+fn glob_and_ls_reach_only_the_destinations_that_offer_them() {
+    let glob = call(
+        CanonicalTool::Glob,
+        "Glob",
+        json!({"pattern": "**/*.rs", "path": "src"}),
+    );
+    assert_eq!(
+        name_of(&translate(&glob, HarnessId::OpenCode, None)),
+        "glob"
+    );
+    assert!(matches!(
+        translate(&glob, HarnessId::Codex, None),
+        Translation::Text { .. }
+    ));
+    // Pi offers `find` and `ls` only when they are enabled; with the pinned default set the call
+    // is text form, and a caller that knows the destination's settings can widen the set.
+    assert!(matches!(
+        translate(&glob, HarnessId::Pi, None),
+        Translation::Text { .. }
+    ));
+    let pi_with_find = ToolSet {
+        names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
+    };
+    assert_eq!(
+        name_of(&translate_with(&glob, HarnessId::Pi, None, pi_with_find)),
+        "find"
+    );
+    assert_eq!(
+        input_of(&translate_with(&glob, HarnessId::Pi, None, pi_with_find)),
+        &json!({"pattern": "**/*.rs", "path": "src"})
+    );
+
+    let ls = call(CanonicalTool::Ls, "LS", json!({"path": "src"}));
+    assert_eq!(
+        name_of(&translate_with(&ls, HarnessId::Pi, None, pi_with_find)),
+        "ls"
+    );
+    assert!(matches!(
+        translate(&ls, HarnessId::Pi, None),
+        Translation::Text { .. }
+    ));
+    assert!(matches!(
+        translate(&ls, HarnessId::OpenCode, None),
+        Translation::Text { .. }
+    ));
+}
+
+// ------------------------------------------------------------------------------------- L14
+
+/// L14: subagents, skills, questions, MCP and harness-internal tools are text form everywhere.
+#[test]
+fn capability_tools_are_text_form_in_every_direction() {
+    let calls = [
+        call(CanonicalTool::Agent, "Agent", json!({"prompt": "x"})),
+        call(CanonicalTool::Skill, "Skill", json!({"skill": "x"})),
+        call(
+            CanonicalTool::AskUserQuestion,
+            "AskUserQuestion",
+            json!({"question": "x"}),
+        ),
+        call(
+            CanonicalTool::Mcp {
+                server: "s".into(),
+                tool: "t".into(),
+            },
+            "mcp__s__t",
+            json!({"a": 1}),
+        ),
+        call(
+            CanonicalTool::Other("StructuredOutput".into()),
+            "StructuredOutput",
+            json!({"x": 1}),
+        ),
+        call(CanonicalTool::Other("Monitor".into()), "Monitor", json!({})),
+    ];
+    for dest in HarnessId::ALL {
+        for call in &calls {
+            assert!(
+                matches!(
+                    translate(call, dest, Some(Shell::Posix)),
+                    Translation::Text { .. }
+                ),
+                "{} translated {}",
+                dest.as_str(),
+                call.source_name
+            );
+        }
+    }
+}
+
+#[test]
+fn text_form_keeps_the_source_name_id_and_arguments() {
+    let call = call(
+        CanonicalTool::Agent,
+        "Agent",
+        json!({"description": "look around", "prompt": "read the docs"}),
+    );
+    let text = tools::text_form_call(&call, HarnessId::Pi);
+    assert!(
+        text.starts_with("[tool call · Agent · id c1 · not available in pi]"),
+        "{text}"
+    );
+    assert!(text.contains("description: look around"), "{text}");
+    assert!(text.contains("prompt: read the docs"), "{text}");
+
+    let result = ToolResult {
+        call_id: "c1".into(),
+        content: mukade::model::ResultContent::Text("out\nmore".into()),
+        is_error: true,
+        truncated_by_source: false,
+    };
+    let text = tools::text_form_result(&result);
+    assert_eq!(text, "[tool result · id c1] (error)\nout\nmore");
+}
+
+#[test]
+fn a_call_without_a_canonical_form_is_text() {
+    let raw = ToolCall {
+        id: "c1".into(),
+        source_name: "mystery".into(),
+        canonical: None,
+        input: json!({}),
+    };
+    assert!(matches!(
+        translate(&raw, HarnessId::ClaudeCode, None),
+        Translation::Text { .. }
+    ));
+}
+
+const PI_WITH_SEARCH: ToolSet = ToolSet {
+    names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
+};
+
+fn is_text(translation: &Translation) -> bool {
+    matches!(translation, Translation::Text { .. })
+}
+
+/// Tables §1.2: a call that used an argument with no counterpart is not equivalent; it is never
+/// translated with the argument silently left out.
+#[test]
+fn an_argument_with_no_counterpart_makes_the_call_text_form() {
+    let in_workdir = call(
+        CanonicalTool::Bash,
+        "exec_command",
+        json!({"cmd": "ls", "workdir": "C:/w"}),
+    );
+    assert!(is_text(&translate(
+        &in_workdir,
+        HarnessId::ClaudeCode,
+        None
+    )));
+    assert!(is_text(&translate(
+        &in_workdir,
+        HarnessId::Pi,
+        Some(Shell::Posix)
+    )));
+    assert_eq!(
+        input_of(&translate(
+            &in_workdir,
+            HarnessId::OpenCode,
+            Some(Shell::Posix)
+        )),
+        &json!({"command": "ls", "workdir": "C:/w"})
+    );
+    let with_prompt = call(
+        CanonicalTool::WebFetch,
+        "WebFetch",
+        json!({"url": "https://x", "prompt": "sum it up"}),
+    );
+    assert!(is_text(&translate(&with_prompt, HarnessId::OpenCode, None)));
+    let with_domains = call(
+        CanonicalTool::WebSearch,
+        "WebSearch",
+        json!({"query": "q", "allowed_domains": ["a.org"]}),
+    );
+    assert!(is_text(&translate(
+        &with_domains,
+        HarnessId::OpenCode,
+        None
+    )));
+    let hidden = call(
+        CanonicalTool::Glob,
+        "glob",
+        json!({"pattern": "*.rs", "hidden": true}),
+    );
+    assert!(is_text(&translate_with(
+        &hidden,
+        HarnessId::Pi,
+        None,
+        PI_WITH_SEARCH
+    )));
+    let unknown = call(
+        CanonicalTool::Read,
+        "Read",
+        json!({"file_path": "a", "frobnicate": 1}),
+    );
+    assert!(is_text(&translate(&unknown, HarnessId::OpenCode, None)));
+    // An argument with no effect on the recorded result does not block (tables §4.1).
+    let described = call(
+        CanonicalTool::Bash,
+        "exec_command",
+        json!({"cmd": "ls", "yield_time_ms": 1000}),
+    );
+    assert_eq!(
+        name_of(&translate(&described, HarnessId::Pi, Some(Shell::Posix))),
+        "bash"
+    );
+}
+
+/// Each harness's own spelling of a search reaches the others' tools under their names.
+#[test]
+fn every_grep_spelling_maps_to_the_destination_grep() {
+    let claude = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "x", "glob": "*.rs", "-i": true, "head_limit": 5}),
+    );
+    assert_eq!(
+        input_of(&translate_with(
+            &claude,
+            HarnessId::Pi,
+            None,
+            PI_WITH_SEARCH
+        )),
+        &json!({"pattern": "x", "glob": "*.rs", "ignoreCase": true, "limit": 5})
+    );
+    let opencode = call(
+        CanonicalTool::Grep,
+        "grep",
+        json!({"pattern": "x", "include": "*.rs", "literal": true, "caseSensitive": false}),
+    );
+    assert_eq!(
+        input_of(&translate_with(
+            &opencode,
+            HarnessId::Pi,
+            None,
+            PI_WITH_SEARCH
+        )),
+        &json!({"pattern": "x", "glob": "*.rs", "ignoreCase": true, "literal": true})
+    );
+    assert_eq!(
+        input_of(&translate(&opencode, HarnessId::OpenCode, None)),
+        &json!({"pattern": "x", "include": "*.rs", "caseSensitive": false, "literal": true})
+    );
+}
+
+/// Claude Code offers Grep, Glob and WebSearch: canonical calls reach it there (L3).
+#[test]
+fn search_tools_reach_claude_code() {
+    let grep = call(
+        CanonicalTool::Grep,
+        "Grep",
+        json!({"pattern": "x", "output_mode": "content", "-n": true}),
+    );
+    assert_eq!(
+        name_of(&translate(&grep, HarnessId::ClaudeCode, None)),
+        "Grep"
+    );
+    assert_eq!(
+        input_of(&translate(&grep, HarnessId::ClaudeCode, None)),
+        &grep.input
+    );
+    let from_pi = call(
+        CanonicalTool::Grep,
+        "grep",
+        json!({"pattern": "x", "context": 2, "limit": 9}),
+    );
+    assert_eq!(
+        input_of(&translate(&from_pi, HarnessId::ClaudeCode, None)),
+        &json!({"pattern": "x", "-C": 2, "head_limit": 9, "output_mode": "content", "-n": true})
+    );
+    let glob = call(
+        CanonicalTool::Glob,
+        "glob",
+        json!({"pattern": "*.rs", "path": "src"}),
+    );
+    assert_eq!(
+        name_of(&translate(&glob, HarnessId::ClaudeCode, None)),
+        "Glob"
+    );
+    let search = call(CanonicalTool::WebSearch, "websearch", json!({"query": "q"}));
+    assert_eq!(
+        name_of(&translate(&search, HarnessId::ClaudeCode, None)),
+        "WebSearch"
+    );
+}
+
+/// L13: OpenCode spells "all occurrences" `replaceAll`; a MultiEdit entry can ask for it too.
+#[test]
+fn every_spelling_of_replace_all_is_honoured() {
+    let opencode = call(
+        CanonicalTool::Edit,
+        "edit",
+        json!({"path": "a", "oldString": "x", "newString": "y", "replaceAll": true}),
+    );
+    assert!(is_text(&translate(&opencode, HarnessId::Pi, None)));
+    assert_eq!(
+        input_of(&translate(&opencode, HarnessId::ClaudeCode, None))["replace_all"],
+        true
+    );
+    let multi = call(
+        CanonicalTool::MultiEdit,
+        "MultiEdit",
+        json!({"file_path": "a", "edits": [{"old_string": "x", "new_string": "y", "replace_all": true}]}),
+    );
+    assert!(is_text(&translate(&multi, HarnessId::Pi, None)));
+}
+
+/// OpenCode spells background `background`; Claude's Bash has `run_in_background`.
+#[test]
+fn a_background_shell_call_keeps_running_in_the_background() {
+    let opencode = call(
+        CanonicalTool::Bash,
+        "shell",
+        json!({"command": "serve", "background": true}),
+    );
+    assert_eq!(
+        input_of(&translate(&opencode, HarnessId::ClaudeCode, None)),
+        &json!({"command": "serve", "run_in_background": true})
+    );
+    assert!(is_text(&translate(
+        &opencode,
+        HarnessId::Pi,
+        Some(Shell::Posix)
+    )));
+    assert!(is_text(&translate(
+        &opencode,
+        HarnessId::Codex,
+        Some(Shell::Posix)
+    )));
+}
+
+/// OpenCode and Pi write `path`; a single Pi edit is an ordinary edit everywhere.
+#[test]
+fn path_spellings_and_single_pi_edits_translate() {
+    let write = call(
+        CanonicalTool::Write,
+        "write",
+        json!({"path": "a", "content": "c"}),
+    );
+    assert_eq!(
+        input_of(&translate(&write, HarnessId::ClaudeCode, None)),
+        &json!({"file_path": "a", "content": "c"})
+    );
+    let one = call(
+        CanonicalTool::Edit,
+        "edit",
+        json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}]}),
+    );
+    assert_eq!(
+        input_of(&translate(&one, HarnessId::ClaudeCode, None)),
+        &json!({"file_path": "a", "old_string": "x", "new_string": "y"})
+    );
+    assert_eq!(
+        input_of(&translate(&one, HarnessId::OpenCode, None)),
+        &json!({"path": "a", "oldString": "x", "newString": "y"})
+    );
+    let two = call(
+        CanonicalTool::Edit,
+        "edit",
+        json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"oldText": "p", "newText": "q"}]}),
+    );
+    assert!(is_text(&translate(&two, HarnessId::ClaudeCode, None)));
+    assert_eq!(input_of(&translate(&two, HarnessId::Pi, None)), &two.input);
+}
+
+/// L5: Pi's `edits` entries need both texts; an empty list is not an edit.
+#[test]
+fn a_multi_edit_pi_cannot_hold_is_text_form() {
+    let missing = call(
+        CanonicalTool::MultiEdit,
+        "MultiEdit",
+        json!({"file_path": "a", "edits": [{"new_string": "y"}]}),
+    );
+    assert!(is_text(&translate(&missing, HarnessId::Pi, None)));
+    let empty = call(
+        CanonicalTool::MultiEdit,
+        "MultiEdit",
+        json!({"file_path": "a", "edits": []}),
+    );
+    assert!(is_text(&translate(&empty, HarnessId::Pi, None)));
+}
+
+/// The offered sets are the ones tables §2 records for the pinned versions, written out here so a
+/// change to either is a change to both.
+#[test]
+fn the_offered_sets_are_the_tables_lists() {
+    fn sorted<'a>(names: &[&'a str]) -> Vec<&'a str> {
+        let mut names = names.to_vec();
+        names.sort_unstable();
+        names
+    }
+    assert_eq!(
+        sorted(offered(HarnessId::ClaudeCode).names),
+        sorted(&[
+            "Agent",
+            "Bash",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+            "Edit",
+            "EnterWorktree",
+            "ExitWorktree",
+            "Glob",
+            "Grep",
+            "ListAgents",
+            "Monitor",
+            "NotebookEdit",
+            "Read",
+            "ReportFindings",
+            "ScheduleWakeup",
+            "SendMessage",
+            "Skill",
+            "TaskStop",
+            "WebFetch",
+            "WebSearch",
+            "Workflow",
+            "Write",
+        ])
+    );
+    assert_eq!(
+        sorted(offered(HarnessId::OpenCode).names),
+        sorted(&[
+            "edit",
+            "glob",
+            "grep",
+            "question",
+            "read",
+            "shell",
+            "skill",
+            "subagent",
+            "webfetch",
+            "websearch",
+            "write",
+            "execute",
+        ])
+    );
+    assert_eq!(
+        sorted(offered(HarnessId::Pi).names),
+        sorted(&["read", "bash", "edit", "write"])
+    );
+    assert_eq!(
+        sorted(offered(HarnessId::Codex).names),
+        sorted(&[
+            "exec_command",
+            "write_stdin",
+            "request_user_input",
+            "view_image",
+            "get_goal",
+            "create_goal",
+            "update_goal",
+            "web_search",
+        ])
+    );
+}
+
+/// A value the source's provider encrypted (an OpenAI Fernet token, `gAAAAA…`) is readable only by
+/// that provider: in the text form of a call it is replaced by a placeholder with its length,
+/// wherever it sits in the arguments. Codex Desktop's `send_message`, `followup_task` and
+/// `spawn_agent` carry their whole `message` that way (decided with the user on 2026-10-28:
+/// encrypted content is excluded).
+#[test]
+fn encrypted_argument_values_are_not_written_into_text_form() {
+    let token = format!("gAAAAABq4cOT{}", "Ab-_9z".repeat(60));
+    let len = token.chars().count();
+    let call = call(
+        CanonicalTool::Other("followup_task".into()),
+        "followup_task",
+        json!({
+            "target": "/root/cessation_reconciliation",
+            "message": token,
+            "items": [{"note": format!("before {token} after")}],
+            "short": "gAAAAAhello",
+        }),
+    );
+    let text = tools::text_form_call(&call, HarnessId::ClaudeCode);
+    let placeholder = format!("<encrypted by the source's provider, {len} chars>");
+    assert!(!text.contains(&token), "{text}");
+    assert!(text.contains(&format!("message: {placeholder}")), "{text}");
+    assert!(
+        text.contains(&format!("before {placeholder} after")),
+        "{text}"
+    );
+    assert!(
+        text.contains("target: /root/cessation_reconciliation"),
+        "{text}"
+    );
+    assert!(
+        text.contains("short: gAAAAAhello"),
+        "a short look-alike stays: {text}"
+    );
+
+    let script = call_with_input(json!(format!(
+        "text(await tools.send_message({{message:\"{token}\"}}));"
+    )));
+    let text = tools::text_form_unanswered(&script);
+    assert!(
+        text.contains(&format!(
+            "tools.send_message({{message:\"{placeholder}\"}})"
+        )),
+        "{text}"
+    );
+}
+
+fn call_with_input(input: Value) -> ToolCall {
+    call(CanonicalTool::Other("exec".into()), "exec", input)
+}
+
+// ------------------------------------------------------------------- Codex apply_patch
+
+fn apply_patch(input: Value) -> ToolCall {
+    call(CanonicalTool::Edit, "apply_patch", input)
+}
+
+fn patch(body: &str) -> String {
+    format!("*** Begin Patch\n{body}\n*** End Patch")
+}
+
+/// A Codex patch that adds one file is a write, wherever the destination has one.
+#[test]
+fn an_added_file_is_a_write() {
+    let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1\n+L2")));
+    let claude = translate(&c, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Write");
+    assert_eq!(
+        input_of(&claude),
+        &json!({"file_path": "D:/w/a.txt", "content": "L1\nL2\n"})
+    );
+    let pi = translate(&c, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "write");
+    assert_eq!(
+        input_of(&pi),
+        &json!({"path": "D:/w/a.txt", "content": "L1\nL2\n"})
+    );
+}
+
+/// One hunk is an ordinary edit; the `@@` anchor line is not part of the texts.
+#[test]
+fn one_hunk_is_an_edit() {
+    let c = apply_patch(json!(patch(
+        "*** Update File: D:/w/a.txt\n@@ fn anchor()\n ctx\n-old\n+new\n ctx2"
+    )));
+    let claude = translate(&c, HarnessId::ClaudeCode, None);
+    assert_eq!(name_of(&claude), "Edit");
+    assert_eq!(
+        input_of(&claude),
+        &json!({"file_path": "D:/w/a.txt", "old_string": "ctx\nold\nctx2", "new_string": "ctx\nnew\nctx2"})
+    );
+    assert_eq!(name_of(&translate(&c, HarnessId::OpenCode, None)), "edit");
+    assert_eq!(name_of(&translate(&c, HarnessId::Pi, None)), "edit");
+}
+
+/// Several hunks reach Pi as one edit with its list of changes; elsewhere they are text form.
+#[test]
+fn several_hunks_are_a_multi_edit() {
+    let c = apply_patch(json!(patch(
+        "*** Update File: D:/w/a.txt\n@@\n-a\n+b\n@@\n x\n-c\n+d"
+    )));
+    let pi = translate(&c, HarnessId::Pi, None);
+    assert_eq!(name_of(&pi), "edit");
+    assert_eq!(input_of(&pi)["edits"].as_array().map(Vec::len), Some(2));
+    assert!(matches!(
+        translate(&c, HarnessId::ClaudeCode, None),
+        Translation::Text { .. }
+    ));
+}
+
+/// Codex records the patch as a bare string (custom tool) or under `input` (function call).
+#[test]
+fn the_object_shape_of_a_patch_reads_too() {
+    let c = apply_patch(json!({"input": patch("*** Add File: D:/w/a.txt\n+L1")}));
+    assert_eq!(
+        name_of(&translate(&c, HarnessId::ClaudeCode, None)),
+        "Write"
+    );
+}
+
+/// A patch that is not one plain file stays text form, its patch intact.
+#[test]
+fn a_patch_that_is_not_one_plain_file_stays_text() {
+    for body in [
+        "*** Delete File: D:/w/a.txt",
+        "*** Add File: D:/w/a.txt\n+L1\n*** Add File: D:/w/b.txt\n+L2",
+        "*** Update File: D:/w/a.txt\n@@\n+only-added",
+    ] {
+        let c = apply_patch(json!(patch(body)));
+        assert!(
+            matches!(
+                translate(&c, HarnessId::ClaudeCode, None),
+                Translation::Text { .. }
+            ),
+            "{body}"
+        );
+    }
+}
+
+/// Toward Codex a patch is still text form: Codex's own apply_patch form is not written.
+#[test]
+fn a_grep_toward_claude_keeps_every_argument_or_becomes_text() {
+    // Claude's own Grep keeps its call; another harness's grep carries only what the translation
+    // writes, so line context, an offset, multiline and `-n: false` make it text form (tables §1.2).
+    for extra in [
+        json!({"-A": 2}),
+        json!({"-B": 2}),
+        json!({"offset": 5}),
+        json!({"multiline": true}),
+        json!({"-n": false}),
+    ] {
+        let mut input = json!({"pattern": "x", "path": "src"});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let out = translate(
+            &call(CanonicalTool::Grep, "grep", input.clone()),
+            HarnessId::ClaudeCode,
+            None,
+        );
+        assert!(
+            matches!(
+                out,
+                Translation::Text {
+                    why: "an argument has no counterpart"
+                }
+            ),
+            "{input} → {out:?}"
+        );
+        let own = translate(
+            &call(CanonicalTool::Grep, "Grep", input.clone()),
+            HarnessId::ClaudeCode,
+            None,
+        );
+        assert!(own.is_call(), "Claude's own Grep {input} → {own:?}");
+    }
+    // What the translation writes anyway still translates.
+    for same in [json!({"multiline": false}), json!({"-n": true})] {
+        let mut input = json!({"pattern": "x", "path": "src"});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(same.as_object().unwrap().clone());
+        let out = translate(
+            &call(CanonicalTool::Grep, "grep", input.clone()),
+            HarnessId::ClaudeCode,
+            None,
+        );
+        assert!(out.is_call(), "{input} → {out:?}");
+    }
+}
+
+#[test]
+fn a_patch_toward_codex_stays_text() {
+    let c = apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1")));
+    assert!(matches!(
+        translate(&c, HarnessId::Codex, Some(Shell::PowerShell)),
+        Translation::Text { .. }
+    ));
+}
+
+// ------------------------------------------------------------------- characterization
+
+/// One call of each canonical tool and argument shape this file uses, with the shell the
+/// destination runs.
+fn characterization_calls() -> Vec<(&'static str, ToolCall, Option<Shell>)> {
+    use CanonicalTool as C;
+    let posix = Some(Shell::Posix);
+    let powershell = Some(Shell::PowerShell);
+    vec![
+        (
+            "bash, shell unknown",
+            call(C::Bash, "Bash", json!({"command": "make", "timeout": 2500})),
+            None,
+        ),
+        (
+            "bash toward posix",
+            call(
+                C::Bash,
+                "Bash",
+                json!({"command": "make", "timeout": 2500, "description": "d"}),
+            ),
+            posix,
+        ),
+        (
+            "bash in the background",
+            call(
+                C::Bash,
+                "Bash",
+                json!({"command": "serve", "run_in_background": true}),
+            ),
+            posix,
+        ),
+        (
+            "exec_command with workdir",
+            call(
+                C::Bash,
+                "exec_command",
+                json!({"cmd": "ls", "workdir": "C:/w", "justification": "j", "yield_time_ms": 1000}),
+            ),
+            posix,
+        ),
+        (
+            "opencode shell in the background",
+            call(
+                C::Bash,
+                "shell",
+                json!({"command": "serve", "background": true, "timeout": 4000}),
+            ),
+            posix,
+        ),
+        (
+            "bash without a command",
+            call(C::Bash, "Bash", json!({"description": "d"})),
+            posix,
+        ),
+        (
+            "powershell toward powershell",
+            call(
+                C::PowerShell,
+                "PowerShell",
+                json!({"command": "Get-ChildItem"}),
+            ),
+            powershell,
+        ),
+        (
+            "powershell toward posix",
+            call(
+                C::PowerShell,
+                "PowerShell",
+                json!({"command": "Get-ChildItem"}),
+            ),
+            posix,
+        ),
+        (
+            "read with offset and limit",
+            call(
+                C::Read,
+                "Read",
+                json!({"file_path": "a.txt", "offset": 5, "limit": 10}),
+            ),
+            None,
+        ),
+        (
+            "read with pages",
+            call(
+                C::Read,
+                "Read",
+                json!({"file_path": "a.pdf", "pages": "1-2"}),
+            ),
+            None,
+        ),
+        (
+            "read with an unknown key",
+            call(C::Read, "Read", json!({"file_path": "a", "frobnicate": 1})),
+            None,
+        ),
+        (
+            "write by path",
+            call(C::Write, "write", json!({"path": "a", "content": "c"})),
+            None,
+        ),
+        (
+            "edit",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "old_string": "a", "new_string": "b"}),
+            ),
+            None,
+        ),
+        (
+            "edit replace_all",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "old_string": "a", "new_string": "b", "replace_all": true}),
+            ),
+            None,
+        ),
+        (
+            "opencode edit replaceAll",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "oldString": "x", "newString": "y", "replaceAll": true}),
+            ),
+            None,
+        ),
+        (
+            "edit without new text",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "old_string": "a"}),
+            ),
+            None,
+        ),
+        (
+            "edit without a path",
+            call(C::Edit, "edit", json!({"oldString": "x", "newString": "y"})),
+            None,
+        ),
+        (
+            "edit without old text",
+            call(
+                C::Edit,
+                "Edit",
+                json!({"file_path": "a.txt", "new_string": "b"}),
+            ),
+            None,
+        ),
+        (
+            "pi edit, one change",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}]}),
+            ),
+            None,
+        ),
+        (
+            "pi edit, two changes",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"oldText": "p", "newText": "q"}]}),
+            ),
+            None,
+        ),
+        (
+            "pi edit, no edits",
+            call(C::Edit, "edit", json!({"path": "a", "edits": []})),
+            None,
+        ),
+        (
+            "pi edit, a change without its texts",
+            call(
+                C::Edit,
+                "edit",
+                json!({"path": "a", "edits": [{"oldText": "x", "newText": "y"}, {"note": "z"}]}),
+            ),
+            None,
+        ),
+        (
+            "multi-edit",
+            call(
+                C::MultiEdit,
+                "MultiEdit",
+                json!({"file_path": "a", "edits": [{"old_string": "x", "new_string": "y"}, {"old_string": "p", "new_string": "q"}]}),
+            ),
+            None,
+        ),
+        (
+            "multi-edit replace_all",
+            call(
+                C::MultiEdit,
+                "MultiEdit",
+                json!({"file_path": "a", "edits": [{"old_string": "x", "new_string": "y", "replace_all": true}]}),
+            ),
+            None,
+        ),
+        (
+            "claude grep",
+            call(
+                C::Grep,
+                "Grep",
+                json!({"pattern": "fn main", "path": "src", "glob": "*.rs", "-i": true, "-C": 3, "head_limit": 5}),
+            ),
+            None,
+        ),
+        (
+            "opencode grep",
+            call(
+                C::Grep,
+                "grep",
+                json!({"pattern": "x", "include": "*.rs", "literal": true, "caseSensitive": false}),
+            ),
+            None,
+        ),
+        (
+            "grep with output_mode content",
+            call(
+                C::Grep,
+                "grep",
+                json!({"pattern": "x", "output_mode": "content"}),
+            ),
+            None,
+        ),
+        (
+            "grep with an extra key",
+            call(
+                C::Grep,
+                "grep",
+                json!({"pattern": "x", "path": "src", "multiline": true}),
+            ),
+            None,
+        ),
+        (
+            "grep without a pattern",
+            call(C::Grep, "grep", json!({"path": "src"})),
+            None,
+        ),
+        (
+            "grep with a file type",
+            call(C::Grep, "grep", json!({"pattern": "x", "type": "rust"})),
+            None,
+        ),
+        (
+            "glob",
+            call(
+                C::Glob,
+                "Glob",
+                json!({"pattern": "**/*.rs", "path": "src"}),
+            ),
+            None,
+        ),
+        (
+            "glob hidden",
+            call(C::Glob, "glob", json!({"pattern": "*.rs", "hidden": true})),
+            None,
+        ),
+        (
+            "glob limit",
+            call(C::Glob, "find", json!({"pattern": "*.rs", "limit": 5})),
+            None,
+        ),
+        (
+            "ls",
+            call(C::Ls, "ls", json!({"path": "src", "limit": 3})),
+            None,
+        ),
+        (
+            "web fetch with prompt",
+            call(
+                C::WebFetch,
+                "WebFetch",
+                json!({"url": "https://x", "prompt": "sum it up"}),
+            ),
+            None,
+        ),
+        (
+            "web fetch with format",
+            call(
+                C::WebFetch,
+                "webfetch",
+                json!({"url": "https://x", "format": "markdown"}),
+            ),
+            None,
+        ),
+        (
+            "web fetch without a url",
+            call(C::WebFetch, "webfetch", json!({"format": "markdown"})),
+            None,
+        ),
+        (
+            "web search with domains",
+            call(
+                C::WebSearch,
+                "WebSearch",
+                json!({"query": "q", "allowed_domains": ["a.org"]}),
+            ),
+            None,
+        ),
+        (
+            "web search",
+            call(C::WebSearch, "websearch", json!({"query": "q"})),
+            None,
+        ),
+        (
+            "web search without a query",
+            call(
+                C::WebSearch,
+                "websearch",
+                json!({"allowed_domains": ["a.org"]}),
+            ),
+            None,
+        ),
+        (
+            "apply_patch add",
+            apply_patch(json!(patch("*** Add File: D:/w/a.txt\n+L1\n+L2"))),
+            None,
+        ),
+        (
+            "apply_patch update",
+            apply_patch(json!(patch(
+                "*** Update File: D:/w/a.txt\n@@ fn anchor()\n ctx\n-old\n+new\n ctx2"
+            ))),
+            None,
+        ),
+        (
+            "apply_patch two hunks",
+            apply_patch(json!(patch(
+                "*** Update File: D:/w/a.txt\n@@\n-a\n+b\n@@\n x\n-c\n+d"
+            ))),
+            None,
+        ),
+        (
+            "agent",
+            call(C::Agent, "Agent", json!({"prompt": "x"})),
+            None,
+        ),
+        (
+            "no canonical form",
+            ToolCall {
+                id: "c1".into(),
+                source_name: "mystery".into(),
+                canonical: None,
+                input: json!({}),
+            },
+            None,
+        ),
+    ]
+}
+
+fn rendered(translation: &Translation) -> String {
+    match translation {
+        Translation::Call { name, input } => format!("{name} {input}"),
+        Translation::Text { why } => format!("text: {why}"),
+    }
+}
+
+/// Every characterization call toward Claude Code, Codex, OpenCode, Pi and Pi with its search
+/// tools.
+fn characterization_row(c: &ToolCall, shell: Option<Shell>) -> [String; 5] {
+    [
+        rendered(&translate(c, HarnessId::ClaudeCode, shell)),
+        rendered(&translate(c, HarnessId::Codex, shell)),
+        rendered(&translate(c, HarnessId::OpenCode, shell)),
+        rendered(&translate(c, HarnessId::Pi, shell)),
+        rendered(&translate_with(c, HarnessId::Pi, shell, PI_WITH_SEARCH)),
+    ]
+}
+
+/// Each characterization call as it was translated before the shapes toward each destination
+/// moved into the adapters: name and input, or the text form's reason.
+#[test]
+fn translation_is_unchanged_for_every_destination() {
+    let destinations = [
+        "Claude Code",
+        "Codex",
+        "OpenCode",
+        "Pi",
+        "Pi with grep, find and ls",
+    ];
+    let expected: Vec<(&str, [&str; 5])> = vec![
+        (
+            "bash, shell unknown",
+            [
+                r#"Bash {"command":"make","timeout":2500}"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+            ],
+        ),
+        (
+            "bash toward posix",
+            [
+                r#"Bash {"command":"make","timeout":2500,"description":"d"}"#,
+                r#"exec_command {"cmd":"make","justification":"d"}"#,
+                r#"shell {"command":"make","timeout":2500}"#,
+                r#"bash {"command":"make","timeout":3}"#,
+                r#"bash {"command":"make","timeout":3}"#,
+            ],
+        ),
+        (
+            "bash in the background",
+            [
+                r#"Bash {"command":"serve","run_in_background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"shell {"command":"serve","background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"text: background execution is not available"#,
+            ],
+        ),
+        (
+            "exec_command with workdir",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"exec_command {"cmd":"ls","workdir":"C:/w","justification":"j"}"#,
+                r#"shell {"command":"ls","workdir":"C:/w"}"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "opencode shell in the background",
+            [
+                r#"Bash {"command":"serve","timeout":4000,"run_in_background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"shell {"command":"serve","timeout":4000,"background":true}"#,
+                r#"text: background execution is not available"#,
+                r#"text: background execution is not available"#,
+            ],
+        ),
+        (
+            "bash without a command",
+            [
+                r#"text: no command"#,
+                r#"text: no command"#,
+                r#"text: no command"#,
+                r#"text: no command"#,
+                r#"text: no command"#,
+            ],
+        ),
+        (
+            "powershell toward powershell",
+            [
+                r#"text: the destination's offered set does not contain it"#,
+                r#"exec_command {"cmd":"Get-ChildItem"}"#,
+                r#"shell {"command":"Get-ChildItem"}"#,
+                r#"bash {"command":"Get-ChildItem"}"#,
+                r#"bash {"command":"Get-ChildItem"}"#,
+            ],
+        ),
+        (
+            "powershell toward posix",
+            [
+                r#"text: the destination's offered set does not contain it"#,
+                r#"text: shell dialect differs from the destination's"#,
+                r#"text: shell dialect differs from the destination's"#,
+                // Pi's own `powershell` tool would take it; it is off unless `defaultTools` names it.
+                r#"text: the destination's offered set does not contain it"#,
+                r#"text: the destination's offered set does not contain it"#,
+            ],
+        ),
+        (
+            "read with offset and limit",
+            [
+                r#"Read {"file_path":"a.txt","offset":5,"limit":10}"#,
+                r#"text: Codex offers no read tool"#,
+                r#"read {"path":"a.txt","offset":5,"limit":10}"#,
+                r#"read {"path":"a.txt","offset":5,"limit":10}"#,
+                r#"read {"path":"a.txt","offset":5,"limit":10}"#,
+            ],
+        ),
+        (
+            "read with pages",
+            [
+                r#"Read {"file_path":"a.pdf","pages":"1-2"}"#,
+                r#"text: Codex offers no read tool"#,
+                r#"text: pages/allow_large has no counterpart"#,
+                r#"text: pages/allow_large has no counterpart"#,
+                r#"text: pages/allow_large has no counterpart"#,
+            ],
+        ),
+        (
+            "read with an unknown key",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: Codex offers no read tool"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "write by path",
+            [
+                r#"Write {"file_path":"a","content":"c"}"#,
+                r#"text: Codex offers no apply_patch here"#,
+                r#"write {"path":"a","content":"c"}"#,
+                r#"write {"path":"a","content":"c"}"#,
+                r#"write {"path":"a","content":"c"}"#,
+            ],
+        ),
+        (
+            "edit",
+            [
+                r#"Edit {"file_path":"a.txt","old_string":"a","new_string":"b"}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a.txt","oldString":"a","newString":"b"}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":"b"}]}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":"b"}]}"#,
+            ],
+        ),
+        (
+            "edit replace_all",
+            [
+                r#"Edit {"file_path":"a.txt","old_string":"a","new_string":"b","replace_all":true}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a.txt","oldString":"a","newString":"b","replaceAll":true}"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+            ],
+        ),
+        (
+            "opencode edit replaceAll",
+            [
+                r#"Edit {"file_path":"a","old_string":"x","new_string":"y","replace_all":true}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a","oldString":"x","newString":"y","replaceAll":true}"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+            ],
+        ),
+        (
+            "edit without new text",
+            [
+                r#"Edit {"file_path":"a.txt","old_string":"a","new_string":""}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a.txt","oldString":"a","newString":""}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":""}]}"#,
+                r#"edit {"path":"a.txt","edits":[{"oldText":"a","newText":""}]}"#,
+            ],
+        ),
+        (
+            "edit without a path",
+            [
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+                r#"text: no path"#,
+            ],
+        ),
+        (
+            "edit without old text",
+            [
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+                r#"text: no old_string"#,
+            ],
+        ),
+        (
+            "pi edit, one change",
+            [
+                r#"Edit {"file_path":"a","old_string":"x","new_string":"y"}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"a","oldString":"x","newString":"y"}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"}]}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"}]}"#,
+            ],
+        ),
+        (
+            "pi edit, two changes",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+            ],
+        ),
+        (
+            "pi edit, no edits",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no edits"#,
+                r#"text: no edits"#,
+            ],
+        ),
+        (
+            "pi edit, a change without its texts",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: an edit without its old and new text"#,
+                r#"text: an edit without its old and new text"#,
+            ],
+        ),
+        (
+            "multi-edit",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+                r#"edit {"path":"a","edits":[{"oldText":"x","newText":"y"},{"oldText":"p","newText":"q"}]}"#,
+            ],
+        ),
+        (
+            "multi-edit replace_all",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+                r#"text: replace_all has no counterpart in Pi"#,
+            ],
+        ),
+        (
+            "claude grep",
+            [
+                r#"Grep {"pattern":"fn main","path":"src","glob":"*.rs","-i":true,"-C":3,"head_limit":5}"#,
+                r#"text: no grep tool offered"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"grep {"pattern":"fn main","path":"src","glob":"*.rs","ignoreCase":true,"context":3,"limit":5}"#,
+            ],
+        ),
+        (
+            "opencode grep",
+            [
+                r#"text: Claude's Grep has no literal search"#,
+                r#"text: no grep tool offered"#,
+                r#"grep {"pattern":"x","include":"*.rs","caseSensitive":false,"literal":true}"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"grep {"pattern":"x","glob":"*.rs","ignoreCase":true,"literal":true}"#,
+            ],
+        ),
+        (
+            "grep with output_mode content",
+            [
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+                r#"text: output_mode has no counterpart"#,
+            ],
+        ),
+        (
+            "grep with an extra key",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: no grep tool offered"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "grep without a pattern",
+            [
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+                r#"text: no pattern"#,
+            ],
+        ),
+        (
+            "grep with a file type",
+            [
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+                r#"text: a file `type` has no counterpart"#,
+            ],
+        ),
+        (
+            "glob",
+            [
+                r#"Glob {"pattern":"**/*.rs","path":"src"}"#,
+                r#"text: no glob tool offered"#,
+                r#"glob {"pattern":"**/*.rs","path":"src"}"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"find {"pattern":"**/*.rs","path":"src"}"#,
+            ],
+        ),
+        (
+            "glob hidden",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: no glob tool offered"#,
+                r#"glob {"pattern":"*.rs","hidden":true}"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: an argument has no counterpart"#,
+            ],
+        ),
+        (
+            "glob limit",
+            [
+                r#"text: an argument has no counterpart"#,
+                r#"text: no glob tool offered"#,
+                r#"glob {"pattern":"*.rs","limit":5}"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"find {"pattern":"*.rs","limit":5}"#,
+            ],
+        ),
+        (
+            "ls",
+            [
+                r#"text: no ls tool offered"#,
+                r#"text: no ls tool offered"#,
+                r#"text: no ls tool offered"#,
+                r#"text: the destination's offered set does not contain it"#,
+                r#"ls {"path":"src","limit":3}"#,
+            ],
+        ),
+        (
+            "web fetch with prompt",
+            [
+                r#"WebFetch {"url":"https://x","prompt":"sum it up"}"#,
+                r#"text: no webfetch tool offered"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: no webfetch tool offered"#,
+                r#"text: no webfetch tool offered"#,
+            ],
+        ),
+        (
+            "web fetch with format",
+            [
+                r#"text: no prompt"#,
+                r#"text: no webfetch tool offered"#,
+                r#"webfetch {"url":"https://x","format":"markdown"}"#,
+                r#"text: no webfetch tool offered"#,
+                r#"text: no webfetch tool offered"#,
+            ],
+        ),
+        (
+            "web fetch without a url",
+            [
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+                r#"text: no url"#,
+            ],
+        ),
+        (
+            "web search with domains",
+            [
+                r#"WebSearch {"query":"q","allowed_domains":["a.org"]}"#,
+                r#"text: web search is server-side or absent"#,
+                r#"text: an argument has no counterpart"#,
+                r#"text: web search is server-side or absent"#,
+                r#"text: web search is server-side or absent"#,
+            ],
+        ),
+        (
+            "web search",
+            [
+                r#"WebSearch {"query":"q"}"#,
+                r#"text: web search is server-side or absent"#,
+                r#"websearch {"query":"q"}"#,
+                r#"text: web search is server-side or absent"#,
+                r#"text: web search is server-side or absent"#,
+            ],
+        ),
+        (
+            "web search without a query",
+            [
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+                r#"text: no query"#,
+            ],
+        ),
+        (
+            "apply_patch add",
+            [
+                r#"Write {"file_path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+                r#"text: Codex offers no apply_patch here"#,
+                r#"write {"path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+                r#"write {"path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+                r#"write {"path":"D:/w/a.txt","content":"L1\nL2\n"}"#,
+            ],
+        ),
+        (
+            "apply_patch update",
+            [
+                r#"Edit {"file_path":"D:/w/a.txt","old_string":"ctx\nold\nctx2","new_string":"ctx\nnew\nctx2"}"#,
+                r#"text: Codex's apply_patch form is not written yet"#,
+                r#"edit {"path":"D:/w/a.txt","oldString":"ctx\nold\nctx2","newString":"ctx\nnew\nctx2"}"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"ctx\nold\nctx2","newText":"ctx\nnew\nctx2"}]}"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"ctx\nold\nctx2","newText":"ctx\nnew\nctx2"}]}"#,
+            ],
+        ),
+        (
+            "apply_patch two hunks",
+            [
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"text: no multi-edit equivalent"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"a","newText":"b"},{"oldText":"x\nc","newText":"x\nd"}]}"#,
+                r#"edit {"path":"D:/w/a.txt","edits":[{"oldText":"a","newText":"b"},{"oldText":"x\nc","newText":"x\nd"}]}"#,
+            ],
+        ),
+        (
+            "agent",
+            [
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+                r#"text: capability is not the destination's"#,
+            ],
+        ),
+        (
+            "no canonical form",
+            [
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+                r#"text: no canonical form"#,
+            ],
+        ),
+    ];
+    let calls = characterization_calls();
+    assert_eq!(calls.len(), expected.len());
+    for ((label, c, shell), (expected_label, row)) in calls.iter().zip(&expected) {
+        assert_eq!(label, expected_label);
+        let got = characterization_row(c, *shell);
+        for ((destination, got), want) in destinations.iter().zip(&got).zip(row) {
+            assert_eq!(got, want, "{label} toward {destination}");
+        }
+    }
+    // Claude Code's PowerShell tool, where the offered set has it.
+    let powershell = call(
+        CanonicalTool::PowerShell,
+        "PowerShell",
+        json!({"command": "Get-ChildItem", "timeout": 1000, "run_in_background": true}),
+    );
+    let with_powershell = ToolSet {
+        names: &["Bash", "PowerShell"],
+    };
+    assert_eq!(
+        rendered(&translate_with(
+            &powershell,
+            HarnessId::ClaudeCode,
+            None,
+            with_powershell
+        )),
+        r#"PowerShell {"command":"Get-ChildItem","timeout":1000,"run_in_background":true}"#
+    );
+}

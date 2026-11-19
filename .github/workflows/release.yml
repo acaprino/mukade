@@ -1,0 +1,165 @@
+name: Release
+
+# A release at every merge of develop into main. The same workflow is in Shinatama, Mukade, Xiox, Muro, Ethel
+# and artcraft-web; what is project-specific is in .github/release.json, the version logic in
+# .github/scripts/release.mjs.
+#   1. the merged pull request's label chooses the step: release:major, release:minor, otherwise patch;
+#   2. the next version is written in every version file (and the project's Cargo.lock entries);
+#   3. the build runs on the project's runner: build-release.bat --no-install on Windows unless release.json
+#      says otherwise;
+#   4. the version commit and the tag <prefix><version> go on main, the GitHub Release gets the installer
+#      (release\installer\, built by build-release.bat with Inno Setup) and one zip with all of release\ in a
+#      folder named after the app, the portable program; no program loose beside them (or release/'s files as
+#      they are, for "assets": "files");
+#   5. main is merged back into develop, so develop carries the new version.
+# Nothing is published when the build fails. Run by hand (Actions, Run workflow) it only builds, unless "publish"
+# is ticked. RELEASE_TOKEN (a token that reads the owner's other private repositories) is needed where the build
+# downloads from them; without it the workflow's own token is used.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      step:
+        description: Version step
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      publish:
+        description: Publish the release (otherwise build only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # The release commit itself ("release v1.2.3") is pushed by this workflow and must not start another one.
+    if: ${{ !startsWith(github.event.head_commit.message, 'release ') }}
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.plan.outputs.runner }}
+      step: ${{ steps.plan.outputs.step }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        shell: pwsh
+        run: |
+          $config = Get-Content .github/release.json -Raw | ConvertFrom-Json
+          $runner = if ($config.runner) { $config.runner } else { 'windows-latest' }
+          $step = '${{ inputs.step }}'
+          if ('${{ github.event_name }}' -eq 'push') {
+            $labels = @(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].labels[].name')
+            $step = if ($labels -contains 'release:major') { 'major' } elseif ($labels -contains 'release:minor') { 'minor' } else { 'patch' }
+          }
+          "runner=$runner" >> $env:GITHUB_OUTPUT
+          "step=$step" >> $env:GITHUB_OUTPUT
+          Write-Host "Runner $runner, version step $step"
+
+  release:
+    needs: plan
+    runs-on: ${{ needs.plan.outputs.runner }}
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+      PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Next version
+        id: version
+        run: |
+          $current = node .github/scripts/release.mjs current
+          $version = node .github/scripts/release.mjs bump '${{ needs.plan.outputs.step }}'
+          if ($LASTEXITCODE) { exit 1 }
+          $tag = (node .github/scripts/release.mjs config tagPrefix) + $version
+          git fetch --tags --quiet
+          if (git tag --list $tag) { Write-Error "$tag already exists"; exit 1 }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "app=$(node .github/scripts/release.mjs config app)" >> $env:GITHUB_OUTPUT
+          Write-Host "$current -> $version ($tag)"
+
+      - name: Inno Setup
+        # build-release.bat makes the installer with it (.github/scripts/installer.iss); most Windows images have it.
+        if: runner.os == 'Windows'
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") -and -not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE) { exit 1 }
+          }
+
+      - name: Prepare and build
+        run: |
+          $commands = @(node .github/scripts/release.mjs config prepare) + @(node .github/scripts/release.mjs config build)
+          foreach ($command in $commands) {
+            if (-not $command) { continue }
+            Write-Host "> $command"
+            if ($IsWindows) { cmd /c $command } else { bash -c $command }
+            if ($LASTEXITCODE) { exit 1 }
+          }
+
+      - name: Package
+        run: |
+          if ((node .github/scripts/release.mjs config assets) -eq 'files') {
+            $assets = @(Get-ChildItem release -File | ForEach-Object FullName)
+          } else {
+            # The portable program: one zip whose only entry is a folder named after the app, with all of release\.
+            $folder = Join-Path $env:RUNNER_TEMP "portable/${{ steps.version.outputs.app }}"
+            New-Item -ItemType Directory -Force -Path $folder | Out-Null
+            Copy-Item -Path (Get-ChildItem release -Exclude installer).FullName -Destination $folder -Recurse
+            $zip = "${{ steps.version.outputs.app }}-${{ steps.version.outputs.version }}-windows-x64.zip"
+            Compress-Archive -Path $folder -DestinationPath $zip
+            $assets = @((Resolve-Path $zip).Path)
+            if (Test-Path release/installer) { $assets += @(Get-ChildItem release/installer -File | ForEach-Object FullName) }
+          }
+          if (-not $assets) { Write-Error 'release/ is empty'; exit 1 }
+          $assets | ForEach-Object { Write-Host $_ }
+          ($assets -join "`n") | Set-Content -Path "$env:RUNNER_TEMP/assets.txt"
+
+      - name: Commit, tag and publish
+        if: env.PUBLISH == 'true'
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- @(node .github/scripts/release.mjs paths)
+          git commit -m "release $tag"
+          git tag -a $tag -m "${{ steps.version.outputs.app }} ${{ steps.version.outputs.version }}"
+          git push origin "HEAD:refs/heads/main" "refs/tags/$tag"
+          if ($LASTEXITCODE) { exit 1 }
+          $assets = @(Get-Content "$env:RUNNER_TEMP/assets.txt")
+          gh release create $tag --repo '${{ github.repository }}' --verify-tag --title "${{ steps.version.outputs.app }} ${{ steps.version.outputs.version }}" --generate-notes @assets
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: develop follows main
+        if: env.PUBLISH == 'true'
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          git fetch origin develop
+          git switch -C develop origin/develop
+          git merge --no-edit -m "Merge $tag into develop" $tag
+          if ($LASTEXITCODE) { Write-Error "main could not be merged into develop: merge $tag into develop by hand"; exit 1 }
+          git push origin develop

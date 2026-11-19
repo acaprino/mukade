@@ -1,0 +1,918 @@
+//! The rendering plan: what a [`Session`] becomes for one destination.
+//!
+//! This is the only place that applies the tool tables (L11–L14) and the reasoning policy, so all
+//! four writers and the CLI's document projection agree on what is carried, what becomes text and
+//! what is dropped. A writer's job is then only to lay the plan out as native records.
+
+use crate::model::{
+    Attachment, Entry, HarnessId, Kind, Meta, MetaKind, ModelRef, Protocol, ResultContent, Session,
+    StepEnd,
+};
+use crate::policy::{ReasoningDrop, ReasoningPlan, plan_reasoning};
+use crate::tools::{self, Shell, Translation};
+use crate::writer::{Interrupted, WriteOpts, media};
+use serde_json::Value;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
+
+/// One call that will be written as the destination's own tool.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedCall {
+    pub id: String,
+    /// The destination's tool name.
+    pub name: String,
+    /// The name the source harness used, kept so a call that has to fall back to text form can
+    /// still say where it came from.
+    pub source_name: String,
+    pub input: Value,
+    /// The input as the source recorded it, for a call that ends up in text form after all.
+    pub source_input: Value,
+}
+
+/// One result, either native (its call was translated) or text (its call travelled as text).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlannedResult {
+    Native {
+        call_id: String,
+        content: ResultContent,
+        is_error: bool,
+    },
+    Text(String),
+}
+
+/// One model step, ready to be laid out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedStep {
+    pub model: Option<ModelRef>,
+    pub reasoning: Vec<ReasoningPlan>,
+    /// The step's own text plus the text form of the calls it could not translate.
+    pub text: Vec<String>,
+    pub calls: Vec<PlannedCall>,
+    pub end: StepEnd,
+}
+
+impl PlannedStep {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.calls.is_empty()
+    }
+
+    /// The reasoning blocks to write, with their opaque payloads.
+    pub fn native_reasoning(&self) -> impl Iterator<Item = &crate::model::Reasoning> {
+        self.reasoning.iter().filter_map(|r| match r {
+            ReasoningPlan::Native(native) => Some(native),
+            _ => None,
+        })
+    }
+}
+
+/// One entry of the plan.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlannedBlock {
+    User {
+        text: String,
+        attachments: Vec<Attachment>,
+    },
+    Step(PlannedStep),
+    Results {
+        results: Vec<PlannedResult>,
+    },
+    /// A compaction: the source's own summary, carried as one user message (L4).
+    Compaction {
+        summary: String,
+    },
+}
+
+/// What the plan did, for the manifest (§6.3).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Counts {
+    /// Conversation entries in the source (not `Meta`: those are not conversation).
+    pub messages_in: usize,
+    /// Blocks the destination will receive.
+    pub messages_out: usize,
+    pub tools_translated: usize,
+    /// Tool calls deliberately omitted with their results.
+    pub tools_omitted: usize,
+    pub tools_text_form: usize,
+    pub text_form_tools: Vec<String>,
+    /// Reasoning blocks not carried, in all.
+    pub reasoning_dropped: usize,
+    /// The same blocks by reason, in the order the reasons first came up.
+    pub reasoning_dropped_why: Vec<(ReasoningDrop, usize)>,
+    /// Reasoning blocks written as labelled text (`--reasoning as_text`): readable by the
+    /// destination's model, but no longer reasoning its provider can replay.
+    pub reasoning_as_text: usize,
+    /// A result whose call is nowhere in the source.
+    pub dropped_orphan_results: usize,
+    /// A second answer to a call already answered: the provider refuses a call answered twice (A3).
+    pub dropped_duplicate_results: usize,
+    /// Tool-call ids the destination's protocol refuses, rewritten for the call and its result.
+    pub rewritten_call_ids: usize,
+    /// Source records of a branch the conversation left (a rewind, an edited prompt), not written.
+    pub dropped_off_branch: usize,
+    /// A last source line cut off mid-write, kept as text and not read.
+    pub dropped_unfinished_lines: usize,
+    /// Steps the source aborted or that failed, written as ordinary replies by a destination with
+    /// no way to mark them (Pi keeps the step's end).
+    pub aborted_steps_as_replies: usize,
+    /// Steps of turns the source never finished, left out on request with their results
+    /// (`Interrupted::Drop`).
+    pub dropped_interrupted_steps: usize,
+    /// A call the source never answered: the provider would refuse it as a tool call (L7).
+    pub unanswered_calls: usize,
+    /// A step that lost everything it had and cannot be written as an empty message.
+    pub dropped_empty_steps: usize,
+    /// User attachments that could not be carried by a destination.
+    pub dropped_attachments: usize,
+    /// Structured blocks flattened by a destination that only accepts text results.
+    pub dropped_result_blocks: usize,
+    /// Compaction summaries with no readable text (encrypted by the source's provider).
+    pub dropped_unreadable_summaries: usize,
+    /// Messages between a subagent and its parent with no readable text (Codex's encrypted
+    /// `agent_message`), not written.
+    pub dropped_subagent_messages: usize,
+    /// Rows whose parent the source file does not hold, read after the row before them.
+    pub relinked_parents: usize,
+    /// Branches of the session written to the destination.
+    pub branches_kept: usize,
+    /// Branches of the session left out: the destination keeps one conversation, cannot say where
+    /// the branch leaves from, or the branch with what it shares would be refused.
+    pub branches_dropped: usize,
+}
+
+impl Counts {
+    /// Count one reasoning block not carried, under its reason.
+    fn drop_reasoning(&mut self, why: ReasoningDrop) {
+        self.reasoning_dropped += 1;
+        match self
+            .reasoning_dropped_why
+            .iter_mut()
+            .find(|(seen, _)| *seen == why)
+        {
+            Some((_, n)) => *n += 1,
+            None => self.reasoning_dropped_why.push((why, 1)),
+        }
+    }
+}
+
+/// A whole session, planned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Plan {
+    /// The conversation the harness resumes: the active path.
+    pub blocks: Vec<PlannedBlock>,
+    pub counts: Counts,
+    /// The branches the session left that the destination can keep, planned: parents before the
+    /// branches that hang off them. Empty unless the source was read with its branches.
+    pub branches: Vec<PlannedBranch>,
+}
+
+/// One branch, planned: the blocks after the point it leaves from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedBranch {
+    /// Where it leaves from: the chain (0 is [`Plan::blocks`], `n + 1` is `branches[n]`) and the
+    /// block of it that comes before the branch. `None`: before the first block.
+    pub parent: Option<(usize, usize)>,
+    pub blocks: Vec<PlannedBlock>,
+}
+
+impl Plan {
+    /// The blocks of a chain: 0 is the active path, `n + 1` is `branches[n]`.
+    pub fn chain(&self, chain: usize) -> &[PlannedBlock] {
+        match chain {
+            0 => &self.blocks,
+            n => &self.branches[n - 1].blocks,
+        }
+    }
+
+    /// The branches that leave right after block `block` of `chain` (or, with `None`, before the
+    /// first block of the session), as their numbers in [`Plan::branches`], in order.
+    pub fn branches_after(&self, at: Option<(usize, usize)>) -> Vec<usize> {
+        self.branches
+            .iter()
+            .enumerate()
+            .filter(|(_, branch)| branch.parent == at)
+            .map(|(n, _)| n)
+            .collect()
+    }
+}
+
+/// What a destination does with the branches of a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchKeeping {
+    /// One conversation only: every branch is left out and counted.
+    None,
+    /// A tree: each record names its parent, and the file names the leaf it resumes (Claude Code
+    /// `parentUuid`, `last-prompt.leafUuid`).
+    Tree,
+    /// A tree whose resumed leaf is the file's last entry (Pi `parentId`): a branch is written
+    /// before the active path goes on, so a branch that would leave after the active path's last
+    /// block would end the file and be resumed instead. That one is left out and counted.
+    TreeLeafLast,
+    /// A line with rollbacks: a branch is written, then rolled back (Codex
+    /// `thread_rolled_back`), which can express a branch that starts a user turn.
+    Rollbacks,
+}
+
+/// Tool-call ids as the destination's protocol accepts them. Anthropic refuses an id outside
+/// `^[a-zA-Z0-9_-]+$`, and Pi on `openai-responses` records ids such as `call_x|fc_y`: such an id
+/// is rewritten once, the same way for the call and for its result, and counted.
+struct CallIds {
+    rewrite: bool,
+    given: HashMap<String, String>,
+    used: HashSet<String>,
+}
+
+impl CallIds {
+    fn new(rewrite: bool) -> Self {
+        CallIds {
+            rewrite,
+            given: HashMap::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    fn of(&mut self, id: &str, counts: &mut Counts) -> String {
+        if !self.rewrite {
+            return id.to_string();
+        }
+        if let Some(given) = self.given.get(id) {
+            return given.clone();
+        }
+        let base: String = id
+            .chars()
+            .map(|c| if anthropic_id_char(c) { c } else { '_' })
+            .collect();
+        let base = if base.is_empty() {
+            "toolu_mukade".to_string()
+        } else {
+            base
+        };
+        let mut candidate = base.clone();
+        let mut n = 1;
+        while self.used.contains(&candidate) {
+            n += 1;
+            candidate = format!("{base}_{n}");
+        }
+        if candidate != id {
+            counts.rewritten_call_ids += 1;
+        }
+        self.used.insert(candidate.clone());
+        self.given.insert(id.to_string(), candidate.clone());
+        candidate
+    }
+}
+
+/// A character Anthropic accepts in a tool-call id.
+pub fn anthropic_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-'
+}
+
+/// A user turn's attachments as the destination holds them: the source's own records when the
+/// destination is the source's harness, an image in the destination's own shape otherwise. What no
+/// shape fits (a PDF, a record a document carried without its block) is dropped and counted.
+fn carry_attachments(
+    attachments: &[Attachment],
+    source: HarnessId,
+    dest: HarnessId,
+    counts: &mut Counts,
+) -> Vec<Attachment> {
+    let mut carried = Vec::new();
+    for attachment in attachments {
+        let raw = if attachment.raw.is_null() {
+            None
+        } else if source == dest {
+            Some(attachment.raw.clone())
+        } else {
+            media::image_of(&attachment.raw)
+                .map(|image| media::user_block(&image, dest))
+                // A destination with no shape for an image answers null: nothing to carry.
+                .filter(|block| !block.is_null())
+        };
+        match raw {
+            Some(raw) => carried.push(Attachment {
+                raw,
+                ..attachment.clone()
+            }),
+            None => counts.dropped_attachments += 1,
+        }
+    }
+    carried
+}
+
+/// Whether `dest`'s writer flattens a result's structured blocks to text
+/// ([`Destination::flattens_result_blocks`](crate::harnesses::Destination::flattens_result_blocks)).
+/// A harness that is no destination flattens nothing.
+fn flattens_result_blocks(dest: HarnessId) -> bool {
+    crate::harnesses::get(dest)
+        .destination()
+        .is_some_and(|destination| destination.flattens_result_blocks())
+}
+
+/// A result's structured blocks as a destination that keeps them (Pi, OpenCode) holds them: an
+/// image in its own shape, text as text, and anything else dropped and counted. Claude Code and
+/// Codex results are flattened to text by their writers, counted where the plan takes them.
+fn carry_result_content(
+    content: &ResultContent,
+    source: HarnessId,
+    dest: HarnessId,
+    counts: &mut Counts,
+) -> ResultContent {
+    let ResultContent::Blocks(blocks) = content else {
+        return content.clone();
+    };
+    if source == dest || flattens_result_blocks(dest) {
+        return content.clone();
+    }
+    let mut carried = Vec::new();
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) == Some("text") {
+            carried.push(block.clone());
+        } else if let Some(image) = media::image_of(block) {
+            carried.push(media::result_block(&image, dest));
+        } else {
+            counts.dropped_result_blocks += 1;
+        }
+    }
+    ResultContent::Blocks(carried)
+}
+
+/// Plan the conversation of a session for a destination.
+pub fn plan(session: &Session, dest: HarnessId, opts: &WriteOpts) -> Plan {
+    let mut plan = plan_conversation(&session.meta, &session.entries, dest, opts);
+    if !session.branches.is_empty() {
+        plan_branches(session, dest, opts, &mut plan);
+    }
+    plan
+}
+
+/// The plan of one conversation, `entries` in order, of the session `meta` describes: the active
+/// path, or a branch with the path it shares. Entries are borrowed, so a branch costs no copy of
+/// the records it shares.
+fn plan_conversation<E: Borrow<Entry>>(
+    meta: &Meta,
+    entries: &[E],
+    dest: HarnessId,
+    opts: &WriteOpts,
+) -> Plan {
+    let each = || entries.iter().map(Borrow::borrow);
+    let dest_protocol = opts
+        .dest_protocol
+        .clone()
+        .or_else(|| crate::policy::destination_protocol(dest));
+    // The destination's offered set is per version and configuration (tables §6); a caller that
+    // knows it passes it in, otherwise the pinned list is used.
+    let offered = opts.offered.unwrap_or_else(|| tools::offered(dest));
+    let mut blocks: Vec<PlannedBlock> = Vec::new();
+    let source_records = |of: MetaKind| {
+        each()
+            .filter(|entry| matches!(&entry.kind, Kind::Meta { kind } if *kind == of))
+            .count()
+    };
+    let mut counts = Counts {
+        dropped_off_branch: source_records(MetaKind::OffBranch),
+        dropped_unfinished_lines: source_records(MetaKind::Unfinished),
+        dropped_subagent_messages: source_records(MetaKind::SubagentMessage),
+        relinked_parents: source_records(MetaKind::Relinked),
+        ..Counts::default()
+    };
+    // The calls of the step just planned: which of them the destination took natively, and which
+    // of them exist at all (a result whose call is nowhere is an orphan and is dropped).
+    let mut last_step_native: Vec<String> = Vec::new();
+    let mut last_step_calls: Vec<String> = Vec::new();
+    // The calls of that step already answered, across its result groups.
+    let mut step_answered: Vec<String> = Vec::new();
+    let source = meta.harness;
+    let mut ids = CallIds::new(dest_protocol.as_ref() == Some(&Protocol::AnthropicMessages));
+
+    // The structured (non-text) result blocks of each call, counted once: a call that travels as
+    // text loses them, and looking them up per call would rescan every result.
+    let mut structured: HashMap<&str, usize> = HashMap::new();
+    for entry in each().filter(|entry| !matches!(entry.kind, Kind::Meta { .. })) {
+        if let Kind::Results { results } = &entry.kind {
+            for result in results {
+                if let ResultContent::Blocks(blocks) = &result.content {
+                    let n = blocks
+                        .iter()
+                        .filter(|block| block.get("type").and_then(Value::as_str) != Some("text"))
+                        .count();
+                    if n > 0 {
+                        *structured.entry(result.call_id.as_str()).or_default() += n;
+                    }
+                }
+            }
+        }
+    }
+
+    // The work of turns the source never finished, left out when the caller asks: the steps and
+    // their results go together, so no call is left without its answer; the prompt stays.
+    let left_out = match opts.interrupted {
+        Interrupted::Keep => Vec::new(),
+        Interrupted::Drop => crate::model::interrupted_work(entries),
+    };
+    for (index, entry) in each().enumerate() {
+        counts.messages_in += 1;
+        if left_out.get(index).copied().unwrap_or(false) {
+            if matches!(entry.kind, Kind::Step { .. }) {
+                counts.dropped_interrupted_steps += 1;
+            }
+            continue;
+        }
+        match &entry.kind {
+            Kind::User { text, attachments } => {
+                // A user turn ends the previous step's pair of call lists: a stray result after it
+                // must not be matched against calls that belong to an earlier step.
+                last_step_native.clear();
+                last_step_calls.clear();
+                step_answered.clear();
+                blocks.push(PlannedBlock::User {
+                    text: text.clone(),
+                    attachments: carry_attachments(attachments, source, dest, &mut counts),
+                });
+            }
+            Kind::Step {
+                model,
+                reasoning,
+                text,
+                calls,
+                end,
+            } => {
+                if matches!(end, StepEnd::Aborted | StepEnd::Error)
+                    && crate::harnesses::get(dest)
+                        .destination()
+                        .is_some_and(|destination| destination.failed_steps_are_replies())
+                {
+                    counts.aborted_steps_as_replies += 1;
+                }
+                let mut planned = PlannedStep {
+                    model: model.clone(),
+                    reasoning: Vec::new(),
+                    text: text.clone(),
+                    calls: Vec::new(),
+                    end: end.clone(),
+                };
+                // Reasoning kept as text goes before the answer it led to.
+                let mut lead = 0;
+                for r in reasoning {
+                    match plan_reasoning(r, dest_protocol.as_ref(), opts.reasoning) {
+                        // A4: the payload must have a place in the destination's own format, or
+                        // the block would be written without it and refused.
+                        ReasoningPlan::Native(native)
+                            if native.opaque.as_ref().is_some_and(|opaque| {
+                                let provider = opts.model_provider.as_deref().or_else(|| {
+                                    meta.models.first().and_then(|m| m.provider.as_deref())
+                                });
+                                crate::harnesses::get(dest).destination().is_some_and(
+                                    |destination| destination.payload_fits(opaque, provider),
+                                )
+                            }) =>
+                        {
+                            planned.reasoning.push(ReasoningPlan::Native(native))
+                        }
+                        ReasoningPlan::Text(t) => {
+                            counts.reasoning_as_text += 1;
+                            planned.reasoning.push(ReasoningPlan::Text(t.clone()));
+                            planned.text.insert(lead, t);
+                            lead += 1;
+                        }
+                        dropped => {
+                            let why = match dropped {
+                                ReasoningPlan::Drop(why) => why,
+                                _ => ReasoningDrop::NoPlaceInFormat,
+                            };
+                            counts.drop_reasoning(why);
+                            planned.reasoning.push(ReasoningPlan::Drop(why));
+                        }
+                    }
+                }
+                last_step_calls.clear();
+                last_step_native.clear();
+                step_answered.clear();
+                for call in calls {
+                    if opts.without_tools {
+                        counts.tools_omitted += 1;
+                        continue;
+                    }
+                    last_step_calls.push(call.id.clone());
+                    if let Some((name, input)) = tools::translate_with_map(call, &opts.tool_map) {
+                        counts.tools_translated += 1;
+                        last_step_native.push(call.id.clone());
+                        planned.calls.push(PlannedCall {
+                            id: ids.of(&call.id, &mut counts),
+                            name,
+                            source_name: call.source_name.clone(),
+                            input,
+                            source_input: call.input.clone(),
+                        });
+                        continue;
+                    }
+                    match tools::translate_with(call, dest, opts.dest_shell, offered) {
+                        Translation::Call { name, input } => {
+                            counts.tools_translated += 1;
+                            last_step_native.push(call.id.clone());
+                            planned.calls.push(PlannedCall {
+                                id: ids.of(&call.id, &mut counts),
+                                name: name.to_string(),
+                                source_name: call.source_name.clone(),
+                                input,
+                                source_input: call.input.clone(),
+                            });
+                        }
+                        Translation::Text { .. } => {
+                            counts.dropped_result_blocks +=
+                                structured.get(call.id.as_str()).copied().unwrap_or(0);
+                            counts.tools_text_form += 1;
+                            if !counts.text_form_tools.contains(&call.source_name) {
+                                counts.text_form_tools.push(call.source_name.clone());
+                            }
+                            planned.text.push(names_child(
+                                tools::text_form_call(call, dest),
+                                &call.id,
+                                &opts.subagents,
+                            ));
+                        }
+                    }
+                }
+                blocks.push(PlannedBlock::Step(planned));
+            }
+            Kind::Results { results } => {
+                if opts.without_tools {
+                    continue;
+                }
+                let mut planned = Vec::new();
+                for result in results {
+                    // A3: the first answer to a call is the one that travels.
+                    if step_answered.contains(&result.call_id) {
+                        counts.dropped_duplicate_results += 1;
+                        continue;
+                    }
+                    step_answered.push(result.call_id.clone());
+                    if last_step_native.contains(&result.call_id) {
+                        if flattens_result_blocks(dest)
+                            && let ResultContent::Blocks(blocks) = &result.content
+                        {
+                            counts.dropped_result_blocks += blocks
+                                .iter()
+                                .filter(|block| {
+                                    block.get("type").and_then(Value::as_str) != Some("text")
+                                })
+                                .count();
+                        }
+                        planned.push(PlannedResult::Native {
+                            call_id: ids.of(&result.call_id, &mut counts),
+                            content: carry_result_content(
+                                &result.content,
+                                source,
+                                dest,
+                                &mut counts,
+                            ),
+                            is_error: result.is_error,
+                        });
+                    } else if last_step_calls.contains(&result.call_id) {
+                        planned.push(PlannedResult::Text(tools::text_form_result(result)));
+                    } else {
+                        // No call of the session answers to this id: an orphan result is dropped by
+                        // policy and counted, never written as a dangling tool result.
+                        counts.dropped_orphan_results += 1;
+                    }
+                }
+                if planned.is_empty() {
+                    continue;
+                }
+                // One step's results may come in several groups (a document with one result per
+                // message, an internal row between them): they answer the same step, as one.
+                let results = match blocks.last_mut() {
+                    Some(PlannedBlock::Results { results }) => results,
+                    _ => {
+                        blocks.push(PlannedBlock::Results {
+                            results: Vec::new(),
+                        });
+                        let Some(PlannedBlock::Results { results }) = blocks.last_mut() else {
+                            unreachable!("just pushed")
+                        };
+                        results
+                    }
+                };
+                results.extend(planned);
+                // §6.2 [V]: text between tool results ends the tool flow for Pi, which then answers
+                // the later calls itself and is refused; the native results go first.
+                results.sort_by_key(|result| matches!(result, PlannedResult::Text(_)));
+            }
+            Kind::Compaction { summary, .. } => {
+                last_step_native.clear();
+                last_step_calls.clear();
+                step_answered.clear();
+                // A summary with no readable text (Codex 0.165 keeps it encrypted) would be an
+                // empty user message, which a provider may refuse: it is left out and counted.
+                if summary.trim().is_empty() {
+                    counts.dropped_unreadable_summaries += 1;
+                } else {
+                    blocks.push(PlannedBlock::Compaction {
+                        summary: summary.clone(),
+                    });
+                }
+            }
+            Kind::Meta { .. } => {
+                counts.messages_in -= 1;
+            }
+        }
+    }
+
+    move_unanswered_calls_to_text(&mut blocks, &mut counts);
+    drop_empty_steps(&mut blocks, &mut counts);
+    counts.messages_out = blocks.len();
+    Plan {
+        blocks,
+        counts,
+        branches: Vec::new(),
+    }
+}
+
+/// Plan the branches of a session for a destination: each with what it shares with the path it
+/// hangs from, so it is judged as the conversation a provider would receive. A branch the
+/// destination cannot hold, cannot place, or would refuse is left out and counted.
+fn plan_branches<'s>(session: &'s Session, dest: HarnessId, opts: &WriteOpts, plan: &mut Plan) {
+    let keeping = crate::writer::for_harness(dest).keeps_branches();
+    let total = session.branches.len();
+    if keeping == BranchKeeping::None || opts.native_budget.is_some() {
+        plan.counts.branches_dropped += total;
+        return;
+    }
+    let protocol = opts
+        .dest_protocol
+        .clone()
+        .or_else(|| crate::policy::destination_protocol(dest));
+    // The conversation entries of every chain, and for each branch the chain and place it hangs
+    // from. `chains[0]` is the active path; `chains[n + 1]` is `session.branches[n]`.
+    let conversation = |entries: &'s [Entry]| -> Vec<&'s Entry> {
+        entries
+            .iter()
+            .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+            .collect()
+    };
+    let mut chains: Vec<Vec<&Entry>> = vec![conversation(&session.entries)];
+    // Every chain's own entries, Meta included: a branch can leave from a bookkeeping entry.
+    let mut whole: Vec<&[Entry]> = vec![&session.entries];
+    let mut hangs: Vec<Option<(usize, usize)>> = vec![None];
+    // The chain a planned branch came from, so a branch that hangs off a dropped one is dropped.
+    let mut planned_as: Vec<Option<usize>> = vec![Some(0)];
+    // The blocks before each chain starts (what it shares with the chain above it).
+    let mut base: Vec<usize> = vec![0];
+    let planned_of = |entries: &[&Entry]| plan_conversation(&session.meta, entries, dest, opts);
+    let path_to = |chains: &[Vec<&'s Entry>],
+                   hangs: &[Option<(usize, usize)>],
+                   chain: usize,
+                   upto: usize|
+     -> Vec<&'s Entry> {
+        // The entries from the start of the session through entry `upto` of `chain`.
+        let mut path: Vec<&Entry> = Vec::new();
+        let (mut c, mut end) = (chain, Some(upto));
+        let mut parts: Vec<(usize, Option<usize>)> = Vec::new();
+        loop {
+            parts.push((c, end));
+            match hangs[c] {
+                Some((parent, at)) => {
+                    c = parent;
+                    end = Some(at);
+                }
+                None => break,
+            }
+        }
+        for (c, end) in parts.into_iter().rev() {
+            let take = end.map_or(0, |end| end + 1);
+            path.extend(chains[c].iter().take(take).copied());
+        }
+        path
+    };
+    // The entries a branch shares with the path it leaves from, and their plan, by where it leaves.
+    #[allow(clippy::type_complexity)]
+    let mut shared: HashMap<Option<(usize, usize)>, (Vec<&Entry>, Vec<PlannedBlock>)> =
+        HashMap::new();
+    for branch in &session.branches {
+        let number = chains.len();
+        chains.push(conversation(&branch.entries));
+        whole.push(&branch.entries);
+        // Where it hangs: the entry it leaves from, in the active path or an earlier branch. A
+        // bookkeeping entry is no block of its own: the branch leaves after the conversation entry
+        // before it, or from where its chain starts when there is none.
+        let place = match &branch.from {
+            None => Some(None),
+            Some(from) => (0..number).find_map(|c| {
+                let at = whole[c].iter().position(|entry| &entry.id == from)?;
+                let before = whole[c][..=at]
+                    .iter()
+                    .filter(|entry| !matches!(entry.kind, Kind::Meta { .. }))
+                    .count();
+                Some(match before {
+                    0 => hangs[c],
+                    n => Some((c, n - 1)),
+                })
+            }),
+        };
+        let kept = (|| {
+            let place = place?;
+            // A branch that hangs off one that was left out is left out with it.
+            if let Some((parent, _)) = place {
+                planned_as[parent]?;
+            }
+            // What the branch shares, planned once for every branch that leaves from there.
+            let (prefix, before) = shared.entry(place).or_insert_with(|| {
+                let prefix = match place {
+                    None => Vec::new(),
+                    Some((c, at)) => path_to(&chains, &hangs, c, at),
+                };
+                let before = planned_of(&prefix).blocks;
+                (prefix, before)
+            });
+            let mut entries = Vec::with_capacity(prefix.len() + chains[number].len());
+            entries.extend(prefix.iter().copied());
+            entries.extend(chains[number].iter().copied());
+            let full = planned_of(&entries);
+            let k = before.len();
+            if full.blocks.len() <= k || full.blocks[..k] != before[..] {
+                return None;
+            }
+            if !crate::strict::check_plan(&full, protocol.as_ref()).is_empty() {
+                return None;
+            }
+            let blocks = full.blocks[k..].to_vec();
+            if keeping == BranchKeeping::Rollbacks
+                && !matches!(blocks.first(), Some(PlannedBlock::User { .. }))
+            {
+                return None;
+            }
+            // The block of the chain it hangs from that this branch follows.
+            let parent = place.and_then(|(c, _)| {
+                let mut chain = c;
+                loop {
+                    let own = base[chain];
+                    if k > own {
+                        return planned_as[chain].map(|n| (n, k - own - 1));
+                    }
+                    match hangs[chain] {
+                        Some((above, _)) => chain = above,
+                        None => return None,
+                    }
+                }
+            });
+            // Written after the active path's last block (results go with their step), it would
+            // be the last entry, and the leaf.
+            if keeping == BranchKeeping::TreeLeafLast
+                && let Some((0, block)) = parent
+                && plan.blocks[block + 1..]
+                    .iter()
+                    .all(|later| matches!(later, PlannedBlock::Results { .. }))
+            {
+                return None;
+            }
+            Some((parent, blocks, k))
+        })();
+        hangs.push(place.flatten());
+        match kept {
+            Some((parent, blocks, k)) => {
+                base.push(k);
+                plan.branches.push(PlannedBranch { parent, blocks });
+                planned_as.push(Some(plan.branches.len()));
+                plan.counts.branches_kept += 1;
+            }
+            None => {
+                base.push(0);
+                planned_as.push(None);
+                plan.counts.branches_dropped += 1;
+            }
+        }
+    }
+}
+
+/// The text form of a call that started a subagent session says which session it became.
+fn names_child(text: String, call_id: &str, subagents: &super::Subagents) -> String {
+    match subagents.spawned.iter().find(|(call, _)| call == call_id) {
+        Some((_, child)) => format!("{text}\n→ {child}"),
+        None => text,
+    }
+}
+
+/// §7: every `tool_use` must be answered in the next message. A call the source never answered is
+/// not written as a tool call — the provider would refuse the whole request — but it is not lost
+/// either: it travels in text form, with its call id, and the plan counts it.
+fn move_unanswered_calls_to_text(blocks: &mut [PlannedBlock], counts: &mut Counts) {
+    for i in 0..blocks.len() {
+        let unanswered: Vec<usize> = match &blocks[i] {
+            PlannedBlock::Step(step) => {
+                let answered: Vec<&str> = match blocks.get(i + 1) {
+                    Some(PlannedBlock::Results { results }) => results
+                        .iter()
+                        .filter_map(|r| match r {
+                            PlannedResult::Native { call_id, .. } => Some(call_id.as_str()),
+                            PlannedResult::Text(_) => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                step.calls
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, call)| !answered.contains(&call.id.as_str()))
+                    .map(|(n, _)| n)
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        if unanswered.is_empty() {
+            continue;
+        }
+        let mut texts = Vec::new();
+        if let PlannedBlock::Step(step) = &mut blocks[i] {
+            for n in unanswered.iter().rev() {
+                let call = step.calls.remove(*n);
+                let as_text = crate::model::ToolCall {
+                    id: call.id,
+                    source_name: call.source_name,
+                    canonical: None,
+                    input: call.source_input,
+                };
+                texts.push(tools::text_form_unanswered(&as_text));
+                counts.tools_translated -= 1;
+            }
+            texts.reverse();
+            counts.unanswered_calls += texts.len();
+            step.text.extend(texts);
+        }
+    }
+}
+
+/// A step that lost everything it had (reasoning-only under `Drop`, for example) is not written:
+/// an assistant message with no content is invalid in every wire dialect. Its results go too.
+fn drop_empty_steps(blocks: &mut Vec<PlannedBlock>, counts: &mut Counts) {
+    let mut i = 0;
+    while i < blocks.len() {
+        let empty_calls: Option<Vec<String>> = match &blocks[i] {
+            PlannedBlock::Step(step) if step.is_empty() => {
+                Some(step.calls.iter().map(|c| c.id.clone()).collect())
+            }
+            _ => None,
+        };
+        let Some(call_ids) = empty_calls else {
+            i += 1;
+            continue;
+        };
+        blocks.remove(i);
+        counts.dropped_empty_steps += 1;
+        if let Some(PlannedBlock::Results { results }) = blocks.get_mut(i) {
+            let before = results.len();
+            results.retain(|r| !matches!(r, PlannedResult::Native { call_id, .. } if call_ids.contains(call_id)));
+            counts.dropped_orphan_results += before - results.len();
+            if results.is_empty() {
+                blocks.remove(i);
+            }
+        }
+    }
+}
+
+/// The wire protocol name a destination's records use, for reasoning provenance and for Pi's
+/// `api` field.
+pub fn protocol_name(protocol: &Protocol) -> &str {
+    match protocol {
+        Protocol::AnthropicMessages => "anthropic-messages",
+        Protocol::OpenaiResponses => "openai-responses",
+        Protocol::OpenaiChat => "openai-chat",
+        Protocol::Other(name) => name,
+    }
+}
+
+/// The shell dialect `--dest-shell` names: a shell [`crate::tools::shell_named`] reads, as a
+/// destination's configuration names it, or `posix`.
+pub fn shell_of(name: &str) -> Option<Shell> {
+    if name.trim().eq_ignore_ascii_case("posix") {
+        return Some(Shell::Posix);
+    }
+    crate::tools::shell_named(name)
+}
+
+/// The model id a plan writes into the destination's records: the destination's own model when the
+/// caller states it, otherwise the source's.
+pub fn model_id(step: &PlannedStep, session: &Session, opts: &WriteOpts) -> Option<String> {
+    opts.model.clone().or_else(|| {
+        step.model
+            .clone()
+            .or_else(|| session.meta.models.first().cloned())
+            .map(|m| m.id)
+    })
+}
+
+/// The provider id a plan writes into the destination's records.
+pub fn provider_id(step: &PlannedStep, session: &Session, opts: &WriteOpts) -> Option<String> {
+    opts.model_provider
+        .clone()
+        .or_else(|| {
+            step.model
+                .clone()
+                .or_else(|| session.meta.models.first().cloned())
+                .and_then(|m| m.provider)
+        })
+        // The one provider a source talks to, which its records never name: a destination that
+        // restores a model by provider and id (Pi) otherwise reads `undefined/<model>`.
+        .or_else(|| {
+            crate::harnesses::get(session.meta.harness)
+                .sole_provider()
+                .map(str::to_owned)
+        })
+}

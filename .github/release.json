@@ -1,0 +1,21 @@
+{
+  "app": "Mukade",
+  "tagPrefix": "v",
+  "files": [
+    "package.json",
+    "package-lock.json",
+    "Cargo.toml",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "apps/desktop/src-tauri/tauri.conf.json",
+    "mukade-tui/Cargo.toml"
+  ],
+  "locks": [
+    "Cargo.lock"
+  ],
+  "crates": [
+    "mukade",
+    "mukade-desktop",
+    "mukade-tui"
+  ],
+  "prepare": []
+}

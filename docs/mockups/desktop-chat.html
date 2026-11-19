@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light"><link rel="icon" href="data:,">
+<title>Mukade desktop: chat prototype</title>
+<!--
+PROTOTYPE MAP (written before the screens). Design artifact, not the app. Sample data only.
+Skin: apps/desktop/src/styles.css, copied token for token. No network, no library.
+
+SCREENS
+  Chat (the subject)
+    Service bar ......... Stop service -> confirm -> stopped screen. Stopped: Start service -> running.
+    Rooms column ........ filter rooms; pick a room; New room -> dialog (name rules, duplicate, closed name).
+    Stage head .......... Graph | Lanes | Feed; Launch agent -> dialog; Close room -> confirm;
+                          closed room: Reopen, Delete -> confirm.
+    Filter bar .......... text; member chips; kind chips (messages, signals and turn, system); clear.
+    Graph ............... members as plates, the room as hub, lines by kind and count;
+                          click a plate -> member in the inspector; scrubber: play, step, pick an event.
+    Lanes ............... one lane per member, a wire from sender to recipients; click a row -> select.
+    Feed ................ the room as cards; click -> select.
+    Composer ............ not joined: Join (name rules) -> joined. Joined: recipients, text, Send
+                          (empty, recognized secret, too long -> inline error; loading; sent), Leave.
+    Inspector ........... members (state, write turn) -> detail: Mention, Show session, Free write turn;
+                          instructions (waiting, overdue, blocked, done) -> select; overdue: Send again.
+  Sessions (kept, restated in the same shell)
+    Installations, folders, filter, tree with fold, detail with "In rooms" -> jumps to the room.
+    Open transcript, Hop, Export, Resume, and the toolbar's Scan folder and Import: unchanged in
+    the app and left out here (a note says so in the session pane).
+  Everywhere
+    Search everything (ctrl+K or /) -> rooms, members, messages, sessions; arrows, Enter.
+    Theme; Reload; Reset prototype. Keys: c, 1 2 3, left right, space, n, l, Escape.
+
+STATE (one object, saved in localStorage, restored on reload)
+  theme, view, service, room, chatView, sel{room: event}, member, filter{text, members, kinds},
+  roomFilter, drafts{room: text}, to{room: [members]}, me{room: member}, dialog{type, fields, errors},
+  inst, folder, session, sFilter, folded, rooms, members, events, turns{room: {holder, at}}
+
+FAKED: every wait is a timer; nothing reaches a chat service. "Overdue" and the write turn come from
+docs/superpowers/specs/2026-11-16-chat-overdue-write-turn-design.md and are not implemented.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --stage: #000000; --chrome: #060607; --chrome-2: #0a0a0c; --surface: #131317; --surface-2: #1c1c22;
+  --pane: #030304; --line: #26252d; --line-strong: #756e8c; --ice: #cbc5dc; --text: #ececf0;
+  --text-2: #c0bfc8; --muted: #95939f; --accent: #9d6bff; --accent-soft: #b794ff; --accent-ink: #0d0618;
+  --live: #6fd6b0; --warning: #e6c36a; --error: #ff8a7a; --danger: #a0294e; --danger-line: #e35f87;
+  --on-danger: #ffffff; --selection: #33264f; --scrim: #030304cc; --shadow: #000000aa; --spawn: #b9a6ff; --fork: #e6c36a;
+  --sheen: linear-gradient(180deg, #ffffff1c 0%, #ffffff0a 49%, #ffffff00 50%, #00000040 100%);
+  --sheen-soft: linear-gradient(180deg, #ffffff12 0%, #ffffff05 49%, #ffffff00 50%, #00000030 100%);
+  --edge: inset 0 1px 0 #ffffff26, inset 0 -1px 0 #000000a0;
+  --specular: linear-gradient(158deg, #ffffff12 0%, #ffffff05 14%, #ffffff00 30%);
+  --ease-out: cubic-bezier(.2, .8, .2, 1); --fast: 120ms; --base: 180ms; --slow: 320ms;
+  --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
+  --display: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+  font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
+  background: var(--stage); color: var(--text);
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+  --stage: #e9e9ec; --chrome: #f5f5f7; --chrome-2: #ededf0; --surface: #ffffff; --surface-2: #e3e2e8;
+  --pane: #fbfbfc; --line: #cfced6; --line-strong: #6a6480; --ice: #4b3f78; --text: #101012;
+  --text-2: #3a3942; --muted: #686670; --accent: #6a35d9; --accent-soft: #5426b8; --accent-ink: #ffffff;
+  --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
+  --selection: #e4dcf7; --scrim: #10101266; --shadow: #10101244; --spawn: #5a3fc0; --fork: #7a5600;
+  --sheen: linear-gradient(180deg, #ffffffcc 0%, #ffffff40 49%, #ffffff00 50%, #0000000d 100%);
+  --sheen-soft: linear-gradient(180deg, #ffffff99 0%, #ffffff26 49%, #ffffff00 50%, #0000000a 100%);
+  --edge: inset 0 1px 0 #ffffff, inset 0 -1px 0 #00000014;
+  --specular: linear-gradient(158deg, #ffffffb0 0%, #ffffff40 14%, #ffffff00 30%);
+}
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body { overflow: hidden; background: var(--stage); overscroll-behavior: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+::selection { background: var(--selection); color: var(--text); }
+[hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: square; stroke-linejoin: miter; }
+.glyph { width: 18px; height: 18px; flex: none; color: var(--text-2); }
+.glyph.desk { color: var(--accent); }
+:root[data-theme='light'] .glyph, :root[data-theme='light'] .node use { filter: drop-shadow(0 0 .6px #101012); }
+.spring { flex: 1; } .muted { color: var(--muted); } .mono { font-family: var(--mono); }
+
+button {
+  display: inline-flex; gap: 7px; align-items: center; justify-content: center; min-height: 28px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 0; background: transparent; background-image: var(--sheen-soft); box-shadow: var(--edge);
+  font: 500 12px/1 var(--display); letter-spacing: .07em; text-transform: uppercase; white-space: nowrap; cursor: default;
+  transition: background-color var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), color var(--fast) var(--ease-out), scale var(--fast) var(--ease-out);
+}
+button:hover { border-color: var(--line-strong); background-color: var(--surface-2); }
+button:active:not(:disabled) { background-color: var(--line); scale: .97; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:disabled:hover { border-color: var(--line); background-color: transparent; }
+button.primary { background-color: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; background-image: var(--sheen);
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
+button.primary:hover:not(:disabled) { background-color: var(--accent-soft); border-color: var(--accent-soft); }
+button.primary:focus-visible { outline-color: var(--accent-ink); outline-offset: -4px; }
+button.danger { background-color: var(--danger); border-color: var(--danger-line); color: var(--on-danger); font-weight: 600; background-image: var(--sheen); }
+button.ghost { border-color: transparent; color: var(--muted); background-image: none; box-shadow: none; }
+button.ghost:hover { color: var(--text); }
+button.small { min-height: 22px; padding: 0 7px; font-size: 11px; }
+kbd { font: 12px var(--mono); color: var(--muted); letter-spacing: 0; text-transform: none; }
+button.primary kbd { color: inherit; opacity: .7; }
+input[type='text'], input[type='search'], input[type='number'], textarea, select {
+  min-height: 28px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 0; background: var(--surface);
+  background-image: var(--sheen-soft); box-shadow: var(--edge); color: var(--text); font: 13px var(--mono);
+}
+textarea { background-image: none; resize: none; line-height: 1.5; }
+input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }
+input:focus-visible, textarea:focus-visible, select:focus-visible { border-color: var(--accent); outline-offset: 0; }
+input::placeholder, textarea::placeholder { color: var(--muted); }
+input[type='radio'] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
+[aria-invalid='true'] { border-color: var(--error) !important; }
+
+#app { display: grid; grid-template-rows: 34px 44px minmax(0, 1fr) 28px; background-image: radial-gradient(900px 420px at 78% -8%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%); }
+.titlebar { position: relative; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); background-image: var(--sheen); box-shadow: var(--edge); font: 12px var(--mono); user-select: none; }
+.brand-mark { width: 18px; height: 18px; color: var(--accent); }
+.wordmark { height: 12px; width: 107px; flex: none; color: var(--ice); fill: none; stroke: currentColor; stroke-width: 1.5; }
+.version { padding-left: 12px; border-left: 1px solid var(--line); color: var(--muted); }
+.title-description { position: absolute; left: 50%; transform: translateX(-50%); color: var(--text-2); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.toolbar { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); background-image: var(--sheen-soft); box-shadow: var(--edge); user-select: none; }
+.toolbar-divider { width: 1px; height: 22px; margin: 0 4px; background: var(--line); flex: none; }
+.tabs { display: flex; align-self: stretch; align-items: flex-end; }
+.tabs button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 36px; color: var(--muted); background-image: none; box-shadow: none; }
+.tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background-color: var(--surface); background-image: var(--sheen); box-shadow: var(--edge); }
+#palette-open { flex: 0 1 340px; min-width: 150px; justify-content: flex-start; color: var(--muted); font: 13px var(--mono); text-transform: none; letter-spacing: 0; background-color: var(--surface); }
+#palette-open kbd { margin-left: auto; }
+.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; padding: 8px; gap: 8px; position: relative; }
+.column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-top-width: 2px; background: var(--pane); background-image: var(--specular); background-repeat: no-repeat; overflow: hidden; }
+.column.focused { border-color: var(--line-strong); border-top-color: var(--accent); }
+.column-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 38px; padding: 5px 12px; border-bottom: 1px solid var(--line); background: var(--chrome-2); background-image: var(--sheen-soft); box-shadow: var(--edge); user-select: none; }
+.column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--text); white-space: nowrap; }
+.column-head small { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.column-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.statusbar { display: flex; align-items: center; gap: 15px; padding: 0 10px; overflow: hidden; border-top: 1px solid var(--line); background: var(--chrome); background-image: var(--sheen-soft); box-shadow: var(--edge); font: 12px var(--mono); color: var(--text-2); white-space: nowrap; user-select: none; }
+.statusbar i { display: inline-block; width: 6px; height: 6px; background: var(--live); flex: none; }
+.statusbar.busy i { background: var(--accent); animation: pulse 900ms ease-in-out infinite alternate; }
+.hints { display: flex; gap: 12px; overflow: hidden; } .hints b { font-weight: 400; color: var(--ice); }
+@keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
+
+.list { margin: 0; padding: 0; list-style: none; }
+.row { display: flex; align-items: center; gap: 8px; min-height: 28px; width: 100%; padding: 2px 10px; border: 1px solid transparent; font: 13px 'Segoe UI Variable Text', 'Segoe UI', sans-serif; letter-spacing: 0; text-transform: none; text-align: left; justify-content: flex-start; color: var(--text-2); background-image: none; box-shadow: none; }
+.row:hover { background-color: var(--surface); border-color: transparent; }
+.row[aria-selected='true'], .row[aria-current='true'] { border-color: var(--accent); background-color: var(--surface-2); color: var(--text);
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 30%, transparent) 0%, color-mix(in srgb, var(--accent) 10%, transparent) 49%, transparent 50%); }
+.row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .num, .row .time { color: var(--muted); font: 11px var(--mono); white-space: nowrap; }
+.row .spawn { color: var(--spawn); font: 12px var(--mono); white-space: nowrap; }
+.row .fork { color: var(--fork); font: 12px var(--mono); white-space: nowrap; }
+.row .caret { width: 12px; flex: none; color: var(--muted); }
+.tag { padding: 0 5px; border: 1px solid currentColor; font: 11px/16px var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+.tag.live { color: var(--live); } .tag.bad { color: var(--error); } .tag.warn { color: var(--warning); } .tag.acc { color: var(--accent-soft); }
+.label { margin: 0; padding: 10px 12px 4px; font: 500 11px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.pad { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.pad h3 { margin: 0; font: 500 17px/1.3 var(--display); letter-spacing: .02em; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+dl.kv { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 5px 12px; margin: 0; font-size: 12px; }
+dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
+.box { border: 1px solid var(--line); background: var(--surface); }
+.note { padding: 8px 12px; border-left: 2px solid var(--line-strong); background: var(--surface); color: var(--text-2); }
+.err { margin: 0; color: var(--error); font-size: 12px; }
+.code { margin: 0; padding: 8px 10px; border: 1px solid var(--line); background: var(--surface); font: 12px/1.5 var(--mono); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+
+/* Chat */
+#view-chat { flex-direction: column; }
+.svc { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 30px; padding: 0 2px; font: 12px var(--mono); color: var(--text-2); }
+.chat-columns { flex: 1; min-height: 0; display: flex; gap: 8px; }
+#rooms { flex: 0 0 272px; } #stage { flex: 1 1 auto; } #inspector { flex: 0 0 316px; }
+#room-filter { flex: 1; min-width: 0; }
+.room-row { align-items: flex-start; padding-top: 7px; padding-bottom: 7px; }
+.room-row .grow { display: flex; flex-direction: column; gap: 1px; white-space: normal; }
+.room-row .room-meta { font: 11px var(--mono); color: var(--muted); }
+.room-row .tags { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+.chat-off { flex: 1; display: grid; place-content: center; justify-items: start; gap: 12px; padding: 24px; }
+.chat-off h3 { margin: 0; font: 500 19px var(--display); letter-spacing: .02em; }
+.seg { display: flex; } .seg button { margin-left: -1px; } .seg button:first-child { margin-left: 0; }
+.seg button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); background-color: var(--surface-2); z-index: 1; background-image: var(--sheen); }
+.filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--chrome); }
+#msg-filter { width: 190px; }
+.chip { min-height: 22px; padding: 0 7px; gap: 5px; font: 12px var(--mono); text-transform: none; letter-spacing: 0; color: var(--muted); background-image: none; box-shadow: none; }
+.chip .glyph { width: 13px; height: 13px; }
+.chip[aria-pressed='true'] { color: var(--text); border-color: var(--accent); background-color: var(--selection); }
+.stage-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.empty { flex: 1; display: grid; place-content: center; gap: 8px; padding: 24px; color: var(--muted); text-align: center; }
+
+/* Graph */
+.graph { flex: 1; min-height: 220px; position: relative; background-image: radial-gradient(closest-side, color-mix(in srgb, var(--line-strong) 16%, transparent), transparent); }
+.graph svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.g-line { stroke: var(--line-strong); fill: none; opacity: .75; }
+.g-line.msg { stroke: var(--accent); opacity: .55; }
+.g-line.done { stroke: var(--live); stroke-dasharray: 7 5; } .g-line.blocked, .g-line.over { stroke: var(--warning); stroke-dasharray: 7 5; }
+.g-line.obs { stroke: var(--muted); stroke-dasharray: 2 5; }
+.g-now { stroke: var(--accent-soft); stroke-width: 2.5; fill: none; }
+.g-now.done { stroke: var(--live); } .g-now.blocked, .g-now.over { stroke: var(--warning); } .g-now.obs { stroke: var(--ice); }
+.g-dot { fill: var(--text); }
+.node { cursor: default; outline: none; }
+.node .plate { fill: var(--chrome-2); stroke: var(--line-strong); stroke-width: 1; transition: stroke var(--base) var(--ease-out); }
+.node .top { stroke: var(--line-strong); stroke-width: 3; }
+.node.working .top { stroke: var(--live); } .node.silent .top { stroke: var(--warning); }
+.node:hover .plate { stroke: var(--ice); }
+.node.sel .plate { stroke: var(--accent); stroke-width: 2; fill: var(--surface-2); }
+.node:focus-visible .plate { stroke: var(--accent-soft); stroke-width: 3; }
+.node.dim { opacity: .28; } .node.left { opacity: .4; }
+.node .nm { font: 13px var(--mono); fill: var(--text); } .node .rl { font: 500 10px var(--display); letter-spacing: .09em; text-transform: uppercase; fill: var(--muted); }
+.node .st { font: 11px var(--mono); fill: var(--muted); text-anchor: end; } .node.working .st { fill: var(--live); } .node.silent .st { fill: var(--warning); }
+.node .pen { stroke: var(--accent-soft); fill: none; stroke-width: 1.4; }
+.hub .plate { fill: var(--surface); stroke: var(--line-strong); } .hub text { text-anchor: middle; }
+.hub .nm { font: 500 12px var(--display); letter-spacing: .08em; text-transform: uppercase; fill: var(--ice); } .hub .rl { font: 10px var(--mono); fill: var(--muted); }
+.legend { position: absolute; left: 12px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px 14px; font: 11px var(--mono); color: var(--muted); pointer-events: none; }
+.legend i { display: inline-block; width: 18px; height: 0; margin-right: 5px; vertical-align: middle; border-top: 2px solid var(--accent); }
+.legend .l-done { border-top: 2px dashed var(--live); } .legend .l-over { border-top: 2px dashed var(--warning); } .legend .l-obs { border-top: 2px dotted var(--muted); }
+.scrub { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--chrome); }
+.ticks { flex: 1; display: flex; align-items: center; gap: 2px; min-width: 0; height: 28px; }
+.tick { flex: 1 1 0; min-width: 4px; max-width: 28px; min-height: 0; height: 12px; padding: 0; border: 0; background-color: var(--line-strong); background-image: none; box-shadow: none; opacity: .6; }
+.tick.k-message { background-color: var(--accent); } .tick.k-signal { background-color: var(--live); } .tick.k-warn { background-color: var(--warning); }
+.tick.after { opacity: .22; } .tick.hide { opacity: .08; }
+.tick[aria-current='true'] { height: 26px; opacity: 1; outline: 1px solid var(--text); outline-offset: 1px; }
+.scrub .pos { font: 12px var(--mono); color: var(--muted); min-width: 108px; text-align: right; }
+.caption { border-top: 1px solid var(--line); max-height: 34%; overflow: auto; background: var(--pane); }
+
+/* Events: feed and caption */
+.ev { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 9px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid transparent; outline-offset: -2px; }
+.ev[aria-current='true'] { border-left-color: var(--accent); background: var(--surface); }
+.ev:hover { background: var(--surface); }
+.ev .meta { flex: 0 0 168px; display: flex; flex-direction: column; gap: 2px; font: 12px var(--mono); color: var(--muted); }
+.ev .meta .who { display: flex; align-items: center; gap: 6px; color: var(--ice); }
+.ev .body { flex: 1 1 300px; min-width: 0; line-height: 1.6; user-select: text; }
+.ev .body p { margin: 0 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ev .to { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font: 12px var(--mono); color: var(--muted); }
+.ev .to b { font-weight: 400; color: var(--text-2); padding: 0 5px; border: 1px solid var(--line); }
+.at { color: var(--accent-soft); } mark { background: var(--selection); color: var(--text); }
+.ev.sys { padding: 5px 14px; font: 12px var(--mono); color: var(--muted); align-items: center; }
+.ev.sys.k-done { color: var(--live); } .ev.sys.k-blocked, .ev.sys.k-overdue { color: var(--warning); } .ev.sys.k-claim, .ev.sys.k-release { color: var(--ice); }
+.ev.sys button.link, button.link { min-height: 0; padding: 0; border: 0; color: var(--ice); text-transform: none; letter-spacing: 0; font: inherit; background: none; box-shadow: none; text-decoration: underline; }
+
+/* Lanes */
+.lanes { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.lhead, .lrow { display: flex; min-width: 620px; }
+.lhead { position: sticky; top: 0; z-index: 2; background: var(--chrome-2); border-bottom: 1px solid var(--line); }
+.lhead time, .lrow time { flex: 0 0 58px; padding: 6px 0 0 12px; font: 11px var(--mono); color: var(--muted); }
+.larea { position: relative; flex: 1; min-width: 0; padding: 4px 0 8px; }
+.lhead .larea { height: 46px; padding: 0; }
+.lname { position: absolute; top: 6px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 1px; font: 12px var(--mono); color: var(--text); white-space: nowrap; }
+.lname span { display: flex; align-items: center; gap: 5px; } .lname small { font: 500 10px var(--display); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.lname .glyph { width: 14px; height: 14px; }
+.life { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.lrow { border-left: 2px solid transparent; outline-offset: -2px; }
+.lrow:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.lrow[aria-current='true'] { border-left-color: var(--accent); background: var(--surface); }
+.wire { position: absolute; top: 12px; height: 0; border-top: 1px solid var(--accent); }
+.wire.done { border-top: 1px dashed var(--live); } .wire.blocked, .wire.overdue { border-top: 1px dashed var(--warning); } .wire.observe { border-top: 1px dotted var(--muted); }
+.wdot { position: absolute; top: 12px; width: 7px; height: 7px; margin: -4px 0 0 -4px; background: var(--accent); }
+.warw { position: absolute; top: 12px; width: 0; height: 0; border: 4px solid transparent; margin-top: -4px; }
+.warw.r { border-left: 7px solid var(--accent); border-right: 0; margin-left: -7px; } .warw.l { border-right: 7px solid var(--accent); border-left: 0; }
+.c-done.wdot { background: var(--live); } .c-done.warw.r { border-left-color: var(--live); } .c-done.warw.l { border-right-color: var(--live); }
+.c-blocked.wdot, .c-overdue.wdot { background: var(--warning); } .c-blocked.warw.r, .c-overdue.warw.r { border-left-color: var(--warning); } .c-blocked.warw.l, .c-overdue.warw.l { border-right-color: var(--warning); }
+.c-observe.wdot { background: var(--muted); } .c-observe.warw.r { border-left-color: var(--muted); } .c-observe.warw.l { border-right-color: var(--muted); }
+.lmsg { position: relative; margin-top: 18px; padding: 6px 9px; border: 1px solid var(--line); background: var(--chrome-2); line-height: 1.5; user-select: text; }
+.lmsg p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; } .lmsg .to { margin-top: 3px; font: 11px var(--mono); color: var(--muted); }
+.lchipwrap { position: relative; margin-top: 2px; height: 20px; }
+.lchip { position: absolute; top: 0; transform: translateX(-50%); padding: 0 6px; border: 1px solid var(--line); background: var(--pane); font: 11px/17px var(--mono); color: var(--muted); white-space: nowrap; }
+.lchip.k-done { color: var(--live); border-color: currentColor; } .lchip.k-blocked, .lchip.k-overdue { color: var(--warning); border-color: currentColor; } .lchip.k-claim, .lchip.k-release { color: var(--ice); }
+.lrow.wired .lchipwrap { margin-top: 18px; }
+
+/* Composer */
+.composer { border-top: 1px solid var(--line-strong); background: var(--chrome-2); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.composer .line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.composer label, .field label { font: 500 11px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.composer textarea { flex: 1; min-width: 0; height: 58px; }
+.composer .hint { font: 12px var(--mono); color: var(--muted); }
+
+/* Inspector */
+.mrow { flex-wrap: wrap; row-gap: 0; }
+.mrow .state { font: 11px var(--mono); color: var(--muted); } .mrow .state.working { color: var(--live); } .mrow .state.silent { color: var(--warning); }
+.mdetail { margin: 0 10px 8px; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.irow { align-items: flex-start; padding-top: 6px; padding-bottom: 6px; }
+.irow .grow { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.turn { margin: 4px 10px 12px; padding: 9px 10px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--text-2); }
+.turn b { font: 13px var(--mono); font-weight: 400; color: var(--text); }
+
+/* Sessions */
+#inst { flex: 0 0 236px; } #sess { flex: 0 0 clamp(320px, 34%, 500px); } #sdetail { flex: 1 1 0; }
+#s-filter { flex: 1; min-width: 0; }
+.lineage .row { border-bottom: 1px solid var(--line); }
+
+/* Dialogs, palette, toasts */
+.scrim { position: fixed; inset: 0; z-index: 20; display: grid; place-items: start center; padding-top: 12vh; background: var(--scrim); backdrop-filter: blur(6px); }
+.dialog { width: min(560px, calc(100vw - 32px)); max-height: 76vh; display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-top: 2px solid var(--accent); background: var(--chrome-2); background-image: var(--specular); background-repeat: no-repeat; box-shadow: 0 24px 60px var(--shadow); }
+.dialog-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 12px; border-bottom: 1px solid var(--line); background-image: var(--sheen-soft); box-shadow: var(--edge); }
+.dialog-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .07em; text-transform: uppercase; }
+.dialog-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+.dialog-foot { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--line); background-image: var(--sheen-soft); box-shadow: var(--edge); }
+.field { display: flex; flex-direction: column; gap: 4px; } .field input, .field select { width: 100%; }
+.fields { display: flex; flex-wrap: wrap; gap: 12px; } .fields > * { flex: 1 1 160px; }
+.choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.choice { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; }
+.choice:has(input:checked) { border-color: var(--accent); background: var(--selection); }
+.choice:has(input:focus-visible) { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+#palette-input { width: 100%; min-height: 34px; font-size: 14px; }
+.pres { max-height: 46vh; overflow: auto; margin: 0 -14px -14px; border-top: 1px solid var(--line); }
+.pres .label { padding-top: 8px; }
+.toasts { position: fixed; right: 14px; bottom: 40px; z-index: 30; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.toast { padding: 8px 12px; border: 1px solid var(--line-strong); border-left: 2px solid var(--live); background: var(--chrome-2); box-shadow: 0 10px 30px var(--shadow); animation: rise var(--slow) var(--ease-out); }
+.toast.bad { border-left-color: var(--error); }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 1099px) { #inspector { flex-basis: 268px; } #rooms { flex-basis: 220px; } }
+@media (max-width: 899px) {
+  .chat-columns { flex-wrap: wrap; overflow: auto; } #rooms, #inspector { flex: 1 1 240px; max-height: 300px; } #stage { flex: 1 1 100%; min-height: 520px; order: 3; }
+  #view-sessions { flex-wrap: wrap; overflow: auto; } #inst, #sess, #sdetail { flex: 1 1 280px; min-height: 260px; }
+  .title-description, .hints { display: none; }
+  #app { grid-template-rows: 34px auto minmax(0, 1fr) 28px; } .toolbar { flex-wrap: wrap; padding: 6px 10px; } .tabs { align-self: auto; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<svg hidden aria-hidden="true">
+  <defs><linearGradient gradientUnits="userSpaceOnUse" id="codex-grad" x1="12" x2="12" y1="3" y2="21"><stop stop-color="#B1A7FF"/><stop offset=".5" stop-color="#7A9DFF"/><stop offset="1" stop-color="#3941FF"/></linearGradient></defs>
+  <symbol id="i-mark" viewBox="0 0 18 18"><path d="M1 13q4-1 5.500-5T11 4l5-2"/><path d="M5 9 3.500 11.500M8 6.500 6.500 9M11 4.500 9.500 7M14 3 12.500 5.500"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.500 13.500v-11h5l1.500 2h6.500v9z"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M2 2.500h12v8H8l-3.500 3v-3H2z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 16 16"><path d="M2.500 3.500h11v9h-11zM2.500 7h11M6 3.500v9"/></symbol>
+  <symbol id="i-hop" viewBox="0 0 16 16"><path d="M2 5.500h11M10.500 3 13 5.500 10.500 8M14 10.500H3M5.500 8 3 10.500 5.500 13"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M4.500 3v10l8-5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 16 16"><path d="m10 3-5 5 5 5"/></symbol>
+  <symbol id="i-next" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"/></symbol>
+  <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 10.500v-8M5 5.500l3-3 3 3M2.500 10v3.500h11V10"/></symbol>
+  <symbol id="i-import" viewBox="0 0 16 16"><path d="M8 2.500v8M5 7.500l3 3 3-3M2.500 10v3.500h11V10"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.500-3.500M13 2.500v3h-3"/></symbol>
+  <symbol id="i-theme" viewBox="0 0 16 16"><path d="M8 2.500v11M8 2.500a5.500 5.500 0 1 0 0 11"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
+  <symbol id="i-caret" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><path d="M7 2.500a4.500 4.500 0 1 0 0 9 4.500 4.500 0 0 0 0-9zM10.500 10.500l3.500 3.500"/></symbol>
+  <symbol id="i-send" viewBox="0 0 16 16"><path d="M2 8h11M9 4l4 4-4 4"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 16 16"><path d="M3 13l1-3.500 7-7 2.500 2.500-7 7zM9.500 4 12 6.500"/></symbol>
+  <symbol id="i-term" viewBox="0 0 16 16"><path d="M1.500 2.500h13v11h-13zM4 6l2.500 2L4 10M8 10.500h4"/></symbol>
+  <symbol id="i-graph" viewBox="0 0 16 16"><path d="M2 2h4v4H2zM10 2h4v4h-4zM6 10h4v4H6zM6 4h4M4 6l3 4M12 6l-3 4"/></symbol>
+  <symbol id="i-lanes" viewBox="0 0 16 16"><path d="M3.500 2v12M8 2v12M12.500 2v12M3.500 5h4.500M8 9h4.500M3.500 12h9"/></symbol>
+  <symbol id="i-feed" viewBox="0 0 16 16"><path d="M2 3.500h12M2 8h12M2 12.500h8"/></symbol>
+  <symbol id="g-claude_code" viewBox="0 0 24 24"><path clip-rule="evenodd" fill-rule="evenodd" fill="#D97757" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"/></symbol>
+  <symbol id="g-codex" viewBox="0 0 24 24"><path d="M19.503 0H4.496A4.496 4.496 0 000 4.496v15.007A4.496 4.496 0 004.496 24h15.007A4.496 4.496 0 0024 19.503V4.496A4.496 4.496 0 0019.503 0z" fill="#fff"/><path fill="url(#codex-grad)" d="M9.064 3.344a4.578 4.578 0 012.285-.312c1 .115 1.891.54 2.673 1.275.01.01.024.017.037.021a.09.09 0 00.043 0 4.55 4.55 0 013.046.275l.047.022.116.057a4.581 4.581 0 012.188 2.399c.209.51.313 1.041.315 1.595a4.24 4.24 0 01-.134 1.223.123.123 0 00.03.115c.594.607.988 1.33 1.183 2.17.289 1.425-.007 2.71-.887 3.854l-.136.166a4.548 4.548 0 01-2.201 1.388.123.123 0 00-.081.076c-.191.551-.383 1.023-.74 1.494-.9 1.187-2.222 1.846-3.711 1.838-1.187-.006-2.239-.44-3.157-1.302a.107.107 0 00-.105-.024c-.388.125-.78.143-1.204.138a4.441 4.441 0 01-1.945-.466 4.544 4.544 0 01-1.61-1.335c-.152-.202-.303-.392-.414-.617a5.81 5.81 0 01-.37-.961 4.582 4.582 0 01-.014-2.298.124.124 0 00.006-.056.085.085 0 00-.027-.048 4.467 4.467 0 01-1.034-1.651 3.896 3.896 0 01-.251-1.192 5.189 5.189 0 01.141-1.6c.337-1.112.982-1.985 1.933-2.618.212-.141.413-.251.601-.33.215-.089.43-.164.646-.227a.098.098 0 00.065-.066 4.51 4.51 0 01.829-1.615 4.535 4.535 0 011.837-1.388zm3.482 10.565a.637.637 0 000 1.272h3.636a.637.637 0 100-1.272h-3.636zM8.462 9.23a.637.637 0 00-1.106.631l1.272 2.224-1.266 2.136a.636.636 0 101.095.649l1.454-2.455a.636.636 0 00.005-.64L8.462 9.23z"/></symbol>
+  <symbol id="g-opencode" viewBox="0 0 24 30"><path d="M18 24H6V12H18V24Z" fill="currentColor" opacity=".4"/><path d="M18 6H6V24H18V6ZM24 30H0V0H24V30Z" fill="currentColor"/></symbol>
+  <symbol id="g-pi" viewBox="140 140 520 520"><path fill="currentColor" fill-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"/><path fill="currentColor" d="M517.36 400H634.72V634.72H517.36Z"/></symbol>
+  <symbol id="g-desktop" viewBox="0 0 18 18"><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 13q4-1 5.500-5T11 4l5-2"/><path d="M5 9 3.500 11.500M8 6.500 6.500 9M11 4.500 9.500 7M14 3 12.500 5.500"/></g></symbol>
+  <symbol id="g-other" viewBox="0 0 16 16"><path d="M2.500 2.500h11v11h-11z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.500 8h5" fill="none" stroke="currentColor" stroke-width="1.25"/></symbol>
+</svg>
+
+<main id="app">
+  <header class="titlebar">
+    <svg class="brand-mark icon" aria-hidden="true"><use href="#i-mark"/></svg>
+    <svg class="wordmark" viewBox="0 0 89 10" role="img" aria-label="Mukade">
+      <path d="M.8 10V1L7 7l6.2-6v9"/><path transform="translate(17)" d="M.8 0v8.2l1 1h8.4l1-1V0"/><path transform="translate(32)" d="M.8 0v10M11.2 0 .8 5l10.400 5"/>
+      <path transform="translate(47)" d="m.5 10 5.500-9.400 5.500 9.400M2.600 6.600h6.800"/><path transform="translate(62)" d="M.8.800h8.400l2 2v4.400l-2 2H.8z"/><path transform="translate(77)" d="M11.200.800H.8v8.400h10.400M.8 5h8.400"/>
+    </svg><span class="version">prototype · sample data</span>
+    <span class="title-description">harness sessions</span>
+  </header>
+  <nav class="toolbar" aria-label="Views and commands">
+    <div class="tabs" role="tablist" aria-label="Views">
+      <button type="button" role="tab" id="tab-sessions" data-act="view" data-id="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions</button>
+      <button type="button" role="tab" id="tab-chat" data-act="view" data-id="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>c</kbd></button>
+    </div>
+    <span class="toolbar-divider"></span>
+    <button type="button" id="palette-open" data-act="palette" aria-label="Search everything"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Search everything <kbd>ctrl K</kbd></button>
+    <span class="spring"></span>
+    <button type="button" id="reload" data-act="reload" title="Read every store and the chat service again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Reload <kbd>r</kbd></button>
+    <button type="button" id="theme" data-act="theme" aria-label="Theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-name">Dark</span></button>
+  </nav>
+  <section class="view" id="view-sessions" aria-labelledby="tab-sessions" hidden></section>
+  <section class="view" id="view-chat" aria-labelledby="tab-chat" hidden></section>
+  <footer class="statusbar" id="statusbar">
+    <i></i><span id="status" role="status" aria-live="polite"></span><span class="muted" id="counts"></span>
+    <span class="spring"></span><span class="hints" id="hints"></span>
+    <button type="button" class="ghost small" data-act="reset" title="Put the sample data back">Reset prototype</button>
+  </footer>
+</main>
+<div id="dialog-host"></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+const KEY = 'mukade-proto-chat-v1';
+const HARNESS = {
+  claude_code: { label: 'Claude Code', launch: true }, codex: { label: 'Codex', launch: true },
+  opencode: { label: 'OpenCode', launch: true }, pi: { label: 'Pi', launch: true },
+  hermes: { label: 'Hermes Agent' }, deepseek_harness: { label: 'DeepSeek Harness' }, desktop: { label: 'Mukade desktop' },
+};
+const glyphId = (h) => (['claude_code', 'codex', 'opencode', 'pi', 'desktop'].includes(h) ? 'g-' + h : 'g-other');
+const glyph = (h) => `<svg class="glyph${h === 'desktop' ? ' desk' : ''}" aria-hidden="true"><use href="#${glyphId(h)}"/></svg>`;
+const icon = (n) => `<svg class="icon" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/, ROOM = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const SECRET = /\b(sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16})\b/;
+
+function seed() {
+  const M = (id, room, name, harness, role, session, cwd, status, progress, evidence) => ({ id, room, name, harness, role, session, cwd, status, progress, evidence, left: false });
+  const E = (id, room, t, kind, actor, x = {}) => ({ id, room, t, kind, actor, to: [], ...x });
+  return {
+    theme: 'dark', view: 'chat', service: 'running', room: 'r-hop', chatView: 'graph', sel: {}, member: null,
+    filter: { text: '', members: [], kinds: ['message', 'signal', 'system'] }, roomFilter: '', drafts: {}, to: {}, me: {}, dialog: null,
+    inst: 'claude_code', folder: '', session: 's1', sFilter: '', folded: [], seq: 60, mseq: 20,
+    turns: { 'r-hop': { holder: 'm2', at: '14:19' } },
+    rooms: [
+      { id: 'r-hop', name: 'hop-review', open: true, day: '14:28' },
+      { id: 'r-desk', name: 'desktop-spec', open: true, day: '13:26' },
+      { id: 'r-code', name: 'codex-code-mode', open: false, day: 'Nov 11' },
+    ],
+    members: [
+      M('m1', 'r-hop', 'claude-a', 'claude_code', 'lead', '5f2c9a1e-8b47-4d02-9c3e-71a0de4416f2', 'C:\\work\\mukade', 'listening', '14:27', 'bus'),
+      M('m2', 'r-hop', 'codex-b', 'codex', 'peer', '0199a7c2-4e1b-7d30-b6f4-2c8e5a90d113', 'C:\\work\\mukade', 'working', '14:30', 'session'),
+      M('m3', 'r-hop', 'opencode-c', 'opencode', 'peer', null, null, 'listening', '14:25', 'bus'),
+      M('m4', 'r-hop', 'pi-d', 'pi', 'worker', '7d3f1c06-91ab-4e2f-a6c4-5d0e8b7f3c19', 'C:\\work\\mukade', 'silent', '14:17', 'session'),
+      M('m5', 'r-hop', 'claude-e', 'claude_code', 'observer', 'a41c77e0-2f6b-4c1d-8e55-3b9f0c7d21aa', 'C:\\work\\mukade', 'listening', '14:28', 'bus'),
+      M('m6', 'r-desk', 'claude-1', 'claude_code', 'peer', null, null, 'listening', '13:10', 'bus'),
+      M('m7', 'r-desk', 'codex-1', 'codex', 'peer', null, null, 'listening', '13:26', 'bus'),
+      M('m8', 'r-code', 'codex-1', 'codex', 'peer', null, null, 'listening', 'Nov 11', 'bus'),
+      M('m9', 'r-code', 'claude-1', 'claude_code', 'peer', null, null, 'listening', 'Nov 11', 'bus'),
+    ],
+    events: [
+      E(1, 'r-hop', '13:46', 'open', 'm1'), E(2, 'r-hop', '13:46', 'join', 'm1'), E(3, 'r-hop', '13:48', 'join', 'm2'),
+      E(4, 'r-hop', '13:52', 'join', 'm3'), E(5, 'r-hop', '13:55', 'join', 'm4'),
+      E(6, 'r-hop', '13:58', 'message', 'm1', { to: ['m4'], text: '@pi-d hop session 5f2c9a1e into the scratch Pi store with --children and signal when the receipt is written.' }),
+      E(7, 'r-hop', '14:03', 'signal', 'm4', { ref: 6, signal: 'done' }),
+      E(8, 'r-hop', '14:06', 'join', 'm5'),
+      E(9, 'r-hop', '14:14', 'message', 'm1', { to: ['m2'], text: 'The hop wrote three Codex threads. @codex-b open 0199a7c2 and check that both subagent threads name it as their parent.' }),
+      E(10, 'r-hop', '14:15', 'observe', 'm5', { target: 'm2' }),
+      E(11, 'r-hop', '14:16', 'message', 'm1', { to: ['m4'], text: '@pi-d do the same hop into the scratch Codex store and compare the children the two manifests list.' }),
+      E(12, 'r-hop', '14:17', 'message', 'm2', { text: 'Both name it. The Explore thread keeps its agent type; the Plan thread lost its title and shows the first user line instead.' }),
+      E(13, 'r-hop', '14:18', 'message', 'm1', { to: ['m3'], text: 'That is a loss the receipt should list. @opencode-c does the same happen on your side?' }),
+      E(14, 'r-hop', '14:19', 'claim', 'm2'),
+      E(15, 'r-hop', '14:21', 'message', 'm2', { to: ['m1'], text: '@claude-a I hold the write turn: I am adding the lost title to the losses the receipt lists.' }),
+      E(16, 'r-hop', '14:25', 'message', 'm3', { text: 'No. OpenCode keeps the title of a child session, so nothing to list there.' }),
+      E(17, 'r-hop', '14:27', 'overdue', 'service', { target: 'm4', ref: 11, progress: '14:17', evidence: 'session' }),
+      E(18, 'r-hop', '14:28', 'observe', 'm5', { target: 'm2' }),
+      E(30, 'r-desk', '13:02', 'open', 'm6'), E(31, 'r-desk', '13:02', 'join', 'm6'), E(32, 'r-desk', '13:04', 'join', 'm7'),
+      E(33, 'r-desk', '13:10', 'message', 'm6', { text: 'The chat view is read only today. Which controls does the window need first?' }),
+      E(34, 'r-desk', '13:26', 'message', 'm7', { to: ['m6'], text: '@claude-1 writing into a room and launching an instance; opening and closing rooms after that.' }),
+      E(50, 'r-code', 'Nov 11', 'open', 'm8'), E(51, 'r-code', 'Nov 11', 'join', 'm8'), E(52, 'r-code', 'Nov 11', 'join', 'm9'),
+      E(53, 'r-code', 'Nov 11', 'message', 'm8', { text: 'Literal exec scripts now read as their calls, each with its own result: 725 of 981 on the real store.' }),
+      E(54, 'r-code', 'Nov 11', 'message', 'm9', { text: 'apply_patch with one hunk reads as an edit; several hunks stay a multi-edit for Pi only.' }),
+      E(55, 'r-code', 'Nov 11', 'close', 'user'),
+    ],
+  };
+}
+const INSTALLS = [['claude_code', 'Claude Code'], ['codex', 'Codex'], ['opencode', 'OpenCode'], ['pi', 'Pi'], ['hermes', 'Hermes'], ['deepseek_harness', 'DeepSeek Harness']];
+const SESS = [
+  { id: 's1', inst: 'claude_code', sid: '5f2c9a1e-8b47-4d02-9c3e-71a0de4416f2', title: 'Hop carries subagents to Codex', time: '14:24', cwd: 'C:\\work\\mukade', live: true },
+  { id: 's1a', inst: 'claude_code', sid: '5f2c9a1e.a1', parent: 's1', kind: 'agent Explore', title: 'Map the writers', time: '14:20', cwd: 'C:\\work\\mukade' },
+  { id: 's1b', inst: 'claude_code', sid: '5f2c9a1e.a2', parent: 's1', kind: 'agent Plan', title: 'Order of the phases', time: '14:17', cwd: 'C:\\work\\mukade' },
+  { id: 's1c', inst: 'claude_code', sid: 'c80b21d4-6a1f-4f0c-b2e9-90d17a3c5e44', parent: 's1', kind: 'fork', title: 'Try portable compaction', time: '14:01', cwd: 'C:\\work\\mukade' },
+  { id: 's2', inst: 'claude_code', sid: 'a41c77e0-2f6b-4c1d-8e55-3b9f0c7d21aa', title: 'Explain the hop review', time: '14:28', cwd: 'C:\\work\\mukade', live: true },
+  { id: 's3', inst: 'claude_code', sid: '2be90f17-33c4-4a8e-9d10-6f5a2c7e8b01', title: 'Folder filter: counts per cwd', time: '12:44', cwd: 'C:\\work\\mukade' },
+  { id: 's4', inst: 'claude_code', sid: '9c14d6aa-0e52-47bb-8f3d-1a7e4b6c2d90', title: 'Chat ledger paging', time: 'yesterday', cwd: 'C:\\work\\mukade' },
+  { id: 's4a', inst: 'claude_code', sid: '9c14d6aa.a1', parent: 's4', kind: 'agent general-purpose', title: 'Read the bus tests', time: 'yesterday', cwd: 'C:\\work\\mukade' },
+  { id: 's5', inst: 'claude_code', sid: 'e07a53b9-71d8-4c26-a4f0-3d9b8e1c6f52', title: 'Terminal launch on Windows', time: 'Nov 11', cwd: 'C:\\work\\shinatama', archived: true },
+  { id: 's6', inst: 'codex', sid: '0199a7c2-4e1b-7d30-b6f4-2c8e5a90d113', title: 'Hop carries subagents to Codex', time: '14:30', cwd: 'C:\\work\\mukade', live: true },
+  { id: 's7', inst: 'codex', sid: '0199a51e-88c0-7a14-9b62-4f0d3e7a1c85', title: 'Codex code mode: tool tables', time: 'Nov 10', cwd: 'C:\\work\\mukade' },
+  { id: 's8', inst: 'opencode', sid: 'ses_4f1c9a27b0e3', title: 'Child session titles', time: '14:25', cwd: 'C:\\work\\mukade' },
+  { id: 's9', inst: 'pi', sid: '7d3f1c06-91ab-4e2f-a6c4-5d0e8b7f3c19', title: 'Scratch store hops', time: '14:17', cwd: 'C:\\work\\mukade' },
+  { id: 's10', inst: 'deepseek_harness', sid: 'dsh-20261115-0931', title: 'DeepSeek headless resume', time: 'yesterday', cwd: 'C:\\work\\mukade' },
+];
+
+let S = load(), busy = {}, playing = null, opener = null, lastDialog = null, pIndex = 0;
+function load() { try { const raw = localStorage.getItem(KEY); if (raw) return { ...seed(), ...JSON.parse(raw) }; } catch (e) { /* storage unavailable: run on the seed */ } return seed(); }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* the prototype still runs without it */ } }
+const $ = (q, el = document) => el.querySelector(q);
+const now = () => new Date().toTimeString().slice(0, 5);
+const mem = (id) => S.members.find((m) => m.id === id);
+const room = (id = S.room) => S.rooms.find((r) => r.id === id);
+const roomMembers = (id = S.room) => S.members.filter((m) => m.room === id);
+const roomEvents = (id = S.room) => S.events.filter((e) => e.room === id);
+const actorName = (a) => (a === 'service' ? 'service' : a === 'user' ? 'the user' : mem(a)?.name ?? a);
+const group = (e) => (e.kind === 'message' ? 'message' : ['signal', 'overdue', 'claim', 'release'].includes(e.kind) ? 'signal' : 'system');
+const selId = (id = S.room) => { const evs = roomEvents(id); return evs.some((e) => e.id === S.sel[id]) ? S.sel[id] : evs.at(-1)?.id; };
+function addEvent(r, kind, actor, x = {}) { const e = { id: ++S.seq, room: r, t: now(), kind, actor, to: [], ...x }; S.events.push(e); room(r).day = e.t; S.sel[r] = e.id; return e; }
+function status(text) { S.status = text; }
+function toast(text, bad) { const t = document.createElement('div'); t.className = 'toast' + (bad ? ' bad' : ''); t.textContent = text; $('#toasts').append(t); setTimeout(() => t.remove(), 4200); }
+
+function visible(e) {
+  const f = S.filter;
+  if (!f.kinds.includes(group(e))) return false;
+  if (f.members.length && !(f.members.includes(e.actor) || f.members.includes(e.target) || e.to.some((x) => f.members.includes(x)))) return false;
+  if (f.text.trim()) return e.kind === 'message' && e.text.toLowerCase().includes(f.text.trim().toLowerCase());
+  return true;
+}
+function instructions(r = S.room, evs = roomEvents(r)) {
+  const out = [];
+  for (const e of evs) {
+    if (e.kind !== 'message' || mem(e.actor)?.role !== 'lead') continue;
+    for (const w of e.to) {
+      const m = mem(w); if (m?.role !== 'worker') continue;
+      let state = 'waiting';
+      for (const x of evs) {
+        if (x.ref !== e.id) continue;
+        if (x.kind === 'signal' && x.actor === w) state = x.signal;
+        else if (x.kind === 'overdue' && x.target === w && state === 'waiting') state = 'overdue';
+      }
+      out.push({ e, w: m, state });
+    }
+  }
+  return out;
+}
+function describe(e) {
+  const a = actorName(e.actor), m = mem(e.actor), t = mem(e.target)?.name;
+  switch (e.kind) {
+    case 'open': return `${a} opened the room`;
+    case 'join': return `${a} joined as ${m.role}`;
+    case 'leave': return `${a} left the room`;
+    case 'close': return `${a} closed the room`;
+    case 'reopen': return `${a} reopened the room`;
+    case 'observe': return `${a} observed ${t}`;
+    case 'signal': return `${a} signalled ${e.signal} on #${e.ref}`;
+    case 'overdue': return `${t} is silent on #${e.ref} · last progress ${e.progress} (${e.evidence})`;
+    case 'claim': return `${a} took the write turn`;
+    case 'release': return e.reason === 'released' ? `${a} released the write turn` : `the write turn of ${t} was freed: ${e.reason}`;
+    default: return e.kind;
+  }
+}
+function rich(text) {
+  const q = S.filter.text.trim(), re = q ? new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi') : null;
+  const hl = (s) => { if (!re) return esc(s); let out = '', at = 0; for (const m of s.matchAll(re)) { out += esc(s.slice(at, m.index)) + `<mark>${esc(m[0])}</mark>`; at = m.index + m[0].length; } return out + esc(s.slice(at)); };
+  let out = '', at = 0;
+  for (const m of text.matchAll(/(^|[^A-Za-z0-9_@.-])@([a-z0-9][a-z0-9_-]{0,31})/g)) {
+    const known = m[2] === 'all' || S.members.some((x) => x.name === m[2]), start = m.index + m[1].length;
+    out += hl(text.slice(at, start)) + (known ? `<span class="at">${hl('@' + m[2])}</span>` : hl('@' + m[2]));
+    at = m.index + m[0].length;
+  }
+  return out + hl(text.slice(at));
+}
+
+/* ---------- shell ---------- */
+function paint() {
+  const a = document.activeElement, keep = a?.id ? '#' + a.id : a?.dataset?.act ? `[data-act="${a.dataset.act}"]${a.dataset.id ? `[data-id="${a.dataset.id}"]` : ''}` : null;
+  document.documentElement.dataset.theme = S.theme;
+  $('#theme-name').textContent = S.theme === 'dark' ? 'Dark' : 'Light';
+  for (const v of ['sessions', 'chat']) { $('#tab-' + v).setAttribute('aria-selected', S.view === v); $('#view-' + v).hidden = S.view !== v; }
+  if (S.view === 'chat') paintChat(); else paintSessions();
+  paintDialog();
+  $('#statusbar').classList.toggle('busy', Object.values(busy).some(Boolean));
+  $('#status').textContent = S.status ?? 'ready';
+  $('#counts').textContent = `6 installations · ${SESS.length} sessions · ${S.rooms.length} rooms`;
+  $('#hints').innerHTML = S.view === 'chat' ? '<span><b>1 2 3</b> view</span><span><b>← →</b> step</span><span><b>space</b> play</span><span><b>n</b> room</span><span><b>l</b> launch</span><span><b>c</b> sessions</span>' : '<span><b>c</b> chat</span><span><b>ctrl K</b> search</span>';
+  save();
+  if (keep) { const el = document.querySelector((S.dialog ? '#dialog-host ' : '') + keep) ?? document.querySelector(keep); if (el && el !== document.activeElement) el.focus({ preventScroll: true }); }
+}
+
+/* ---------- chat ---------- */
+function paintChat() {
+  const v = $('#view-chat');
+  if (S.service !== 'running') {
+    v.innerHTML = `<div class="svc"><span class="tag ${busy.svc ? 'acc' : 'warn'}">${busy.svc ? 'service starting' : 'service stopped'}</span><span class="muted">rooms and history are kept on disk</span></div>
+      <div class="column focused chat-off"><h3>The chat service is not running.</h3>
+      <p class="muted" style="margin:0;max-width:56ch">Agents join rooms through it. Start it here, or from a terminal:</p>
+      <pre class="code">mukade chat start</pre>
+      <button type="button" class="primary" id="svc-start" data-act="svcstart" ${busy.svc ? 'disabled' : ''}>${icon('play')}${busy.svc ? 'Starting…' : 'Start service'}</button></div>`;
+    return;
+  }
+  const open = S.rooms.filter((r) => r.open).length;
+  v.innerHTML = `<div class="svc"><span class="tag live">service running</span><span>http://127.0.0.1:47631/mcp</span><span class="muted">${open} open rooms · checked every 3 s</span>
+      <span class="spring"></span><button type="button" class="ghost small" id="svc-stop" data-act="svcstop" ${busy.svc ? 'disabled' : ''}>${busy.svc ? 'Stopping…' : 'Stop service'}</button></div>
+    <div class="chat-columns">
+      <section class="column" id="rooms" aria-label="Rooms"><div class="column-head"><h2>Rooms</h2><small>${S.rooms.length}</small><input type="search" id="room-filter" aria-label="Filter rooms" placeholder="Filter" value="${esc(S.roomFilter)}" autocomplete="off" spellcheck="false">
+        <button type="button" class="small" id="new-room" data-act="newroom" title="New room (n)" aria-label="New room">${icon('plus')}</button></div><div class="column-body" id="rooms-body"></div></section>
+      <section class="column focused" id="stage" aria-label="Room"></section>
+      <section class="column" id="inspector" aria-label="Members and instructions"></section>
+    </div>`;
+  paintRooms(); paintStage(); paintInspector();
+}
+function paintRooms() {
+  const q = S.roomFilter.trim().toLowerCase(), list = S.rooms.filter((r) => r.name.includes(q));
+  $('#rooms-body').innerHTML = list.length ? `<ul class="list">${list.map((r) => {
+    const ms = roomMembers(r.id).filter((m) => !m.left).length, over = instructions(r.id).filter((i) => i.state === 'overdue').length;
+    return `<li><button type="button" class="row room-row" data-act="room" data-id="${r.id}" aria-selected="${r.id === S.room}"><span class="grow"><span>${esc(r.name)}</span><span class="room-meta">${ms} members · ${roomEvents(r.id).length} events · ${r.day}</span></span>
+      <span class="tags"><span class="tag ${r.open ? 'live' : ''}">${r.open ? 'open' : 'closed'}</span>${over ? `<span class="tag warn">${over} overdue</span>` : ''}</span></button></li>`;
+  }).join('')}</ul>` : `<p class="label">No room matches “${esc(S.roomFilter)}”.</p>`;
+}
+function paintStage() {
+  const r = room(), el = $('#stage');
+  if (!r) { el.innerHTML = `<div class="column-head"><h2>No room</h2></div><div class="empty"><span>No room is selected.</span><button type="button" class="primary" data-act="newroom">${icon('plus')}New room</button></div>`; return; }
+  const ms = roomMembers(), f = S.filter, filtered = f.text.trim() || f.members.length || f.kinds.length < 3;
+  const seg = (id, ic, label, key) => `<button type="button" data-act="cv" data-id="${id}" aria-pressed="${S.chatView === id}">${icon(ic)}${label} <kbd>${key}</kbd></button>`;
+  el.innerHTML = `<div class="column-head"><h2>${esc(r.name)}</h2><small>${roomEvents().length} events</small><span class="tag ${r.open ? 'live' : ''}">${r.open ? 'open' : 'closed'}</span><span class="spring"></span>
+      <div class="seg" role="group" aria-label="View of the room">${seg('graph', 'graph', 'Graph', '1')}${seg('lanes', 'lanes', 'Lanes', '2')}${seg('feed', 'feed', 'Feed', '3')}</div>
+      ${r.open ? `<button type="button" id="launch" data-act="launch" title="Start an instance already in this room (l)">${icon('term')}Launch agent</button><button type="button" class="ghost" id="close-room" data-act="closeroom">Close room</button>`
+        : `<button type="button" id="reopen" data-act="reopen">Reopen</button><button type="button" class="ghost" id="del-room" data-act="delroom">Delete</button>`}</div>
+    <div class="filterbar" role="group" aria-label="Filter the room"><input type="search" id="msg-filter" aria-label="Filter messages" placeholder="Filter messages" value="${esc(f.text)}" autocomplete="off" spellcheck="false">
+      ${ms.map((m) => `<button type="button" class="chip" data-act="fmember" data-id="${m.id}" aria-pressed="${f.members.includes(m.id)}">${glyph(m.harness)}${esc(m.name)}</button>`).join('')}
+      <span class="toolbar-divider"></span>
+      ${[['message', 'messages'], ['signal', 'signals and turn'], ['system', 'system']].map(([k, l]) => `<button type="button" class="chip" data-act="fkind" data-id="${k}" aria-pressed="${f.kinds.includes(k)}">${l}</button>`).join('')}
+      ${filtered ? `<button type="button" class="ghost small" data-act="fclear">Clear</button>` : ''}</div>
+    <div class="stage-body" id="stage-body"></div><div class="composer" id="composer"></div>`;
+  paintComposer(); paintStageBody(); // the composer first: the graph is drawn at the size it leaves
+}
+function paintStageBody(quiet) {
+  const el = $('#stage-body'); if (!el) return;
+  const evs = roomEvents(), shown = evs.filter(visible), sel = selId();
+  if (S.chatView === 'graph') { el.innerHTML = graphHTML(evs, sel); const g = $('.graph', el); $('svg', g).outerHTML = graphSVG(evs, sel, Math.max(g.clientWidth, 420), Math.max(g.clientHeight, 220)); if (!quiet) animateNow(); return; }
+  if (!shown.length) { el.innerHTML = `<div class="empty"><span>Nothing in this room matches the filter.</span><button type="button" data-act="fclear">Clear the filter</button></div>`; return; }
+  el.innerHTML = S.chatView === 'lanes' ? lanesHTML(shown, sel) : `<div class="column-body" id="feed">${shown.map((e) => card(e, sel)).join('')}</div>`;
+  $('[aria-current="true"]', el)?.scrollIntoView({ block: 'nearest' });
+}
+function card(e, sel, plain) {
+  const cur = !plain && e.id === sel, attrs = plain ? '' : `data-act="sel" data-id="${e.id}" tabindex="0" role="button" aria-current="${cur}"`;
+  if (e.kind !== 'message') {
+    const k = e.kind === 'signal' ? e.signal : e.kind, link = e.ref ? ` <button type="button" class="link" data-act="sel" data-id="${e.ref}">show #${e.ref}</button>` : '';
+    return `<div class="ev sys k-${k}" ${attrs}><span>${e.t} · #${e.id} · ${esc(describe(e))}</span>${link}</div>`;
+  }
+  const m = mem(e.actor), states = instructions().filter((i) => i.e.id === e.id);
+  return `<article class="ev" ${attrs}><div class="meta"><span class="who">${glyph(m.harness)}${esc(m.name)}</span><span>${m.role} · ${e.t} · #${e.id}</span></div>
+    <div class="body"><p>${rich(e.text)}</p><div class="to">to ${e.to.length ? e.to.map((x) => `<b>${esc(mem(x).name)}</b>`).join('') : 'everyone'}
+    ${states.map((i) => `<span class="tag ${{ waiting: 'acc', overdue: 'warn', blocked: 'warn', done: 'live' }[i.state]}">${esc(i.w.name)} ${i.state}</span>`).join('')}</div></div></article>`;
+}
+
+/* graph */
+const HW = 88, HH = 31;
+function layout(ms, W, H) { const n = ms.length, rx = Math.max(120, W / 2 - 108), ry = Math.max(70, H / 2 - 54); return Object.fromEntries(ms.map((m, i) => { const a = -Math.PI / 2 + (i * 2 * Math.PI) / n; return [m.id, { x: W / 2 + rx * Math.cos(a), y: H / 2 - 8 + ry * Math.sin(a) }]; })); }
+function clip(p, q, hw, hh) { const dx = q.x - p.x, dy = q.y - p.y, t = Math.min(hw / Math.abs(dx || 1e-6), hh / Math.abs(dy || 1e-6), .9); return { x: q.x - dx * t, y: q.y - dy * t }; }
+function segments(e) {
+  if (e.kind === 'message') return (e.to.length ? e.to : ['hub']).map((b) => ({ a: e.actor, b, type: 'msg' }));
+  if (e.kind === 'signal') { const ins = S.events.find((x) => x.id === e.ref); return ins ? [{ a: e.actor, b: ins.actor, type: e.signal }] : []; }
+  if (e.kind === 'observe') return [{ a: e.actor, b: e.target, type: 'obs' }];
+  if (e.kind === 'overdue') { const ins = S.events.find((x) => x.id === e.ref); return ins ? [{ a: e.target, b: ins.actor, type: 'over' }] : []; }
+  return [];
+}
+function graphSVG(evs, sel, W, H) {
+  const r = room(), ms = roomMembers(), pos = { ...layout(ms, W, H), hub: { x: W / 2, y: H / 2 - 8 } }, at = evs.findIndex((e) => e.id === sel), cur = evs[at];
+  const joined = new Set(evs.slice(0, at + 1).filter((e) => e.kind === 'join').map((e) => e.actor));
+  const gone = new Set(evs.slice(0, at + 1).filter((e) => e.kind === 'leave').map((e) => e.actor));
+  const lines = new Map();
+  for (const e of evs.slice(0, at + 1)) { if (!visible(e)) continue; for (const s of segments(e)) { const k = [s.a, s.b].sort().join('|') + '|' + s.type; lines.set(k, { ...s, n: (lines.get(k)?.n ?? 0) + 1 }); } }
+  const half = (id) => (id === 'hub' ? [58, 30] : [HW, HH]);
+  const SHIFT = { msg: 0, done: 7, blocked: -7, over: -7, obs: 14 };
+  const line = (s, cls, extra = '') => { const [u, v] = [s.a, s.b].sort(), dx = pos[v].x - pos[u].x, dy = pos[v].y - pos[u].y, len = Math.hypot(dx, dy) || 1, k = SHIFT[s.type] / len, o = { x: -dy * k, y: dx * k };
+    const A = { x: pos[s.a].x + o.x, y: pos[s.a].y + o.y }, B = { x: pos[s.b].x + o.x, y: pos[s.b].y + o.y }, p = clip(B, A, ...half(s.a)), q = clip(A, B, ...half(s.b)); return `<line class="${cls} ${s.type}" x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${q.x.toFixed(1)}" y2="${q.y.toFixed(1)}" ${extra}/>`; };
+  const nowSegs = cur ? segments(cur).filter((s) => pos[s.a] && pos[s.b]) : [];
+  const past = evs.slice(0, at + 1), newest = at === evs.length - 1, fm = S.filter.members;
+  const over = new Set(instructions(r.id, past).filter((i) => i.state === 'overdue').map((i) => i.w.id));
+  let turn = null; for (const e of past) { if (e.kind === 'claim') turn = e.actor; else if (e.kind === 'release') turn = null; }
+  const node = (m) => {
+    // the live state (working, listening) is known only now: during a replay a plate shows what the events say
+    const p = pos[m.id], st = gone.has(m.id) ? 'left' : over.has(m.id) ? 'silent' : newest ? m.status : 'past', label = st === 'silent' ? 'overdue' : st === 'past' ? '' : st;
+    const cls = ['node', st, S.member === m.id ? 'sel' : '', fm.length && !fm.includes(m.id) ? 'dim' : ''].join(' ');
+    return `<g class="${cls}" transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})" tabindex="0" role="button" data-act="member" data-id="${m.id}" aria-label="${esc([m.name, m.role, HARNESS[m.harness].label, label, turn === m.id ? 'holds the write turn' : ''].filter(Boolean).join(', '))}">
+      <polygon class="plate" points="-88,-31 79,-31 88,-22 88,31 -79,31 -88,22"/><line class="top" x1="-88" y1="-30" x2="79" y2="-30"/>
+      <use href="#${glyphId(m.harness)}" x="-76" y="-13" width="26" height="26" style="color:var(--${m.harness === 'desktop' ? 'accent' : 'text-2'})"/>
+      <text class="nm" x="-40" y="-3">${esc(m.name)}</text><text class="rl" x="-40" y="15">${m.role}</text><text class="st" x="78" y="15">${label}</text>
+      ${turn === m.id ? '<path class="pen" transform="translate(60 -25)" d="M3 13l1-3.500 7-7 2.500 2.500-7 7zM9.500 4 12 6.500"/>' : ''}</g>`;
+  };
+  const shownMs = ms.filter((m) => joined.has(m.id));
+  return `<svg viewBox="0 0 ${W} ${H}" role="group" aria-label="${esc(r.name)}: who wrote to whom, up to event ${at + 1} of ${evs.length}">
+      <defs><marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="context-stroke"/></marker></defs>
+      ${[...lines.values()].filter((s) => (joined.has(s.a) || s.a === 'hub') && pos[s.b]).map((s) => line(s, 'g-line', `stroke-width="${Math.min(1 + s.n * .9, 5).toFixed(1)}"`)).join('')}
+      ${nowSegs.map((s) => line(s, 'g-now', 'marker-end="url(#arw)" data-now="1"')).join('')}
+      <g class="hub" transform="translate(${pos.hub.x} ${pos.hub.y})"><polygon class="plate" points="-58,0 0,-30 58,0 0,30"/><text class="nm" y="0">everyone</text><text class="rl" y="13">${at + 1} of ${evs.length}</text></g>
+      ${shownMs.map(node).join('')}</svg>`;
+}
+function graphHTML(evs, sel) {
+  const at = evs.findIndex((e) => e.id === sel), cur = evs[at];
+  return `<div class="graph"><svg></svg>
+      <div class="legend"><span><i></i>message</span><span><i class="l-done"></i>signal done</span><span><i class="l-over"></i>blocked, overdue</span><span><i class="l-obs"></i>observation</span></div></div>
+    <div class="scrub" role="group" aria-label="Replay the room"><button type="button" class="small" id="play" data-act="play" aria-label="${playing ? 'Pause' : 'Play from here'}">${icon(playing ? 'pause' : 'play')}</button>
+      <button type="button" class="small" id="prev" data-act="prev" aria-label="Previous event" ${at <= 0 ? 'disabled' : ''}>${icon('prev')}</button><button type="button" class="small" id="next" data-act="next" aria-label="Next event" ${at >= evs.length - 1 ? 'disabled' : ''}>${icon('next')}</button>
+      <div class="ticks">${evs.map((e, i) => { const g = group(e), k = e.kind === 'overdue' || e.signal === 'blocked' ? 'warn' : g; return `<button type="button" class="tick k-${k}${i > at ? ' after' : ''}${visible(e) ? '' : ' hide'}" data-act="sel" data-id="${e.id}" aria-current="${i === at}" aria-label="${esc(`${e.t}, ${e.kind === 'message' ? actorName(e.actor) + ' wrote' : describe(e)}`)}" title="${esc(`${e.t} · #${e.id} · ${e.kind}`)}"></button>`; }).join('')}</div>
+      <span class="pos">${at + 1} / ${evs.length} · ${cur ? cur.t : ''}</span></div>
+    <div class="caption" aria-live="polite">${cur ? card(cur, sel, true) : ''}</div>`;
+}
+function animateNow() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const svg = $('.graph svg'); if (!svg) return;
+  for (const l of svg.querySelectorAll('[data-now]')) {
+    const d = document.createElementNS('http://www.w3.org/2000/svg', 'rect'); d.setAttribute('class', 'g-dot'); d.setAttribute('x', -4); d.setAttribute('y', -4); d.setAttribute('width', 8); d.setAttribute('height', 8);
+    svg.append(d);
+    const a = d.animate([{ transform: `translate(${l.getAttribute('x1')}px, ${l.getAttribute('y1')}px)` }, { transform: `translate(${l.getAttribute('x2')}px, ${l.getAttribute('y2')}px)` }], { duration: 620, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    a.onfinish = () => d.remove();
+  }
+}
+
+/* lanes */
+function lanesHTML(shown, sel) {
+  const ms = roomMembers(), n = ms.length, c = (i) => ((i + .5) / n) * 100, ix = (id) => ms.findIndex((m) => m.id === id);
+  const life = ms.map((m, i) => `<i class="life" style="left:${c(i)}%"></i>`).join('');
+  const row = (e) => {
+    let a = ix(e.kind === 'overdue' ? e.target : e.actor), rec = [], k = e.kind === 'signal' ? e.signal : e.kind;
+    if (e.kind === 'message') rec = e.to.length ? e.to.map(ix) : ms.map((_, i) => i).filter((i) => i !== a);
+    else if (e.kind === 'signal' || e.kind === 'overdue') rec = [ix(S.events.find((x) => x.id === e.ref)?.actor)];
+    else if (e.kind === 'observe') rec = [ix(e.target)];
+    else if (e.kind === 'release' && a < 0) a = ix(e.target);
+    rec = rec.filter((i) => i >= 0);
+    const lo = Math.min(a, ...rec), hi = Math.max(a, ...rec), kc = e.kind === 'message' ? '' : ' c-' + k;
+    const wire = a >= 0 && rec.length ? `<span class="wire ${e.kind === 'message' ? '' : k}" style="left:${c(lo)}%;width:${c(hi) - c(lo)}%"></span><span class="wdot${kc}" style="left:${c(a)}%"></span>${rec.map((i) => `<span class="warw ${i > a ? 'r' : 'l'}${kc}" style="left:${c(i)}%"></span>`).join('')}` : '';
+    let body;
+    if (e.kind === 'message') { const w = Math.max(c(hi) - c(lo), 46), left = Math.max(0, Math.min(c(lo) - 3, 100 - w)); body = `<div class="lmsg" style="margin-left:${left}%;width:${w}%"><p>${rich(e.text)}</p><div class="to">#${e.id} · ${esc(mem(e.actor).name)} to ${e.to.length ? e.to.map((x) => esc(mem(x).name)).join(', ') : 'everyone'}</div></div>`; }
+    else { const text = { join: `joined · ${mem(e.actor)?.role}`, leave: 'left', open: 'opened the room', close: 'closed the room', reopen: 'reopened the room', observe: `observes ${mem(e.target)?.name}`, signal: `${e.signal} · #${e.ref}`, overdue: `silent on #${e.ref}`, claim: 'took the write turn', release: e.reason === 'released' ? 'released the turn' : `turn freed: ${e.reason}` }[e.kind];
+      body = `<div class="lchipwrap"><span class="lchip k-${k}" style="left:clamp(66px, ${a >= 0 ? c(a) : 50}%, calc(100% - 66px))">${esc((a < 0 ? actorName(e.actor) + ' ' : '') + text)}</span></div>`; }
+    return `<div class="lrow${wire && e.kind !== 'message' ? ' wired' : ''}" data-act="sel" data-id="${e.id}" tabindex="0" role="button" aria-current="${e.id === sel}" aria-label="${esc(`${e.t}, ${e.kind === 'message' ? actorName(e.actor) + ': ' + e.text : describe(e)}`)}"><time>${e.t}</time><div class="larea">${life}${wire}${body}</div></div>`;
+  };
+  return `<div class="lanes"><div class="lhead"><time></time><div class="larea">${ms.map((m, i) => `<div class="lname" style="left:${c(i)}%"><span>${glyph(m.harness)}${esc(m.name)}</span><small>${m.role}</small></div>`).join('')}</div></div>${shown.map(row).join('')}</div>`;
+}
+
+/* composer */
+function paintComposer() {
+  const el = $('#composer'), r = room(); if (!el || !r) return;
+  const me = mem(S.me[r.id]);
+  if (!r.open) { el.innerHTML = `<div class="line"><span class="hint">This room is closed. Its history stays readable; reopen it to write.</span><span class="spring"></span><button type="button" data-act="reopen">Reopen</button></div>`; return; }
+  if (!me || me.left) {
+    const d = S.drafts['join:' + r.id] ?? { name: 'desk', role: 'peer' };
+    el.innerHTML = `<div class="line"><label for="join-name">Join as</label><input type="text" id="join-name" value="${esc(d.name)}" size="12" autocomplete="off" spellcheck="false" aria-describedby="join-err" ${busy.join ? 'disabled' : ''} aria-invalid="${!!busy.joinErr}">
+      <select id="join-role" aria-label="Role" ${busy.join ? 'disabled' : ''}><option value="peer" ${d.role === 'peer' ? 'selected' : ''}>peer: talks with the others</option><option value="lead" ${d.role === 'lead' ? 'selected' : ''}>lead: instructs workers</option></select>
+      <button type="button" class="primary" id="join" data-act="join" ${busy.join ? 'disabled' : ''}>${busy.join ? 'Joining…' : 'Join to write'}</button><span class="hint">The window reads without joining. To write, it joins as a member the agents can see.</span></div>
+      <p class="err" id="join-err" role="alert">${esc(busy.joinErr ?? '')}</p>`;
+    return;
+  }
+  const others = roomMembers().filter((m) => m.id !== me.id && !m.left), to = (S.to[r.id] ?? []).filter((x) => others.some((m) => m.id === x));
+  const instructs = me.role === 'lead' && to.some((x) => mem(x).role === 'worker');
+  el.innerHTML = `<div class="line"><label>To</label><button type="button" class="chip" data-act="to" data-id="all" aria-pressed="${!to.length}">everyone</button>
+      ${others.map((m) => `<button type="button" class="chip" data-act="to" data-id="${m.id}" aria-pressed="${to.includes(m.id)}">${glyph(m.harness)}${esc(m.name)}</button>`).join('')}
+      <span class="spring"></span><span class="hint">writing as ${esc(me.name)} · ${me.role}</span><button type="button" class="ghost small" id="leave" data-act="leave">Leave</button></div>
+    <div class="line"><textarea id="draft" aria-label="Message" aria-describedby="draft-err draft-hint" aria-invalid="${!!busy.sendErr}" placeholder="Write to the room. @name addresses a member." ${busy.send ? 'disabled' : ''}>${esc(S.drafts[r.id] ?? '')}</textarea>
+      <button type="button" class="primary" id="send" data-act="send" ${busy.send ? 'disabled' : ''}>${icon('send')}${busy.send ? 'Sending…' : 'Send'} <kbd>ctrl ↵</kbd></button></div>
+    <p class="err" id="draft-err" role="alert">${esc(busy.sendErr ?? '')}</p>
+    <span class="hint" id="draft-hint">${instructs ? 'Addressed to a worker: this is an instruction, and the worker signals done or blocked against it.' : ''}</span>`;
+}
+
+/* inspector */
+function paintInspector() {
+  const el = $('#inspector'), r = room(); if (!el) return;
+  if (!r) { el.innerHTML = `<div class="column-head"><h2>Members</h2></div>`; return; }
+  const ms = roomMembers(), ins = instructions(), over = new Set(ins.filter((i) => i.state === 'overdue').map((i) => i.w.id)), turn = S.turns[r.id];
+  const detail = (m) => `<div class="box mdetail"><dl class="kv"><dt>harness</dt><dd>${HARNESS[m.harness].label}</dd><dt>session</dt><dd class="mono">${m.session ? esc(m.session) : 'not bound'}</dd>${m.cwd ? `<dt>folder</dt><dd class="mono">${esc(m.cwd)}</dd>` : ''}<dt>progress</dt><dd>${m.left ? 'left the room' : `${m.progress} · from the ${m.evidence}`}</dd></dl>
+      <div class="actions">${S.me[r.id] && S.me[r.id] !== m.id && !m.left && r.open ? `<button type="button" class="small" data-act="mention" data-id="${m.id}">Mention</button>` : ''}
+      ${m.session && SESS.some((s) => s.sid === m.session) ? `<button type="button" class="small" data-act="showsession" data-id="${m.id}">${icon('list')}Show session</button>` : ''}</div></div>`;
+  el.innerHTML = `<div class="column-head"><h2>Members</h2><small>${ms.filter((m) => !m.left).length}</small></div><div class="column-body">
+    <ul class="list">${ms.map((m) => { const st = m.left ? 'left' : over.has(m.id) ? 'overdue' : m.status; return `<li><button type="button" class="row mrow" data-act="member" data-id="${m.id}" aria-expanded="${S.member === m.id}" aria-selected="${S.member === m.id}">${glyph(m.harness)}<span class="grow">${esc(m.name)}</span>${turn?.holder === m.id ? `<span class="tag acc" title="Holds the write turn">turn</span>` : ''}<span class="tag">${m.role}</span><span class="state ${st === 'overdue' ? 'silent' : st}">${st}</span></button>${S.member === m.id ? detail(m) : ''}</li>`; }).join('')}</ul>
+    <p class="label">Write turn</p>
+    <div class="box turn">${turn ? `<span><b>${esc(mem(turn.holder).name)}</b> holds it since ${turn.at}</span><span class="muted">last progress ${mem(turn.holder).progress}, from the ${mem(turn.holder).evidence}. It frees itself after 10 minutes of silence.</span><div><button type="button" class="small" id="free-turn" data-act="freeturn">Free the turn…</button></div>` : `<span class="muted">Free. A member takes it before writing files in a shared checkout.</span>`}</div>
+    <p class="label">Instructions to workers</p>
+    ${ins.length ? `<ul class="list">${ins.slice().reverse().map((i) => `<li><button type="button" class="row irow" data-act="sel" data-id="${i.e.id}"><span class="num">#${i.e.id}</span><span class="grow">${esc(i.e.text)}</span><span class="tag ${{ waiting: 'acc', overdue: 'warn', blocked: 'warn', done: 'live' }[i.state]}">${esc(i.w.name)} ${i.state}</span></button>
+      ${i.state === 'overdue' && r.open ? `<div class="actions" style="padding:0 10px 8px 44px"><button type="button" class="small" data-act="again" data-id="${i.e.id}">Send again</button></div>` : ''}</li>`).join('')}</ul>` : `<p class="note" style="margin:0 10px">No lead has instructed a worker in this room.</p>`}
+    </div>`;
+}
+
+/* ---------- sessions ---------- */
+function paintSessions() {
+  const list = SESS.filter((s) => s.inst === S.inst), folders = [...new Set(list.map((s) => s.cwd))], q = S.sFilter.trim().toLowerCase();
+  const match = (s) => !q || s.title.toLowerCase().includes(q) || s.sid.includes(q) || s.cwd.toLowerCase().includes(q);
+  const inFolder = list.filter((s) => !S.folder || s.cwd === S.folder), tops = inFolder.filter((s) => !s.parent && (match(s) || inFolder.some((k) => k.parent === s.id && match(k))));
+  const cur = SESS.find((s) => s.id === S.session && s.inst === S.inst) ?? tops[0], kids = (p) => inFolder.filter((k) => k.parent === p.id);
+  const srow = (s, child) => `<li><div style="display:flex">${!child && kids(s).length ? `<button type="button" class="ghost small" style="padding:0 2px;min-width:22px" data-act="fold" data-id="${s.id}" aria-label="${S.folded.includes(s.id) ? 'Unfold' : 'Fold'} ${esc(s.title)}" aria-expanded="${!S.folded.includes(s.id)}"><svg class="icon" aria-hidden="true" style="${S.folded.includes(s.id) ? 'rotate:-90deg' : ''}"><use href="#i-caret"/></svg></button>` : `<span style="width:${child ? 44 : 22}px;flex:none"></span>`}
+    <button type="button" class="row" data-act="sess" data-id="${s.id}" aria-selected="${cur?.id === s.id}">${s.kind ? `<span class="${s.kind === 'fork' ? 'fork' : 'spawn'}">${s.kind === 'fork' ? 'fork' : '↳ ' + s.kind}</span>` : ''}<span class="grow" ${child ? '' : 'style="font-weight:600"'}>${esc(s.title)}</span>${s.live ? '<span class="tag live">live</span>' : ''}${s.archived ? '<span class="tag">archived</span>' : ''}<span class="time">${s.time}</span></button></div></li>`;
+  const bound = cur ? S.members.filter((m) => m.session === cur.sid && !m.left) : [];
+  $('#view-sessions').innerHTML = `<section class="column" id="inst" aria-label="Installations"><div class="column-head"><h2>Installations</h2><small>6</small></div><div class="column-body">
+      <ul class="list">${INSTALLS.map(([k, l]) => `<li><button type="button" class="row" data-act="inst" data-id="${k}" aria-selected="${S.inst === k}">${glyph(k)}<span class="grow">${l}</span><span class="num">${SESS.filter((s) => s.inst === k).length}</span></button></li>`).join('')}</ul>
+      <p class="label">Folders</p><ul class="list"><li><button type="button" class="row" data-act="folder" data-id="" aria-selected="${!S.folder}"><span class="grow">All</span><span class="num">${list.length}</span></button></li>
+      ${folders.map((f) => `<li><button type="button" class="row" data-act="folder" data-id="${esc(f)}" aria-selected="${S.folder === f}"><span class="grow mono">${esc(f)}</span><span class="num">${list.filter((s) => s.cwd === f).length}</span></button></li>`).join('')}</ul></div></section>
+    <section class="column focused" id="sess" aria-label="Sessions"><div class="column-head"><h2>Sessions</h2><input type="search" id="s-filter" aria-label="Filter sessions" placeholder="Filter by title, id, folder" value="${esc(S.sFilter)}" autocomplete="off" spellcheck="false"></div>
+      <div class="column-body" id="sess-body">${tops.length ? `<ul class="list">${tops.map((s) => srow(s) + (S.folded.includes(s.id) ? '' : kids(s).map((k) => srow(k, true)).join(''))).join('')}</ul>` : `<p class="label">${list.length ? `No session matches “${esc(S.sFilter)}”.` : 'This installation has no sessions.'}</p>`}</div></section>
+    <section class="column" id="sdetail" aria-label="Session">${cur ? `<div class="column-head"><h2>Session</h2><small>${esc(cur.sid.slice(0, 8))}</small><span class="spring"></span>${cur.live ? '<span class="tag live">live</span>' : ''}</div>
+      <div class="column-body"><div class="pad"><h3>${esc(cur.title)}</h3>
+      <p class="note" style="margin:0">Open transcript, Hop, Export, Save as and Resume stay here as they are in the app. This prototype does not draw them.</p>
+      <dl class="kv"><dt>harness</dt><dd>${HARNESS[cur.inst].label}</dd><dt>id</dt><dd class="mono">${esc(cur.sid)}</dd><dt>kind</dt><dd>${cur.kind ?? 'session'}</dd><dt>folder</dt><dd class="mono">${esc(cur.cwd)}</dd><dt>updated</dt><dd>${cur.time}</dd><dt>live</dt><dd>${cur.live ? 'yes' : 'no'}</dd></dl>
+      <div><p class="label" style="padding-left:0">In rooms</p>${bound.length ? `<ul class="list box lineage">${bound.map((m) => `<li><button type="button" class="row" data-act="goroom" data-id="${m.id}">${icon('chat')}<span class="grow">${esc(room(m.room).name)} · ${esc(m.name)}</span><span class="tag">${m.role}</span><span class="state mono muted">${m.status}</span></button></li>`).join('')}</ul>` : `<p class="note" style="margin:0">No room member is bound to this session.</p>`}</div>
+      </div></div>` : `<div class="column-head"><h2>Session</h2></div><div class="empty">No session is selected.</div>`}</section>`;
+}
+
+/* ---------- dialogs ---------- */
+function paintDialog() {
+  const host = $('#dialog-host'), d = S.dialog;
+  if (!d) { host.innerHTML = ''; lastDialog = null; return; }
+  const r = room(d.room ?? S.room), foot = (ok, cls = 'primary') => `<div class="dialog-foot"><button type="button" data-act="dlg-cancel" ${busy.dlg ? 'disabled' : ''}>Cancel</button><button type="button" class="${cls}" id="dlg-ok" data-act="dlg-ok" ${busy.dlg ? 'disabled' : ''}>${busy.dlg ? 'Working…' : ok}</button></div>`;
+  let title, body;
+  if (d.type === 'newroom') { title = 'New room';
+    body = `<div class="dialog-body"><div class="field"><label for="f-name">Name</label><input type="text" id="f-name" data-f="name" value="${esc(d.name ?? '')}" autocomplete="off" spellcheck="false" aria-describedby="f-name-err" aria-invalid="${!!d.err}">
+      <p class="err" id="f-name-err" role="alert">${esc(d.err ?? '')}${d.go ? ` <button type="button" class="link" data-act="room" data-id="${d.go}">Go to it</button>` : ''}</p><span class="muted">Lowercase letters, digits, - and _; up to 64. Agents join it by this name.</span></div></div>${foot('Open room')}`; }
+  else if (d.type === 'launch') { title = `Launch an agent into ${r.name}`;
+    const cmd = `mukade chat launch ${d.harness} --room ${r.name}${d.role !== 'peer' ? ' --role ' + d.role : ''} --listen ${d.listen || 0}`;
+    body = `<div class="dialog-body"><div class="field"><label id="f-h">Harness</label><div class="choices" role="radiogroup" aria-labelledby="f-h">${Object.entries(HARNESS).filter(([, h]) => h.launch).map(([k, h]) => `<label class="choice"><input type="radio" name="harness" data-f="harness" value="${k}" ${d.harness === k ? 'checked' : ''}>${glyph(k)}${h.label}</label>`).join('')}</div></div>
+      <div class="fields"><div class="field"><label for="f-role">Role</label><select id="f-role" data-f="role">${['peer', 'lead', 'worker', 'observer'].map((x) => `<option ${d.role === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      <div class="field"><label for="f-listen">Listens for, seconds</label><input type="number" id="f-listen" data-f="listen" min="0" max="3600" value="${esc(d.listen)}" aria-describedby="f-listen-err" aria-invalid="${!!d.errListen}"><p class="err" id="f-listen-err" role="alert">${esc(d.errListen ?? '')}</p></div></div>
+      <div class="field"><label for="f-cwd">Folder the terminal opens in</label><input type="text" id="f-cwd" data-f="cwd" value="${esc(d.cwd)}" spellcheck="false" aria-describedby="f-cwd-err" aria-invalid="${!!d.errCwd}"><p class="err" id="f-cwd-err" role="alert">${esc(d.errCwd ?? '')}</p></div>
+      <div class="field"><label>Runs in a new terminal</label><pre class="code" id="launch-cmd">${esc(cmd)}</pre></div></div>${foot('Launch in terminal')}`; }
+  else if (d.type === 'palette') { title = 'Search';
+    body = `<div class="dialog-body"><input type="search" id="palette-input" role="combobox" aria-expanded="true" aria-controls="pres" aria-label="Search rooms, members, messages and sessions" placeholder="Search rooms, members, messages, sessions" value="${esc(d.q ?? '')}" autocomplete="off" spellcheck="false">
+      <div class="actions" role="group" aria-label="Where to search">${['all', 'rooms', 'members', 'messages', 'sessions'].map((s) => `<button type="button" class="chip" data-act="pscope" data-id="${s}" aria-pressed="${(d.scope ?? 'all') === s}">${s}</button>`).join('')}</div><div class="pres" id="pres" role="listbox"></div></div>`; }
+  else { const c = {
+      closeroom: ['Close the room', `Close ${r?.name}? Its history stays readable and exportable. Members can no longer write, and the write turn is freed.`, 'Close room', 'primary'],
+      delroom: ['Delete the room', `Delete ${r?.name}? This removes the room with its ${roomMembers(r?.id).length} members and ${roomEvents(r?.id).length} events. It cannot be undone.`, 'Delete room', 'danger'],
+      svcstop: ['Stop the chat service', `Stop the service? ${S.members.filter((m) => !m.left && room(m.room)?.open).length} members in ${S.rooms.filter((x) => x.open).length} open rooms stop receiving messages. Rooms and history are kept.`, 'Stop service', 'danger'],
+      freeturn: ['Free the write turn', `Free the write turn of ${mem(S.turns[r?.id]?.holder)?.name}? The service does not stop its writes: it only lets another member take the turn.`, 'Free the turn', 'danger'],
+    }[d.what]; title = c[0]; body = `<div class="dialog-body"><p style="margin:0;line-height:1.6">${esc(c[1])}</p></div>${foot(c[2], c[3])}`; }
+  host.innerHTML = `<div class="scrim" data-act="dlg-scrim"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title"><div class="dialog-head"><h2 id="dlg-title">${esc(title)}</h2><span class="spring"></span><button type="button" class="ghost small" data-act="dlg-cancel" aria-label="Close">${icon('close')}</button></div>${body}</div></div>`;
+  if (d.type === 'palette') paintResults();
+  if (lastDialog !== d.type + (d.what ?? '')) { lastDialog = d.type + (d.what ?? ''); (host.querySelector('input:not([type=radio]), select') ?? $('#dlg-ok', host))?.focus(); }
+}
+function results() {
+  const d = S.dialog, q = (d.q ?? '').trim().toLowerCase(), sc = d.scope ?? 'all', out = [], want = (s) => sc === 'all' || sc === s, cap = sc === 'all' ? 5 : 30;
+  const push = (g, items) => { if (want(g) && items.length) out.push({ g, items: items.slice(0, cap), more: Math.max(0, items.length - cap) }); };
+  push('rooms', S.rooms.filter((r) => r.name.includes(q)).map((r) => ({ label: r.name, sub: r.open ? 'open' : 'closed', go: { room: r.id } })));
+  push('members', S.members.filter((m) => !q || m.name.includes(q) || HARNESS[m.harness].label.toLowerCase().includes(q) || m.role.includes(q)).map((m) => ({ label: m.name, h: m.harness, sub: `${m.role} · ${room(m.room).name}`, go: { room: m.room, member: m.id } })));
+  if (q) push('messages', S.events.filter((e) => e.kind === 'message' && e.text.toLowerCase().includes(q)).map((e) => ({ label: e.text, h: mem(e.actor).harness, sub: `${mem(e.actor).name} · ${room(e.room).name} · ${e.t}`, go: { room: e.room, ev: e.id } })));
+  push('sessions', SESS.filter((s) => !q || s.title.toLowerCase().includes(q) || s.sid.includes(q)).map((s) => ({ label: s.title, h: s.inst, sub: `${HARNESS[s.inst].label} · ${s.time}`, go: { sess: s.id } })));
+  return out;
+}
+function paintResults() {
+  const el = $('#pres'); if (!el) return;
+  const groups = results(), flat = groups.flatMap((g) => g.items); pIndex = Math.max(0, Math.min(pIndex, flat.length - 1)); let i = 0;
+  el.innerHTML = flat.length ? groups.map((g) => `<p class="label">${g.g}${g.more ? ` · ${g.more} more, narrow the search` : ''}</p><ul class="list">${g.items.map((it) => { const n = i++; return `<li><button type="button" class="row" role="option" data-act="pgo" data-id="${n}" aria-selected="${n === pIndex}">${it.h ? glyph(it.h) : icon('chat')}<span class="grow">${esc(it.label)}</span><span class="num">${esc(it.sub)}</span></button></li>`; }).join('')}</ul>`).join('')
+    : `<p class="label">Nothing matches “${esc(S.dialog.q ?? '')}”${(S.dialog.scope ?? 'all') !== 'all' ? ` in ${S.dialog.scope}` : ''}.</p>`;
+  $('[aria-selected="true"]', el)?.scrollIntoView({ block: 'nearest' });
+}
+function go(g) {
+  S.dialog = null;
+  if (g.sess) { const s = SESS.find((x) => x.id === g.sess); S.view = 'sessions'; S.inst = s.inst; S.folder = ''; S.sFilter = ''; S.session = s.id; if (s.parent) S.folded = S.folded.filter((x) => x !== s.parent); }
+  else { S.view = 'chat'; S.room = g.room; S.filter = { text: '', members: [], kinds: ['message', 'signal', 'system'] }; if (g.member) S.member = g.member; if (g.ev) { S.sel[g.room] = g.ev; if (S.chatView === 'graph') S.chatView = 'feed'; } if (S.service !== 'running') status('the chat service is stopped'); }
+}
+function closeDialog() { S.dialog = null; busy.dlg = false; paint(); if (opener) document.querySelector(opener)?.focus(); opener = null; }
+function openDialog(d, from) { opener = from ?? null; pIndex = 0; S.dialog = d; paint(); }
+
+/* ---------- actions ---------- */
+const later = (ms, fn) => setTimeout(() => { fn(); paint(); }, ms);
+function stopPlay() { clearInterval(playing); playing = null; }
+function step(by) { const evs = roomEvents(), i = evs.findIndex((e) => e.id === selId()) + by; if (i < 0 || i >= evs.length) return false; S.sel[S.room] = evs[i].id; return true; }
+const ACT = {
+  view: (d) => { S.view = d.id; }, theme: () => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; },
+  reload: () => { if (busy.reload) return; busy.reload = true; status('reading the stores and the chat service…'); later(700, () => { busy.reload = false; status('read again · nothing changed'); }); },
+  reset: () => { stopPlay(); S = seed(); busy = {}; status('sample data restored'); },
+  room: (d) => { stopPlay(); S.room = d.id; S.member = null; S.dialog = null; }, cv: (d) => { stopPlay(); S.chatView = d.id; },
+  sel: (d) => { stopPlay(); S.sel[S.room] = Number(d.id); const e = S.events.find((x) => x.id === Number(d.id)); if (e && !visible(e)) S.filter = { text: '', members: [], kinds: ['message', 'signal', 'system'] }; },
+  member: (d) => { S.member = S.member === d.id ? null : d.id; },
+  fmember: (d) => { const f = S.filter.members; S.filter.members = f.includes(d.id) ? f.filter((x) => x !== d.id) : [...f, d.id]; },
+  fkind: (d) => { const k = S.filter.kinds; S.filter.kinds = k.includes(d.id) ? k.filter((x) => x !== d.id) : [...k, d.id]; },
+  fclear: () => { S.filter = { text: '', members: [], kinds: ['message', 'signal', 'system'] }; },
+  play: () => { if (playing) return stopPlay(); if (!step(1)) S.sel[S.room] = roomEvents()[0].id; playing = setInterval(() => { if (!step(1)) stopPlay(); paint(); }, 1100); },
+  prev: () => { stopPlay(); step(-1); }, next: () => { stopPlay(); step(1); },
+  to: (d) => { const t = S.to[S.room] ?? []; S.to[S.room] = d.id === 'all' ? [] : t.includes(d.id) ? t.filter((x) => x !== d.id) : [...t, d.id]; },
+  mention: (d) => { const n = '@' + mem(d.id).name + ' ', cur = S.drafts[S.room] ?? ''; S.drafts[S.room] = cur + (cur && !cur.endsWith(' ') ? ' ' : '') + n; setTimeout(() => { const t = $('#draft'); t?.focus(); t?.setSelectionRange(t.value.length, t.value.length); }); },
+  again: (d) => { const e = S.events.find((x) => x.id === Number(d.id)); if (!S.me[S.room]) { status('join the room as lead to send it again'); toast('Join the room first: the window writes as a member.', true); return; } S.drafts[S.room] = e.text; S.to[S.room] = e.to.slice(); setTimeout(() => $('#draft')?.focus()); },
+  showsession: (d) => { const s = SESS.find((x) => x.sid === mem(d.id).session); go({ sess: s.id }); },
+  goroom: (d) => { const m = mem(d.id); go({ room: m.room, member: m.id }); },
+  join: () => {
+    const name = $('#join-name').value.trim(), role = $('#join-role').value; S.drafts['join:' + S.room] = { name, role };
+    busy.joinErr = !NAME.test(name) || name === 'all' ? 'A name is 1 to 32 lowercase letters, digits, - or _, and cannot be “all”.' : roomMembers().some((m) => m.name === name) ? `${name} is already a member of this room. Names are never reused in a room.` : null;
+    if (busy.joinErr) { setTimeout(() => $('#join-name')?.focus()); return; }
+    busy.join = true; const r = S.room;
+    later(500, () => { busy.join = false; const id = 'm' + ++S.mseq; S.members.push({ id, room: r, name, harness: 'desktop', role, session: null, cwd: null, status: 'listening', progress: now(), evidence: 'bus', left: false }); S.me[r] = id; addEvent(r, 'join', id); status(`joined ${room(r).name} as ${name}`); setTimeout(() => $('#draft')?.focus()); });
+  },
+  leave: () => { const id = S.me[S.room]; mem(id).left = true; delete S.me[S.room]; addEvent(S.room, 'leave', id); status('left the room'); },
+  send: () => {
+    const r = S.room, me = mem(S.me[r]), text = ($('#draft')?.value ?? '').trim(), m = text.match(SECRET);
+    busy.sendErr = !text ? 'Write a message first.' : m ? `The service refuses a recognized secret (${m[0].slice(0, 6)}…). Nothing was sent.` : new Blob([text]).size > 65536 ? 'A message is at most 65,536 bytes.' : null;
+    if (busy.sendErr) { setTimeout(() => $('#draft')?.focus()); return; }
+    busy.send = true;
+    later(500, () => {
+      busy.send = false; let to = (S.to[r] ?? []).slice(), all = false;
+      text.replace(/(^|[^A-Za-z0-9_@.-])@([a-z0-9][a-z0-9_-]{0,31})/g, (_, p, n) => { if (n === 'all') all = true; const x = roomMembers(r).find((y) => y.name === n && !y.left && y.id !== me.id); if (x && !to.includes(x.id)) to.push(x.id); });
+      if (all) to = []; me.progress = now();
+      addEvent(r, 'message', me.id, { to, text }); S.drafts[r] = ''; S.to[r] = [];
+      status(`sent to ${to.length ? to.map((x) => mem(x).name).join(', ') : 'everyone'}`); setTimeout(() => $('#draft')?.focus());
+    });
+  },
+  newroom: (d, el) => openDialog({ type: 'newroom', name: '' }, '#new-room'),
+  launch: () => openDialog({ type: 'launch', harness: 'codex', role: 'worker', listen: 600, cwd: 'C:\\work\\mukade' }, '#launch'),
+  closeroom: () => openDialog({ type: 'confirm', what: 'closeroom', room: S.room }, '#close-room'),
+  delroom: () => openDialog({ type: 'confirm', what: 'delroom', room: S.room }, '#del-room'),
+  svcstop: () => openDialog({ type: 'confirm', what: 'svcstop' }, '#svc-stop'),
+  freeturn: () => openDialog({ type: 'confirm', what: 'freeturn', room: S.room }, '#free-turn'),
+  reopen: () => { const r = room(); r.open = true; addEvent(r.id, 'reopen', 'user'); status(`${r.name} reopened`); },
+  svcstart: () => { busy.svc = true; status('starting the chat service…'); later(900, () => { busy.svc = false; S.service = 'running'; status('chat service running'); toast('The chat service is running.'); }); },
+  palette: () => openDialog({ type: 'palette', q: '', scope: 'all' }, '#palette-open'),
+  pscope: (d) => { S.dialog.scope = d.id; pIndex = 0; setTimeout(() => $('#palette-input')?.focus()); },
+  pgo: (d) => { const it = results().flatMap((g) => g.items)[Number(d.id)]; if (it) go(it.go); },
+  'dlg-cancel': () => closeDialog(), 'dlg-scrim': (d, el, ev) => { if (ev.target === el && !busy.dlg) closeDialog(); },
+  'dlg-ok': () => {
+    const d = S.dialog;
+    if (d.type === 'newroom') {
+      const name = (d.name ?? '').trim(), ex = S.rooms.find((r) => r.name === name); d.go = null;
+      d.err = !ROOM.test(name) ? 'A room name is 1 to 64 lowercase letters, digits, - or _, starting with a letter or digit.' : ex?.open ? `A room named ${name} is already open.` : ex ? `${name} is closed. Reopen it instead of opening a new one.` : null;
+      if (ex) d.go = ex.id; if (d.err) { setTimeout(() => $('#f-name')?.focus()); return; }
+      busy.dlg = true; later(400, () => { busy.dlg = false; const id = 'r' + ++S.seq; S.rooms.unshift({ id, name, open: true, day: now() }); addEvent(id, 'open', 'user'); S.room = id; S.member = null; S.dialog = null; status(`room ${name} opened`); toast(`Room ${name} is open. Launch an agent into it.`); });
+    } else if (d.type === 'launch') {
+      const n = Number(d.listen);
+      d.errListen = d.listen === '' || !Number.isInteger(n) || n < 0 || n > 3600 ? 'Whole seconds, from 0 to 3600.' : null;
+      d.errCwd = !/^([A-Za-z]:\\|\/)/.test(d.cwd.trim()) ? 'Give an absolute folder, such as C:\\work\\mukade.' : null;
+      if (d.errListen || d.errCwd) { setTimeout(() => $(d.errListen ? '#f-listen' : '#f-cwd')?.focus()); return; }
+      busy.dlg = true; status('opening a terminal…'); const r = S.room;
+      later(1200, () => { busy.dlg = false; const base = d.harness === 'claude_code' ? 'claude' : d.harness, taken = roomMembers(r).map((m) => m.name); let k = 1; while (taken.includes(`${base}-${k}`)) k++;
+        const id = 'm' + ++S.mseq, name = `${base}-${k}`; S.members.push({ id, room: r, name, harness: d.harness, role: d.role, session: null, cwd: d.cwd.trim(), status: 'listening', progress: now(), evidence: 'bus', left: false });
+        addEvent(r, 'join', id); S.member = id; S.dialog = null; status(`${name} joined ${room(r).name}`); toast(`${name} joined ${room(r).name} as ${d.role}.`); });
+    } else {
+      busy.dlg = true; const r = room(d.room), what = d.what;
+      later(what === 'svcstop' ? 600 : 350, () => { busy.dlg = false; S.dialog = null;
+        if (what === 'closeroom') { const t = S.turns[r.id]; r.open = false; if (t) { addEvent(r.id, 'release', 'service', { target: t.holder, reason: 'closed' }); delete S.turns[r.id]; } addEvent(r.id, 'close', 'user'); status(`${r.name} closed`); }
+        if (what === 'delroom') { S.rooms = S.rooms.filter((x) => x.id !== r.id); S.events = S.events.filter((e) => e.room !== r.id); S.members = S.members.filter((m) => m.room !== r.id); S.room = S.rooms[0]?.id ?? null; S.member = null; status(`${r.name} deleted`); toast(`Room ${r.name} was deleted.`); }
+        if (what === 'svcstop') { stopPlay(); S.service = 'stopped'; status('chat service stopped'); }
+        if (what === 'freeturn') { const t = S.turns[r.id]; addEvent(r.id, 'release', 'service', { target: t.holder, reason: 'forced' }); delete S.turns[r.id]; status('write turn freed'); toast(`The write turn of ${mem(t.holder).name} is free.`); }
+      });
+    }
+  },
+  inst: (d) => { S.inst = d.id; S.folder = ''; S.session = null; }, folder: (d) => { S.folder = d.id; }, sess: (d) => { S.session = d.id; },
+  fold: (d) => { S.folded = S.folded.includes(d.id) ? S.folded.filter((x) => x !== d.id) : [...S.folded, d.id]; },
+};
+function run(name, el, ev) { const fn = ACT[name]; if (!fn) return; fn(el?.dataset ?? {}, el, ev); paint(); }
+
+document.addEventListener('click', (ev) => { const el = ev.target.closest('[data-act]'); if (el && !el.disabled) run(el.dataset.act, el, ev); });
+document.addEventListener('input', (ev) => {
+  const t = ev.target;
+  if (t.id === 'draft') { S.drafts[S.room] = t.value; if (busy.sendErr) { busy.sendErr = null; $('#draft-err').textContent = ''; t.setAttribute('aria-invalid', 'false'); } }
+  else if (t.id === 'msg-filter') { S.filter.text = t.value; paintStageBody(); }
+  else if (t.id === 'room-filter') { S.roomFilter = t.value; paintRooms(); }
+  else if (t.id === 's-filter') { S.sFilter = t.value; paintSessions(); const f = $('#s-filter'); f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+  else if (t.id === 'palette-input') { S.dialog.q = t.value; pIndex = 0; paintResults(); }
+  else if (t.id === 'join-name' || t.id === 'join-role') { S.drafts['join:' + S.room] = { name: $('#join-name').value, role: $('#join-role').value }; }
+  else if (t.dataset.f && S.dialog) { S.dialog[t.dataset.f] = t.value; if (S.dialog.type === 'launch') { const d = S.dialog; $('#launch-cmd').textContent = `mukade chat launch ${d.harness} --room ${room().name}${d.role !== 'peer' ? ' --role ' + d.role : ''} --listen ${d.listen || 0}`; } }
+  save();
+});
+document.addEventListener('keydown', (ev) => {
+  const t = ev.target, typing = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName), k = ev.key;
+  if ((ev.ctrlKey || ev.metaKey) && k.toLowerCase() === 'k') { ev.preventDefault(); if (S.dialog?.type !== 'palette') run('palette'); return; }
+  if (S.dialog) {
+    if (k === 'Escape' && !busy.dlg) { ev.preventDefault(); closeDialog(); return; }
+    if (S.dialog.type === 'palette' && (k === 'ArrowDown' || k === 'ArrowUp')) { ev.preventDefault(); pIndex += k === 'ArrowDown' ? 1 : -1; paintResults(); return; }
+    if (k === 'Enter' && t.tagName !== 'BUTTON' && t.tagName !== 'TEXTAREA') { ev.preventDefault(); if (S.dialog.type === 'palette') run('pgo', { dataset: { id: pIndex } }); else if (!busy.dlg) run('dlg-ok'); return; }
+    if (k === 'Tab') { const f = [...$('#dialog-host').querySelectorAll('button:not(:disabled), input, select')], i = f.indexOf(document.activeElement); ev.preventDefault(); f[(i + (ev.shiftKey ? -1 : 1) + f.length) % f.length]?.focus(); }
+    return;
+  }
+  if (t.id === 'draft' && k === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); if (!busy.send) run('send'); return; }
+  if (t.id === 'join-name' && k === 'Enter') { ev.preventDefault(); if (!busy.join) run('join'); return; }
+  if (typing) { if (k === 'Escape') t.blur(); return; }
+  if ((k === 'Enter' || k === ' ') && t.dataset?.act && t.tagName !== 'BUTTON') { ev.preventDefault(); run(t.dataset.act, t, ev); return; }
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (k === '/') { ev.preventDefault(); run('palette'); }
+  else if (k === 'c') run('view', { dataset: { id: S.view === 'chat' ? 'sessions' : 'chat' } });
+  else if (k === 'r') run('reload');
+  else if (S.view === 'chat' && S.service === 'running') {
+    if ('123'.includes(k)) run('cv', { dataset: { id: ['graph', 'lanes', 'feed'][k - 1] } });
+    else if (k === 'ArrowLeft') { ev.preventDefault(); run('prev'); } else if (k === 'ArrowRight') { ev.preventDefault(); run('next'); }
+    else if (k === ' ' && t.tagName !== 'BUTTON' && S.chatView === 'graph') { ev.preventDefault(); run('play'); }
+    else if (k === 'n') run('newroom'); else if (k === 'l' && room()?.open) run('launch');
+  }
+});
+
+/* self-check: the rules the prototype shows (run with ?selfcheck in the address) */
+if (location.search.includes('selfcheck')) {
+  const s = seed(), keep = S; S = s;
+  console.assert(instructions('r-hop').map((i) => i.state).join() === 'done,overdue', 'instruction states');
+  console.assert(NAME.test('codex-b') && !NAME.test('Codex') && ROOM.test('hop-review') && !ROOM.test('-x'), 'name rules');
+  console.assert(SECRET.test('key sk-abcdefghijklmnop1234') && !SECRET.test('ask-me'), 'secret rule');
+  console.assert(segments(s.events.find((e) => e.id === 7))[0].b === 'm1', 'a signal goes to the instruction author');
+  S = keep; console.log('selfcheck done');
+}
+addEventListener('resize', () => { if (S.view === 'chat' && S.service === 'running' && S.chatView === 'graph') paintStageBody(true); });
+paint();
+</script>
+</body>
+</html>

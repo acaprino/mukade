@@ -1,0 +1,852 @@
+//! The plan's own guarantees: what a destination must never receive (spec §7) and what the
+//! destination's offered set changes (tables §6, L11).
+
+mod support;
+
+use mukade::model::{
+    CanonicalTool, Entry, HarnessId, Kind, Meta, ResultContent, Session, StepEnd, ToolCall,
+    ToolResult,
+};
+use mukade::tools::{self, ToolSet};
+use mukade::writer::plan::{self, PlannedBlock, PlannedResult};
+use serde_json::json;
+
+fn session(entries: Vec<Entry>) -> Session {
+    Session {
+        meta: Meta {
+            harness: HarnessId::ClaudeCode,
+            harness_version: "2.1.311".into(),
+            id: "src".into(),
+            cwd: Some(support::cwd_for(HarnessId::ClaudeCode)),
+            title: None,
+            created: None,
+            updated: None,
+            models: vec![],
+            git_branch: None,
+            parent: None,
+            parent_kind: None,
+            source_path: None,
+            source_sha256: None,
+        },
+        entries,
+        branches: Vec::new(),
+    }
+}
+
+fn step(id: &str, calls: Vec<ToolCall>) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec![],
+            calls,
+            end: StepEnd::ToolUse,
+        },
+        raw: vec![],
+    }
+}
+
+fn results(id: &str, call_ids: &[&str]) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::Results {
+            results: call_ids
+                .iter()
+                .map(|c| ToolResult {
+                    call_id: (*c).to_string(),
+                    content: ResultContent::Text("out".into()),
+                    is_error: false,
+                    truncated_by_source: false,
+                })
+                .collect(),
+        },
+        raw: vec![],
+    }
+}
+
+fn read_call(id: &str) -> ToolCall {
+    ToolCall {
+        id: id.into(),
+        source_name: "Read".into(),
+        canonical: Some(CanonicalTool::Read),
+        input: json!({"file_path": "a.txt"}),
+    }
+}
+
+/// A structured result a destination flattens loses the blocks it has no shape for, and the
+/// manifest says so: a count with a matching loss line, never a silent drop.
+#[test]
+fn flattened_structured_results_are_counted_and_reported() {
+    let mut s = session(vec![step(
+        "e1",
+        vec![ToolCall {
+            id: "call-1".into(),
+            source_name: "Read".into(),
+            canonical: None,
+            input: json!({}),
+        }],
+    )]);
+    s.entries.push(Entry {
+        id: "e2".into(),
+        kind: Kind::Results {
+            results: vec![ToolResult {
+                call_id: "call-1".into(),
+                content: ResultContent::Blocks(vec![
+                    json!({"type": "text", "text": "kept"}),
+                    json!({"type": "image", "data": "not-text"}),
+                ]),
+                is_error: false,
+                truncated_by_source: false,
+            }],
+        },
+        raw: Vec::new(),
+    });
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-flattened-result");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(plan.counts.dropped_result_blocks, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses
+            .iter()
+            .any(|loss| loss.contains("structured tool-result blocks")),
+        "{losses:?}"
+    );
+}
+
+/// §7: a provider refuses a `tool_use` that the next message does not answer, so a call the source
+/// never answered is written as text — with its id — and counted.
+#[test]
+fn an_unanswered_call_travels_as_text_instead_of_as_a_tool_call() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-unanswered");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("c1"), read_call("c2")]),
+        results("e2", &["c1"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(plan.counts.unanswered_calls, 1);
+    match &plan.blocks[0] {
+        PlannedBlock::Step(step) => {
+            assert_eq!(
+                step.calls.len(),
+                1,
+                "only the answered call stays a tool call"
+            );
+            assert_eq!(step.calls[0].id, "c1");
+            assert_eq!(step.text.len(), 1);
+            assert!(
+                step.text[0].contains("id c2"),
+                "the text form names the call: {}",
+                step.text[0]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    match &plan.blocks[1] {
+        PlannedBlock::Results { results } => {
+            assert_eq!(
+                results,
+                &vec![PlannedResult::Native {
+                    call_id: "c1".into(),
+                    content: ResultContent::Text("out".into()),
+                    is_error: false
+                }]
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// §7: a result with no call anywhere is not written as a dangling tool result.
+#[test]
+fn an_orphan_result_is_dropped_and_counted() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-orphan");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("c1")]),
+        results("e2", &["c1", "ghost"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(plan.counts.dropped_orphan_results, 1);
+    match &plan.blocks[1] {
+        PlannedBlock::Results { results } => assert_eq!(results.len(), 1),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A result that arrives after a user turn must not be matched against the calls of an earlier
+/// step: the lists are cleared when a user turn or a compaction ends the pair.
+#[test]
+fn a_stray_result_after_a_user_turn_is_not_matched_to_an_earlier_step() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-stray");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("c1")]),
+        results("e2", &["c1"]),
+        Entry {
+            id: "e3".into(),
+            kind: Kind::User {
+                text: "hello".into(),
+                attachments: vec![],
+            },
+            raw: vec![],
+        },
+        results("e4", &["c1"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(
+        plan.counts.dropped_orphan_results, 1,
+        "the stray result has no call left to answer"
+    );
+    assert_eq!(
+        plan.blocks.len(),
+        3,
+        "step, results, user — the stray one is dropped"
+    );
+}
+
+/// Tables §6: the destination's offered set is per configuration, and a caller that knows it can
+/// widen it — here Pi with `find` enabled keeps a Glob call instead of losing it to text.
+#[test]
+fn the_destination_offered_set_decides_translation() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-offered");
+    let glob = ToolCall {
+        id: "c1".into(),
+        source_name: "Glob".into(),
+        canonical: Some(CanonicalTool::Glob),
+        input: json!({"pattern": "**/*.rs"}),
+    };
+    let s = session(vec![step("e1", vec![glob.clone()]), results("e2", &["c1"])]);
+
+    let pinned = plan::plan(&s, HarnessId::Pi, &support::opts(HarnessId::Pi, &scratch));
+    assert_eq!(
+        pinned.counts.tools_text_form, 1,
+        "Pi's pinned default set has no find"
+    );
+    assert_eq!(pinned.counts.tools_translated, 0);
+
+    let mut wide = support::opts(HarnessId::Pi, &scratch);
+    wide.offered = Some(ToolSet {
+        names: &["read", "bash", "edit", "write", "grep", "find", "ls"],
+    });
+    let widened = plan::plan(&s, HarnessId::Pi, &wide);
+    assert_eq!(widened.counts.tools_translated, 1);
+    assert_eq!(widened.counts.tools_text_form, 0);
+    match &widened.blocks[0] {
+        PlannedBlock::Step(step) => assert_eq!(step.calls[0].name, "find"),
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        !tools::offered(HarnessId::Pi).contains("find"),
+        "the pinned list is the bench's default set"
+    );
+    assert!(tools::offered(HarnessId::Pi).contains("read"));
+}
+
+/// §6.2 [V]: Pi reads a user message between tool results as the end of the tool flow, answers the
+/// later calls with `No result provided` and then sends their real results too, which the provider
+/// refuses. Native results come first, then the text that answers calls carried as text.
+#[test]
+fn native_results_come_before_the_text_that_answers_a_text_form_call() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-results-order");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let unknown = ToolCall {
+        id: "f1".into(),
+        source_name: "Frobnicate".into(),
+        canonical: None,
+        input: json!({}),
+    };
+    let s = session(vec![
+        step("e1", vec![read_call("r1"), unknown, read_call("r2")]),
+        results("e2", &["r1", "f1", "r2"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
+        panic!("{:?}", plan.blocks)
+    };
+    let order: Vec<&str> = results
+        .iter()
+        .map(|result| match result {
+            PlannedResult::Native { call_id, .. } => call_id.as_str(),
+            PlannedResult::Text(_) => "text",
+        })
+        .collect();
+    assert_eq!(order, ["r1", "r2", "text"]);
+}
+
+/// §7 A3: a call answered twice is refused by the provider. The first answer is kept; the rest are
+/// dropped and counted.
+#[test]
+fn a_second_result_for_the_same_call_is_dropped_and_counted() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-duplicate-result");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("c1")]),
+        results("e2", &["c1", "c1"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert_eq!(plan.counts.dropped_duplicate_results, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("duplicate")),
+        "{losses:?}"
+    );
+}
+
+fn reasoning_step(
+    id: &str,
+    protocol: mukade::model::Protocol,
+    signature: Option<&str>,
+    encrypted: Option<&str>,
+) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![mukade::model::Reasoning {
+                text: String::new(),
+                opaque: Some(mukade::model::Opaque {
+                    chat: None,
+                    protocol,
+                    model: Some("m".into()),
+                    signature: signature.map(str::to_owned),
+                    encrypted: encrypted.map(str::to_owned),
+                }),
+            }],
+            text: vec!["done".into()],
+            calls: vec![],
+            end: StepEnd::Completed,
+        },
+        raw: vec![],
+    }
+}
+
+/// A4: Claude's `redacted_thinking` carries its payload in `data`, not in a signature. Written back
+/// as `thinking` with a null signature it is refused and the payload is gone.
+#[test]
+fn redacted_thinking_is_written_back_as_redacted_thinking() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-redacted-thinking");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![reasoning_step(
+        "e1",
+        mukade::model::Protocol::AnthropicMessages,
+        None,
+        Some("REDACTED-PAYLOAD"),
+    )]);
+    let written = mukade::writer::for_harness(HarnessId::ClaudeCode)
+        .write(&s, &opts)
+        .unwrap();
+    let rows: Vec<serde_json::Value> = std::fs::read_to_string(&written.location)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let blocks: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter_map(|row| {
+            row.pointer("/message/content")
+                .and_then(serde_json::Value::as_array)
+        })
+        .flatten()
+        .collect();
+    assert!(
+        blocks
+            .iter()
+            .any(|b| b["type"] == "redacted_thinking" && b["data"] == "REDACTED-PAYLOAD"),
+        "{blocks:?}"
+    );
+    assert!(
+        !blocks.iter().any(|b| b["type"] == "thinking"),
+        "{blocks:?}"
+    );
+}
+
+/// A4: Pi replays thinking from its signature. Reasoning that has only an encrypted payload cannot
+/// be written there, so it is dropped and counted instead of travelling as an unsigned block.
+#[test]
+fn reasoning_with_only_an_encrypted_payload_is_dropped_for_pi() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-encrypted-to-pi");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.dest_protocol = Some(mukade::model::Protocol::OpenaiResponses);
+    let s = session(vec![reasoning_step(
+        "e1",
+        mukade::model::Protocol::OpenaiResponses,
+        None,
+        Some("gAAAA-ENCRYPTED"),
+    )]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.reasoning_dropped, 1);
+    let Some(PlannedBlock::Step(step)) = plan.blocks.first() else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert!(
+        !step
+            .reasoning
+            .iter()
+            .any(|r| matches!(r, mukade::policy::ReasoningPlan::Native(_))),
+        "{:?}",
+        step.reasoning
+    );
+}
+
+/// Every reasoning block a plan does not carry natively is accounted for with its reason, and one
+/// written as text is counted too: the live run of 2026-10-28 found a block dropped toward Pi
+/// under "foreign provider" when the destination's protocol was simply not named, and `as_text`
+/// leaving no trace in the manifest.
+#[test]
+fn reasoning_not_carried_natively_is_counted_with_its_reason() {
+    use mukade::manifest::Manifest;
+    use mukade::model::Protocol;
+    use mukade::policy::{ReasoningDrop, ReasoningPolicy};
+    let scratch = support::scratch(HarnessId::Pi, "plan-reasoning-why");
+    let plan_of = |entry: Entry, dest_protocol: Option<Protocol>, policy| {
+        let mut opts = support::opts(HarnessId::Pi, &scratch);
+        opts.dest_protocol = dest_protocol;
+        opts.reasoning = policy;
+        plan::plan(&session(vec![entry]), HarnessId::Pi, &opts)
+    };
+    let signed = || reasoning_step("r", Protocol::AnthropicMessages, Some("SIG"), None);
+    let with_text = |mut entry: Entry| {
+        if let Kind::Step { reasoning, .. } = &mut entry.kind {
+            reasoning[0].text = "17 times 23".into();
+        }
+        entry
+    };
+    let cases = [
+        (
+            plan_of(signed(), None, ReasoningPolicy::DropForeign),
+            ReasoningDrop::UnknownProtocol,
+        ),
+        (
+            plan_of(
+                signed(),
+                Some(Protocol::OpenaiResponses),
+                ReasoningPolicy::DropForeign,
+            ),
+            ReasoningDrop::ForeignProtocol,
+        ),
+        (
+            plan_of(
+                reasoning_step("r", Protocol::AnthropicMessages, None, None),
+                Some(Protocol::AnthropicMessages),
+                ReasoningPolicy::DropForeign,
+            ),
+            ReasoningDrop::NoPayload,
+        ),
+        (
+            plan_of(
+                reasoning_step("r", Protocol::OpenaiResponses, None, Some("gAAAA")),
+                Some(Protocol::OpenaiResponses),
+                ReasoningPolicy::DropForeign,
+            ),
+            ReasoningDrop::NoPlaceInFormat,
+        ),
+        (
+            plan_of(signed(), None, ReasoningPolicy::Drop),
+            ReasoningDrop::Requested,
+        ),
+        (
+            plan_of(signed(), None, ReasoningPolicy::AsText),
+            ReasoningDrop::NoVisibleText,
+        ),
+    ];
+    for (plan, why) in cases {
+        assert_eq!(plan.counts.reasoning_dropped, 1, "{why:?}");
+        assert_eq!(plan.counts.reasoning_dropped_why, [(why, 1)]);
+        let losses = Manifest::losses_for(&plan.counts, false, false);
+        assert!(
+            losses.iter().any(|l| l.contains(why.describe())),
+            "{why:?}: {losses:?}"
+        );
+    }
+
+    let as_text = plan_of(with_text(signed()), None, ReasoningPolicy::AsText);
+    assert_eq!(as_text.counts.reasoning_dropped, 0);
+    assert_eq!(as_text.counts.reasoning_as_text, 1);
+    let losses = Manifest::losses_for(&as_text.counts, false, false);
+    assert!(
+        losses.iter().any(|l| l.contains("as labelled text")),
+        "{losses:?}"
+    );
+
+    let kept = plan_of(
+        signed(),
+        Some(Protocol::AnthropicMessages),
+        ReasoningPolicy::DropForeign,
+    );
+    assert_eq!(kept.counts.reasoning_dropped, 0);
+    assert_eq!(kept.counts.reasoning_as_text, 0);
+    assert!(Manifest::losses_for(&kept.counts, false, false).is_empty());
+}
+
+/// Anthropic refuses a tool-call id outside `^[a-zA-Z0-9_-]+$`; Pi on `openai-responses` records
+/// ids such as `call_x|fc_y`. The id is rewritten the same way for the call and its result, and
+/// counted.
+#[test]
+fn a_call_id_anthropic_refuses_is_rewritten_for_call_and_result() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-call-id");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("call_x|fc_y")]),
+        results("e2", &["call_x|fc_y"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    let (Some(PlannedBlock::Step(step)), Some(PlannedBlock::Results { results })) =
+        (plan.blocks.first(), plan.blocks.get(1))
+    else {
+        panic!("{:?}", plan.blocks)
+    };
+    let id = &step.calls[0].id;
+    assert!(
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+        "{id}"
+    );
+    let PlannedResult::Native { call_id, .. } = &results[0] else {
+        panic!("{results:?}")
+    };
+    assert_eq!(call_id, id);
+    assert_eq!(plan.counts.rewritten_call_ids, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("ids rewritten")),
+        "{losses:?}"
+    );
+}
+
+/// No loss is silent: the records of an abandoned branch (a rewind, an edited prompt) stay in the
+/// source and are not written, and the manifest says so.
+#[test]
+fn records_of_an_abandoned_branch_are_counted() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-off-branch");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let off = Entry {
+        id: "old".into(),
+        kind: Kind::Meta {
+            kind: mukade::model::MetaKind::OffBranch,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![off.clone(), off, step("e1", vec![])]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.dropped_off_branch, 2);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("abandoned branch")),
+        "{losses:?}"
+    );
+}
+
+/// No loss is silent: a last line the source never finished writing is not read, and the manifest
+/// says so.
+#[test]
+fn an_unfinished_last_line_is_counted() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-unfinished");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let cut = Entry {
+        id: "unfinished".into(),
+        kind: Kind::Meta {
+            kind: mukade::model::MetaKind::Unfinished,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![step("e1", vec![]), cut]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.dropped_unfinished_lines, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("unfinished")),
+        "{losses:?}"
+    );
+}
+
+/// A step's results may come in more than one group (a document with one result per message, an
+/// internal row between them): they answer the same step and travel as one.
+#[test]
+fn results_split_over_two_groups_answer_the_same_step() {
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-split-results");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let s = session(vec![
+        step("e1", vec![read_call("a"), read_call("b")]),
+        results("e2", &["a"]),
+        results("e3", &["b"]),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    assert_eq!(plan.blocks.len(), 2, "{:?}", plan.blocks);
+    let Some(PlannedBlock::Results { results }) = plan.blocks.get(1) else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert_eq!(results.len(), 2);
+    assert_eq!(plan.counts.dropped_orphan_results, 0);
+    assert_eq!(plan.counts.unanswered_calls, 0);
+}
+
+/// The counts say what was written: a call moved to text because nothing answered it is not
+/// counted as translated, and the source's own record of it is what the text shows.
+#[test]
+fn an_unanswered_call_is_counted_once_and_shown_as_the_source_made_it() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-unanswered-label");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let s = session(vec![step("e1", vec![read_call("c1")])]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.tools_translated, 0);
+    assert_eq!(plan.counts.unanswered_calls, 1);
+    let Some(PlannedBlock::Step(step)) = plan.blocks.first() else {
+        panic!("{:?}", plan.blocks)
+    };
+    let text = step.text.join("\n");
+    assert!(
+        text.contains("Read") && text.contains("file_path"),
+        "{text}"
+    );
+    assert!(!text.contains("not available in"), "{text}");
+}
+
+/// A source message stays a source message in the count, whatever the plan does with it.
+#[test]
+fn a_group_of_orphan_results_still_counts_as_a_source_message() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-orphan-count");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let s = session(vec![step("e1", vec![]), results("e2", &["ghost"])]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(plan.counts.messages_in, 2);
+    assert_eq!(plan.counts.dropped_orphan_results, 1);
+}
+
+/// Reasoning kept as text comes before the answer it led to, as it did in the source.
+#[test]
+fn reasoning_as_text_comes_before_the_answer() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-reasoning-order");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.reasoning = mukade::policy::ReasoningPolicy::AsText;
+    let s = session(vec![Entry {
+        id: "e1".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![mukade::model::Reasoning {
+                text: "THINKING".into(),
+                opaque: None,
+            }],
+            text: vec!["ANSWER".into()],
+            calls: vec![],
+            end: StepEnd::Completed,
+        },
+        raw: vec![],
+    }]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    let Some(PlannedBlock::Step(step)) = plan.blocks.first() else {
+        panic!("{:?}", plan.blocks)
+    };
+    assert!(step.text[0].contains("THINKING"), "{:?}", step.text);
+    assert_eq!(step.text[1], "ANSWER");
+}
+
+/// No loss is silent: outside Pi, which keeps a step's end, an aborted or failed step is written
+/// as an ordinary reply, and the manifest says so.
+#[test]
+fn an_aborted_step_written_as_a_reply_is_counted() {
+    let aborted = Entry {
+        id: "e1".into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec!["PARTIAL".into()],
+            calls: vec![],
+            end: StepEnd::Aborted,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![aborted]);
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-aborted");
+    let plan = plan::plan(
+        &s,
+        HarnessId::ClaudeCode,
+        &support::opts(HarnessId::ClaudeCode, &scratch),
+    );
+    assert_eq!(plan.counts.aborted_steps_as_replies, 1);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("aborted")),
+        "{losses:?}"
+    );
+    let scratch = support::scratch(HarnessId::Pi, "plan-aborted");
+    let plan = plan::plan(&s, HarnessId::Pi, &support::opts(HarnessId::Pi, &scratch));
+    assert_eq!(
+        plan.counts.aborted_steps_as_replies, 0,
+        "Pi keeps the step's end"
+    );
+}
+
+/// A compaction whose summary has no readable text (Codex 0.165 keeps it encrypted) is not
+/// written as an empty user message, which a provider may refuse: it is left out and counted.
+#[test]
+fn a_compaction_with_no_readable_summary_is_left_out_and_counted() {
+    use mukade::manifest::Manifest;
+    let scratch = support::scratch(HarnessId::ClaudeCode, "plan-empty-summary");
+    let opts = support::opts(HarnessId::ClaudeCode, &scratch);
+    let user = |id: &str, text: &str| Entry {
+        id: id.into(),
+        kind: Kind::User {
+            text: text.into(),
+            attachments: Vec::new(),
+        },
+        raw: vec![],
+    };
+    let compaction = |id: &str, summary: &str| Entry {
+        id: id.into(),
+        kind: Kind::Compaction {
+            summary: summary.into(),
+            trigger: mukade::model::Trigger::Unknown,
+            tokens_before: None,
+            kept_from: None,
+        },
+        raw: vec![],
+    };
+    let s = session(vec![
+        user("u1", "before"),
+        compaction("c1", ""),
+        compaction("c2", "  \n"),
+        compaction("c3", "a real summary"),
+        user("u2", "after"),
+    ]);
+    let plan = plan::plan(&s, HarnessId::ClaudeCode, &opts);
+    let summaries: Vec<&str> = plan
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            PlannedBlock::Compaction { summary } => Some(summary.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(summaries, ["a real summary"]);
+    assert_eq!(plan.counts.dropped_unreadable_summaries, 2);
+    let losses = Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|l| l.contains("no readable text")),
+        "{losses:?}"
+    );
+}
+
+fn prompt(id: &str, text: &str) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::User {
+            text: text.into(),
+            attachments: Vec::new(),
+        },
+        raw: vec![],
+    }
+}
+
+fn reply(id: &str, text: &str, end: StepEnd) -> Entry {
+    Entry {
+        id: id.into(),
+        kind: Kind::Step {
+            model: None,
+            reasoning: vec![],
+            text: vec![text.into()],
+            calls: vec![],
+            end,
+        },
+        raw: vec![],
+    }
+}
+
+/// What the plan carries, one word per block, with the text of prompts and replies.
+fn carried(plan: &plan::Plan) -> Vec<String> {
+    plan.blocks
+        .iter()
+        .map(|block| match block {
+            PlannedBlock::User { text, .. } => format!("user:{text}"),
+            PlannedBlock::Step(step) => format!("step:{}", step.text.join("|")),
+            PlannedBlock::Results { .. } => "results".to_string(),
+            PlannedBlock::Compaction { .. } => "compaction".to_string(),
+        })
+        .collect()
+}
+
+/// A turn that used a tool and was then interrupted, between two turns that finished.
+fn session_with_an_interrupted_turn() -> Session {
+    session(vec![
+        prompt("u1", "FIRST"),
+        reply("a1", "DONE-1", StepEnd::Completed),
+        prompt("u2", "SECOND"),
+        step("a2", vec![read_call("toolu_1")]),
+        results("r2", &["toolu_1"]),
+        reply("a3", "PARTIAL", StepEnd::Aborted),
+        prompt("u3", "THIRD"),
+        reply("a4", "DONE-3", StepEnd::Completed),
+    ])
+}
+
+/// `--interrupted drop`: what the agent did in a turn it never finished is left out, calls and
+/// results included. The prompt is the user's and complete, so it stays; finished turns are whole.
+#[test]
+fn drop_leaves_out_the_work_of_an_interrupted_turn_and_keeps_its_prompt() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-interrupted-drop");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.interrupted = mukade::writer::Interrupted::Drop;
+    let plan = plan::plan(&session_with_an_interrupted_turn(), HarnessId::Pi, &opts);
+    assert_eq!(
+        carried(&plan),
+        [
+            "user:FIRST",
+            "step:DONE-1",
+            "user:SECOND",
+            "user:THIRD",
+            "step:DONE-3"
+        ]
+    );
+    assert_eq!(plan.counts.dropped_interrupted_steps, 2);
+    let losses = mukade::manifest::Manifest::losses_for(&plan.counts, false, false);
+    assert!(
+        losses.iter().any(|loss| loss.contains("interrupted turns")),
+        "{losses:?}"
+    );
+}
+
+/// The default keeps everything: an interrupted turn travels with what it holds.
+#[test]
+fn by_default_the_work_of_an_interrupted_turn_travels() {
+    let scratch = support::scratch(HarnessId::Pi, "plan-interrupted-keep");
+    let opts = support::opts(HarnessId::Pi, &scratch);
+    let plan = plan::plan(&session_with_an_interrupted_turn(), HarnessId::Pi, &opts);
+    assert_eq!(plan.blocks.len(), 8, "{:?}", carried(&plan));
+    assert!(carried(&plan).contains(&"step:PARTIAL".to_string()));
+    assert_eq!(plan.counts.dropped_interrupted_steps, 0);
+}
+
+/// An interruption after a tool answered leaves no aborted step, only the source's marker: the
+/// turn is interrupted all the same.
+#[test]
+fn drop_takes_a_turn_whose_only_sign_is_the_abort_marker() {
+    use mukade::model::MetaKind;
+    let scratch = support::scratch(HarnessId::Pi, "plan-interrupted-marker");
+    let mut opts = support::opts(HarnessId::Pi, &scratch);
+    opts.interrupted = mukade::writer::Interrupted::Drop;
+    let s = session(vec![
+        prompt("u1", "FIRST"),
+        step("a1", vec![read_call("toolu_1")]),
+        results("r1", &["toolu_1"]),
+        Entry {
+            id: "x1".into(),
+            kind: Kind::Meta {
+                kind: MetaKind::TurnAborted,
+            },
+            raw: vec![],
+        },
+        prompt("u2", "SECOND"),
+        reply("a2", "DONE-2", StepEnd::Completed),
+    ]);
+    let plan = plan::plan(&s, HarnessId::Pi, &opts);
+    assert_eq!(carried(&plan), ["user:FIRST", "user:SECOND", "step:DONE-2"]);
+    assert_eq!(plan.counts.dropped_interrupted_steps, 1);
+}
