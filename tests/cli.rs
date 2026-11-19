@@ -1607,6 +1607,7 @@ fn harness_inventory_uses_standard_store_roots_when_the_variables_are_unset() {
         .env("APPDATA", &isolated)
         .env("LOCALAPPDATA", &isolated)
         .env("XDG_DATA_HOME", &xdg_data)
+        .env_remove("XDG_CONFIG_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
         .env_remove("OPENCODE_DB")
@@ -1624,12 +1625,17 @@ fn harness_inventory_uses_standard_store_roots_when_the_variables_are_unset() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    for (harness, expected_root) in [
-        ("claude_code", home.join(".claude")),
-        ("codex", home.join(".codex")),
-        ("opencode", db_path),
-        ("pi", home.join(".pi").join("agent")),
+    for (harness, expected_root, expected_config) in [
+        ("claude_code", home.join(".claude"), home.join(".claude")),
+        ("codex", home.join(".codex"), home.join(".codex")),
+        ("opencode", db_path, home.join(".config").join("opencode")),
+        (
+            "pi",
+            home.join(".pi").join("agent"),
+            home.join(".pi").join("agent"),
+        ),
     ] {
+        let config = format!("config:   {}", expected_config.display());
         let section = stdout
             .split(&format!("\n{harness} ("))
             .nth(1)
@@ -1642,6 +1648,7 @@ fn harness_inventory_uses_standard_store_roots_when_the_variables_are_unset() {
             "expected {} in {section}",
             expected_root.display()
         );
+        assert!(section.contains(&config), "expected {config} in {section}");
     }
 }
 

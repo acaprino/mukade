@@ -329,6 +329,7 @@ fn each_harness_names_its_own_file_and_tables() {
         app_data: None,
         local_app_data: None,
         xdg_data_home: None,
+        xdg_config_home: None,
     };
     // The harnesses' own variables would move these files: this test reads the defaults.
     for name in [
