@@ -15,6 +15,7 @@ Its step numbers are in brackets below.
 | The Smooth look ([desktop guide](docs/desktop.md)) | one look | Smooth by default, dark and light following the system; Oni, the first look, in Settings |
 | Hop options in the window | destination, compaction (none, portable, summary), subagents, branches, reasoning, shell, prompt | also native compaction, the summary's intent, model and kept turns, the destination's model and provider, unfinished turns, without tools |
 | The terminal browser | `mukade-tui.exe` beside the app | removed: the desktop app is the interface, the command line stays |
+| Chat in the window ([design](docs/superpowers/specs/2026-11-16-desktop-chat-redesign-design.md), layer A) | read only: a flat list of one room | graph, lanes and feed of the same events, a replay, one filter, members and instructions; the window joins as the host's member and writes, opens, closes, reopens and deletes rooms, starts and stops the service, launches agents; search everything; a session's rooms. Not tried against the real service yet **[U]** |
 
 ## ✅ Done from 2026-11-13 to 2026-11-16
 

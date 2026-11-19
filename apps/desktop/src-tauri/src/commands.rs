@@ -304,6 +304,34 @@ pub async fn chat_ledger(
     .await
 }
 
+/// A write in a room (`chat::WRITES`), passed through to the service; `args` carry the
+/// window's own request id, so a repeated click or a lost answer cannot write twice.
+#[tauri::command]
+pub async fn chat_write(operation: String, args: Value) -> CmdResult<Value> {
+    chat::write(&operation, args).await
+}
+
+#[tauri::command]
+pub async fn chat_start() -> CmdResult<Value> {
+    blocking(|| tauri::async_runtime::block_on(chat::start())).await
+}
+
+#[tauri::command]
+pub async fn chat_stop() -> CmdResult<Value> {
+    blocking(|| tauri::async_runtime::block_on(chat::stop())).await
+}
+
+#[tauri::command]
+pub async fn chat_launch(
+    harness: String,
+    room: String,
+    role: String,
+    listen: u64,
+    cwd: Option<String>,
+) -> CmdResult<Vec<String>> {
+    blocking(move || chat::launch(&harness, &room, &role, listen, cwd.as_deref())).await
+}
+
 /// The window asked to close while a hop or import ran, and the person confirmed.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {

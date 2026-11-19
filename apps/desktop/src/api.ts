@@ -51,6 +51,14 @@ export const api = {
   chatMembers: (roomId: string) => invoke<Page<Member>>('chat_members', { roomId }),
   chatLedger: (roomId: string, opts: { cursor?: string; since?: string; text?: string } = {}) =>
     invoke<Page<ChatEvent>>('chat_ledger', { roomId, ...opts }),
+  /** One write as the room's host: open, close, reopen, delete, join, rejoin, leave, send. `args`
+   *  are the service's own, `request_id` included. */
+  chatWrite: <T = Record<string, unknown>>(operation: string, args: Record<string, unknown>) => invoke<T>('chat_write', { operation, args }),
+  chatStart: () => invoke<unknown>('chat_start'),
+  chatStop: () => invoke<unknown>('chat_stop'),
+  /** Run an agent in a room in a new terminal; answers the command it runs. */
+  chatLaunch: (harness: string, room: string, role: string, listen: number, cwd?: string) =>
+    invoke<string[]>('chat_launch', { harness, room, role, listen, cwd }),
   quit: () => invoke<void>('quit'),
 };
 

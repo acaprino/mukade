@@ -52,6 +52,10 @@ fn main() {
             commands::chat_rooms,
             commands::chat_members,
             commands::chat_ledger,
+            commands::chat_write,
+            commands::chat_start,
+            commands::chat_stop,
+            commands::chat_launch,
             commands::quit,
         ])
         .run(tauri::generate_context!())

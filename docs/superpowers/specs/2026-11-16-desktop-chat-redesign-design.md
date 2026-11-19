@@ -1,6 +1,16 @@
 # Mukade desktop: the chat view redrawn, with controls and search
 
-Date: 2026-11-16. Status: design; nothing here is implemented.
+Date: 2026-11-16. Status: layer A implemented on 2026-11-19 (`apps/desktop/src/chat.ts`, `chatviews.ts`,
+`chatmodel.ts`, `search.ts`, `chatindex.ts`; `src-tauri/src/chat.rs` for the writes, the service and
+launches); layer B is not. Where the build differs from this text:
+
+- The window's member is the host's (`join … host: true`, with the host credential): what it sends
+  reaches the agents as the user's ([usage](../../usage.md#the-host)). The host came after this design.
+- `←` `→` keep moving between columns, as in the sessions view; `↑` `↓` step the events of the room.
+- The toolbar's field stays the sessions filter; Search everything is `ctrl+K` and a toolbar button.
+- A plate's harness mark is the harness's logo where the window has one, else a plain mark.
+
+The design as written:
 It changes the chat view of [the desktop window](2026-11-12-desktop-design.md) and replaces two of
 its statements: that the chat view is read only, and that chat writes are out of scope.
 Prototype: [`docs/mockups/desktop-chat.html`](../../mockups/desktop-chat.html), one file, opened in

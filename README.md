@@ -87,7 +87,7 @@ Use `--children` to include supported subagent sessions, `--interrupted drop` to
 
 ## Desktop app
 
-`mukade-ui.exe` browses every installation's sessions and reads them, then hops, exports, imports or resumes them in a terminal, and shows the chat rooms. Use `--scan <directory>` to discover additional installations. [Desktop guide](docs/desktop.md)
+`mukade-ui.exe` browses every installation's sessions and reads them, then hops, exports, imports or resumes them in a terminal, and runs the chat rooms: who wrote to whom, writing as you, launching agents. Use `--scan <directory>` to discover additional installations. [Desktop guide](docs/desktop.md)
 
 ## Local MCP chat
 

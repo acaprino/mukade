@@ -85,33 +85,153 @@ const receipt = (args: { dest: string }): Receipt => ({
   reply: 'Picking up where the Claude Code session stopped: the child lines still have to appear in the hop result. I will start from the receipt view model.',
 });
 
-const rooms: Room[] = [
-  { room_id: 'r-hop', name: 'hop-review', opened_at: ago(40), closed_at: null, opened_by: 'claude-a', kept: true, members: 3, events: 9, last_activity: ago(1), revision: '9' },
-  { room_id: 'r-spec', name: 'desktop-spec', opened_at: ago(300), closed_at: null, opened_by: 'claude-a', kept: true, members: 2, events: 41, last_activity: ago(60), revision: '41' },
-  { room_id: 'r-codex', name: 'codex-code-mode', opened_at: ago(3000), closed_at: ago(2900), opened_by: 'codex-b', kept: true, members: 2, events: 9, last_activity: ago(2900), revision: '9' },
+// The chat service, kept in memory: what the window writes (open, join, send…) changes it, as the
+// running service would, so every flow can be driven on `npm run dev` and in the smoke test.
+let chatRunning = true;
+const chatRooms: Room[] = [
+  { room_id: 'r-hop', name: 'hop-review', opened_at: ago(40), closed_at: null, opened_by: 'claude-a', kept: true, members: 0, events: 0, last_activity: null, revision: '0' },
+  { room_id: 'r-spec', name: 'desktop-spec', opened_at: ago(300), closed_at: null, opened_by: 'claude-a', kept: true, members: 0, events: 0, last_activity: null, revision: '0' },
+  { room_id: 'r-codex', name: 'codex-code-mode', opened_at: ago(3000), closed_at: ago(2900), opened_by: 'codex-b', kept: true, members: 0, events: 0, last_activity: null, revision: '0' },
 ];
+const member = (room_id: string, member_id: string, name: string, harness: string, role: string, joined: number, session: Member['session'] = null): Member =>
+  ({ room_id, member_id, name, harness, role, joined_at: ago(joined), left_at: null, last_command_at: ago(Math.max(joined - 30, 1)), session });
+const chatMembers: Member[] = [
+  member('r-hop', 'm1', 'claude-a', 'claude_code', 'lead', 40, { harness: 'claude_code', id: main, cwd: project }),
+  member('r-hop', 'm2', 'codex-b', 'codex', 'worker', 38, { harness: 'codex', id: '0199a7c2-4e1b-7d30-b6f4-2c8e5a90d113', cwd: project }),
+  member('r-hop', 'm3', 'opencode-c', 'opencode', 'peer', 30),
+  member('r-hop', 'm4', 'pi-d', 'pi', 'observer', 20),
+  member('r-spec', 'm5', 'claude-a', 'claude_code', 'peer', 300, { harness: 'claude_code', id: main, cwd: project }),
+  member('r-spec', 'm6', 'codex-b', 'codex', 'peer', 290),
+  member('r-codex', 'm7', 'codex-b', 'codex', 'peer', 3000),
+];
+const actor = (one: Member) => ({ type: 'member' as const, member_id: one.member_id, name: one.name, role: one.role });
+const byId = (id: string) => chatMembers.find((one) => one.member_id === id)!;
+let lastEvent = 0;
+const event = (room_id: string, who: string | null, minutes: number, kind: string, payload: Record<string, unknown> = {}, recipient_ids: string[] = []): ChatEvent =>
+  ({ room_id, event_id: String(++lastEvent), timestamp: ago(minutes), actor: who ? actor(byId(who)) : { type: 'local_admin' }, kind, payload, recipient_ids });
+const say = (room_id: string, who: string, minutes: number, text: string, to: string[] = []): ChatEvent =>
+  event(room_id, who, minutes, 'message', { text, recipients: to, mentions: to, historical_mentions: [] });
+const chatEvents: ChatEvent[] = [
+  event('r-hop', 'm1', 40, 'open', { name: 'hop-review' }),
+  event('r-hop', 'm2', 38, 'join', { harness: 'codex', role: 'worker' }),
+  event('r-hop', 'm3', 30, 'join', { harness: 'opencode', role: 'peer' }),
+  say('r-hop', 'm1', 14, 'The hop wrote three Codex threads. @codex-b open 0199a7c2 and check that both subagent threads name it as their parent.', ['codex-b']),
+  event('r-hop', 'm4', 12, 'join', { harness: 'pi', role: 'observer' }),
+  event('r-hop', 'm4', 11, 'observe', {}, ['m2']),
+  event('r-hop', 'm2', 9, 'signal', { instruction_event_id: '4', signal: 'done', reason: null }, ['m1']),
+  say('r-hop', 'm3', 8, 'Both name it. The Explore thread keeps its agent type; the Plan thread lost its title and shows the first user line instead.'),
+  say('r-hop', 'm1', 6, 'That is a loss the receipt should list. @opencode-c does the same happen on your side?', ['opencode-c']),
+  say('r-hop', 'm1', 4, '@codex-b list the Plan thread’s lost title as a loss in the receipt, with the subagent id.', ['codex-b']),
+  say('r-hop', 'm3', 1, 'No. OpenCode keeps the title of a child session, so nothing to list there.'),
+  event('r-spec', 'm5', 300, 'open', { name: 'desktop-spec' }),
+  event('r-spec', 'm6', 290, 'join', { harness: 'codex', role: 'peer' }),
+  say('r-spec', 'm5', 70, 'The chat view gets three views of the same events: graph, lanes and feed.'),
+  say('r-spec', 'm6', 60, 'Then the selection must be one per room, shared by the three.', ['claude-a']),
+  event('r-codex', 'm7', 3000, 'open', { name: 'codex-code-mode' }),
+  say('r-codex', 'm7', 2950, 'Code mode reads as tool calls; nothing to add.'),
+  event('r-codex', null, 2900, 'close'),
+];
+/** A room as the service lists it: its counts and revision from what it holds now. */
+function roomNow(room: Room): Room {
+  const events = chatEvents.filter((one) => one.room_id === room.room_id);
+  return { ...room, members: chatMembers.filter((one) => one.room_id === room.room_id && one.left_at === null).length, events: events.length,
+    last_activity: events.at(-1)?.timestamp ?? room.opened_at, revision: events.at(-1)?.event_id ?? '0' };
+}
+const handles = new Map<string, string>();
+const replies = new Map<string, unknown>();
+const uuid = () => crypto.getRandomValues(new Uint32Array(4)).reduce((text, part) => text + part.toString(16).padStart(8, '0'), '').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+const stamp = () => new Date().toISOString();
 
-const members: Member[] = [
-  { room_id: 'r-hop', member_id: 'm1', name: 'claude-a', harness: 'claude_code', role: 'lead', joined_at: ago(40), left_at: null, last_command_at: ago(2), session: { harness: 'claude_code', id: main, cwd: project } },
-  { room_id: 'r-hop', member_id: 'm2', name: 'codex-b', harness: 'codex', role: 'peer', joined_at: ago(38), left_at: null, last_command_at: ago(3), session: { harness: 'codex', id: '0199a7c2-4e1b-7d30-b6f4-2c8e5a90d113', cwd: project } },
-  { room_id: 'r-hop', member_id: 'm3', name: 'opencode-c', harness: 'opencode', role: 'observer', joined_at: ago(30), left_at: null, last_command_at: ago(1), session: null },
-];
-
-const actor = (member: Member) => ({ type: 'member' as const, member_id: member.member_id, name: member.name, role: member.role });
-const message = (id: number, member: Member, minutes: number, text: string, to: string[] = [], mentions: string[] = []): ChatEvent => ({
-  room_id: 'r-hop', event_id: String(id), timestamp: ago(minutes), actor: actor(member), kind: 'message',
-  payload: { text, recipients: to, mentions, historical_mentions: [] }, recipient_ids: [],
-});
-const ledger: ChatEvent[] = [
-  { room_id: 'r-hop', event_id: '1', timestamp: ago(40), actor: actor(members[0]), kind: 'open', payload: { name: 'hop-review' }, recipient_ids: [] },
-  { room_id: 'r-hop', event_id: '2', timestamp: ago(38), actor: actor(members[1]), kind: 'join', payload: { harness: 'codex', role: 'peer' }, recipient_ids: [] },
-  message(3, members[0], 12, 'The hop wrote three Codex threads. @codex-b open 0199a7c2 and check that both subagent threads name it as their parent.', ['codex-b'], ['codex-b']),
-  { room_id: 'r-hop', event_id: '4', timestamp: ago(11), actor: actor(members[1]), kind: 'observe', payload: {}, recipient_ids: ['m1'] },
-  message(5, members[1], 9, 'Both name it. The Explore thread keeps its agent type; the Plan thread lost its title and shows the first user line instead.'),
-  message(6, members[0], 8, 'That is a loss the receipt should list. @opencode-c does the same happen on your side?', ['opencode-c'], ['opencode-c']),
-  { room_id: 'r-hop', event_id: '7', timestamp: ago(7), actor: actor(members[1]), kind: 'signal', payload: { instruction_event_id: '3', signal: 'done', reason: null }, recipient_ids: ['m1'] },
-  message(8, members[2], 1, 'No. OpenCode keeps the title of a child session, so nothing to list there.'),
-];
+function chatWrite(operation: string, a: Record<string, unknown>): unknown {
+  const fail = (code: string, message: string): never => { throw { kind: 'failed', message: `${code}: ${message}` }; };
+  const request = String(a.request_id ?? '');
+  if (replies.has(request)) return replies.get(request);
+  const room = chatRooms.find((one) => one.room_id === a.room_id);
+  const needRoom = (): Room => room ?? fail('room_not_found', 'No room has that ID');
+  const writer = (): Member => chatMembers.find((one) => one.member_id === handles.get(String(a.member_handle)) && one.left_at === null)
+    ?? fail('stale_member', 'The member handle is not active; recover the member with rejoin');
+  const push = (room_id: string, who: Member | null, kind: string, payload: Record<string, unknown> = {}, recipient_ids: string[] = []) => {
+    const added: ChatEvent = { room_id, event_id: String(++lastEvent), timestamp: stamp(), actor: who ? { ...actor(who), host: who.host } : { type: 'local_admin' }, kind, payload, recipient_ids };
+    chatEvents.push(added);
+    return added;
+  };
+  let reply: unknown;
+  switch (operation) {
+    case 'open': {
+      const name = String(a.name ?? '');
+      if (chatRooms.some((one) => one.name === name && one.closed_at === null)) fail('room_exists', `An open room is named ${name}`);
+      const room_id = `r-${uuid().slice(0, 8)}`;
+      chatRooms.push({ room_id, name, opened_at: stamp(), closed_at: null, opened_by: null, kept: true, members: 0, events: 0, last_activity: null, revision: '0' });
+      push(room_id, null, 'open', { name });
+      reply = { room_id };
+      break;
+    }
+    case 'close': case 'reopen': {
+      const target = needRoom();
+      if ((operation === 'close') === (target.closed_at !== null)) fail('room_state', operation === 'close' ? 'The room is closed already' : 'The room is open');
+      target.closed_at = operation === 'close' ? stamp() : null;
+      push(target.room_id, null, operation);
+      reply = { status: 'ok' };
+      break;
+    }
+    case 'delete': {
+      const target = needRoom();
+      if (!target.closed_at) fail('room_open', 'Close the room before deleting it');
+      if (String(a.expected_revision) !== roomNow(target).revision) fail('revision_mismatch', 'The room changed since its summary');
+      chatRooms.splice(chatRooms.indexOf(target), 1);
+      for (const list of [chatMembers, chatEvents] as { room_id: string }[][]) for (let i = list.length - 1; i >= 0; i -= 1) if (list[i].room_id === target.room_id) list.splice(i, 1);
+      reply = { status: 'ok' };
+      break;
+    }
+    case 'join': {
+      const target = needRoom();
+      if (target.closed_at) fail('room_closed', 'The room is closed');
+      const name = String(a.name ?? '');
+      if (chatMembers.some((one) => one.room_id === target.room_id && one.name === name && one.left_at === null)) fail('name_taken', `${name} is taken in this room`);
+      const joined: Member = { ...member(target.room_id, `m${uuid().slice(0, 6)}`, name, String(a.harness), String(a.role), 0), joined_at: stamp(), last_command_at: stamp(), host: a.host === true };
+      chatMembers.push(joined);
+      const handle = uuid();
+      handles.set(handle, joined.member_id);
+      push(target.room_id, joined, 'join', { harness: joined.harness, role: joined.role });
+      reply = { status: 'ok', room_id: target.room_id, member_id: joined.member_id, member_handle: handle, name, harness: joined.harness, role: joined.role, host: joined.host };
+      break;
+    }
+    case 'rejoin': {
+      const target = needRoom();
+      const again = chatMembers.find((one) => one.member_id === a.member_id && one.room_id === target.room_id) ?? fail('member_not_found', 'No member has that ID in this room');
+      again.left_at = null;
+      const handle = uuid();
+      handles.set(handle, again.member_id);
+      push(target.room_id, again, 'rejoin', { role: again.role });
+      reply = { status: 'ok', room_id: target.room_id, member_id: again.member_id, member_handle: handle, name: again.name, role: again.role };
+      break;
+    }
+    case 'leave': {
+      const target = needRoom();
+      const leaving = writer();
+      leaving.left_at = stamp();
+      push(target.room_id, leaving, 'leave');
+      reply = { status: 'ok' };
+      break;
+    }
+    case 'send': {
+      const target = needRoom();
+      if (target.closed_at) fail('room_closed', 'The room is closed');
+      const sender = writer();
+      const text = String(a.text ?? '');
+      if (/sk-[A-Za-z0-9]{10,}/.test(text)) fail('secret_detected', 'The message looks like it holds a credential; nothing was sent');
+      const named = [...text.matchAll(/@([a-z0-9][a-z0-9_-]{0,31})/g)].map((found) => found[1]);
+      const to = (Array.isArray(a.recipients) ? a.recipients.map(String) : []).concat(named.filter((name) => !(a.recipients as string[] | undefined)?.includes(name)));
+      const ids = to.flatMap((name) => chatMembers.find((one) => one.room_id === target.room_id && one.name === name && one.left_at === null)?.member_id ?? []);
+      sender.last_command_at = stamp();
+      reply = { status: 'ok', event_id: push(target.room_id, sender, 'message', { text, recipients: to, mentions: named, historical_mentions: [] }, ids).event_id };
+      break;
+    }
+    default: fail('unknown_operation', operation);
+  }
+  replies.set(request, reply);
+  return reply;
+}
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((resolve) => setTimeout(() => resolve(structuredClone(value)), ms));
 
@@ -153,13 +273,27 @@ export async function answer(command: string, args: Record<string, unknown> = {}
       return delay({ launched: true, command: ['claude', '--resume', String(args.id)], cwd: project });
     }
     case 'pick': return delay(args.kind === 'folder' ? 'D:\\apps' : args.kind === 'save' ? `C:\\Users\\me\\Desktop\\${args.name}` : 'C:\\work\\mukade\\mukade-data\\exports\\claude_code-5f2c9a1e.json', 50);
-    case 'chat_status': return delay({ state: 'running', endpoint: 'http://127.0.0.1:47631/mcp', data_dir: 'C:\\work\\mukade\\mukade-data' }, 60);
-    case 'chat_rooms': return delay({ items: rooms, next_cursor: null });
-    case 'chat_members': return delay({ items: members.filter((m) => m.room_id === args.roomId || args.roomId !== 'r-hop' && m.member_id !== 'm3'), next_cursor: null, high_water: '8' });
+    case 'chat_status': return delay(chatRunning ? { state: 'running', endpoint: 'http://127.0.0.1:47631/mcp', data_dir: 'C:\\work\\mukade\\mukade-data' } : { state: 'stopped', data_dir: 'C:\\work\\mukade\\mukade-data' }, 60);
+    case 'chat_rooms': return delay({ items: chatRooms.map(roomNow), next_cursor: null });
+    case 'chat_members': return delay({ items: chatMembers.filter((one) => one.room_id === args.roomId), next_cursor: null });
     case 'chat_ledger': {
       const text = String(args.text ?? '').toLowerCase();
-      const items = args.roomId === 'r-hop' ? ledger : ledger.slice(0, 3).map((e) => ({ ...e, room_id: String(args.roomId) }));
-      return delay({ items: text ? items.filter((e) => String(e.payload.text ?? '').toLowerCase().includes(text)) : items, next_cursor: null, high_water: '8' });
+      const items = chatEvents.filter((one) => one.room_id === args.roomId);
+      return delay({ items: text ? items.filter((one) => String(one.payload.text ?? '').toLowerCase().includes(text)) : items, next_cursor: null });
+    }
+    case 'chat_write': return delay(chatWrite(String(args.operation), args.args as Record<string, unknown>), 160);
+    case 'chat_start': chatRunning = true; return delay({ status: 'running' }, 400);
+    case 'chat_stop': chatRunning = false; return delay({ status: 'stopped' }, 300);
+    case 'chat_launch': {
+      const room = chatRooms.find((one) => one.name === args.room);
+      if (room) {
+        window.setTimeout(() => {
+          const joined: Member = { ...member(room.room_id, `m${uuid().slice(0, 6)}`, `${String(args.harness).replace('_code', '')}-${chatMembers.length}`, String(args.harness), String(args.role), 0), joined_at: stamp() };
+          chatMembers.push(joined);
+          chatEvents.push({ room_id: room.room_id, event_id: String(++lastEvent), timestamp: stamp(), actor: actor(joined), kind: 'join', payload: { harness: joined.harness, role: joined.role }, recipient_ids: [] });
+        }, 1500);
+      }
+      return delay(['mukade.exe', 'chat', 'launch', String(args.harness), '--room', String(args.room), '--role', String(args.role), '--listen', String(args.listen)]);
     }
     case 'quit': return undefined;
     default: throw { kind: 'failed', message: `no mock for ${command}` };

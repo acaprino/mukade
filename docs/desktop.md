@@ -1,7 +1,7 @@
 # mukade desktop
 
 The Tauri 2 window that browses every installation's sessions, reads them, hops them to another
-harness, exports and imports interchange documents, resumes them in a terminal, and reads the chat
+harness, exports and imports interchange documents, resumes them in a terminal, and runs the chat
 rooms. Specification: [`superpowers/specs/2026-11-12-desktop-design.md`](superpowers/specs/2026-11-12-desktop-design.md).
 
 ## Run and build
@@ -51,7 +51,7 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 | Rust: listing, transcript and raw pages on fixture stores, export, a real hop into every writable harness, the receipt, chat replies, terminal commands | `cargo test -p mukade-desktop` |
 | No harness branch outside its adapter (the desktop crate included) | `cargo test --test architecture` |
 | TypeScript: tree and collapse, search, folders, marks, keys, transcript rows into entries, chat ledger, receipt commands | `npm test` |
-| Smoke: every view in each look (Smooth, Oni), dark and light, on the mocked commands, Enter on Cancel never hops, the chat filter survives a poll; screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
+| Smoke: every view in each look (Smooth, Oni), dark and light, on the mocked commands, Enter on Cancel never hops, the chat's three views, join and send, a new room, search everything, the chat filter survives a poll; screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
 
 ## The window
 
@@ -65,7 +65,9 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 | Hop | destination, compaction (none, portable, summary with its intent, model and turns kept whole, native with the destination model's context window), subagents carry or leave, all branches (where the source keeps them), reasoning, destination shell (default: the destination's own), prompt, and under More options the destination's model and provider, unfinished turns keep or drop, and without tools; the plan before anything is written |
 | Receipt | new id, location, manifest path (saved under `mukade-data/manifests/`), interactive and headless resume with Copy, subagents written and whether each is linked, losses, the destination's reply; Show in sessions, Resume in terminal |
 | Import | a document (typed or chosen), the installation, an optional prompt; ends in the receipt |
-| Chat | read only, through the running chat service, polled every 3 s: rooms, the messages of one (filter, newest last, follows the end unless scrolled up), its members with Show session. When the service is not running it says so and how to start it (`mukade chat start`); it is never started from here |
+| Chat | through the running chat service, polled every 3 s ([design](superpowers/specs/2026-11-16-desktop-chat-redesign-design.md), layer A). Rooms with a filter, New room, Close, Reopen, Delete (the service's summary first). The room in three views of the same events with one selected event: Graph (a plate per member in join order around everyone, a line per pair and kind, wider with each event, the selected one with an arrow; a strip to pick, step and play the room back), Lanes (a column per member, a wire per event), Feed (recipients, the state of each instruction, a signal's instruction). One filter for the three: text, kinds, members. Members with role and state (`left`, or the last command: nothing is invented), their details, Mention, Show session; the instructions leads gave workers, waiting, blocked or done. To write, the window joins as a member of its own, peer or lead, marked as the host's: what it sends reaches the agents as the user's. Its handle is kept per room across restarts, recovered with Rejoin when the service calls it stale; the draft is kept per room. Start and Stop the service; Launch agent runs `mukade chat launch` in a new terminal, the command shown first |
+| Search | `ctrl+K` or Search: rooms and members by name, messages by text (the 20 most recent open rooms first), sessions of every installation by title, id or folder; a result opens its room, member, event or session |
+| In rooms | under a session's details, the rooms where a member is bound to it; each opens the room at that member |
 
 Resume opens a new terminal window in the session's folder with the store's variables: Windows
 Terminal when installed and no variable is needed, else a new console window; Terminal.app on
@@ -125,9 +127,13 @@ Resume.
 | `t` | last N turns ↔ all |
 | `g` `G`, PgUp PgDn | reader top / bottom, a page |
 | `o` · `r` | scan a folder · reload |
-| `/`, `ctrl+f` | search (in the chat view, its message filter) |
+| `/`, `ctrl+f` | filter the list (in the chat view, the focused column's) |
+| `ctrl+k` | search everything |
 | `c` | chat ↔ sessions |
-| `space` | fold the selected parent |
+| `space` | fold the selected parent; in the chat, play the room back |
+| `1` `2` `3` | chat: graph · lanes · feed |
+| `n` · `l` | chat: new room · launch an agent |
+| `ctrl+⏎` | chat: send |
 | `?` | the keys |
 
 Keys do nothing while a text field has the focus, except `esc` and `⏎`.
