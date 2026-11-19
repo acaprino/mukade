@@ -233,6 +233,8 @@ function chatWrite(operation: string, a: Record<string, unknown>): unknown {
   return reply;
 }
 
+const mockSandboxes: { harness: string; name: string; root: string; store: string; exe: string; package: string; created: string }[] = [];
+
 const delay = <T>(value: T, ms = 120) => new Promise<T>((resolve) => setTimeout(() => resolve(structuredClone(value)), ms));
 
 export async function answer(command: string, args: Record<string, unknown> = {}): Promise<unknown> {
@@ -297,6 +299,25 @@ export async function answer(command: string, args: Record<string, unknown> = {}
       }
       return delay(['mukade.exe', 'chat', 'launch', String(args.harness), '--room', String(args.room), '--role', String(args.role), '--listen', String(args.listen)]);
     }
+    case 'harness_inventory': return delay(installations.slice(0, 6).map((item, i) => ({
+      id: item.harness, display: item.label, status: i === 4 ? 'missing' : 'installed', source: i === 1 ? 'the catalog\'s location' : 'PATH',
+      binary: i === 4 ? undefined : `C:\\Users\\me\\AppData\\Roaming\\npm\\${item.harness}.cmd`, version: i === 4 ? undefined : `1.${i}.0`,
+      store: `C:\\Users\\me\\.${item.harness}`, store_exists: i !== 4, binary_env: `MUKADE_${item.harness.toUpperCase()}_EXE`, store_env: `${item.harness.toUpperCase()}_HOME`,
+      destination: true, install_command: item.harness === 'hermes' ? undefined : `npm install -g ${item.harness}`, sandbox_package: item.harness === 'hermes' ? undefined : `@example/${item.harness}`,
+    })), 300);
+    case 'system_roots': return delay(['C:\\Users\\me', 'C:\\Program Files', 'D:\\apps', 'D:\\Software']);
+    case 'scan_folder': return delay({ dir: String(args.dir), visited: 120, truncated: false,
+      found: String(args.dir) === 'D:\\apps' ? [{ harness: 'opencode', store: JANURA.store, engine: JANURA.engine }] : [] }, 400);
+    case 'install_system': return delay(['powershell', '-NoExit', '-Command', `install ${args.harness}`]);
+    case 'sandboxes': return delay(mockSandboxes);
+    case 'sandbox_install': {
+      const made = { harness: String(args.harness), name: String(args.name), root: `C:\\work\\mukade\\mukade-data\\sandboxes\\${args.harness}-${args.name}`,
+        store: `C:\\work\\mukade\\mukade-data\\sandboxes\\${args.harness}-${args.name}\\home`, exe: `${args.harness}.cmd`, package: `@example/${args.harness}`, created: new Date().toISOString() };
+      mockSandboxes.push(made);
+      return delay(made, 1500);
+    }
+    case 'sandbox_forget': mockSandboxes.splice(mockSandboxes.findIndex((one) => one.root === args.root), 1); return delay(null);
+    case 'sandbox_run': return delay(['run']);
     case 'quit': return undefined;
     default: throw { kind: 'failed', message: `no mock for ${command}` };
   }

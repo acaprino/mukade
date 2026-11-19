@@ -17,7 +17,7 @@ export interface ReaderState {
 }
 
 export interface State {
-  view: 'sessions' | 'chat';
+  view: 'sessions' | 'chat' | 'harnesses';
   focus: Column;
   installations: Installation[];
   installation: string | null;

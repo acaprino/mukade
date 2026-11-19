@@ -89,4 +89,13 @@ export interface ChatEvent {
   room_id: string; event_id: string; timestamp: string; actor: Actor; kind: string;
   payload: Record<string, unknown>; recipient_ids: string[];
 }
+/** A harness as the harnesses page shows it. */
+export interface HarnessView {
+  id: string; display: string; status: 'installed' | 'configured' | 'missing'; binary?: string; source: string; version?: string;
+  store?: string; store_exists: boolean; binary_env: string; store_env: string; destination: boolean;
+  install_command?: string; sandbox_package?: string;
+}
+export interface Found { harness: string; store: string; engine?: string }
+export interface FolderScan { dir: string; found: Found[]; visited: number; truncated: boolean }
+export interface Sandbox { harness: string; name: string; root: string; store: string; exe: string; package: string; created: string }
 export interface Page<T> { items: T[]; next_cursor: string | null; high_water?: string }

@@ -5,8 +5,8 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  ChatEvent, ChatStatus, CmdError, Exported, HopArgs, HopOptions, InstallationList, Member,
-  Page, RawPage, Receipt, Resumed, Room, SessionRow, Startup, TranscriptView,
+  ChatEvent, ChatStatus, CmdError, Exported, FolderScan, HarnessView, HopArgs, HopOptions, InstallationList, Member,
+  Page, RawPage, Receipt, Resumed, Room, Sandbox, SessionRow, Startup, TranscriptView,
 } from './types.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
@@ -62,6 +62,17 @@ export const api = {
   /** Run an agent in a room in a new terminal; answers the command it runs. */
   chatLaunch: (harness: string, room: string, role: string, listen: number, cwd?: string) =>
     invoke<string[]>('chat_launch', { harness, room, role, listen, cwd }),
+  harnessInventory: () => invoke<HarnessView[]>('harness_inventory'),
+  /** The folders a system scan reads, one at a time. */
+  systemRoots: () => invoke<string[]>('system_roots'),
+  scanFolder: (dir: string) => invoke<FolderScan>('scan_folder', { dir }),
+  /** The harness's own install command, in a new terminal. */
+  installSystem: (harness: string) => invoke<string[]>('install_system', { harness }),
+  sandboxes: () => invoke<Sandbox[]>('sandboxes'),
+  /** npm installs the harness into a sandbox of its own; answers when it is done. */
+  sandboxInstall: (harness: string, name: string) => invoke<Sandbox>('sandbox_install', { harness, name }),
+  sandboxForget: (root: string) => invoke<null>('sandbox_forget', { root }),
+  sandboxRun: (root: string) => invoke<string[]>('sandbox_run', { root }),
   quit: () => invoke<void>('quit'),
 };
 

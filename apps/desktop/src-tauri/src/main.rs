@@ -7,7 +7,9 @@ mod actions;
 mod chat;
 mod commands;
 mod error;
+mod harnesses;
 mod locations;
+mod sandbox;
 mod sessions;
 mod state;
 mod terminal;
@@ -57,6 +59,14 @@ fn main() {
             commands::chat_start,
             commands::chat_stop,
             commands::chat_launch,
+            commands::harness_inventory,
+            commands::system_roots,
+            commands::scan_folder,
+            commands::install_system,
+            commands::sandboxes,
+            commands::sandbox_install,
+            commands::sandbox_forget,
+            commands::sandbox_run,
             commands::quit,
         ])
         .run(tauri::generate_context!())

@@ -82,6 +82,14 @@ try {
     await page.locator('.search-row').first().waitFor();
     await page.screenshot({ path: `${out}search-${name}.png` });
     await page.keyboard.press('Escape');
+    // The harnesses page: every harness, and a scan of the computer that finds a portable one.
+    await page.keyboard.press('m');
+    await page.locator('.harness-card').first().waitFor();
+    await page.getByRole('button', { name: 'Scan this computer' }).click();
+    await page.locator('#status', { hasText: 'system scan done' }).waitFor({ timeout: 20000 });
+    await page.locator('.install-row', { hasText: 'JanuraCode' }).waitFor();
+    await page.screenshot({ path: `${out}harnesses-${name}.png` });
+    await page.keyboard.press('c');
     // What is being typed in the filter survives the 3 s poll.
     await page.locator('#chat-filter').click();
     await page.keyboard.type('sub');
@@ -106,4 +114,4 @@ if (failures.length) {
   console.error(failures.join('\n'));
   process.exit(1);
 }
-console.log(`smoke ok: 36 screenshots in ${out}`);
+console.log(`smoke ok: 40 screenshots in ${out}`);

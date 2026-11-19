@@ -34,6 +34,7 @@
     <symbol id="g-pi" viewBox="140 140 520 520"><path fill="currentColor" fill-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"/><path fill="currentColor" d="M517.36 400H634.72V634.72H517.36Z"/></symbol>
     <symbol id="g-desktop" viewBox="0 0 18 18"><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 13q4-1 5.500-5T11 4l5-2"/><path d="M5 9 3.500 11.500M8 6.500 6.500 9M11 4.500 9.500 7M14 3 12.500 5.500"/></g></symbol>
     <symbol id="g-other" viewBox="0 0 16 16"><path d="M2.500 2.500h11v11h-11z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.500 8h5" fill="none" stroke="currentColor" stroke-width="1.25"/></symbol>
+    <symbol id="i-harness" viewBox="0 0 16 16"><path d="M2.500 4.500 8 2l5.500 2.500v7L8 14l-5.500-2.500zM2.500 4.500 8 7l5.500-2.500M8 7v7"/></symbol>
     <symbol id="i-close" viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></symbol>
     <symbol id="i-caret" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
     <symbol id="i-fork" viewBox="0 0 16 16"><path d="M4 2v3q0 3 4 3t4-3V2M8 8v6"/></symbol>
@@ -69,6 +70,7 @@
       <div class="tabs" role="tablist" aria-label="Views">
         <button type="button" role="tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions</button>
         <button type="button" role="tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>c</kbd></button>
+        <button type="button" role="tab" id="tab-harnesses" aria-selected="false" data-view="harnesses"><svg class="icon" aria-hidden="true"><use href="#i-harness"/></svg>Harnesses <kbd>m</kbd></button>
       </div>
       <span class="toolbar-divider"></span>
       <button type="button" id="search-everything" title="Search rooms, members, messages and sessions"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Search <kbd>ctrl K</kbd></button>
@@ -89,6 +91,7 @@
       <button type="button" class="back-column" data-back aria-label="Back one column">‹ Back</button>
     </section>
     <section id="view-chat" class="view" aria-label="Chat" hidden></section>
+    <section id="view-harnesses" class="view" aria-label="Harnesses" hidden></section>
     <footer class="statusbar" id="statusbar"><i></i><span id="status">starting…</span><span id="status-counts" class="muted"></span><span class="spring"></span><span id="status-right" class="hints"></span></footer>
   </main>
   <script type="module" src="/src/main.ts"></script>

@@ -6,7 +6,7 @@ export type Action =
   | 'hop' | 'export' | 'import' | 'resume' | 'turns'
   | 'top' | 'bottom' | 'pageUp' | 'pageDown'
   | 'scan' | 'reload' | 'search' | 'chat' | 'fold' | 'help'
-  | 'searchAll' | 'graph' | 'lanes' | 'feed' | 'newRoom' | 'launch';
+  | 'searchAll' | 'graph' | 'lanes' | 'feed' | 'newRoom' | 'launch' | 'harnesses';
 
 export interface KeyLike { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean }
 
@@ -46,13 +46,15 @@ export function actionFor(event: KeyLike, inField: boolean): Action | null {
     case '3': return 'feed';
     case 'n': return 'newRoom';
     case 'l': return 'launch';
+    case 'm': return 'harnesses';
     default: return null;
   }
 }
 
 /** The key hints the status line shows, per place. */
-export const HINTS: Record<'sessions' | 'reader' | 'chat', [string, string][]> = {
+export const HINTS: Record<'sessions' | 'reader' | 'chat' | 'harnesses', [string, string][]> = {
   sessions: [['↑↓', 'move'], ['←→', 'column'], ['space', 'fold'], ['⏎', 'open'], ['h', 'hop'], ['e', 'export'], ['R', 'resume'], ['/', 'filter']],
   reader: [['j k', 'scroll'], ['g G', 'top · bottom'], ['PgUp PgDn', 'page'], ['t', 'turns'], ['h', 'hop'], ['esc', 'back']],
+  harnesses: [['o', 'scan a folder'], ['r', 'reload'], ['ctrl K', 'search'], ['m', 'sessions'], ['c', 'chat']],
   chat: [['↑↓', 'move'], ['←→', 'column'], ['1 2 3', 'graph · lanes · feed'], ['space', 'play'], ['n', 'new room'], ['l', 'launch'], ['/', 'filter'], ['ctrl K', 'search'], ['c', 'sessions']],
 };

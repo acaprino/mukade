@@ -4,6 +4,8 @@
 
 use crate::actions::{self, Exported, HopArgs, HopOptions, Resumed};
 use crate::chat;
+use crate::harnesses::{self, HarnessView};
+use crate::sandbox::{self, Sandbox};
 use crate::error::{CmdError, CmdResult};
 use crate::locations::{self, InstallationView, ScanNote};
 use crate::sessions::{self, RawPage, SessionRow, TranscriptView};
@@ -86,6 +88,8 @@ pub fn installations_for(state: &AppState, scan: &[String]) -> InstallationList 
     let mut found = locations::standard_locations(state.standard());
     let folders: Vec<PathBuf> = scan.iter().map(PathBuf::from).collect();
     let scans = locations::scan_folders(&mut found, &folders, state.standard());
+    // The sandboxes the window installed, listed even before their first session.
+    locations::add_installations(&mut found, &sandbox::installations(), state.standard());
     let installations = found
         .iter()
         .map(|location| {
@@ -361,6 +365,103 @@ pub async fn chat_launch(
     cwd: Option<String>,
 ) -> CmdResult<Vec<String>> {
     blocking(move || chat::launch(&harness, &room, &role, listen, cwd.as_deref())).await
+}
+
+/// Every harness: its binary as the window would run it, its version, its standard store.
+#[tauri::command]
+pub async fn harness_inventory(state: State<'_, AppState>) -> CmdResult<Vec<HarnessView>> {
+    let state = state.inner().clone();
+    blocking(move || Ok(harnesses::inventory(state.standard()))).await
+}
+
+/// The folders a system scan reads, one at a time.
+#[tauri::command]
+pub async fn system_roots() -> CmdResult<Vec<String>> {
+    blocking(|| {
+        Ok(harnesses::system_roots()
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect())
+    })
+    .await
+}
+
+/// One folder of a system scan: what `mukade::detect` found there, without listing sessions.
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderScan {
+    pub dir: String,
+    pub found: Vec<Found>,
+    pub visited: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Found {
+    pub harness: &'static str,
+    pub store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+}
+
+#[tauri::command]
+pub async fn scan_folder(dir: String) -> CmdResult<FolderScan> {
+    blocking(move || {
+        let scan = mukade::detect::scan_installations(
+            std::path::Path::new(&dir),
+            mukade::detect::DEFAULT_SCAN_DEPTH,
+        );
+        Ok(FolderScan {
+            found: scan
+                .installations
+                .iter()
+                .map(|found| Found {
+                    harness: found.harness.as_str(),
+                    store: found.store.display().to_string(),
+                    engine: found.exe.as_ref().map(|exe| exe.display().to_string()),
+                })
+                .collect(),
+            visited: scan.visited,
+            truncated: scan.truncated,
+            dir,
+        })
+    })
+    .await
+}
+
+fn harness_id(harness: &str) -> CmdResult<mukade::model::HarnessId> {
+    harness
+        .parse()
+        .map_err(|_| CmdError::refused(format!("unknown harness {harness}")))
+}
+
+/// The system install of a harness, in a new terminal: answers the command it runs.
+#[tauri::command]
+pub async fn install_system(harness: String) -> CmdResult<Vec<String>> {
+    let harness = harness_id(&harness)?;
+    blocking(move || sandbox::install_system(harness)).await
+}
+
+/// The sandboxes the window installed.
+#[tauri::command]
+pub async fn sandboxes() -> CmdResult<Vec<Sandbox>> {
+    blocking(|| Ok(sandbox::list())).await
+}
+
+/// Install a harness into a sandbox with npm; blocks while npm runs.
+#[tauri::command]
+pub async fn sandbox_install(harness: String, name: String) -> CmdResult<Sandbox> {
+    let harness = harness_id(&harness)?;
+    blocking(move || sandbox::install(harness, &name)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_forget(root: String) -> CmdResult<()> {
+    blocking(move || sandbox::forget(&root)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_run(root: String) -> CmdResult<Vec<String>> {
+    blocking(move || sandbox::run(&root)).await
 }
 
 /// The window asked to close while a hop or import ran, and the person confirmed.

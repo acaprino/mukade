@@ -13,6 +13,7 @@ import { stepIn } from './lists.ts';
 import { LOOK_KEY, THEMES, THEME_KEY, nextTheme, paints, storedLook, storedTheme, type Look, type Theme } from './look.ts';
 import { closeModal, confirmModal, modalOpen, openModal } from './modal.ts';
 import { Reader } from './reader.ts';
+import { HarnessesView } from './harnesses.ts';
 import { openSearch } from './search.ts';
 import { renderSessions, visiblePlaces } from './sessions.ts';
 import { folderKey, renderSidebar } from './sidebar.ts';
@@ -46,7 +47,7 @@ function drawStatus(): void {
   bar.classList.toggle('error', state.job === null && state.statusError);
   $('status').textContent = state.job ?? state.status;
   $('status-counts').textContent = state.counts;
-  const hints = state.view === 'chat' ? HINTS.chat : state.reader ? HINTS.reader : HINTS.sessions;
+  const hints = state.view === 'chat' ? HINTS.chat : state.view === 'harnesses' ? HINTS.harnesses : state.reader ? HINTS.reader : HINTS.sessions;
   fill($('status-right'), ...hints.map(([key, what]) => h('span', {}, h('b', {}, key), ` ${what}`)));
 }
 
@@ -410,7 +411,9 @@ async function scanFolder(): Promise<void> {
   const dir = await api.pick('folder').catch((error) => { setStatus(errorText(error), true); return null; });
   if (!dir) return;
   if (!state.scan.includes(dir)) state.scan.push(dir);
+  keepFolders();
   await loadInventory();
+  harnesses.draw();
 }
 
 // --- views and theme ----------------------------------------------------------------------------
@@ -426,14 +429,47 @@ const chat = new ChatView($('view-chat'), {
   status: setStatus,
 });
 
-function switchView(view: 'sessions' | 'chat'): void {
+/** The folders and stores scanned and kept across restarts (Scan folder, the system scan). */
+const SCAN_KEY = 'mukade.scan';
+function keptFolders(): string[] {
+  try { const kept = JSON.parse(localStorage.getItem(SCAN_KEY) ?? '[]'); return Array.isArray(kept) ? kept.map(String) : []; } catch { return []; }
+}
+function keepFolders(): void {
+  try { localStorage.setItem(SCAN_KEY, JSON.stringify(state.scan.filter((dir) => !startupScan.includes(dir)))); } catch { /* private window: not kept */ }
+}
+let startupScan: string[] = [];
+
+const harnesses = new HarnessesView($('view-harnesses'), {
+  installations: () => state.installations,
+  folders: () => state.scan,
+  addFolders: async (dirs) => {
+    for (const dir of dirs) if (!state.scan.includes(dir)) state.scan.push(dir);
+    keepFolders();
+    await loadInventory();
+    harnesses.draw();
+  },
+  forgetFolder: async (dir) => {
+    state.scan = state.scan.filter((one) => one !== dir);
+    keepFolders();
+    await loadInventory();
+    harnesses.draw();
+  },
+  reload: async () => { await loadInventory(); harnesses.draw(); },
+  scanFolder: () => void scanFolder(),
+  showInstallation: (key) => { switchView('sessions'); void pickInstallation(key).then(() => setFocus('sessions')); },
+  status: setStatus,
+});
+
+function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   if (state.view === view) return;
   state.view = view;
   $('view-sessions').hidden = view !== 'sessions';
   $('view-chat').hidden = view !== 'chat';
+  $('view-harnesses').hidden = view !== 'harnesses';
+  if (view === 'harnesses') harnesses.show();
   for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.setAttribute('aria-selected', String(tab.dataset.view === view));
-  // The chat view has its own filter, on its messages.
-  $('search').hidden = view === 'chat';
+  // The chat view has its own filter, on its messages; the harnesses page has none.
+  $('search').hidden = view !== 'sessions';
   if (view === 'chat') chat.show(); else chat.hide();
   drawStatus();
 }
@@ -550,6 +586,7 @@ function act(action: Action, event: KeyboardEvent): boolean {
   }
   if (modalOpen()) return false;
   if (action === 'chat') { switchView(state.view === 'chat' ? 'sessions' : 'chat'); return true; }
+  if (action === 'harnesses') { switchView(state.view === 'harnesses' ? 'sessions' : 'harnesses'); return true; }
   if (action === 'reload') { void loadInventory(); return true; }
   if (action === 'scan') { void scanFolder(); return true; }
   if (action === 'import') { importDocument(); return true; }
@@ -591,7 +628,7 @@ function showHelp(): void {
   const rows: [string, string][] = [
     ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['← →', 'previous / next column'], ['⏎', 'next column, or open the transcript'],
     ['esc', 'close the reader or a dialog, or back one column'], ['h · e · i · R', 'hop · export · import · resume'], ['t', 'last turns ↔ all'],
-    ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['ctrl+k', 'search everything'], ['c', 'chat ↔ sessions'], ['space', 'fold a parent; in the chat, play the room'],
+    ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['ctrl+k', 'search everything'], ['c', 'chat ↔ sessions'], ['m', 'harnesses ↔ sessions'], ['space', 'fold a parent; in the chat, play the room'],
     ['1 2 3', 'chat: graph · lanes · feed'], ['n · l', 'chat: new room · launch an agent'], ['ctrl+⏎', 'chat: send'],
   ];
   fill(modal.body, h('dl', { class: 'kv keys' }, ...rows.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
@@ -633,7 +670,7 @@ document.addEventListener('keydown', (event) => {
 // --- start --------------------------------------------------------------------------------------
 
 function wire(): void {
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => switchView(tab.dataset.view as 'sessions' | 'chat'));
+  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => switchView(tab.dataset.view as 'sessions' | 'chat' | 'harnesses'));
   $('scan').addEventListener('click', () => void scanFolder());
   $('import').addEventListener('click', () => importDocument());
   $('reload').addEventListener('click', () => void loadInventory());
@@ -681,7 +718,8 @@ function wire(): void {
     const startup = await api.startup();
     $('version').textContent = startup.version;
     state.defaultTurns = startup.turns;
-    state.scan = [...startup.scan];
+    startupScan = [...startup.scan];
+    state.scan = [...new Set([...startup.scan, ...keptFolders()])];
   } catch (error) {
     setStatus(errorText(error), true);
   }
