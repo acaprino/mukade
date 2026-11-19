@@ -27,7 +27,7 @@ const HARNESSES = [['claude_code', 'Claude Code'], ['codex', 'Codex'], ['opencod
 const ROLES = [['peer', 'peer'], ['lead', 'lead'], ['worker', 'worker'], ['observer', 'observer']] as const;
 
 /** The window's member in a room: the handle it writes with, kept across restarts. */
-interface Mine { member_id: string; handle: string; name: string; role: string }
+interface Mine { member_id: string; handle: string; name: string; role: string; /** When it joined (ms). */ at?: number }
 /** What is being written in a room, kept across rooms and restarts. */
 interface Draft { text: string; to: string[] }
 
@@ -60,6 +60,8 @@ export class ChatView {
   private rooms: Room[] = [];
   private room: string | null = null;
   private members: Member[] = [];
+  /** When the members shown were asked for (ms): an answer asked before a join does not know it. */
+  private membersAsked = 0;
   private events: ChatEvent[] = [];
   /** The text filter, asked of the service. */
   private text = '';
@@ -87,6 +89,8 @@ export class ChatView {
   private animated: string | null = null;
   private launched: { room: string; at: number; count: number; command: string[] } | null = null;
   private graphHost: HTMLElement | null = null;
+  /** The composer takes the focus once it is drawn (after a join). */
+  private focusComposer = false;
   private painted = '';
   private readonly resize = new ResizeObserver(() => this.paintGraph(false));
   focus: 'rooms' | 'messages' | 'members' = 'rooms';
@@ -186,6 +190,7 @@ export class ChatView {
   }
 
   private async loadRoom(roomId: string): Promise<void> {
+    const asked = Date.now();
     const members = (await api.chatMembers(roomId)).items;
     const since = this.events.length ? this.events[this.events.length - 1].timestamp : undefined;
     let cursor: string | undefined;
@@ -199,6 +204,7 @@ export class ChatView {
     // A slower answer for a room no longer shown does not replace the one shown.
     if (roomId !== this.room) return;
     this.members = members;
+    this.membersAsked = asked;
     this.events = mergeEvents(this.events, fresh);
   }
 
@@ -208,7 +214,9 @@ export class ChatView {
     const mine = room ? this.mine[room] : undefined;
     if (!room || !mine || !this.members.length) return;
     const member = this.members.find((one) => one.member_id === mine.member_id);
-    if (!member || member.left_at !== null) { delete this.mine[room]; save('mukade.chat.members', this.mine); }
+    // Missing from a list asked for before the join is not gone: the list does not know it yet.
+    const gone = member ? member.left_at !== null : this.membersAsked > (mine.at ?? 0);
+    if (gone) { delete this.mine[room]; save('mukade.chat.members', this.mine); }
   }
 
   /** A launched agent joins at a poll; one that has not within a minute is said so. */
@@ -381,6 +389,7 @@ export class ChatView {
     this.paintComposerNote();
     this.paintJoinNote();
     this.restore(kept);
+    if (this.focusComposer && this.composer.isConnected) { this.focusComposer = false; this.composer.focus(); }
     this.paintGraph(true);
   }
 
@@ -738,12 +747,12 @@ export class ChatView {
     if (refusal) { this.writeError = refusal; this.paintJoinNote(); this.nameInput.focus(); return; }
     const joined = await this.write<Joined>('joining', 'join', { room_id: room.room_id, harness: 'desktop', role: this.joinRole, name: this.joinName, host: true });
     if (joined) {
-      this.mine[room.room_id] = { member_id: joined.member_id, handle: joined.member_handle, name: joined.name ?? this.joinName, role: joined.role ?? this.joinRole };
+      this.mine[room.room_id] = { member_id: joined.member_id, handle: joined.member_handle, name: joined.name ?? this.joinName, role: joined.role ?? this.joinRole, at: Date.now() };
       save('mukade.chat.members', this.mine);
       this.hooks.status(`the window joined ${room.name} as ${this.joinName}`);
+      this.focusComposer = true;
     }
     await this.poll(true);
-    if (joined && this.composer.isConnected) this.composer.focus();
   }
 
   private async rejoin(room: Room): Promise<void> {
@@ -751,7 +760,7 @@ export class ChatView {
     if (!mine || this.busy) return;
     const joined = await this.write<Joined>('rejoining', 'rejoin', { room_id: room.room_id, member_id: mine.member_id, host: true });
     if (joined) {
-      this.mine[room.room_id] = { ...mine, handle: joined.member_handle };
+      this.mine[room.room_id] = { ...mine, handle: joined.member_handle, at: Date.now() };
       save('mukade.chat.members', this.mine);
       this.hooks.status(`the window rejoined ${room.name} as ${mine.name}, with a new handle`);
     }
