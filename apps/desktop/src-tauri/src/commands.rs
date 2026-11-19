@@ -410,10 +410,12 @@ pub async fn scan_folder(dir: String) -> CmdResult<FolderScan> {
             std::path::Path::new(&dir),
             mukade::detect::DEFAULT_SCAN_DEPTH,
         );
+        let root = std::path::Path::new(&dir);
         Ok(FolderScan {
             found: scan
                 .installations
                 .iter()
+                .filter(|found| !harnesses::in_checkout(&found.store, root))
                 .map(|found| Found {
                     harness: found.harness.as_str(),
                     store: found.store.display().to_string(),

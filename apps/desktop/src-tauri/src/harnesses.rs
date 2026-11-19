@@ -120,6 +120,16 @@ pub fn system_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Whether a store found by a system scan sits inside a git checkout, below `root`: test homes and
+/// fixtures live there, never a harness's own store.
+pub fn in_checkout(store: &Path, root: &Path) -> bool {
+    store
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| dir.starts_with(root))
+        .any(|dir| dir.join(".git").exists())
+}
+
 /// A drive's system folder, a folder already read through another root, or the home's parent
 /// (`C:\Users` holds other people's homes).
 fn skipped(path: &Path, roots: &[PathBuf]) -> bool {
@@ -132,10 +142,24 @@ fn skipped(path: &Path, roots: &[PathBuf]) -> bool {
 }
 
 #[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetDriveTypeW(root_path_name: *const u16) -> u32;
+}
+
+/// The fixed drives only. The type is asked without touching the drive: an empty card reader or
+/// optical drive would otherwise answer with the system's "no disk" dialog.
+#[cfg(windows)]
 fn drives() -> Vec<PathBuf> {
+    const DRIVE_FIXED: u32 = 3;
     (b'A'..=b'Z')
-        .map(|letter| PathBuf::from(format!("{}:\\", letter as char)))
-        .filter(|drive| drive.is_dir())
+        .map(|letter| format!("{}:\\", letter as char))
+        .filter(|root| {
+            let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
+            // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call.
+            unsafe { GetDriveTypeW(wide.as_ptr()) == DRIVE_FIXED }
+        })
+        .map(PathBuf::from)
         .collect()
 }
 
@@ -166,6 +190,19 @@ mod tests {
             assert!(!view.store_env.is_empty());
             assert_eq!(view.binary.is_some(), view.status != "missing");
         }
+    }
+
+    #[test]
+    fn a_store_inside_a_git_checkout_is_not_an_installation() {
+        let scratch = crate::scratch::Scratch::new("checkout");
+        let repo = scratch.join("work").join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let store = repo.join("fixtures").join(".claude");
+        std::fs::create_dir_all(&store).unwrap();
+        assert!(in_checkout(&store, &scratch.join("work")));
+        let portable = scratch.join("work").join("apps").join(".claude");
+        std::fs::create_dir_all(&portable).unwrap();
+        assert!(!in_checkout(&portable, &scratch.join("work")));
     }
 
     #[test]
