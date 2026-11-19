@@ -1,7 +1,7 @@
 [package]
 name = "mukade"
 description = "Harness sessions manager for coding agents: move a session between Claude Code, Codex CLI, OpenCode and Pi, as one of the destination's own."
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/acaprino/mukade"
