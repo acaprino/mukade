@@ -417,4 +417,24 @@ mod tests {
         );
         assert_eq!(pi, ["pi", "-p", "--session", "/sessions/id.jsonl"]);
     }
+
+    /// The argv the desktop app's resume runs, exactly, for every harness. DeepSeek Harness has no
+    /// terminal UI: its interactive resume is the headless one (the refusal is in tests/harnesses.rs).
+    #[test]
+    fn every_harness_has_the_exact_interactive_resume_argv() {
+        let file = Path::new("/tmp/session.jsonl");
+        let tail = |harness| interactive_resume(harness, "exe", "abc", Some(file))[1..].to_vec();
+        assert_eq!(tail(HarnessId::ClaudeCode), ["--resume", "abc"]);
+        assert_eq!(tail(HarnessId::Codex), ["resume", "abc"]);
+        assert_eq!(
+            tail(HarnessId::OpenCode),
+            ["mini", "--standalone", "--session", "abc"]
+        );
+        assert_eq!(tail(HarnessId::Pi), ["--session", "/tmp/session.jsonl"]);
+        assert_eq!(tail(HarnessId::Hermes), ["--resume", "abc"]);
+        assert_eq!(
+            tail(HarnessId::DeepSeekHarness),
+            ["--profile", "headless", "--session-id", "abc"]
+        );
+    }
 }

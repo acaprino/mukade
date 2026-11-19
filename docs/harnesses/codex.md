@@ -440,7 +440,7 @@ empty catalogue, and the rollouts are listed as before.
 
 - **Subagents:** `list` leaves out the threads Codex ran for another (`source` containing
   `subagent`, `thread_source` `guardian_review` or `subagent`, or a child in `thread_spawn_edges`):
-  7493 of the 8598 rows. `list_all` (`list --children`, the TUI) keeps them, with `parent` from
+  7493 of the 8598 rows. `list_all` (`list --children`, the desktop app) keeps them, with `parent` from
   `thread_spawn_edges` and `parent_kind` `Spawn { agent: agent_role }` (`guardian_review` for a
   guardian review, which has no edge and so no parent).
 - **Title and time:** the row's `name`, else `title`, else the start of `preview` (one line, 120

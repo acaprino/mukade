@@ -1,12 +1,20 @@
 # Next: open points
 
-**Status on 2026-11-16.** What is done, then what is open, by what it needs (Windows, model calls,
+**Status on 2026-11-19.** What is done, then what is open, by what it needs (Windows, model calls,
 code, a key, macOS), then the known limits. Unverified facts are marked **[U]** here and in the docs.
 
 **The step-by-step for every open check:** [docs/verification/windows-checklist.md](docs/verification/windows-checklist.md).
 Its step numbers are in brackets below.
 
 ---
+
+## ✅ Done on 2026-11-19
+
+| what | before | now |
+|---|---|---|
+| The Smooth look ([desktop guide](docs/desktop.md)) | one look | Smooth by default, dark and light following the system; Oni, the first look, in Settings |
+| Hop options in the window | destination, compaction (none, portable, summary), subagents, branches, reasoning, shell, prompt | also native compaction, the summary's intent, model and kept turns, the destination's model and provider, unfinished turns, without tools |
+| The terminal browser | `mukade-tui.exe` beside the app | removed: the desktop app is the interface, the command line stays |
 
 ## ✅ Done from 2026-11-13 to 2026-11-16
 

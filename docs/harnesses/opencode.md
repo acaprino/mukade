@@ -12,7 +12,7 @@ it never writes OpenCode's SQLite database itself [1][10][27].
 | Write | ✅ `session import --standalone`; needs a project id, a provider and a model (found or given) |
 | Hop as source | ✅ unset `OPENCODE_DB` means OpenCode's own configured store |
 | Hop as destination | ✅ one assistant message per step, call and result in one tool part |
-| Resume | ✅ `<exe> run --standalone --session <id>`; mukade's TUI: `<exe> mini --standalone --session <id>` |
+| Resume | ✅ `<exe> run --standalone --session <id>`; mukade's desktop app: `<exe> mini --standalone --session <id>` |
 | Summary by its own model | ✅ `--compaction summary`: a deny-all `run --fork`, the fork deleted afterwards [37] |
 | Native compaction | ⚠️ reads the source's `compaction` record; `--compaction native` writes one (live on 2.2.5, 2026-11-04 [27 §4.4][56]); OpenCode's own HTTP compaction is never run by mukade |
 | Subagents | ✅ read as sessions of their own; `hop --children` writes each as an imported session with `info.parentID` set, the parent imported first (live on 2.2.5, scratch store) |
@@ -475,7 +475,7 @@ Code: `src/reader/opencode.rs` [31].
   `OPENCODE_DB is not set: no OpenCode store to list`. It opens the file read-only (2 s busy timeout)
   without starting OpenCode; returns root sessions (`parent_id IS NULL`), newest `time_updated`
   first, archived included (`archived` = `time_archived` set; `--archived false` leaves them out).
-  `list_all` (`list --children`, the TUI) adds the child sessions. `parent` = `parent_id` (spawn),
+  `list_all` (`list --children`, the desktop app) adds the child sessions. `parent` = `parent_id` (spawn),
   else `fork_session_id` with a `fork_boundary` (fork, `at` = the boundary's `messageID` when its `type` is `through`, the last message the fork holds; a `before` boundary names the message after the last one held, so `at` is the parent's message just before it in `seq` order, looked up in the store, which is where OpenCode 2.2.5 ends the copy (`SessionProjector.projectFork`); none when the store is not at hand (`--from-file`), the boundary message is not in it, or nothing comes before it; read only where the table has both columns). The inventory counts forks as the listing reads them: a `fork_session_id` with a `fork_boundary` and no `parent_id`; a child (`parent_id`) is a subagent and is not.
 - **`read`** (`dump`, a hop source) runs `<exe> session export <id> --standalone` (stdin closed, 120 s
   `EXPORT_TIMEOUT`) and parses `{info, messages}`. Stderr containing `not found` is a not-found

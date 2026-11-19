@@ -832,7 +832,7 @@ pub fn export_command(exe: &str, id: &str) -> Vec<String> {
 /// costs a process start per session it has to look at.
 ///
 /// This is the one destination probe the UI cannot reasonably reimplement: it belongs to the
-/// harness's own store, not to the TUI. `cache` is the caller's `mukade-data/cache` folder.
+/// harness's own store, not to the desktop app. `cache` is the caller's `mukade-data/cache` folder.
 pub fn project_id_for(
     exe: &str,
     cwd: &str,

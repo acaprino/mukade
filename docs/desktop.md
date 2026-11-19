@@ -6,8 +6,8 @@ rooms. Specification: [`superpowers/specs/2026-11-12-desktop-design.md`](superpo
 
 ## Run and build
 
-**Download (Windows x64):** `mukade-v0.1.0-windows-x64.zip` from the
-[releases](https://github.com/acaprino/mukade/releases) holds `mukade-ui.exe`, `mukade.exe` and `mukade-tui.exe`. Extract it
+**Download (Windows x64):** `Mukade-<version>-windows-x64.zip` from the
+[releases](https://github.com/acaprino/mukade/releases) holds `mukade-ui.exe` and `mukade.exe`. Extract it
 to a plain local folder outside any git checkout and OneDrive, then run `mukade-ui.exe`; its data
 goes to `mukade-data` beside it. The programs are not signed: SmartScreen may ask once.
 
@@ -25,10 +25,10 @@ npm run desktop
 (`target/debug/mukade-ui`, no installer). `npm run dev` serves the same page in a browser with
 made-up sessions (`apps/desktop/src/mock.ts`): every view can be seen without stores.
 
-The portable package: `build-release.bat` (Windows) builds the release command line, the terminal
-browser and the app with the UI embedded into `release\` (made again on every build), installs it
+The portable package: `build-release.bat` (Windows) builds the release command line and the app
+with the UI embedded into `release\` (made again on every build), installs it
 into `D:\Software\Mukade` and removes what the build staged (cargo's `target\` stays as the build
-cache). There `mukade-ui.exe` (the app), `mukade.exe` and `mukade-tui.exe` sit side by side, sharing
+cache). There `mukade-ui.exe` (the app) and `mukade.exe` sit side by side, sharing
 `mukade-data` beside them (exports, manifests, the chat service). An install copies over the
 programs and leaves `mukade-data` alone; it waits while a program runs from that folder. Options:
 `--no-install` (stop at `release\`), `--target <folder>` (another install folder), `--ci` (`npm ci`

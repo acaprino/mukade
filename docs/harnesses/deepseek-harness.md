@@ -13,7 +13,7 @@ Labels: `[n]` = a source in [Sources](#sources). **[S]** = read in upstream sour
 | **Write** | ✅ a v4 zstd log in the folder dsh derives from the id and the cwd; `dsh` opened, resumed and extended a written one [36] |
 | **Hop as source** | ✅ `mukade hop deepseek_harness <id> <dst>`; `--all-branches` does not apply |
 | **Hop as destination** | ⚠️ works; reasoning payloads have no place (a written assistant message has no `replayState`, so dsh reads it as another provider's); `--dest-agent` and `--metadata-file` are refused as a command-line mistake (exit 1), `--dest-path` and `--compaction native` as unsupported (exit 2) |
-| **Resume** | ✅ receipt: `dsh --profile headless --session-id <id>` (add a task). The TUI cannot open it: dsh has no terminal UI, and says so |
+| **Resume** | ✅ receipt: `dsh --profile headless --session-id <id>` (add a task). The desktop app cannot open it: dsh has no terminal UI, and says so |
 | **Summary by its own model** | ❌ `--compaction summary` from dsh is refused, with the reason (How mukade summarizes it) |
 | **Native compaction** | ⚠️ read: `compaction/summary` plus its `compact-checkpoint` message is a compaction entry, so `--compaction portable` works; never written |
 | **Subagents** | ⚠️ read: a log whose header has `parentSession` and `origin: "subagent"` is a child (`--children`), `isSeeded` marks one that inherits context, a fork is `kind: fork`. Written: `hop --children` writes each child as a session of its own, unlinked |

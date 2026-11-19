@@ -1,4 +1,4 @@
-// The keyboard (spec §4.1): the TUI's keys, mapped to actions. Pure, so tests/keys.test.ts checks
+// The keyboard (spec §4.1): one key per action, mapped to actions. Pure, so tests/keys.test.ts checks
 // it without a window.
 
 export type Action =

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { actionFor } from '../src/keys.ts';
 
-test('the TUI keys map to their actions', () => {
+test('the keys map to their actions', () => {
   const cases: [string, string][] = [['j', 'down'], ['ArrowDown', 'down'], ['k', 'up'], ['h', 'hop'], ['e', 'export'], ['i', 'import'],
     ['R', 'resume'], ['r', 'reload'], ['t', 'turns'], ['g', 'top'], ['G', 'bottom'], ['o', 'scan'], ['/', 'search'], ['c', 'chat'], [' ', 'fold'],
     ['Enter', 'enter'], ['Escape', 'back'], ['PageDown', 'pageDown']];

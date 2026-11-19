@@ -1,6 +1,6 @@
 @echo off
-rem Mukade: build mukade-ui.exe (desktop app, the UI embedded), mukade.exe (command line) and
-rem mukade-tui.exe (terminal browser), assemble them in .\release, install into D:\Software\Mukade,
+rem Mukade: build mukade-ui.exe (desktop app, the UI embedded) and mukade.exe (command line),
+rem assemble them in .\release, install into D:\Software\Mukade,
 rem clean what the build staged. The programs sit in one folder on purpose: they share mukade-data
 rem beside them (exports, manifests, the chat service's files), so the app reads the chat that
 rem `mukade chat start` runs. Chat refuses a data folder inside the clone: use the install.
@@ -223,8 +223,6 @@ rem Each subroutine returns 0 when done; errors go to :sub_fail. The working fol
 :build
 echo     mukade.exe ^(command line, release^)
 cargo build --release --locked -p mukade --bin mukade || goto :sub_fail
-echo     mukade-tui.exe ^(terminal browser, release^)
-cargo build --release --locked -p mukade-tui || goto :sub_fail
 echo     mukade-ui.exe ^(Tauri, release, custom-protocol; the page through beforeBuildCommand^)
 pushd "apps\desktop" || goto :sub_fail
 call "%ROOT%node_modules\.bin\tauri.cmd" build --no-bundle --features custom-protocol -- --locked
@@ -237,8 +235,7 @@ exit /b 0
 mkdir "%RELEASE%" || goto :sub_fail
 copy /y "target\release\mukade-ui.exe" "%RELEASE%\" >nul || goto :sub_fail
 copy /y "target\release\mukade.exe" "%RELEASE%\" >nul || goto :sub_fail
-copy /y "target\release\mukade-tui.exe" "%RELEASE%\" >nul || goto :sub_fail
-copy /y "docs\desktop.md" "%RELEASE%\LEGGIMI-desktop.md" >nul || goto :sub_fail
+copy /y "docs\desktop.md" "%RELEASE%\README-desktop.md" >nul || goto :sub_fail
 copy /y "LICENSE" "%RELEASE%\LICENSE" >nul || goto :sub_fail
 for %%F in ("%RELEASE%\*") do echo     %%~nxF  %%~zF bytes
 exit /b 0

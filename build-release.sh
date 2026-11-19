@@ -25,7 +25,7 @@ mkdir -p release
 # Only the programs are replaced: release/mukade-data, if it is there, is the user's and stays.
 cp target/release/mukade release/mukade
 cp target/release/mukade-ui release/mukade-ui
-cp docs/desktop.md release/LEGGIMI-desktop.md
+cp docs/desktop.md release/README-desktop.md
 cp LICENSE release/LICENSE
 
 printf '\nOK. Ready:\n  %s/release/mukade-ui\n  %s/release/mukade\nData: %s/release/mukade-data (made on first use)\n' \

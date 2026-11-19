@@ -1,5 +1,5 @@
 // The session tree, folders, children counts and search: pure functions over the listing, so
-// `tests/tree.test.ts` runs them without a window. Ported from the TUI's tree.rs and directory.rs.
+// `tests/tree.test.ts` runs them without a window.
 
 import type { SessionRow } from './types.ts';
 

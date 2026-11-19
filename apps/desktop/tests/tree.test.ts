@@ -7,7 +7,7 @@ const row = (id: string, extra: Partial<SessionRow> = {}): SessionRow => ({ id, 
 const spawn = (parent: string, agent?: string): Partial<SessionRow> => ({ parent, parent_kind: { kind: 'spawn', agent } });
 const fork = (parent: string): Partial<SessionRow> => ({ parent, parent_kind: { kind: 'fork' } });
 
-// The TUI's listing: a child before its parent, a fork, a subagent of a session not listed.
+// A listing: a child before its parent, a fork, a subagent of a session not listed.
 const listing = [
   row('helper', spawn('main', 'explore')),
   row('main'),
@@ -59,7 +59,7 @@ test('folders: All, each path, Unknown; a shared leaf name keeps enough of its p
   assert.deepEqual(inFolder(rows, '/w/two/app').map((r) => r.id), ['2', '3']);
 });
 
-test('marks, kind and children read as the TUI wrote them', () => {
+test('marks, kind and children read as the listing gives them', () => {
   assert.deepEqual(mark(listing[0]), { text: '↳ agent explore', kind: 'spawn' });
   assert.equal(mark(listing[2])?.kind, 'fork');
   assert.equal(mark(listing[1]), null);

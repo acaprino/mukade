@@ -13,7 +13,7 @@ Evidence: `[n]` = source n in [Sources](#sources); `[S n]` = Hermes source at ta
 | **Write** | ⚠️ through `hermes sessions import --from claude`, never by writing `state.db`. Only user and assistant text arrives; every tool call is text; no model, no reasoning, no image. Takes about 70 s (the import starts the gateway) [33][35] |
 | **Hop as source** | ✅ `mukade hop hermes <id> <dst>`; `--all-branches` does not apply |
 | **Hop as destination** | ⚠️ works with the losses above; `--dest-id`, `--dest-agent` and `--metadata-file` are refused as a command-line mistake (exit 1, as toward every destination that does not take them), `--dest-path` and `--compaction native` as unsupported (exit 2); each before anything runs |
-| **Resume** | ✅ receipt: `hermes chat -Q --resume <id> -q`; the TUI runs `hermes --resume <id>` |
+| **Resume** | ✅ receipt: `hermes chat -Q --resume <id> -q`; the desktop app's resume runs `hermes --resume <id>` |
 | **Summary by its own model** | ❌ `--compaction summary` from Hermes is refused, with the reason (How mukade summarizes it) |
 | **Native compaction** | ⚠️ read: a stored summary row (`_compressed_summary = 1`) is a compaction entry, so `--compaction portable` works; never written (the import has no such record) |
 | **Subagents** | ⚠️ read: `delegate_task` sessions are children (`list --children`, `dump --children`); a `/branch` copy is a fork. Written: `hop --children` imports each child as a session of its own, unlinked |

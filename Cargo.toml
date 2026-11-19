@@ -56,12 +56,12 @@ name = "mukade"
 path = "src/bin/mukade.rs"
 
 [workspace]
-members = ["mukade-tui", "apps/desktop/src-tauri"]
+members = ["apps/desktop/src-tauri"]
 default-members = ["."]
 resolver = "3"
 
-# The CLI stays the default build: `cargo build` and `cargo test` never pull the TUI's
-# dependencies. `cargo build -p mukade-tui` builds the terminal browser.
+# The CLI stays the default build: `cargo build` and `cargo test` never pull the desktop app's
+# dependencies. The desktop app builds with npm (docs/desktop.md).
 
 # The binary is one file that is copied around: small and fast matter more than build time.
 [profile.release]
