@@ -3,7 +3,7 @@ name = "mukade"
 description = "Harness sessions manager for coding agents: move a session between Claude Code, Codex CLI, OpenCode and Pi, as one of the destination's own."
 version = "0.1.3"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/acaprino/mukade"
 readme = "README.md"
 keywords = ["session", "claude-code", "codex", "opencode", "harness"]
@@ -56,12 +56,12 @@ name = "mukade"
 path = "src/bin/mukade.rs"
 
 [workspace]
-members = ["mukade-tui", "apps/desktop/src-tauri"]
+members = ["apps/desktop/src-tauri"]
 default-members = ["."]
 resolver = "3"
 
-# The CLI stays the default build: `cargo build` and `cargo test` never pull the TUI's
-# dependencies. `cargo build -p mukade-tui` builds the terminal browser.
+# The CLI stays the default build: `cargo build` and `cargo test` never pull the desktop app's
+# dependencies. The desktop app builds with npm (docs/desktop.md).
 
 # The binary is one file that is copied around: small and fast matter more than build time.
 [profile.release]

@@ -15,7 +15,7 @@
 //!
 //! Each harness's layout is an adapter (`claude_code`, `codex`, `opencode`, `pi`, `hermes`,
 //! `deepseek_harness`) behind one contract (`layout::StoreLayout`), so detection and the scan
-//! apply the same rules. The CLI and the terminal browser use these functions and recognize
+//! apply the same rules. The CLI and the desktop app use these functions and recognize
 //! nothing themselves (ADR-0001).
 
 mod claude_code;

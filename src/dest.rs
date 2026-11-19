@@ -2,7 +2,7 @@
 //!
 //! Two writers need a value only the destination's own configuration knows: OpenCode refuses a
 //! model reference without a provider, and Codex stamps the provider its `config.toml` names.
-//! The CLI used to read them privately; the TUI needs the same answer without a second copy.
+//! The CLI used to read them privately; the desktop app needs the same answer without a second copy.
 //! The shell the destination runs decides which shell calls stay calls (L13): both ask it here too.
 
 use crate::model::HarnessId;

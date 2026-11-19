@@ -210,8 +210,8 @@ list missed are marked (added).
     `ALL` uses (added); the adapter's rows in `tests/harnesses.rs`; its reader, writer and detector
     files in `ADAPTER_FILES` and its `HarnessId::` name in `HARNESS_ARMS` of `tests/architecture.rs`;
     the origin test in `tests/bus_origin.rs` (added).
-12. `mukade-tui` needs no code: it loops over the registry, so listing and hopping work. Check the
-    resume (`every_harness_has_the_exact_interactive_resume_argv`) and say in `resume_refusal` when
+12. The desktop app needs no code: it loops over the registry, so listing and hopping work. Check the
+    resume (`every_harness_has_the_exact_interactive_resume_argv` in `src/catalog.rs`) and say in `resume_refusal` when
     the harness has no interface to open a session in (added).
 13. Docs (added): the harness page (skeleton: Status in mukade, Quick start, Install and locate,
     Session store, Features, How mukade reads / writes / summarizes it, Open points, Sources),
@@ -227,7 +227,7 @@ catalog entry. Nothing else branches on it.
 
 `tests/architecture.rs`, `no_harness_branch_outside_its_adapter`:
 
-1. Walks every `.rs` file under `src/` and `mukade-tui/src/`.
+1. Walks every `.rs` file under `src/` and `apps/desktop/src-tauri/src/`.
 2. Skips the adapter files (`ADAPTER_FILES`, exact files and folders): `src/harnesses/`, the
    readers, writers and detectors of one harness, `src/model/harness.rs`.
 3. Skips test code: the item after a `#[cfg(test)]` line. One lexer reads each file from its

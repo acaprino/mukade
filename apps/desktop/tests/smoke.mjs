@@ -53,9 +53,43 @@ try {
     await page.screenshot({ path: `${out}receipt-${name}.png` });
     await page.keyboard.press('Escape');
     await page.keyboard.press('c');
-    await page.locator('.msg').first().waitFor();
+    // The room in its three views: the graph (the first), the lanes, the feed.
+    await page.locator('.graph-canvas svg .node').first().waitFor();
     await expect(page, '#chat-members .member', 'chat');
+    await page.waitForTimeout(700);
     await page.screenshot({ path: `${out}chat-${name}.png` });
+    await page.keyboard.press('2');
+    await page.locator('.lanes .lrow').first().waitFor();
+    await page.screenshot({ path: `${out}chat-lanes-${name}.png` });
+    await page.keyboard.press('3');
+    await page.locator('.feed .msg').first().waitFor();
+    // The window joins and writes as the user; the message comes back from the service.
+    await page.getByRole('button', { name: 'Join', exact: true }).click();
+    await page.locator('#chat-text').waitFor();
+    await page.locator('#chat-text').fill('Smoke check: @codex-b is the receipt done?');
+    await page.keyboard.press('Control+Enter');
+    await page.locator('.feed .msg', { hasText: 'Smoke check' }).waitFor();
+    await page.screenshot({ path: `${out}chat-feed-${name}.png` });
+    // A new room, from its key.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('n');
+    await page.locator('#room-name').fill('smoke-room');
+    await page.keyboard.press('Enter');
+    await page.locator('#chat-rooms .row', { hasText: 'smoke-room' }).waitFor();
+    // Search everything finds a member of another room.
+    await page.keyboard.press('Control+k');
+    await page.locator('#search-all').fill('codex');
+    await page.locator('.search-row').first().waitFor();
+    await page.screenshot({ path: `${out}search-${name}.png` });
+    await page.keyboard.press('Escape');
+    // The harnesses page: every harness, and a scan of the computer that finds a portable one.
+    await page.keyboard.press('m');
+    await page.locator('.harness-card').first().waitFor();
+    await page.getByRole('button', { name: 'Scan this computer' }).click();
+    await page.locator('#status', { hasText: 'system scan done' }).waitFor({ timeout: 20000 });
+    await page.locator('.install-row', { hasText: 'JanuraCode' }).waitFor();
+    await page.screenshot({ path: `${out}harnesses-${name}.png` });
+    await page.keyboard.press('c');
     // What is being typed in the filter survives the 3 s poll.
     await page.locator('#chat-filter').click();
     await page.keyboard.type('sub');
@@ -80,4 +114,4 @@ if (failures.length) {
   console.error(failures.join('\n'));
   process.exit(1);
 }
-console.log(`smoke ok: 24 screenshots in ${out}`);
+console.log(`smoke ok: 40 screenshots in ${out}`);

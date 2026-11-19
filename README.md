@@ -7,14 +7,14 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#supported-harnesses">Harnesses</a> ·
-  <a href="#terminal-ui">Terminal UI</a> ·
+  <a href="#desktop-app">Desktop app</a> ·
   <a href="#local-mcp-chat">MCP chat</a> ·
   <a href="#ecosystem">Ecosystem</a> ·
   <a href="#contributing">Contributing</a>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-77a98a" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-77a98a" alt="Apache-2.0 license"></a>
   <a href="#rust-library"><img src="https://img.shields.io/badge/Rust-CLI%20%2B%20library-c17451" alt="Rust CLI and library"></a>
 </p>
 
@@ -22,14 +22,14 @@
 
 Start a task in Claude Code, then pick it up in Pi, Codex, or another supported harness. Mukade reads the saved history and creates a **native session** in the destination. The original session stays intact. The receipt gives you the new session ID, the command to resume it, and a manifest of what was converted or left behind.
 
-- **Browse and resume** sessions from multiple harnesses in one terminal UI.
+- **Browse and resume** sessions from multiple harnesses in one desktop window.
 - **Export and import** sessions as JSON for backups or handoffs to another machine.
 - **Connect running agents** in a local MCP room so they can exchange messages and follow each other's work.
 - **Embed the handoff** in your own tool through the Rust library.
 
 ## Quickstart
 
-**Windows x64: download.** Take `mukade-v0.1.0-windows-x64.zip` from [Releases](https://github.com/acaprino/mukade/releases) and
+**Windows x64: download.** Take `Mukade-<version>-windows-x64.zip` from [Releases](https://github.com/acaprino/mukade/releases) and
 extract it to a plain local folder, for example `C:\tools\mukade`. Not into a git checkout or a
 OneDrive folder (on Windows 11 often the Desktop and Documents): [chat refuses those](docs/usage.md#local-chat-between-harness-instances).
 
@@ -37,20 +37,19 @@ OneDrive folder (on Windows 11 often the Desktop and Documents): [chat refuses t
 | --- | --- |
 | `mukade.exe` | the command line: `list`, `hop`, `dump`, `write`, `chat` … |
 | `mukade-ui.exe` | the [desktop app](docs/desktop.md); needs the WebView2 runtime, part of Windows 11 |
-| `mukade-tui.exe` | the [terminal browser](#terminal-ui) |
 
 The programs are not signed: Windows SmartScreen may ask before the first run (**More info** →
-**Run anyway**). `SHA256SUMS.txt` on the release page lists each file's checksum.
+**Run anyway**). `Mukade-<version>-setup.exe`, on the same page, installs them instead.
 
 **Any platform: build from source** with [Rust](https://rustup.rs/) and Git.
 
 ```sh
 git clone https://github.com/acaprino/mukade.git
 cd mukade
-cargo build --release --locked --workspace
+cargo build --release --locked
 ```
 
-The build produces `mukade` and `mukade-tui` in `target/release/`, with `.exe` on Windows. Add that directory to your `PATH` or run the binaries by their paths.
+The build produces `mukade` in `target/release/`, with `.exe` on Windows; the desktop app has [its own build](docs/desktop.md#run-and-build). Add that directory to your `PATH` or run the binaries by their paths.
 
 **Continue a Claude Code session in Pi.** Replace `SESSION_ID` with an ID from `list` and use the paths to your own stores.
 
@@ -86,13 +85,9 @@ Use `--children` to include supported subagent sessions, `--interrupted drop` to
 
 [History and compaction](docs/usage.md#5-choose-what-travels) · [Tool conversion tables](docs/tool-conversion-tables.md) · [Interchange specification](docs/session-interchange-spec.md)
 
-## Terminal UI
+## Desktop app
 
-```sh
-cargo run -p mukade-tui
-```
-
-Browse stores and transcripts, then press **`R`** to resume, **`h`** to hop, **`e`** to export, or **`i`** to import. Use `--scan <directory>` to discover additional installations. [TUI guide](mukade-tui/README.md)
+`mukade-ui.exe` browses every installation's sessions and reads them, then hops, exports, imports or resumes them in a terminal, and runs the chat rooms: who wrote to whom, writing as you, launching agents. Use `--scan <directory>` to discover additional installations. [Desktop guide](docs/desktop.md)
 
 ## Local MCP chat
 
@@ -183,4 +178,4 @@ cargo test --locked --workspace
 
 ## License
 
-[MIT](LICENSE). The [harness marks](docs/assets/branding/harnesses/README.md) belong to their respective owners.
+[Apache-2.0](LICENSE). The [harness marks](docs/assets/branding/harnesses/README.md) belong to their respective owners.

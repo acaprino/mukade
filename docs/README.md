@@ -9,7 +9,7 @@ New here: the [project README](../README.md), then the [usage guide](usage.md).
 | [Project README](../README.md) | you want the matrix, quick start, library, commands |
 | [Command-line usage](usage.md) | you run `mukade`: setup, commands, compaction, intents, troubleshooting |
 | [Reading a session of any size](reading-large-sessions.md) | you read a huge session: which call, the commands, measured memory |
-| [Sessions TUI](../mukade-tui/README.md) | you want the terminal explorer: keys, resume, hop, export, import |
+| [Desktop app](desktop.md) | you want the window: browse, read, hop, export, import, resume, chat |
 | [Open points](../next.md) | you want the status board: done, to verify, known limits |
 | [Windows checklist](verification/windows-checklist.md) | you settle an open check: steps, pass criterion |
 
@@ -73,5 +73,5 @@ Historical intent; for behavior use the reference and records.
 
 - [Source-model summary design](archive/design/source-model-summary.md) and [plan](archive/plans/source-model-summary-implementation.md).
 - Designed, not built (2026-11-16): [an overdue worker and a write turn for chat](superpowers/specs/2026-11-16-chat-overdue-write-turn-design.md); [the desktop chat view redrawn, with controls and search](superpowers/specs/2026-11-16-desktop-chat-redesign-design.md), with a [prototype to open in a browser](mockups/desktop-chat.html).
-- [Design drafts](superpowers/specs/): TUI (2026-10-30), Hermes and DeepSeek (2026-10-31, then [2026-11-12](superpowers/specs/2026-11-12-hermes-deepseek-design.md)), directory filter (2026-11-02), Codex code mode (2026-11-11), subagents (2026-11-12); [implementation plans](superpowers/plans/) for the later ones.
-- [TUI mockup](mockups/tui.html); [branding assets](assets/branding/) (logo, its generation prompt).
+- [Design drafts](superpowers/specs/): the former TUI (2026-10-30), Hermes and DeepSeek (2026-10-31, then [2026-11-12](superpowers/specs/2026-11-12-hermes-deepseek-design.md)), directory filter (2026-11-02), Codex code mode (2026-11-11), subagents (2026-11-12); [implementation plans](superpowers/plans/) for the later ones.
+- [Chat view prototype](mockups/desktop-chat.html); [branding assets](assets/branding/) (logo, its generation prompt).

@@ -5,6 +5,7 @@ import './detail.css';
 import { button, fill, h, icon, kbd } from './dom.ts';
 import { currentInstallation, selectedRow, state } from './state.ts';
 import { ancestors, childrenText, kindText, mark } from './tree.ts';
+import type { RoomMember } from './chatindex.ts';
 import type { SessionRow } from './types.ts';
 
 export interface DetailActions {
@@ -89,4 +90,14 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
     lineage,
     row.live ? h('p', { class: 'note' }, `This session is open in ${installation.label}. A hop or export copies what is on disk now.`) : null,
   )));
+}
+
+/** The rooms where a member is bound to the session: each opens the room at that member. */
+export function inRoomsBox(found: RoomMember[], open: (roomId: string, memberId: string) => void): HTMLElement {
+  return h('div', { class: 'box lineage in-rooms' }, h('p', { class: 'label' }, `In rooms · ${found.length}`),
+    ...found.map(({ room, member }) => button([
+      icon('chat'),
+      h('span', { class: 'grow' }, room.name),
+      h('span', { class: 'num' }, `${member.name} · ${member.role}${member.left_at ? ' · left' : ''}${room.closed_at ? ' · closed' : ''}`),
+    ], { class: 'lineage-row', title: 'Show the room at this member', onclick: () => open(room.room_id, member.member_id) })));
 }

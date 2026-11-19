@@ -338,7 +338,7 @@ fn prompt(text: Option<&str>) -> Option<ResumePrompt> {
 
 /// F6: read the source from its own installation, compact it there, write it into the
 /// destination's stores (two installations of one harness keep theirs apart). The library's
-/// `hop_into` does the hop, so its refusals and its registry hold here as in the CLI and the TUI.
+/// `hop_into` does the hop, so its refusals and its registry hold here as in the CLI.
 pub fn hop(state: &AppState, args: &HopArgs) -> CmdResult<ReceiptView> {
     let (source, info) = readable(state, &args.source, &args.id)?;
     let dest = state.location(&args.dest)?;

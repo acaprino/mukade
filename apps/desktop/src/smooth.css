@@ -15,7 +15,8 @@
   & button:hover { border-color: var(--line); background: color-mix(in srgb, var(--text) 9%, transparent); }
   & button:active { background: var(--line); }
   & button:disabled:hover { border-color: var(--line); background: color-mix(in srgb, var(--text) 4%, transparent); }
-  & kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; font: 11px var(--sans); }
+  /* Keys in the code face: a lowercase l is not a bar. */
+  & kbd { padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; font: 11px var(--code); }
 }
 
 :root[data-look="smooth"] {
@@ -123,4 +124,22 @@
   & #app { background: color-mix(in srgb, var(--stage) 86%, transparent); }
   & .titlebar { background: color-mix(in srgb, color-mix(in srgb, var(--stage) 92%, var(--line-strong)) 76%, transparent); }
   & .dialog { border-color: color-mix(in srgb, var(--line-strong) 70%, transparent); }
+}
+/* The chat: chips and tags are pills, cards and plates are rounded, the lacquer-free strip is flat. */
+:root[data-look="smooth"] {
+  & .chip { border-radius: 999px; }
+  & :is(.state, .msg .to b) { border-radius: 4px; }
+  & :is(.lmsg, .search-results, .caption) { border-radius: var(--radius); }
+  & .lchip { border-radius: 999px; }
+  & .node .plate { rx: 8px; }
+  & .tick { border-radius: 2px; }
+  & .wdot { border-radius: 50%; }
+  & .composer { border-top-color: var(--line); background: none; }
+  & .scrub { background: none; }
+  & .lhead { background: var(--pane); }
+  & .msg[aria-selected='true'], & .lrow[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  & .member-row.open { background: color-mix(in srgb, var(--text) 6%, transparent); }
+  & .search-row[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  & .column-tools { border-bottom-color: transparent; }
+  & .stage-tools { border-bottom-color: transparent; }
 }

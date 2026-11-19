@@ -79,10 +79,23 @@ export interface Binding { harness: string; id: string; cwd: string | null; sour
 export interface Member {
   room_id: string; member_id: string; name: string; harness: string; role: string; joined_at: string;
   left_at: string | null; last_command_at: string | null; session: Binding | null;
+  /** A member the host (this window, or Shinatama) created: what it sends is the user's. */
+  host?: boolean;
 }
-export type Actor = { type: 'local_admin' } | { type: 'member'; member_id: string | null; name: string; role: string | null };
+export type Actor = { type: 'local_admin' } | { type: 'member'; member_id: string | null; name: string; role: string | null; host?: boolean };
+/** What a join or rejoin answers: the member, and the handle it writes with. */
+export interface Joined { room_id: string; member_id: string; member_handle: string; name: string; role: string }
 export interface ChatEvent {
   room_id: string; event_id: string; timestamp: string; actor: Actor; kind: string;
   payload: Record<string, unknown>; recipient_ids: string[];
 }
+/** A harness as the harnesses page shows it. */
+export interface HarnessView {
+  id: string; display: string; status: 'installed' | 'configured' | 'missing'; binary?: string; source: string; version?: string;
+  store?: string; store_exists: boolean; binary_env: string; store_env: string; destination: boolean;
+  install_command?: string; sandbox_package?: string;
+}
+export interface Found { harness: string; store: string; engine?: string }
+export interface FolderScan { dir: string; found: Found[]; visited: number; truncated: boolean }
+export interface Sandbox { harness: string; name: string; root: string; store: string; exe: string; package: string; created: string }
 export interface Page<T> { items: T[]; next_cursor: string | null; high_water?: string }

@@ -102,15 +102,25 @@ export class Reader {
       h('pre', { class: 'code raw-json' }, raw === null ? 'Reading…' : JSON.stringify(raw.length === 1 ? raw[0] : raw, null, 2)));
   }
 
+  /** Set while a live session read again is drawn: the reader stays where it is, and follows the
+   *  end only when it was there. */
+  keepPlace = false;
+
   private setEntries(transcript: Transcript): void {
     if (transcript.entries === this.entries) return;
     const keep = this.entries.length && transcript.entries[0]?.id === this.entries[0]?.id;
+    const atEnd = this.pinned || this.scroller.scrollTop + this.scroller.clientHeight >= this.scroller.scrollHeight - 40;
+    const top = this.scroller.scrollTop;
     this.entries = transcript.entries;
     this.heights = this.entries.map((entry) => 44 + entry.blocks.reduce((sum, block) => sum + Math.min(400, 22 * Math.ceil(block.text.length / 90)), 0));
     this.offsets = [0];
     for (const height of this.heights) this.offsets.push(this.offsets[this.offsets.length - 1] + height);
     this.spacer.style.height = `${this.offsets[this.offsets.length - 1]}px`;
-    if (!keep) {
+    if (this.keepPlace) {
+      if (!keep) this.expanded.clear();
+      if (atEnd) requestAnimationFrame(() => this.bottom());
+      else this.scroller.scrollTop = top;
+    } else if (!keep) {
       this.expanded.clear();
       // A transcript opens at its end, where the conversation is now.
       requestAnimationFrame(() => this.bottom());

@@ -6,16 +6,14 @@
     "package-lock.json",
     "Cargo.toml",
     "apps/desktop/src-tauri/Cargo.toml",
-    "apps/desktop/src-tauri/tauri.conf.json",
-    "mukade-tui/Cargo.toml"
+    "apps/desktop/src-tauri/tauri.conf.json"
   ],
   "locks": [
     "Cargo.lock"
   ],
   "crates": [
     "mukade",
-    "mukade-desktop",
-    "mukade-tui"
+    "mukade-desktop"
   ],
   "prepare": []
 }

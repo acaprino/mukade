@@ -28,7 +28,7 @@ Top level: `schema`, `description`, `expansions` (the tokens below, for readers;
 | `store.layout` | patterns of the files that make a store recognizable |
 | `lineage.recorded` / `fields` / `note` | what the format records about forks, and what not |
 | `resume` | native resume argv; `{exe}`, `{id}`, `{file}` filled in (`{file}` is the session file, or the id when none) |
-| `interactive_resume` | argv that opens the session in the harness's terminal UI (`mukade-tui`); when empty, `resume` is used |
+| `interactive_resume` | argv that opens the session in the harness's terminal UI (the desktop app's resume); when empty, `resume` is used |
 
 ## Platform locations
 
@@ -83,16 +83,16 @@ that file's header.
 
 **Resume commands** (`{exe}` is the resolved executable):
 
-| harness | `resume` (in a receipt) | `interactive_resume` (`mukade-tui`) |
+| harness | `resume` (in a receipt) | `interactive_resume` (desktop app) |
 |---|---|---|
 | Claude Code | `{exe} -p --resume {id}` | `{exe} --resume {id}` |
 | Codex CLI | `{exe} exec resume {id}` | `{exe} resume {id}` |
 | OpenCode | `{exe} run --standalone --session {id}` | `{exe} mini --standalone --session {id}` |
 | Pi | `{exe} -p --session {file}` | `{exe} --session {file}` |
 | Hermes Agent | `{exe} chat -Q --resume {id} -q` | `{exe} --resume {id}` |
-| DeepSeek Harness | `{exe} --profile headless --session-id {id}` (a task follows) | none: dsh has no terminal UI, so `mukade-tui` refuses (`Harness::resume_refusal`) |
+| DeepSeek Harness | `{exe} --profile headless --session-id {id}` (a task follows) | none: dsh has no terminal UI, so the desktop app refuses (`Harness::resume_refusal`) |
 
-**Default stores** are what the **harness** itself uses. Only `mukade harnesses` and `mukade-tui`
+**Default stores** are what the **harness** itself uses. Only `mukade harnesses` and the desktop app
 fall back to them when the store variable is unset or empty; other commands use the explicit roots of
 [usage §7](../usage.md#7-stores-and-executables).
 
@@ -135,7 +135,7 @@ fall back to them when the store variable is unset or empty; other commands use 
 | `src/detect/engine.rs` `engine_beside_store()` (`mukade scan`, `--dest-root`) | `binary.beside_store` |
 | `mukade harnesses` (`src/cli.rs` `print_harnesses()`) | `display`, `binary.flag`/`binary.env` (labels), `store.env`, `store.default`, `store.layout`, `lineage` |
 | writers' receipts (`src/catalog.rs` `resume()`) | `resume` |
-| `mukade-tui` | `display`, `store.default`, `store.root_is_a_file`, `interactive_resume` |
+| the desktop app (`apps/desktop/src-tauri`) | `display`, `store.default`, `store.root_is_a_file`, `resume`, `interactive_resume` |
 
 OpenCode's counts: one read-only query; Pi's forks: the session headers.
 
@@ -153,5 +153,5 @@ OpenCode's counts: one read-only query; Pi's forks: the session headers.
      unexpandable token makes the location unknown, never a literal path;
    - OpenCode's default store falls back to `{home}/.local/share/opencode/opencode.db`;
    - the exact `resume` argv of Claude Code, OpenCode and Pi, and Hermes's store default per
-     platform (`src/catalog.rs`); `interactive_resume` of all six (`mukade-tui/src/main.rs`
+     platform (`src/catalog.rs`); `interactive_resume` of all six (`src/catalog.rs`
      `every_harness_has_the_exact_interactive_resume_argv`).

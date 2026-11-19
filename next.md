@@ -1,12 +1,23 @@
 # Next: open points
 
-**Status on 2026-11-16.** What is done, then what is open, by what it needs (Windows, model calls,
+**Status on 2026-11-19.** What is done, then what is open, by what it needs (Windows, model calls,
 code, a key, macOS), then the known limits. Unverified facts are marked **[U]** here and in the docs.
 
 **The step-by-step for every open check:** [docs/verification/windows-checklist.md](docs/verification/windows-checklist.md).
 Its step numbers are in brackets below.
 
 ---
+
+## ✅ Done on 2026-11-19
+
+| what | before | now |
+|---|---|---|
+| The Smooth look ([desktop guide](docs/desktop.md)) | one look | Smooth by default, dark and light following the system; Oni, the first look, in Settings |
+| Hop options in the window | destination, compaction (none, portable, summary), subagents, branches, reasoning, shell, prompt | also native compaction, the summary's intent, model and kept turns, the destination's model and provider, unfinished turns, without tools |
+| The terminal browser | `mukade-tui.exe` beside the app | removed: the desktop app is the interface, the command line stays |
+| Harnesses page | `mukade harnesses` and `scan` in the terminal only | a page per harness (binary, version, store, installations), a scan of the whole computer with progress, folders kept, installs on the system or into an npm sandbox with its own store. Installs not tried for real yet **[U]** |
+| A live session in the reader | read once, as it was when opened | read again when its file changes; the reader keeps its place, or follows the end |
+| Chat in the window ([design](docs/superpowers/specs/2026-11-16-desktop-chat-redesign-design.md), layer A) | read only: a flat list of one room | graph, lanes and feed of the same events, a replay, one filter, members and instructions; the window joins as the host's member and writes, opens, closes, reopens and deletes rooms, starts and stops the service, launches agents; search everything; a session's rooms. Not tried against the real service yet **[U]** |
 
 ## ✅ Done from 2026-11-13 to 2026-11-16
 

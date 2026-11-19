@@ -5,8 +5,8 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  ChatEvent, ChatStatus, CmdError, Exported, HopArgs, HopOptions, InstallationList, Member,
-  Page, RawPage, Receipt, Resumed, Room, SessionRow, Startup, TranscriptView,
+  ChatEvent, ChatStatus, CmdError, Exported, FolderScan, HarnessView, HopArgs, HopOptions, InstallationList, Member,
+  Page, RawPage, Receipt, Resumed, Room, Sandbox, SessionRow, Startup, TranscriptView,
 } from './types.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
@@ -37,7 +37,10 @@ export const api = {
   /** Every standard store, then what each folder in `scan` holds: pass every folder scanned so far. */
   installations: (scan: string[]) => invoke<InstallationList>('installations', { scan }),
   sessions: (installation: string) => invoke<SessionRow[]>('sessions', { installation }),
-  transcript: (installation: string, id: string, turns: number) => invoke<TranscriptView>('transcript', { installation, id, turns }),
+  /** `fresh` reads the session again instead of drawing the copy the window holds (a live session). */
+  transcript: (installation: string, id: string, turns: number, fresh = false) => invoke<TranscriptView>('transcript', { installation, id, turns, fresh }),
+  /** The session's file as it is now (size and modified time); null when it cannot be looked at. */
+  sessionStamp: (installation: string, id: string) => invoke<string | null>('session_stamp', { installation, id }),
   /** Native records of the session's entries `offset` to `offset + limit` (at most 200). */
   raw: (installation: string, id: string, offset: number, limit: number) => invoke<RawPage>('raw', { installation, id, offset, limit }),
   hopOptions: (source: string, id: string) => invoke<HopOptions>('hop_options', { source, id }),
@@ -51,6 +54,25 @@ export const api = {
   chatMembers: (roomId: string) => invoke<Page<Member>>('chat_members', { roomId }),
   chatLedger: (roomId: string, opts: { cursor?: string; since?: string; text?: string } = {}) =>
     invoke<Page<ChatEvent>>('chat_ledger', { roomId, ...opts }),
+  /** One write as the room's host: open, close, reopen, delete, join, rejoin, leave, send. `args`
+   *  are the service's own, `request_id` included. */
+  chatWrite: <T = Record<string, unknown>>(operation: string, args: Record<string, unknown>) => invoke<T>('chat_write', { operation, args }),
+  chatStart: () => invoke<unknown>('chat_start'),
+  chatStop: () => invoke<unknown>('chat_stop'),
+  /** Run an agent in a room in a new terminal; answers the command it runs. */
+  chatLaunch: (harness: string, room: string, role: string, listen: number, cwd?: string) =>
+    invoke<string[]>('chat_launch', { harness, room, role, listen, cwd }),
+  harnessInventory: () => invoke<HarnessView[]>('harness_inventory'),
+  /** The folders a system scan reads, one at a time. */
+  systemRoots: () => invoke<string[]>('system_roots'),
+  scanFolder: (dir: string) => invoke<FolderScan>('scan_folder', { dir }),
+  /** The harness's own install command, in a new terminal. */
+  installSystem: (harness: string) => invoke<string[]>('install_system', { harness }),
+  sandboxes: () => invoke<Sandbox[]>('sandboxes'),
+  /** npm installs the harness into a sandbox of its own; answers when it is done. */
+  sandboxInstall: (harness: string, name: string) => invoke<Sandbox>('sandbox_install', { harness, name }),
+  sandboxForget: (root: string) => invoke<null>('sandbox_forget', { root }),
+  sandboxRun: (root: string) => invoke<string[]>('sandbox_run', { root }),
   quit: () => invoke<void>('quit'),
 };
 

@@ -4,7 +4,8 @@
 import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
-import { renderDetail } from './detail.ts';
+import { boundTo, chatIndex } from './chatindex.ts';
+import { inRoomsBox, renderDetail } from './detail.ts';
 import { button, commandLine, fill, h, kbd } from './dom.ts';
 import { openHop, openImport, segmented, type JobHooks } from './hop.ts';
 import { HINTS, actionFor, type Action } from './keys.ts';
@@ -12,6 +13,8 @@ import { stepIn } from './lists.ts';
 import { LOOK_KEY, THEMES, THEME_KEY, nextTheme, paints, storedLook, storedTheme, type Look, type Theme } from './look.ts';
 import { closeModal, confirmModal, modalOpen, openModal } from './modal.ts';
 import { Reader } from './reader.ts';
+import { HarnessesView } from './harnesses.ts';
+import { openSearch } from './search.ts';
 import { renderSessions, visiblePlaces } from './sessions.ts';
 import { folderKey, renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
@@ -44,7 +47,7 @@ function drawStatus(): void {
   bar.classList.toggle('error', state.job === null && state.statusError);
   $('status').textContent = state.job ?? state.status;
   $('status-counts').textContent = state.counts;
-  const hints = state.view === 'chat' ? HINTS.chat : state.reader ? HINTS.reader : HINTS.sessions;
+  const hints = state.view === 'chat' ? HINTS.chat : state.view === 'harnesses' ? HINTS.harnesses : state.reader ? HINTS.reader : HINTS.sessions;
   fill($('status-right'), ...hints.map(([key, what]) => h('span', {}, h('b', {}, key), ` ${what}`)));
 }
 
@@ -100,6 +103,31 @@ function drawDetail(): void {
     exportTo: (saveAs) => void exportSelected(saveAs),
     resume: () => { const row = selectedRow(); if (row && state.installation !== null) void resume(state.installation, row.id); },
     pick: (id) => pickSession(id),
+  });
+  void drawInRooms();
+}
+
+let roomsTicket = 0;
+/** The rooms where a member is bound to the selected session, under its details. */
+async function drawInRooms(): Promise<void> {
+  const ticket = ++roomsTicket;
+  const row = selectedRow();
+  const installation = currentInstallation();
+  if (!row || !installation || state.reader) return;
+  const index = await chatIndex().catch(() => null);
+  const pad = columns.detail.querySelector('.pad');
+  if (ticket !== roomsTicket || !index || !pad) return;
+  const found = boundTo(index, installation.harness, row.id);
+  pad.querySelector('.in-rooms')?.remove();
+  if (found.length) pad.append(inRoomsBox(found, (roomId, memberId) => { chat.openRoom(roomId, { member: memberId }); switchView('chat'); }));
+}
+
+/** Search everything: rooms, members, messages, sessions. */
+function searchEverything(): void {
+  openSearch({
+    installations: () => state.installations,
+    openSession: (key, id) => void revealSession(key, id, false),
+    openRoom: (roomId, at) => { chat.openRoom(roomId, at); switchView('chat'); },
   });
 }
 
@@ -243,11 +271,46 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
   if (state.reader !== mine) return;
   drawDetail();
   reader.focus();
+  watchLive(mine);
+}
+
+let liveTimer = 0;
+/** A live session open in the reader is read again when its file changes, checked every 3 s. */
+function watchLive(mine: NonNullable<typeof state.reader>): void {
+  window.clearInterval(liveTimer);
+  liveTimer = 0;
+  if (!selectedRow()?.live || mine.error) return;
+  let stamp: string | null = null;
+  let reading = false;
+  liveTimer = window.setInterval(async () => {
+    if (state.reader !== mine) { window.clearInterval(liveTimer); return; }
+    if (reading || document.hidden || state.view !== 'sessions' || mine.tab !== 'conversation') return;
+    reading = true;
+    try {
+      const now = await api.sessionStamp(mine.key, mine.id).catch(() => null);
+      if (now === null || state.reader !== mine) return;
+      // The first look is the file the reader has just read.
+      if (stamp === null || now === stamp) { stamp = now; return; }
+      stamp = now;
+      const transcript = toTranscript(await api.transcript(mine.key, mine.id, mine.turns, true), mine.transcript?.title ?? mine.id);
+      if (state.reader !== mine) return;
+      mine.transcript = transcript;
+      reader.keepPlace = true;
+      try { drawDetail(); } finally { reader.keepPlace = false; }
+      setStatus(`live: read again at ${new Date().toLocaleTimeString()}, ${transcript.total_turns} turns`);
+    } catch {
+      // The next look tries again.
+    } finally {
+      reading = false;
+    }
+  }, 3000);
 }
 
 function closeReader(draw = true): void {
   if (!state.reader) return;
   state.reader = null;
+  window.clearInterval(liveTimer);
+  liveTimer = 0;
   rawRecords = null;
   if (draw) {
     state.focus = 'sessions';
@@ -348,27 +411,65 @@ async function scanFolder(): Promise<void> {
   const dir = await api.pick('folder').catch((error) => { setStatus(errorText(error), true); return null; });
   if (!dir) return;
   if (!state.scan.includes(dir)) state.scan.push(dir);
+  keepFolders();
   await loadInventory();
+  harnesses.draw();
 }
 
 // --- views and theme ----------------------------------------------------------------------------
 
-const chat = new ChatView($('view-chat'), (harness, id) => {
-  const installation = state.installations.find((item) => item.harness === harness && !item.scanned)
-    ?? state.installations.find((item) => item.harness === harness);
-  if (!installation) return false;
-  void revealSession(installation.key, id, false);
-  return true;
+const chat = new ChatView($('view-chat'), {
+  showSession: (harness, id) => {
+    const installation = state.installations.find((item) => item.harness === harness && !item.scanned)
+      ?? state.installations.find((item) => item.harness === harness);
+    if (!installation) return false;
+    void revealSession(installation.key, id, false);
+    return true;
+  },
+  status: setStatus,
 });
 
-function switchView(view: 'sessions' | 'chat'): void {
+/** The folders and stores scanned and kept across restarts (Scan folder, the system scan). */
+const SCAN_KEY = 'mukade.scan';
+function keptFolders(): string[] {
+  try { const kept = JSON.parse(localStorage.getItem(SCAN_KEY) ?? '[]'); return Array.isArray(kept) ? kept.map(String) : []; } catch { return []; }
+}
+function keepFolders(): void {
+  try { localStorage.setItem(SCAN_KEY, JSON.stringify(state.scan.filter((dir) => !startupScan.includes(dir)))); } catch { /* private window: not kept */ }
+}
+let startupScan: string[] = [];
+
+const harnesses = new HarnessesView($('view-harnesses'), {
+  installations: () => state.installations,
+  folders: () => state.scan,
+  addFolders: async (dirs) => {
+    for (const dir of dirs) if (!state.scan.includes(dir)) state.scan.push(dir);
+    keepFolders();
+    await loadInventory();
+    harnesses.draw();
+  },
+  forgetFolder: async (dir) => {
+    state.scan = state.scan.filter((one) => one !== dir);
+    keepFolders();
+    await loadInventory();
+    harnesses.draw();
+  },
+  reload: async () => { await loadInventory(); harnesses.draw(); },
+  scanFolder: () => void scanFolder(),
+  showInstallation: (key) => { switchView('sessions'); void pickInstallation(key).then(() => setFocus('sessions')); },
+  status: setStatus,
+});
+
+function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   if (state.view === view) return;
   state.view = view;
   $('view-sessions').hidden = view !== 'sessions';
   $('view-chat').hidden = view !== 'chat';
+  $('view-harnesses').hidden = view !== 'harnesses';
+  if (view === 'harnesses') harnesses.show();
   for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.setAttribute('aria-selected', String(tab.dataset.view === view));
-  // The chat view has its own filter, on its messages.
-  $('search').hidden = view === 'chat';
+  // The chat view has its own filter, on its messages; the harnesses page has none.
+  $('search').hidden = view !== 'sessions';
   if (view === 'chat') chat.show(); else chat.hide();
   drawStatus();
 }
@@ -474,6 +575,7 @@ function act(action: Action, event: KeyboardEvent): boolean {
     if (state.view === 'chat') chat.focusFilter(); else ($('search') as HTMLInputElement).focus();
     return true;
   }
+  if (action === 'searchAll') { if (!modalOpen()) searchEverything(); return true; }
   if (action === 'back') {
     if (closeModal()) return true;
     if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) { (document.activeElement as HTMLElement).blur(); return true; }
@@ -484,12 +586,17 @@ function act(action: Action, event: KeyboardEvent): boolean {
   }
   if (modalOpen()) return false;
   if (action === 'chat') { switchView(state.view === 'chat' ? 'sessions' : 'chat'); return true; }
+  if (action === 'harnesses') { switchView(state.view === 'harnesses' ? 'sessions' : 'harnesses'); return true; }
   if (action === 'reload') { void loadInventory(); return true; }
   if (action === 'scan') { void scanFolder(); return true; }
   if (action === 'import') { importDocument(); return true; }
   if (state.view === 'chat') {
     if (action === 'down' || action === 'up') { chat.move(action === 'down' ? 1 : -1); return true; }
     if (action === 'left' || action === 'right') { chat.column(action === 'right' ? 1 : -1); return true; }
+    if (action === 'graph' || action === 'lanes' || action === 'feed') { chat.setView(action); return true; }
+    if (action === 'fold') { chat.togglePlay(); return true; }
+    if (action === 'newRoom') { chat.newRoomDialog(); return true; }
+    if (action === 'launch') { chat.launchDialog(); return true; }
     return false;
   }
   switch (action) {
@@ -521,7 +628,8 @@ function showHelp(): void {
   const rows: [string, string][] = [
     ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['← →', 'previous / next column'], ['⏎', 'next column, or open the transcript'],
     ['esc', 'close the reader or a dialog, or back one column'], ['h · e · i · R', 'hop · export · import · resume'], ['t', 'last turns ↔ all'],
-    ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['c', 'chat ↔ sessions'], ['space', 'fold a parent'],
+    ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['ctrl+k', 'search everything'], ['c', 'chat ↔ sessions'], ['m', 'harnesses ↔ sessions'], ['space', 'fold a parent; in the chat, play the room'],
+    ['1 2 3', 'chat: graph · lanes · feed'], ['n · l', 'chat: new room · launch an agent'], ['ctrl+⏎', 'chat: send'],
   ];
   fill(modal.body, h('dl', { class: 'kv keys' }, ...rows.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
 }
@@ -562,7 +670,7 @@ document.addEventListener('keydown', (event) => {
 // --- start --------------------------------------------------------------------------------------
 
 function wire(): void {
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => switchView(tab.dataset.view as 'sessions' | 'chat'));
+  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => switchView(tab.dataset.view as 'sessions' | 'chat' | 'harnesses'));
   $('scan').addEventListener('click', () => void scanFolder());
   $('import').addEventListener('click', () => importDocument());
   $('reload').addEventListener('click', () => void loadInventory());
@@ -572,6 +680,7 @@ function wire(): void {
     applyLook();
   });
   $('settings').addEventListener('click', openSettings);
+  $('search-everything').addEventListener('click', searchEverything);
   systemLight.addEventListener('change', applyLook);
   const search = $('search') as HTMLInputElement;
   search.addEventListener('input', () => {
@@ -609,7 +718,8 @@ function wire(): void {
     const startup = await api.startup();
     $('version').textContent = startup.version;
     state.defaultTurns = startup.turns;
-    state.scan = [...startup.scan];
+    startupScan = [...startup.scan];
+    state.scan = [...new Set([...startup.scan, ...keptFolders()])];
   } catch (error) {
     setStatus(errorText(error), true);
   }

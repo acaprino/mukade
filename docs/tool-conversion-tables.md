@@ -386,7 +386,7 @@ translating (spec L11):
 - Codex: `codex app-server` `model/list` exposes the model's metadata [U: whether it lists tools].
 
 **Today.** Until T11 exists, the library uses the §2 lists (`src/tools.rs` `offered()`) unless the
-caller passes a set (`WriteDetails::offered`, `src/tools.rs` `translate_with()`). The CLI and the TUI
+caller passes a set (`WriteDetails::offered`, `src/tools.rs` `translate_with()`). The CLI and the desktop app
 pass `src/tools.rs` `offered_in()`: the §2 list plus what the destination's configuration turns on,
 Claude's `PowerShell` and Pi's `powershell` (§4.1). An unlisted tool is text form; the CLI has no
 flag for a wider set.

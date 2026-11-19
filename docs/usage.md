@@ -4,8 +4,8 @@ Use this page to run `mukade` from a shell. Mukade moves a coding-agent session 
 another — Claude Code, Codex CLI, OpenCode, Pi, Hermes Agent, DeepSeek Harness — and the destination
 continues it **as one of its own sessions**.
 
-- The sessions explorer window is a separate crate: [mukade-tui](../mukade-tui/README.md) (its
-  commands, keys, resume and hop examples).
+- The desktop app browses, reads, hops, exports, imports and resumes sessions in a window: [desktop
+  guide](desktop.md).
 - Paths, session IDs, project IDs, model and provider names in the examples are **illustrative**:
   use the values of your installation.
 - Examples are Windows PowerShell. On macOS or Linux use `/` paths and `export NAME=value` instead
@@ -415,7 +415,7 @@ takes no options.
 
 ### `mukade dump`
 
-Exports a session as one harness-neutral JSON document (**export**; the TUI's `e`).
+Exports a session as one harness-neutral JSON document (**export**; the desktop app's Export).
 
 1. Set the source's store variable, or pass `--root`.
 2. Run `mukade dump <harness> <session-id> --output <file>`. Use `--output`, not a shell pipe:
@@ -487,7 +487,7 @@ mukade dump claude_code YOUR_ID --stream --output C:\work\entries.jsonl
 
 ### `mukade write`
 
-Imports a document as a **new** session of any harness (**import**; the TUI's `i`).
+Imports a document as a **new** session of any harness (**import**; the desktop app's Import).
 
 1. Set the **destination's** store variable. The destination needs its own configuration and
    credentials: mukade does not transfer them.
@@ -1019,7 +1019,7 @@ What it does not do:
   `hop` reads the source itself and sees both: prefer it.
 - **A summary is not rewritten**: turns folded into the summary (`--compaction portable` or
   `summary`) are the summary's; the option acts on the turns that travel as they are.
-- It is not a `dump` or `list` option, and `mukade-tui` always keeps.
+- It is not a `dump` or `list` option; the desktop app's hop dialog has it as Unfinished turns.
 
 ### A session that was rewound or branched
 
@@ -1110,15 +1110,15 @@ on its own is a user turn:
 
 A report on an abandoned branch (a rewind) is left behind with that branch and counted in
 `dropped_off_branch`. A subagent's own transcript is a session of its own: `list --children` finds
-it, `dump` and `hop` take it by its id ([Subagent sessions](#subagent-sessions)). The TUI does not
-resume a Claude Code subagent (`R`): Claude Code resumes sessions, not their subagents; it names the
+it, `dump` and `hop` take it by its id ([Subagent sessions](#subagent-sessions)). The desktop app does not
+resume a Claude Code subagent: Claude Code resumes sessions, not their subagents; it names the
 parent to resume instead.
 
 #### Carry the subagent sessions
 
 `--children` on `dump` and `hop` carries every readable subagent session of the session, at any
-depth. Without it nothing changes. The TUI's hop dialog has it as the `subagents` field, offered
-when the session has subagent sessions and off until chosen ([mukade-tui](../mukade-tui/README.md#hop-h)).
+depth. Without it nothing changes. The desktop app's hop dialog has it as Subagents (carry or leave), offered
+when the session has subagent sessions ([desktop guide](desktop.md)).
 
 | | |
 |---|---|
@@ -1242,8 +1242,8 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID pi --cwd 'C:\work\my-project' --de
 command does, with typed errors (`HopError::ResumeFailed` carries the written session's receipt).
 `HopRequest.all_branches` is `--all-branches` (refused with a summary from the source's model, as
 the CLI refuses it); `mukade::hop::reads_all_branches(harness)` says whether a source can take it,
-without reading anything, so a host offers the option only there: the TUI's `branches` field, the
-desktop app's `all_branches` on each installation.
+without reading anything, so a host offers the option only there: the desktop app's `all_branches` on each
+installation.
 A host that shows or searches a session it cannot afford to hold whole asks the reader for less:
 `Reader::overview` (one session's listing row, from the two ends of its file), `Reader::read_clipped`
 (the full read with every string longer than a limit cut, never refused for size; past 16 MiB the file
@@ -1345,7 +1345,7 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --dest-root 'D:\Apps\Janu
   read it as an option), and one with line breaks when the destination's executable is a `.cmd`
   launcher, which cannot take them.
 
-**Deadlines.** Every harness process mukade starts, except `mukade-tui`'s interactive resume, runs with
+**Deadlines.** Every harness process mukade starts, except the desktop app's resume in a terminal, runs with
 a deadline; one that outlives it is stopped **with everything it started** (an MCP server, a shell):
 Windows `taskkill /T`, elsewhere a walk of the process tree (`src/exe.rs` `kill_tree()`). A detached
 daemon is not found. A timeout too large for the clock sets no deadline.
@@ -1470,7 +1470,7 @@ mukade hop claude_code YOUR_CLAUDE_SESSION_ID opencode --cwd 'C:\work\my-project
 
 - **Source.** `list hermes` reads `<HERMES_HOME>/state.db` read-only, without starting Hermes; it
   lists what Hermes's own `sessions list` lists: the sessions of the sources `oneshot`, `tool` and `kanban`
-  (finite runs, integrations, workers) are left out, and `list --children` and the TUI add them; any
+  (finite runs, integrations, workers) are left out, and `list --children` and the desktop app add them; any
   is readable by id. A store older than schema 32 is refused, naming it.
 - **Destination.** mukade runs `hermes sessions import --from claude` on a file it writes, then deletes
   the file. That keeps user and assistant text only: every tool call and result is text inside the
@@ -1501,7 +1501,7 @@ Details and verification: [Hermes Agent page](harnesses/hermes-agent.md).
   is `session-<uuid>` (`--dest-id` takes that or a UUID); `--cwd` must be an absolute folder. Refused:
   `--dest-agent` and `--metadata-file` (exit 1), `--dest-path` and `--compaction native` (exit 2).
 - **Resume.** `dsh` has no terminal UI, so the receipt's command is headless and needs a task:
-  `dsh --profile headless --session-id <id> "<task>"`, run from the session's cwd. The TUI says so
+  `dsh --profile headless --session-id <id> "<task>"`, run from the session's cwd. The desktop app says so
   instead of opening it.
 
 ```powershell

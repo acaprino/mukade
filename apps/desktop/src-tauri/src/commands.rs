@@ -4,6 +4,8 @@
 
 use crate::actions::{self, Exported, HopArgs, HopOptions, Resumed};
 use crate::chat;
+use crate::harnesses::{self, HarnessView};
+use crate::sandbox::{self, Sandbox};
 use crate::error::{CmdError, CmdResult};
 use crate::locations::{self, InstallationView, ScanNote};
 use crate::sessions::{self, RawPage, SessionRow, TranscriptView};
@@ -11,7 +13,7 @@ use crate::state::AppState;
 use crate::view::ReceiptView;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
@@ -86,6 +88,8 @@ pub fn installations_for(state: &AppState, scan: &[String]) -> InstallationList 
     let mut found = locations::standard_locations(state.standard());
     let folders: Vec<PathBuf> = scan.iter().map(PathBuf::from).collect();
     let scans = locations::scan_folders(&mut found, &folders, state.standard());
+    // The sandboxes the window installed, listed even before their first session.
+    locations::add_installations(&mut found, &sandbox::installations(), state.standard());
     let installations = found
         .iter()
         .map(|location| {
@@ -147,18 +151,49 @@ pub async fn transcript(
     installation: String,
     id: String,
     turns: usize,
+    fresh: Option<bool>,
 ) -> CmdResult<TranscriptView> {
     let location = state.location(&installation)?;
     let state = state.inner().clone();
     blocking(move || {
-        // A change of turn limit draws the open session again without reading it again.
-        let session = match state.cached_session(&installation, &id) {
+        // A change of turn limit draws the open session again without reading it again; a live
+        // session that changed on disk (`fresh`) is read again.
+        let cached = if fresh.unwrap_or(false) {
+            None
+        } else {
+            state.cached_session(&installation, &id)
+        };
+        let session = match cached {
             Some(session) => session,
             None => state.cache_session(&installation, &id, sessions::read(&location, &id)?),
         };
         Ok(sessions::transcript(&session, turns))
     })
     .await
+}
+
+/// The listed session's file as it is now: a live session open in the reader is read again only
+/// when this changes.
+#[tauri::command]
+pub async fn session_stamp(
+    state: State<'_, AppState>,
+    installation: String,
+    id: String,
+) -> CmdResult<Option<String>> {
+    let path = state.listed_session(&installation, &id)?.path;
+    blocking(move || Ok(stamp_of(Path::new(&path)))).await
+}
+
+/// `size:modified-ms` of a file, or none when it cannot be looked at.
+pub fn stamp_of(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(format!("{}:{modified}", meta.len()))
 }
 
 #[tauri::command]
@@ -304,6 +339,133 @@ pub async fn chat_ledger(
     .await
 }
 
+/// A write in a room (`chat::WRITES`), passed through to the service; `args` carry the
+/// window's own request id, so a repeated click or a lost answer cannot write twice.
+#[tauri::command]
+pub async fn chat_write(operation: String, args: Value) -> CmdResult<Value> {
+    chat::write(&operation, args).await
+}
+
+#[tauri::command]
+pub async fn chat_start() -> CmdResult<Value> {
+    blocking(|| tauri::async_runtime::block_on(chat::start())).await
+}
+
+#[tauri::command]
+pub async fn chat_stop() -> CmdResult<Value> {
+    blocking(|| tauri::async_runtime::block_on(chat::stop())).await
+}
+
+#[tauri::command]
+pub async fn chat_launch(
+    harness: String,
+    room: String,
+    role: String,
+    listen: u64,
+    cwd: Option<String>,
+) -> CmdResult<Vec<String>> {
+    blocking(move || chat::launch(&harness, &room, &role, listen, cwd.as_deref())).await
+}
+
+/// Every harness: its binary as the window would run it, its version, its standard store.
+#[tauri::command]
+pub async fn harness_inventory(state: State<'_, AppState>) -> CmdResult<Vec<HarnessView>> {
+    let state = state.inner().clone();
+    blocking(move || Ok(harnesses::inventory(state.standard()))).await
+}
+
+/// The folders a system scan reads, one at a time.
+#[tauri::command]
+pub async fn system_roots() -> CmdResult<Vec<String>> {
+    blocking(|| {
+        Ok(harnesses::system_roots()
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect())
+    })
+    .await
+}
+
+/// One folder of a system scan: what `mukade::detect` found there, without listing sessions.
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderScan {
+    pub dir: String,
+    pub found: Vec<Found>,
+    pub visited: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Found {
+    pub harness: &'static str,
+    pub store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+}
+
+#[tauri::command]
+pub async fn scan_folder(dir: String) -> CmdResult<FolderScan> {
+    blocking(move || {
+        let scan = mukade::detect::scan_installations(
+            std::path::Path::new(&dir),
+            mukade::detect::DEFAULT_SCAN_DEPTH,
+        );
+        let root = std::path::Path::new(&dir);
+        Ok(FolderScan {
+            found: scan
+                .installations
+                .iter()
+                .filter(|found| !harnesses::in_checkout(&found.store, root))
+                .map(|found| Found {
+                    harness: found.harness.as_str(),
+                    store: found.store.display().to_string(),
+                    engine: found.exe.as_ref().map(|exe| exe.display().to_string()),
+                })
+                .collect(),
+            visited: scan.visited,
+            truncated: scan.truncated,
+            dir,
+        })
+    })
+    .await
+}
+
+fn harness_id(harness: &str) -> CmdResult<mukade::model::HarnessId> {
+    harness
+        .parse()
+        .map_err(|_| CmdError::refused(format!("unknown harness {harness}")))
+}
+
+/// The system install of a harness, in a new terminal: answers the command it runs.
+#[tauri::command]
+pub async fn install_system(harness: String) -> CmdResult<Vec<String>> {
+    let harness = harness_id(&harness)?;
+    blocking(move || sandbox::install_system(harness)).await
+}
+
+/// The sandboxes the window installed.
+#[tauri::command]
+pub async fn sandboxes() -> CmdResult<Vec<Sandbox>> {
+    blocking(|| Ok(sandbox::list())).await
+}
+
+/// Install a harness into a sandbox with npm; blocks while npm runs.
+#[tauri::command]
+pub async fn sandbox_install(harness: String, name: String) -> CmdResult<Sandbox> {
+    let harness = harness_id(&harness)?;
+    blocking(move || sandbox::install(harness, &name)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_forget(root: String) -> CmdResult<()> {
+    blocking(move || sandbox::forget(&root)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_run(root: String) -> CmdResult<Vec<String>> {
+    blocking(move || sandbox::run(&root)).await
+}
+
 /// The window asked to close while a hop or import ran, and the person confirmed.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {
@@ -318,6 +480,17 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn a_stamp_changes_when_the_file_does() {
+        let scratch = Scratch::new("stamp");
+        let file = scratch.join("session.jsonl");
+        std::fs::write(&file, "a").unwrap();
+        let before = stamp_of(&file).unwrap();
+        std::fs::write(&file, "ab").unwrap();
+        assert_ne!(stamp_of(&file).unwrap(), before);
+        assert_eq!(stamp_of(&scratch.join("none")), None);
     }
 
     #[test]
