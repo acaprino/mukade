@@ -11,7 +11,7 @@ use crate::state::AppState;
 use crate::view::ReceiptView;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
@@ -147,18 +147,49 @@ pub async fn transcript(
     installation: String,
     id: String,
     turns: usize,
+    fresh: Option<bool>,
 ) -> CmdResult<TranscriptView> {
     let location = state.location(&installation)?;
     let state = state.inner().clone();
     blocking(move || {
-        // A change of turn limit draws the open session again without reading it again.
-        let session = match state.cached_session(&installation, &id) {
+        // A change of turn limit draws the open session again without reading it again; a live
+        // session that changed on disk (`fresh`) is read again.
+        let cached = if fresh.unwrap_or(false) {
+            None
+        } else {
+            state.cached_session(&installation, &id)
+        };
+        let session = match cached {
             Some(session) => session,
             None => state.cache_session(&installation, &id, sessions::read(&location, &id)?),
         };
         Ok(sessions::transcript(&session, turns))
     })
     .await
+}
+
+/// The listed session's file as it is now: a live session open in the reader is read again only
+/// when this changes.
+#[tauri::command]
+pub async fn session_stamp(
+    state: State<'_, AppState>,
+    installation: String,
+    id: String,
+) -> CmdResult<Option<String>> {
+    let path = state.listed_session(&installation, &id)?.path;
+    blocking(move || Ok(stamp_of(Path::new(&path)))).await
+}
+
+/// `size:modified-ms` of a file, or none when it cannot be looked at.
+pub fn stamp_of(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some(format!("{}:{modified}", meta.len()))
 }
 
 #[tauri::command]
@@ -346,6 +377,17 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn a_stamp_changes_when_the_file_does() {
+        let scratch = Scratch::new("stamp");
+        let file = scratch.join("session.jsonl");
+        std::fs::write(&file, "a").unwrap();
+        let before = stamp_of(&file).unwrap();
+        std::fs::write(&file, "ab").unwrap();
+        assert_ne!(stamp_of(&file).unwrap(), before);
+        assert_eq!(stamp_of(&scratch.join("none")), None);
     }
 
     #[test]

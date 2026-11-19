@@ -248,6 +248,8 @@ export async function answer(command: string, args: Record<string, unknown> = {}
     }
     case 'sessions': return delay(sessions[key] ?? []);
     case 'transcript': return delay({ ...transcript, hidden_turns: Number(args.turns) === 0 ? 0 : transcript.hidden_turns }, 200);
+    // A live session changes every ten seconds.
+    case 'session_stamp': return delay(String(Math.floor(Date.now() / 10_000)), 20);
     case 'raw': {
       const entry = rows.find((row) => row.index === Number(args.offset));
       return delay({ total: 12, items: [{ index: Number(args.offset), entry_id: entry?.entry_id ?? 'e', kind: 'step', truncated: false,

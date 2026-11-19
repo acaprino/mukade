@@ -270,11 +270,46 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
   if (state.reader !== mine) return;
   drawDetail();
   reader.focus();
+  watchLive(mine);
+}
+
+let liveTimer = 0;
+/** A live session open in the reader is read again when its file changes, checked every 3 s. */
+function watchLive(mine: NonNullable<typeof state.reader>): void {
+  window.clearInterval(liveTimer);
+  liveTimer = 0;
+  if (!selectedRow()?.live || mine.error) return;
+  let stamp: string | null = null;
+  let reading = false;
+  liveTimer = window.setInterval(async () => {
+    if (state.reader !== mine) { window.clearInterval(liveTimer); return; }
+    if (reading || document.hidden || state.view !== 'sessions' || mine.tab !== 'conversation') return;
+    reading = true;
+    try {
+      const now = await api.sessionStamp(mine.key, mine.id).catch(() => null);
+      if (now === null || state.reader !== mine) return;
+      // The first look is the file the reader has just read.
+      if (stamp === null || now === stamp) { stamp = now; return; }
+      stamp = now;
+      const transcript = toTranscript(await api.transcript(mine.key, mine.id, mine.turns, true), mine.transcript?.title ?? mine.id);
+      if (state.reader !== mine) return;
+      mine.transcript = transcript;
+      reader.keepPlace = true;
+      try { drawDetail(); } finally { reader.keepPlace = false; }
+      setStatus(`live: read again at ${new Date().toLocaleTimeString()}, ${transcript.total_turns} turns`);
+    } catch {
+      // The next look tries again.
+    } finally {
+      reading = false;
+    }
+  }, 3000);
 }
 
 function closeReader(draw = true): void {
   if (!state.reader) return;
   state.reader = null;
+  window.clearInterval(liveTimer);
+  liveTimer = 0;
   rawRecords = null;
   if (draw) {
     state.focus = 'sessions';

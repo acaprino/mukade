@@ -37,7 +37,10 @@ export const api = {
   /** Every standard store, then what each folder in `scan` holds: pass every folder scanned so far. */
   installations: (scan: string[]) => invoke<InstallationList>('installations', { scan }),
   sessions: (installation: string) => invoke<SessionRow[]>('sessions', { installation }),
-  transcript: (installation: string, id: string, turns: number) => invoke<TranscriptView>('transcript', { installation, id, turns }),
+  /** `fresh` reads the session again instead of drawing the copy the window holds (a live session). */
+  transcript: (installation: string, id: string, turns: number, fresh = false) => invoke<TranscriptView>('transcript', { installation, id, turns, fresh }),
+  /** The session's file as it is now (size and modified time); null when it cannot be looked at. */
+  sessionStamp: (installation: string, id: string) => invoke<string | null>('session_stamp', { installation, id }),
   /** Native records of the session's entries `offset` to `offset + limit` (at most 200). */
   raw: (installation: string, id: string, offset: number, limit: number) => invoke<RawPage>('raw', { installation, id, offset, limit }),
   hopOptions: (source: string, id: string) => invoke<HopOptions>('hop_options', { source, id }),

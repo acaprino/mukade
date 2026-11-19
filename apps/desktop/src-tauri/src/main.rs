@@ -41,6 +41,7 @@ fn main() {
             commands::installations,
             commands::sessions,
             commands::transcript,
+            commands::session_stamp,
             commands::raw,
             commands::hop_options,
             commands::hop,
