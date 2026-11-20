@@ -8,12 +8,12 @@ rem
 rem   build-release.bat                   build, .\release, install, clean
 rem   build-release.bat --no-install      stop at .\release
 rem   build-release.bat --target <dir>    install folder (default D:\Software\Mukade)
-rem   build-release.bat --ci              npm ci even when node_modules is already there
+rem   build-release.bat --ci              accepted for compatibility; every release uses npm ci
 rem   build-release.bat --jobs N          parallel Rust compilations (CARGO_BUILD_JOBS)
 rem
 rem The same script, with the same steps and options, is in Shinatama, Mukade, Xiox, Muro and
 rem Ethel: only the PROJECT parts (the settings below and the subroutines at the end) differ.
-rem   1. tools, version, npm dependencies in NPM_DIR (npm ci only when node_modules is missing, or --ci)
+rem   1. tools, version, npm dependencies in NPM_DIR (npm ci from the lockfile)
 rem   2. build                                                          PROJECT :build
 rem   3. .\release made from nothing: the programs and their files      PROJECT :assemble
 rem      then release\installer\<App>-<version>-setup.exe from it (.github\scripts\installer.iss,
@@ -48,12 +48,11 @@ rem ============================================================================
 
 set "INSTALL=D:\Software\%APP%"
 set "DO_INSTALL=1"
-set "NPM_CI=0"
 
 :args
 if "%~1"=="" goto :args_done
 if /i "%~1"=="--no-install" (set "DO_INSTALL=0" & shift & goto :args)
-if /i "%~1"=="--ci" (set "NPM_CI=1" & shift & goto :args)
+if /i "%~1"=="--ci" (shift & goto :args)
 if /i "%~1"=="--target" goto :arg_target
 if /i "%~1"=="--jobs" goto :arg_jobs
 goto :usage
@@ -91,15 +90,11 @@ if defined CARGO_BUILD_JOBS echo     %CARGO_BUILD_JOBS% parallel Rust jobs
 if "%DO_INSTALL%"=="1" echo     install into %INSTALL%
 if not "%DO_INSTALL%"=="1" echo     no install: .\release only
 
-if "%NPM_CI%"=="1" goto :npm_ci
-if exist "%NPM_DIR%\node_modules\.package-lock.json" if exist "%NPM_DIR%\node_modules\@acaprino\imago\package.json" goto :npm_done
-:npm_ci
 pushd "%NPM_DIR%" || goto :fail
 call npm ci
 set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" goto :fail
-:npm_done
 
 rem --- 2. Build ----------------------------------------------------------------------------------
 echo.

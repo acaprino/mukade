@@ -17,5 +17,5 @@ export function initializeWindow(reportError: (error: unknown) => void): void {
   for (const button of bar.querySelectorAll<HTMLButtonElement>('[data-im-window]')) button.disabled = false;
   mountWindowControls(bar, tauriWindowApi((_what, error) => reportError(error)), { onError: (_action, error) => reportError(error) });
   mountZoom(document, { apply: level => getCurrentWebview().setZoom(level), storageKey: 'mukade.zoom' });
-  if (!import.meta.env.DEV) guardDesktop(document);
+  if (!import.meta.env.DEV) guardDesktop(document, { keyPhase: 'bubble' });
 }

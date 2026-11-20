@@ -1,6 +1,8 @@
 // Smoke test (spec §7): the app on Vite with the mocked commands (src/mock.ts), one screenshot
 // per view in each look (Smooth, Oni), dark and light, under tests/out/. Fails on a page error or a missing view.
 //   node apps/desktop/tests/smoke.mjs
+import assert from 'node:assert/strict';
+import { checkProduction } from './production.mjs';
 import { createServer } from 'vite';
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
@@ -20,6 +22,7 @@ const expect = async (page, selector, what) => {
   if (!(await page.locator(selector).first().isVisible())) failures.push(`${what}: ${selector} not shown`);
 };
 try {
+  await checkProduction(browser);
   for (const look of ['smooth', 'oni']) for (const scheme of ['dark', 'light']) {
     const name = `${look}-${scheme}`;
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
@@ -45,8 +48,10 @@ try {
       await page.getByRole('button', { name: 'Views' }).click();
       await page.getByRole('menuitem', { name: 'Sessions' }).click();
       const sidebar = page.locator('.im-sidebar-toggle');
+      const mainBounds = await page.locator('.im-work').boundingBox();
       await sidebar.click();
       await expect(page, '#session-sidebar', 'narrow sidebar drawer');
+      assert.deepEqual(await page.locator('.im-work').boundingBox(), mainBounds, 'the drawer overlays the content');
       await page.keyboard.press('Escape');
       if (await sidebar.getAttribute('aria-expanded') !== 'false') failures.push('narrow sidebar did not close');
       await page.locator('#sessions .row').first().click();

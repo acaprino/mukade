@@ -259,24 +259,30 @@ export function openImport(installations: Installation[], into: string | null, d
     h('div', { class: 'field im-field' }, h('label', { for: 'import-into' }, 'Into'), dest),
     h('div', { class: 'field im-field' }, h('label', { for: 'import-prompt' }, 'Prompt · optional, runs the destination once'), prompt),
     h('p', { class: 'note' }, 'The document becomes a new session of the installation, with its own id; the source is not touched.')));
+  let importing = false;
   const run = async () => {
+    if (importing) return;
     if (!path.value.trim()) { path.focus(); return; }
     const target = writable.find((item) => item.key === dest.value);
+    importing = true;
     modal.lock(true);
     fill(modal.foot, h('span', { class: 'mono' }, `Importing into ${target?.label}…`), h('span', { class: 'spring' }));
     hooks.job(`importing → ${target?.label}…`);
+    let receipt: Receipt;
     try {
-      const receipt = await api.import(path.value.trim(), dest.value, prompt.value.trim() || undefined);
-      hooks.job(null);
-      hooks.status(`import done → ${receipt.dest_label} · ${receipt.dest_id}`);
-      modal.lock(false);
-      showReceipt(modal, receipt, `document → ${receipt.dest_label}`, hooks);
+      receipt = await api.import(path.value.trim(), dest.value, prompt.value.trim() || undefined);
     } catch (error) {
+      importing = false;
       hooks.job(null);
       hooks.status(`import failed: ${errorText(error)}`, true);
       modal.lock(false);
       fill(modal.foot, h('p', { class: 'note err grow' }, errorText(error)), button(['Close ', kbd('esc')], { onclick: () => modal.close() }), button('Try again', { class: 'primary', onclick: run }));
+      return;
     }
+    hooks.job(null);
+    hooks.status(`import done → ${receipt.dest_label} · ${receipt.dest_id}`);
+    modal.lock(false);
+    showReceipt(modal, receipt, `document → ${receipt.dest_label}`, hooks);
   };
   fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), button(['Import ', kbd('⏎')], { class: 'primary', onclick: run }));
   modal.root.onkeydown = (event) => { if (submits(event)) { event.preventDefault(); void run(); } };

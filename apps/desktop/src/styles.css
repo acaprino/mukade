@@ -21,7 +21,6 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 .column-head small { color: var(--im-muted); }
 .column-head h2 { font: 600 1em var(--im-font-head); }
 #installations { flex: 1; min-height: 0; }
-#session-sidebar { position: relative; }
 #detail { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 #session-sidebar .im-sidebar-collapse { flex: none; }
 .resizer { position: absolute; inset-block: 0; width: var(--im-s-2); z-index: 2; cursor: col-resize; touch-action: none; }
@@ -30,6 +29,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 #resize-sessions { left: calc(var(--w-sessions, 52%) - var(--im-s-1)); }
 .back-column { display: none; }
 @container im-shell (width >= 850px) {
+  #session-sidebar { position: relative; }
   .im-shell[data-im-sidebar="on"]:not([data-im-sidebar-collapsed="true"]) .im-body { grid-template-columns: min(var(--w-installations, var(--im-w-sidebar)), 45%) minmax(0,1fr); }
 }
 @container im-shell (width >= 1000px) {

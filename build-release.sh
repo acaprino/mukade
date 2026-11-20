@@ -8,11 +8,11 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
-command -v npm >/dev/null || { echo "npm is required (Node.js 22+)"; exit 1; }
+command -v npm >/dev/null || { echo "npm is required (Node.js 24+)"; exit 1; }
 command -v cargo >/dev/null || { echo "cargo is required (Rust)"; exit 1; }
 
 echo "[1/4] Frontend dependencies"
-if [ ! -d node_modules/@tauri-apps/cli ] || [ ! -f node_modules/@acaprino/imago/package.json ]; then npm ci; fi
+npm ci
 
 echo "[2/4] Command line (mukade, release profile)"
 cargo build --release --locked -p mukade --bin mukade

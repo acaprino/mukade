@@ -31,8 +31,8 @@ into `D:\Software\Mukade` and removes what the build staged (cargo's `target\` s
 cache). There `mukade-ui.exe` (the app) and `mukade.exe` sit side by side, sharing
 `mukade-data` beside them (exports, manifests, the chat service). An install copies over the
 programs and leaves `mukade-data` alone; it waits while a program runs from that folder. Options:
-`--no-install` (stop at `release\`), `--target <folder>` (another install folder), `--ci` (`npm ci`
-even when `node_modules` is there), `--jobs N`. Shinatama, Xiox and Muro have the same script.
+`--no-install` (stop at `release\`), `--target <folder>` (another install folder), `--jobs N`. Both release scripts run `npm ci` before building. Windows also accepts
+`--ci` for compatibility. Shinatama, Xiox and Muro have the same script.
 `build-release.sh` builds `release\` only. Chat refuses a data folder inside the clone: use the
 installed copy, or set `MUKADE_DATA_DIR` for every new process
 ([how](usage.md#local-chat-between-harness-instances)). The app needs the WebView2 runtime (part of
