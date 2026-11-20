@@ -501,7 +501,7 @@ mod platform {
             if libc::statfs(p.as_ptr(), &mut s) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            if s.f_flags & libc::MNT_LOCAL == 0 {
+            if s.f_flags & (libc::MNT_LOCAL as u32) == 0 {
                 return Err(refused());
             }
             Ok(())
