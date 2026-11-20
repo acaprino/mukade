@@ -13,7 +13,7 @@
     "smoke": "node apps/desktop/tests/smoke.mjs"
   },
   "dependencies": {
-    "@acaprino/imago": "git+https://github.com/acaprino/imago.git#28cb41d89dfea790c39dd9b38826dbde3a7b3218",
+    "@acaprino/imago": "git+https://github.com/acaprino/imago.git#v0.1.1",
     "@tauri-apps/api": "2.12.4"
   },
   "devDependencies": {
