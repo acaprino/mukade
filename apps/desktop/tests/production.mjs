@@ -44,6 +44,8 @@ export async function checkProduction(browser) {
       await page.waitForFunction(expected => window.testIpc.reads === expected, reads + index + 1);
     }
     await page.locator('#import').click();
+    await page.getByRole('button', { name: 'Choose…' }).click();
+    await page.waitForFunction(() => document.getElementById('import-path').value.endsWith('.json'));
     await page.locator('#import-path').fill('session.json');
     await page.keyboard.press('Enter');
     await page.keyboard.press('Enter');
