@@ -2018,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "mukade"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -2045,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "mukade-desktop"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "chrono",
