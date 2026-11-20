@@ -1,6 +1,9 @@
 // The window: wires the views (sidebar, sessions, detail, reader, chat, dialogs) to the commands
 // and the keyboard (spec §2, §4).
 
+import '@acaprino/imago/css/imago.css';
+import { parseLook } from '@acaprino/imago/shell';
+import { attachLayers, createRegistry, hasModal, inspector, openMenu, openPalette, regions, roving, sidebarCollapse, sidebarDrawer, topLayer } from '@acaprino/imago/ui';
 import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
@@ -10,7 +13,7 @@ import { button, commandLine, fill, h, kbd } from './dom.ts';
 import { openHop, openImport, segmented, type JobHooks } from './hop.ts';
 import { HINTS, actionFor, type Action } from './keys.ts';
 import { stepIn } from './lists.ts';
-import { LOOK_KEY, THEMES, THEME_KEY, nextTheme, paints, storedLook, storedTheme, type Look, type Theme } from './look.ts';
+import { LOOK_KEY, THEMES, THEME_KEY, nextTheme, storedTheme, type Look, type Theme } from './look.ts';
 import { closeModal, confirmModal, modalOpen, openModal } from './modal.ts';
 import { Reader } from './reader.ts';
 import { HarnessesView } from './harnesses.ts';
@@ -20,11 +23,13 @@ import { folderKey, renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
 import { toTranscript } from './transcript.ts';
 import { ancestors, folders } from './tree.ts';
-import { initializeWindow, tintWindow } from './window.ts';
-// Last: Smooth is a layer over every other stylesheet.
-import './smooth.css';
+import { initializeWindow, paintWindow } from './window.ts';
+
 
 const $ = (id: string) => document.getElementById(id)!;
+const registry = createRegistry();
+const sessionInspector = inspector($('app'));
+const narrowSessions = matchMedia('(max-width: 999.98px)');
 const columns = { installations: $('installations'), sessions: $('sessions'), detail: $('detail') };
 let rawRecords: unknown[] | null = null;
 
@@ -61,6 +66,7 @@ const hooks: JobHooks = {
 // --- drawing ------------------------------------------------------------------------------------
 
 const reader = new Reader({
+  retry: () => void openReader(state.reader?.turns),
   back: () => closeReader(),
   setTab: (tab) => { if (state.reader) { state.reader.tab = tab; drawDetail(); } },
   toggleTurns: () => void toggleTurns(),
@@ -77,14 +83,23 @@ function drawSidebar(): void {
 
 function drawSessions(): void {
   renderSessions(columns.sessions, {
-    pick: (id) => pickSession(id),
+    pick: (id) => { pickSession(id); if (narrowSessions.matches) setFocus('detail'); },
+    reload: () => void loadInventory(),
     open: (id) => { pickSession(id); void openReader(); },
     fold: (id) => fold(id),
     focus: () => setFocus('sessions'),
   });
 }
 
+function syncSidebar(): void {
+  const visible = state.view === 'sessions' && !state.reader;
+  $('app').dataset.imSidebar = visible ? 'on' : 'off';
+  $('session-sidebar').hidden = !visible;
+  document.querySelector<HTMLElement>('.im-sidebar-toggle')!.hidden = !visible;
+}
+
 function drawDetail(): void {
+  syncSidebar();
   const view = $('view-sessions');
   view.classList.toggle('reading', state.reader !== null);
   view.classList.toggle('has-selection', state.selected !== null);
@@ -131,7 +146,14 @@ function searchEverything(): void {
   });
 }
 
+function syncInspector(): void {
+  const visible = !narrowSessions.matches || state.focus === 'detail' || Boolean(state.reader);
+  if (visible && !sessionInspector.isOpen()) sessionInspector.open(columns.detail);
+  if (!visible && sessionInspector.isOpen()) sessionInspector.close();
+}
+
 function drawFocus(): void {
+  syncInspector();
   const focused: Record<Column, HTMLElement> = { installations: columns.installations, folders: columns.installations, sessions: columns.sessions, detail: columns.detail };
   for (const column of Object.values(columns)) column.classList.toggle('focused', column === focused[state.focus]);
   $('view-sessions').dataset.focus = state.focus === 'folders' ? 'installations' : state.focus;
@@ -160,6 +182,7 @@ let listing = 0;
 async function loadInventory(): Promise<void> {
   const ticket = ++listing;
   setJob(state.scan.length ? `scanning ${state.scan.join(', ')} for installations…` : 'reading every store…');
+  if (!currentInstallation()) drawSessions();
   try {
     const list = await api.installations(state.scan);
     if (ticket !== listing) return; // a newer reload replaced this one
@@ -177,10 +200,12 @@ async function loadInventory(): Promise<void> {
     const keep = list.installations.some((item) => item.key === state.installation);
     const first = added?.key ?? (keep ? state.installation! : list.installations.find((item) => item.count > 0)?.key ?? list.installations[0]?.key);
     if (first !== undefined) await pickInstallation(first, true);
+    else drawAll();
   } catch (error) {
     if (ticket !== listing) return;
     setJob(null);
     setStatus(`reading the stores failed: ${errorText(error)}`, true);
+    drawSessions();
   }
 }
 
@@ -463,6 +488,7 @@ const harnesses = new HarnessesView($('view-harnesses'), {
 function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   if (state.view === view) return;
   state.view = view;
+  syncSidebar();
   $('view-sessions').hidden = view !== 'sessions';
   $('view-chat').hidden = view !== 'chat';
   $('view-harnesses').hidden = view !== 'harnesses';
@@ -470,23 +496,23 @@ function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.setAttribute('aria-selected', String(tab.dataset.view === view));
   // The chat view has its own filter, on its messages; the harnesses page has none.
   $('search').hidden = view !== 'sessions';
+  for (const content of [columns.sessions, $('view-chat'), $('view-harnesses')]) {
+    content.classList.toggle('im-content', content === (view === 'sessions' ? columns.sessions : $(`view-${view}`)));
+  }
   if (view === 'chat') chat.show(); else chat.hide();
   drawStatus();
 }
 
 const stored = (key: string): string | null => { try { return localStorage.getItem(key); } catch { return null; } };
 const keep = (key: string, value: string): void => { try { localStorage.setItem(key, value); } catch { /* private window: the choice is not kept */ } };
-let look: Look = storedLook(stored(LOOK_KEY));
+let look: Look = parseLook(stored(LOOK_KEY));
 const themes: Record<Look, Theme> = { oni: storedTheme('oni', stored(THEME_KEY.oni)), smooth: storedTheme('smooth', stored(THEME_KEY.smooth)) };
 const systemLight = matchMedia('(prefers-color-scheme: light)');
 function applyLook(): void {
   const theme = themes[look];
-  const painted = paints(theme, systemLight.matches);
-  document.documentElement.dataset.look = look;
-  document.documentElement.dataset.theme = painted;
+  paintWindow(look, theme);
   $('theme-name').textContent = theme[0].toUpperCase() + theme.slice(1);
   $('theme').title = `Theme: ${theme}`;
-  tintWindow(look, painted);
 }
 
 /** Settings: the look and its theme. Each pick applies and is kept at once. */
@@ -494,10 +520,10 @@ function openSettings(): void {
   const modal = openModal({ title: 'Settings', icon: 'settings' });
   const draw = (): void => {
     fill(modal.body, h('div', { class: 'col' },
-      h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Look'),
+      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Look'),
         segmented('Look', ['smooth', 'oni'], look, (value) => { look = value; keep(LOOK_KEY, look); applyLook(); draw(); }),
         h('span', { class: 'muted hint' }, look === 'smooth' ? 'Clean and modern, the default.' : 'The look Mukade was born with.')),
-      h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Theme'),
+      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Theme'),
         segmented('Theme', THEMES[look], themes[look], (value) => { themes[look] = value; keep(THEME_KEY[look], value); applyLook(); draw(); }))));
     // The pick keeps the keyboard: the redraw made a new button of it.
     modal.body.querySelector<HTMLElement>('[aria-label="Look"] [aria-pressed="true"]')?.focus();
@@ -649,15 +675,16 @@ function pageCommand(event: KeyboardEvent): boolean {
   return false;
 }
 
-/** The browser's context menu (Back, Reload, Print, Inspect) only where it edits or copies text. */
-document.addEventListener('contextmenu', (event) => {
-  const target = event.target as HTMLElement;
-  const editable = target.closest('input, textarea, [contenteditable="true"]');
-  const selected = (document.getSelection()?.toString() ?? '').length > 0;
-  if (!editable && !selected && !import.meta.env.DEV) event.preventDefault();
-});
-
 document.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || event.isComposing || topLayer()) return;
+  if (event.key === 'Escape' && $('app').dataset.imSidebarOpen === 'true') return;
+  if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element && event.target.closest('button, summary, [role="tab"]')) return;
+  const command = registry.match(event);
+  if (command) {
+    event.preventDefault();
+    void Promise.resolve(command.run()).catch(error => setStatus(errorText(error), true));
+    return;
+  }
   if (pageCommand(event)) { event.preventDefault(); return; }
   const target = event.target as HTMLElement;
   const inField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
@@ -670,17 +697,48 @@ document.addEventListener('keydown', (event) => {
 // --- start --------------------------------------------------------------------------------------
 
 function wire(): void {
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => switchView(tab.dataset.view as 'sessions' | 'chat' | 'harnesses'));
-  $('scan').addEventListener('click', () => void scanFolder());
-  $('import').addEventListener('click', () => importDocument());
-  $('reload').addEventListener('click', () => void loadInventory());
+  const shell = $('app');
+  attachLayers(shell);
+  regions(shell);
+  roving(shell.querySelector<HTMLElement>('.im-tabs')!, { item: '[role="tab"]', orientation: 'horizontal', onSelect: tab => tab.click() });
+  narrowSessions.addEventListener('change', syncInspector);
+  columns.detail.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing && !topLayer()) {
+      event.preventDefault();
+      act('back', event);
+    }
+  });
+  sidebarDrawer(shell);
+  sidebarCollapse(shell, { collapsed: stored('mukade.sidebar.collapsed') === 'true', onChange: value => keep('mukade.sidebar.collapsed', String(value)) });
+
+  const views = ['sessions', 'chat', 'harnesses'] as const;
+  for (const view of views) registry.register({ id: view, title: $(`tab-${view}`).textContent!.split(' ')[0].trim(), run: () => switchView(view) });
+  registry.register({ id: 'search', keys: 'Ctrl+K', title: 'Search rooms, messages and sessions', run: searchEverything });
+  registry.register({ id: 'scan', keys: 'O', title: 'Scan folder', run: scanFolder });
+  registry.register({ id: 'import', keys: 'I', title: 'Import document', run: importDocument });
+  registry.register({ id: 'reload', keys: 'R', title: 'Reload stores', run: loadInventory });
+  registry.register({ id: 'settings', title: 'Look and theme', run: openSettings });
+  registry.register({ id: 'keys', title: 'Keyboard shortcuts', run: showHelp });
+  const hasSession = () => state.view === 'sessions' && Boolean(selectedRow());
+  registry.register({ id: 'open-reader', title: 'Open transcript', when: hasSession, run: () => openReader() });
+  registry.register({ id: 'hop', title: 'Hop to another installation', keys: 'H', when: hasSession, run: startHop });
+  registry.register({ id: 'export', title: 'Export session', keys: 'E', when: hasSession, run: () => exportSelected(false) });
+  registry.register({ id: 'new-room', title: 'Create chat room', keys: 'N', when: () => state.view === 'chat', run: () => chat.newRoomDialog() });
+  const commands = () => { if (!hasModal()) openPalette(shell, registry); };
+  registry.register({ id: 'commands', title: 'Commands', keys: 'Ctrl+Shift+K', run: commands });
+  $('commands').addEventListener('click', commands);
+  $('views-menu').addEventListener('click', () => {
+    if (!hasModal()) openMenu($('views-menu'), views.map(view => ({ label: registry.get(view)!.title, run: () => switchView(view) })));
+  });
+  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => { if (!hasModal()) void registry.get(tab.dataset.view!)?.run(); });
+  for (const [buttonId, commandId] of [['scan', 'scan'], ['import', 'import'], ['reload', 'reload'], ['settings', 'settings'], ['search-everything', 'search']]) {
+    $(buttonId).addEventListener('click', () => { if (!hasModal()) void registry.get(commandId)!.run(); });
+  }
   $('theme').addEventListener('click', () => {
     themes[look] = nextTheme(look, themes[look]);
     keep(THEME_KEY[look], themes[look]);
     applyLook();
   });
-  $('settings').addEventListener('click', openSettings);
-  $('search-everything').addEventListener('click', searchEverything);
   systemLight.addEventListener('change', applyLook);
   const search = $('search') as HTMLInputElement;
   search.addEventListener('input', () => {
@@ -691,11 +749,11 @@ function wire(): void {
     if (!state.reader) drawDetail();
   });
   search.addEventListener('focus', () => setFocus('sessions'));
-  columns.sessions.addEventListener('mousedown', () => setFocus('sessions'));
+  columns.sessions.addEventListener('mousedown', () => setFocus('sessions'), { capture: true });
   columns.detail.addEventListener('mousedown', () => { if (state.selected) setFocus('detail'); });
   makeResizer($('resize-installations'), 'installations');
   makeResizer($('resize-sessions'), 'sessions');
-  for (const back of document.querySelectorAll<HTMLElement>('[data-back]')) back.addEventListener('click', () => column(-1));
+  for (const back of document.querySelectorAll<HTMLElement>('[data-back]')) back.addEventListener('click', () => { if (state.reader) closeReader(); else setFocus('sessions'); });
   // A document dropped on the window opens the import dialog with it.
   onFilesDropped((paths) => {
     const document = paths.find((path) => path.toLowerCase().endsWith('.json'));

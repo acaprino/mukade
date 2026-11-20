@@ -3,6 +3,7 @@
 // tested without stores.
 
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
 import type {
   ChatEvent, ChatStatus, CmdError, Exported, FolderScan, HarnessView, HopArgs, HopOptions, InstallationList, Member,
@@ -79,10 +80,9 @@ export const api = {
 /** Files dropped on the window (paths), in Tauri only: the WebView keeps them from the page. */
 export function onFilesDropped(handler: (paths: string[]) => void): void {
   if (!inTauri) return;
-  void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>
-    getCurrentWebview().onDragDropEvent((event) => {
-      if (event.payload.type === 'drop') handler(event.payload.paths);
-    }));
+  void getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === 'drop') handler(event.payload.paths);
+  });
 }
 
 /** The window refused to close while a hop or import ran. */

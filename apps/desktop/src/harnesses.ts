@@ -4,6 +4,7 @@
 // with npm, with a store of its own.
 
 import './harnesses.css';
+import { setPanelState } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { mark } from './chatviews.ts';
 import { button, fill, h, icon, kbd } from './dom.ts';
@@ -79,8 +80,14 @@ export class HarnessesView {
         : button([icon('search'), 'Scan this computer'], { class: 'primary', title: 'Look in your home and in every folder of every drive', onclick: () => void this.scanComputer() }),
       button([icon('folder'), 'Scan folder… ', kbd('o')], { onclick: () => this.hooks.scanFolder() }),
       button([icon('refresh'), 'Check again'], { disabled: this.reading, onclick: () => void this.refresh() }));
-    if (this.error) { fill(this.root, head, h('div', { class: 'empty' }, h('p', { class: 'note err' }, this.error))); return; }
-    if (!this.inventory) { fill(this.root, head, h('div', { class: 'empty' }, h('p', {}, 'Looking for every harness…'))); return; }
+    if (this.error || !this.inventory) {
+      fill(this.root, head, h('div', { class: 'im-panel-body' }));
+      setPanelState(this.root, this.error
+        ? { kind: 'error', text: this.error, retry: { label: 'Check again', run: () => void this.refresh() } }
+        : { kind: 'loading', rows: 4 });
+      return;
+    }
+    this.root.removeAttribute('aria-busy');
     const cards = h('div', { class: 'harness-grid' }, ...this.inventory.map((harness) => this.card(harness, installations)));
     const folders = this.hooks.folders();
     const kept = h('section', { class: 'box harness-folders' },
@@ -101,7 +108,7 @@ export class HarnessesView {
       h('header', {},
         mark(harness.id),
         h('h3', {}, harness.display),
-        h('span', { class: `tag ${harness.status === 'missing' ? 'bad' : 'live'}` }, STATUS_TEXT[harness.status]),
+        h('span', { class: `tag im-chip ${harness.status === 'missing' ? 'bad' : 'live'}` }, STATUS_TEXT[harness.status]),
         harness.version ? h('span', { class: 'mono muted' }, harness.version) : null,
         h('span', { class: 'spring' }),
         button([icon('import'), installing ? 'Installing…' : 'Install…'], { disabled: installing, onclick: () => this.installDialog(harness) })),
@@ -118,15 +125,15 @@ export class HarnessesView {
           ...others.map((item) => {
             const sandbox = sandboxes.find((one) => one.store === item.store);
             return h('div', { class: 'install-row' },
-              h('span', { class: 'grow' }, h('b', {}, item.label), sandbox ? h('span', { class: 'tag' }, 'sandbox') : null,
+              h('span', { class: 'grow' }, h('b', {}, item.label), sandbox ? h('span', { class: 'tag im-chip' }, 'sandbox') : null,
                 h('span', { class: 'mono muted block' }, item.store ?? ''), item.engine ? h('span', { class: 'mono muted block' }, `engine ${item.engine}`) : null),
-              h('span', { class: 'num' }, item.error ? 'error' : `${item.count} sessions`),
+              h('span', { class: 'num im-num' }, item.error ? 'error' : `${item.count} sessions`),
               item.count > 0 ? button('Show', { class: 'ghost', onclick: () => this.hooks.showInstallation(item.key) }) : null,
               sandbox ? button([icon('term'), 'Run'], { class: 'ghost', title: 'Open it in a terminal, in its sandbox', onclick: () => void this.runSandbox(sandbox) }) : null,
               sandbox ? button('Forget', { class: 'ghost', title: 'Stop listing it; its folder stays', onclick: () => void this.forgetSandbox(sandbox) }) : null);
           }),
           ...sandboxes.filter((one) => !others.some((item) => item.store === one.store)).map((sandbox) => h('div', { class: 'install-row' },
-            h('span', { class: 'grow' }, h('b', {}, `sandbox ${sandbox.name}`), h('span', { class: 'tag' }, 'sandbox'),
+            h('span', { class: 'grow' }, h('b', {}, `sandbox ${sandbox.name}`), h('span', { class: 'tag im-chip' }, 'sandbox'),
               h('span', { class: 'mono muted block' }, sandbox.root), h('span', { class: 'muted block' }, 'Its store appears at the first run.')),
             button([icon('term'), 'Run'], { class: 'ghost', onclick: () => void this.runSandbox(sandbox) }),
             button('Forget', { class: 'ghost', onclick: () => void this.forgetSandbox(sandbox) }))))
@@ -177,7 +184,7 @@ export class HarnessesView {
     const name = h('input', { id: 'sandbox-name', type: 'text', value: 'try', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
     const note = h('div', { class: 'field-note', 'aria-live': 'polite' });
     const system = h('div', { class: 'col' },
-      h('div', { class: 'field' }, h('span', { class: 'lab' }, 'On the system'),
+      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'On the system'),
         harness.install_command
           ? h('pre', { class: 'code' }, harness.install_command)
           : h('p', { class: 'note' }, `${harness.display} installs with its own script; its page in docs/harnesses says how.`)),
@@ -186,12 +193,12 @@ export class HarnessesView {
         : `${harness.display} is already installed: the same command updates it. It runs in a new terminal; check again when it ends.`),
       harness.install_command ? button([icon('term'), 'Run in a terminal'], { onclick: () => void this.installSystem(harness, modal.close) }) : null);
     const sandbox = h('div', { class: 'col' },
-      h('div', { class: 'field' }, h('span', { class: 'lab' }, 'In a sandbox'),
+      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'In a sandbox'),
         harness.sandbox_package
           ? h('p', {}, 'npm installs ', h('code', {}, harness.sandbox_package), ' into ', h('code', {}, `mukade-data/sandboxes/${harness.id}-<name>`),
             ', with a store of its own: it touches neither the installed harness nor its sessions. Hops can land in it, and Run opens it in a terminal. It needs Node.js 22 or later, and its own sign-in.')
           : h('p', { class: 'note' }, `${harness.display} is not an npm package: it has no sandbox.`)),
-      harness.sandbox_package ? h('div', { class: 'field' }, h('label', { for: 'sandbox-name' }, 'Name'), name) : null,
+      harness.sandbox_package ? h('div', { class: 'field im-field' }, h('label', { for: 'sandbox-name' }, 'Name'), name) : null,
       note,
       harness.sandbox_package ? button([icon('import'), 'Install in a sandbox'], { class: 'primary', onclick: () => void run() }) : null);
     const run = async (): Promise<void> => {

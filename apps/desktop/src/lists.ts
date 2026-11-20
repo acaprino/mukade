@@ -7,10 +7,10 @@ import { h } from './dom.ts';
 export interface ListRow { id: string; cells: (Node | string)[]; class?: string; title?: string }
 
 export function listbox(label: string, rows: ListRow[], selected: string | null, onPick: (id: string) => void, onOpen?: (id: string) => void): HTMLElement {
-  const list = h('ul', { class: 'list', role: 'listbox', 'aria-label': label });
+  const list = h('ul', { class: 'list im-list', role: 'listbox', tabindex: '0', 'aria-label': label });
   for (const { id, cells, class: extra, title } of rows) {
     const item = h('li', {
-      class: `row ${extra ?? ''}`.trim(), role: 'option', id: `opt-${cssId(label)}-${cssId(id)}`,
+      class: `row im-row im-row--1 ${extra ?? ''}`.trim(), role: 'option', id: `opt-${cssId(label)}-${cssId(id)}`,
       'aria-selected': String(id === selected), 'data-id': id, title,
     }, ...cells);
     item.addEventListener('mousedown', (event) => { event.preventDefault(); onPick(id); });

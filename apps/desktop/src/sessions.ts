@@ -2,6 +2,7 @@
 // their parent, each parent folding with space or its caret.
 
 import './sessions.css';
+import { setPanelState } from '@acaprino/imago/ui';
 import { fill, h, icon } from './dom.ts';
 import { listbox, reveal, type ListRow } from './lists.ts';
 import { currentInstallation, state } from './state.ts';
@@ -12,6 +13,7 @@ export interface SessionsActions {
   open(id: string): void;
   fold(id: string): void;
   focus(): void;
+  reload(): void;
 }
 
 export function visiblePlaces(): Place[] {
@@ -30,10 +32,10 @@ function cells(place: Place, actions: SessionsActions): Node[] {
   if (marker?.kind === 'fork') out.push(h('span', { class: 'fork' }, icon('fork'), 'fork'));
   else if (marker) out.push(h('span', { class: marker.kind }, marker.text));
   out.push(h('span', { class: 'grow' }, row.title ?? `${row.id.slice(0, 8)} (no title)`));
-  if (children && !open) out.push(h('span', { class: 'num' }, `${children} inside`));
-  if (row.live) out.push(h('span', { class: 'tag live' }, 'live'));
-  if (row.archived) out.push(h('span', { class: 'tag' }, 'archived'));
-  if (row.unreadable) out.push(h('span', { class: 'tag bad', title: row.unreadable }, 'unreadable'));
+  if (children && !open) out.push(h('span', { class: 'num im-num' }, `${children} inside`));
+  if (row.live) out.push(h('span', { class: 'tag im-chip live' }, 'live'));
+  if (row.archived) out.push(h('span', { class: 'tag im-chip' }, 'archived'));
+  if (row.unreadable) out.push(h('span', { class: 'tag im-chip bad', title: row.unreadable }, 'unreadable'));
   out.push(h('span', { class: 'time', title: row.updated ?? '' }, shortTime(row.updated)));
   if (depth) (out[0] as HTMLElement).style.marginLeft = `${Math.min(depth, 6) * 18}px`;
   return out;
@@ -43,25 +45,30 @@ export function renderSessions(root: HTMLElement, actions: SessionsActions): voi
   const installation = currentInstallation();
   const places = visiblePlaces();
   const folder = state.folder === null ? 'All folders' : state.folder || 'Unknown folder';
-  const head = h('div', { class: 'column-head' },
+  const head = h('div', { class: 'column-head im-panel-header' },
     h('h2', {}, 'Sessions'), h('small', { title: folder }, folder), h('span', { class: 'spring' }),
     h('small', {}, state.query.trim() ? `${places.length} match` : String(places.length)));
-  let body: Node;
-  if (!installation) body = h('div', { class: 'empty' }, h('p', {}, 'Reading the stores…'));
-  else if (installation.error) body = h('div', { class: 'empty' }, h('h2', {}, 'This store could not be read'), h('p', {}, installation.error));
-  else if (!places.length) {
-    body = h('div', { class: 'empty' }, state.query.trim()
-      ? h('p', {}, `No session matches “${state.query.trim()}”.`)
-      : h('p', {}, `${installation.label} has no sessions${state.folder !== null ? ' in this folder' : ''}.`));
+  const body = h('div', { class: 'column-body im-panel-body' });
+  fill(root, head, body);
+  if (!installation) {
+    if (state.statusError) setPanelState(root, { kind: 'error', text: state.status, retry: { label: 'Reload stores', run: actions.reload } });
+    else if (state.job) setPanelState(root, { kind: 'loading', rows: 4 });
+    else setPanelState(root, { kind: 'empty', text: 'No installations found.' });
+  } else if (installation.error) {
+    setPanelState(root, { kind: 'error', text: installation.error, retry: { label: 'Read the stores again', run: actions.reload } });
+  } else if (!places.length) {
+    const text = state.query.trim() ? `No session matches “${state.query.trim()}”.`
+      : `${installation.label} has no sessions${state.folder !== null ? ' in this folder' : ''}.`;
+    setPanelState(root, { kind: 'empty', text });
   } else {
+    setPanelState(root, { kind: 'ready' });
     const rows: ListRow[] = places.map((place) => ({
       id: place.row.id,
       class: [place.row.title ? '' : 'untitled', place.depth ? 'child' : ''].join(' ').trim() || undefined,
       title: place.row.cwd ? `${place.row.title ?? place.row.id}\n${place.row.cwd}` : undefined,
       cells: cells(place, actions),
     }));
-    body = listbox('Sessions', rows, state.selected, (id) => { actions.focus(); actions.pick(id); }, actions.open);
+    body.append(listbox('Sessions', rows, state.selected, (id) => { actions.focus(); actions.pick(id); }, actions.open));
   }
-  fill(root, head, h('div', { class: 'column-body' }, body));
   reveal(root.querySelector('.list'));
 }

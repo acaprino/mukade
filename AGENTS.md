@@ -13,3 +13,5 @@
   `develop`. Nothing is published when the build fails.
 - Never change the version or create release tags by hand: the workflow does it (`.github/release.json` lists
   the version files, `.github/scripts/release.mjs` writes them).
+
+For desktop UI work, read `node_modules/@acaprino/imago/docs/design-file.md` and the referenced components. Use Imago's controls, behaviours and tokens. Keep workflow-specific components in Mukade and build them from the shared tokens.

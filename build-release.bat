@@ -92,7 +92,7 @@ if "%DO_INSTALL%"=="1" echo     install into %INSTALL%
 if not "%DO_INSTALL%"=="1" echo     no install: .\release only
 
 if "%NPM_CI%"=="1" goto :npm_ci
-if exist "%NPM_DIR%\node_modules\.package-lock.json" goto :npm_done
+if exist "%NPM_DIR%\node_modules\.package-lock.json" if exist "%NPM_DIR%\node_modules\@acaprino\imago\package.json" goto :npm_done
 :npm_ci
 pushd "%NPM_DIR%" || goto :fail
 call npm ci

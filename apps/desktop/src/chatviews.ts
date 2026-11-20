@@ -98,7 +98,7 @@ export function feedCard(event: ChatEvent, ctx: RoomContext, plain = false): HTM
   return h('article', { ...attrs, class: `msg${actorOf(event) === ctx.mine ? ' mine' : ''}` },
     h('div', { class: 'meta' },
       h('span', { class: 'who' }, mark(member?.harness ?? 'other'), actorName(event),
-        actorOf(event) === ctx.mine ? h('span', { class: 'tag' }, 'you') : host ? h('span', { class: 'tag', title: 'The host’s member: what it sends is the user’s' }, 'user') : null),
+        actorOf(event) === ctx.mine ? h('span', { class: 'tag im-chip' }, 'you') : host ? h('span', { class: 'tag im-chip', title: 'The host’s member: what it sends is the user’s' }, 'user') : null),
       h('span', {}, `${event.actor.type === 'member' ? `${event.actor.role ?? ''} · ` : ''}${time(event)} · #${event.event_id}`)),
     h('div', { class: 'body' },
       richText(String(event.payload.text ?? ''), ctx.members),

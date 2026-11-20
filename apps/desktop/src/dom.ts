@@ -13,6 +13,14 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
     else if (value === true) node.setAttribute(name, '');
     else node.setAttribute(name, String(value));
   }
+  if (tag === 'kbd') node.classList.add('im-key');
+  if (tag === 'select') node.classList.add('im-select');
+  if (tag === 'textarea' || (tag === 'input' && !['checkbox', 'radio'].includes(String(attrs.type)))) node.classList.add('im-input');
+  if (node.classList.contains('im-chip')) {
+    if (node.classList.contains('live')) node.dataset.imTone = 'ok';
+    if (node.classList.contains('bad')) node.dataset.imTone = 'err';
+    if (node.classList.contains('warn')) node.dataset.imTone = 'warn';
+  }
   append(node, children);
   return node;
 }
@@ -44,7 +52,12 @@ export function icon(name: string, extra = ''): SVGSVGElement {
 }
 
 export function button(label: Child | Child[], attrs: Attrs = {}): HTMLButtonElement {
-  return h('button', { type: 'button', ...attrs }, ...(Array.isArray(label) ? label : [label]));
+  const node = h('button', { type: 'button', ...attrs }, ...(Array.isArray(label) ? label : [label]));
+  node.classList.add(attrs.role === 'tab' ? 'im-tab' : 'im-btn');
+  if (node.classList.contains('primary')) node.classList.add('im-btn--primary');
+  if (node.classList.contains('ghost')) node.classList.add('im-btn--ghost');
+  if (node.classList.contains('danger')) node.classList.add('im-btn--danger');
+  return node;
 }
 
 export function kbd(text: string): HTMLElement {

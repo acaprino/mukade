@@ -35,7 +35,7 @@ function submits(event: KeyboardEvent): boolean {
 }
 
 export function segmented<T extends string>(label: string, values: readonly T[], current: T, onPick: (value: T) => void): HTMLElement {
-  const group = h('div', { class: 'seg', role: 'group', 'aria-label': label });
+  const group = h('div', { class: 'seg im-seg', role: 'group', 'aria-label': label });
   for (const value of values) {
     group.append(button(value, { 'aria-pressed': String(value === current), onclick: () => onPick(value) }));
   }
@@ -115,7 +115,7 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
   const textField = (id: string, label: string, value: string | undefined, placeholder: string, set: (value: string) => void): HTMLElement => {
     const input = h('input', { id, type: 'text', placeholder, value: value ?? '', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
     input.addEventListener('input', () => { set(input.value); drawPlan(); });
-    return h('div', { class: 'field' }, h('label', { for: id }, label), input);
+    return h('div', { class: 'field im-field' }, h('label', { for: id }, label), input);
   };
   /** A whole number of at least 1, or nothing. */
   const count = (text: string): number | undefined => { const n = Number(text.trim()); return text.trim() && Number.isInteger(n) && n >= 1 ? n : undefined; };
@@ -130,32 +130,32 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
       h('div', { class: 'row-fields' },
         textField('hop-model', 'Destination model', choice.model, dest.model ?? 'the destination’s own', (value) => { choice.model = value; }),
         textField('hop-provider', 'Provider', choice.model_provider, 'the destination’s own', (value) => { choice.model_provider = value; })),
-      h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Unfinished turns'),
+      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Unfinished turns'),
         segmented('Unfinished turns', ['keep', 'drop'], choice.interrupted ?? 'keep', (value) => { choice.interrupted = value; redraw(); })),
       h('label', { class: 'check', for: 'hop-no-tools' }, noTools, 'Without tool calls and results')));
   more.addEventListener('toggle', () => { moreOpen = more.open; });
 
   const left = h('div', { class: 'col' },
-    h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Destination'), destList),
-    h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Compaction'),
+    h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Destination'), destList),
+    h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Compaction'),
       segmented('Compaction', options.compactions.filter((c) => !(choice.all_branches && c === 'summary')), choice.compaction, (value) => { choice.compaction = value; redraw(); }),
       h('span', { class: 'muted mono hint' }, COMPACTION_HELP[choice.compaction] ?? '')),
     summary ? h('div', { class: 'row-fields' },
-      h('div', { class: 'field' }, h('label', { for: 'hop-intent' }, 'Intent'), intent),
+      h('div', { class: 'field im-field' }, h('label', { for: 'hop-intent' }, 'Intent'), intent),
       textField('hop-summary-model', 'Summary model', choice.summary_model, 'the session’s own', (value) => { choice.summary_model = value; }),
       textField('hop-keep-turns', 'Turns kept whole', choice.keep_turns ? String(choice.keep_turns) : '', '0', (value) => { choice.keep_turns = count(value); })) : null,
     native ? h('div', { class: 'row-fields' },
       textField('hop-context', 'Context window · tokens', choice.context_window ? String(choice.context_window) : '', 'of the destination’s model, e.g. 200000', (value) => { choice.context_window = count(value); }),
       textField('hop-max-output', 'Output limit · optional', choice.max_output_tokens ? String(choice.max_output_tokens) : '', 'tokens', (value) => { choice.max_output_tokens = count(value); })) : null,
-    options.subagents.length ? h('div', { class: 'field' }, h('span', { class: 'lab' }, `Subagents · ${options.subagents.length} found`),
+    options.subagents.length ? h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, `Subagents · ${options.subagents.length} found`),
       segmented('Subagents', ['carry', 'leave'], choice.children ? 'carry' : 'leave', (value) => { choice.children = value === 'carry'; redraw(); })) : null,
-    h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Reasoning'),
+    h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Reasoning'),
       segmented('Reasoning', ['drop_foreign', 'as_text', 'drop'], choice.reasoning, (value) => { choice.reasoning = value; redraw(); })),
     h('div', { class: 'row-fields' },
-      h('div', { class: 'field' }, h('label', { for: 'hop-shell' }, 'Destination shell'), shell),
+      h('div', { class: 'field im-field' }, h('label', { for: 'hop-shell' }, 'Destination shell'), shell),
       h('label', { class: `check${options.all_branches_supported ? '' : ' off'}`, for: 'hop-branches', title: options.all_branches_supported ? 'Carry every branch the source keeps' : 'This source keeps no branches mukade reads' },
         branches, options.all_branches_supported ? 'All branches' : 'All branches · not kept by this source')),
-    h('div', { class: 'field' }, h('label', { for: 'hop-prompt' }, 'Prompt · optional, runs the destination once'), prompt),
+    h('div', { class: 'field im-field' }, h('label', { for: 'hop-prompt' }, 'Prompt · optional, runs the destination once'), prompt),
     more);
 
   drawPlan();
@@ -164,7 +164,7 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
     !choice.children && options.subagents.length ? `the ${options.subagents.length} subagent session${options.subagents.length === 1 ? '' : 's'}` : '',
   ].filter(Boolean);
   const right = h('div', { class: 'col' },
-    h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Plan · nothing is written yet'), plan),
+    h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Plan · nothing is written yet'), plan),
     notTravelling.length ? h('p', { class: 'note warn' }, `Will not travel: ${notTravelling.join('; ')}.`) : null,
     h('p', { class: 'note' }, 'What the destination cannot hold is listed as a loss in the receipt; no loss is silent.'),
     options.live ? h('p', { class: 'note' }, 'The source session is live. The hop copies what is on disk now.') : null);
@@ -208,7 +208,7 @@ async function runHop(modal: Modal, options: HopOptions, choice: HopArgs, hooks:
 
 function commandField(label: string, argv: string[]): HTMLElement {
   const text = commandLine(argv);
-  return h('div', { class: 'field' }, h('span', { class: 'lab' }, label), h('div', { class: 'cmd' }, h('pre', { class: 'code' }, text), copyButton(text)));
+  return h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, label), h('div', { class: 'cmd' }, h('pre', { class: 'code' }, text), copyButton(text)));
 }
 
 /** The receipt of a hop or import, in `modal` (spec F6 result). */
@@ -223,16 +223,16 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
       h('dt', {}, 'location'), h('dd', {}, receipt.location),
       h('dt', {}, 'manifest'), h('dd', {}, receipt.manifest_path ?? 'not saved (no mukade-data folder)')),
     receipt.refusal
-      ? h('div', { class: 'field' }, h('span', { class: 'lab' }, 'Resume · interactive'), h('p', { class: 'note' }, receipt.refusal))
+      ? h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Resume · interactive'), h('p', { class: 'note' }, receipt.refusal))
       : commandField('Resume · interactive', receipt.interactive),
     receipt.headless.length ? commandField('Resume · headless', receipt.headless) : null,
-    receipt.children.length ? h('div', { class: 'field' }, h('span', { class: 'lab' }, `Subagents written · ${receipt.children.length}`),
+    receipt.children.length ? h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, `Subagents written · ${receipt.children.length}`),
       h('ul', { class: 'plan' }, ...receipt.children.map((child) => h('li', {}, h('span', { class: 'spawn' }, '↳ '), `${child.source_id} → ${child.dest_id}`,
         h('span', { class: child.linked ? 'muted' : 'warn-text' }, child.linked ? ' · linked to its parent' : ' · not linked: the destination has no link'))))) : null);
   const right = h('div', { class: 'col' },
-    h('div', { class: 'field' }, h('span', { class: 'lab' }, receipt.losses.length ? `Losses · ${receipt.losses.length}` : 'Losses'),
+    h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, receipt.losses.length ? `Losses · ${receipt.losses.length}` : 'Losses'),
       receipt.losses.length ? h('ul', { class: 'plan losses' }, ...receipt.losses.map((loss) => h('li', {}, loss))) : h('p', { class: 'note' }, 'None: everything travelled.')),
-    receipt.reply ? h('div', { class: 'field' }, h('span', { class: 'lab' }, `Reply from ${receipt.dest_label}`), h('pre', { class: 'code' }, receipt.reply)) : null);
+    receipt.reply ? h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, `Reply from ${receipt.dest_label}`), h('pre', { class: 'code' }, receipt.reply)) : null);
   fill(modal.body, left, right);
   const close = button(['Close ', kbd('⏎')], { class: 'primary', onclick: () => modal.close() });
   fill(modal.foot,
@@ -256,9 +256,9 @@ export function openImport(installations: Installation[], into: string | null, d
   const prompt = h('textarea', { id: 'import-prompt', rows: '2', placeholder: 'continue' }) as HTMLTextAreaElement;
   const browse = button('Choose…', { onclick: async () => { const picked = await api.pick('open').catch(() => null); if (picked) path.value = picked; } });
   fill(modal.body, h('div', { class: 'col' },
-    h('div', { class: 'field' }, h('label', { for: 'import-path' }, 'Document'), h('div', { class: 'cmd' }, path, browse)),
-    h('div', { class: 'field' }, h('label', { for: 'import-into' }, 'Into'), dest),
-    h('div', { class: 'field' }, h('label', { for: 'import-prompt' }, 'Prompt · optional, runs the destination once'), prompt),
+    h('div', { class: 'field im-field' }, h('label', { for: 'import-path' }, 'Document'), h('div', { class: 'cmd' }, path, browse)),
+    h('div', { class: 'field im-field' }, h('label', { for: 'import-into' }, 'Into'), dest),
+    h('div', { class: 'field im-field' }, h('label', { for: 'import-prompt' }, 'Prompt · optional, runs the destination once'), prompt),
     h('p', { class: 'note' }, 'The document becomes a new session of the installation, with its own id; the source is not touched.')));
   const run = async () => {
     if (!path.value.trim()) { path.focus(); return; }

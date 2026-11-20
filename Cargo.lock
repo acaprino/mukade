@@ -1607,6 +1607,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "imago-shell"
+version = "0.1.0"
+source = "git+https://github.com/acaprino/imago?tag=v0.1.0#d1220d2a0af6828964bff9976e65ecff46790d46"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "webview2-com",
+ "windows-core",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2036,6 +2049,7 @@ version = "0.1.4"
 dependencies = [
  "anyhow",
  "chrono",
+ "imago-shell",
  "mukade",
  "serde",
  "serde_json",

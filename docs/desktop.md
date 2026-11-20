@@ -79,26 +79,13 @@ The window refuses to close while a hop or import runs, and asks first.
 
 ## Look and desktop behaviour
 
-The window follows Shinatama's: only the colours are Mukade's own (black, graphite grey, and
-the violet of the armour as the one accent).
-
-| part | how |
-|---|---|
-| Frame | no system frame: a 34 px title bar (mark, drawn wordmark, version, description, minimize, maximize, close) that drags the window and maximizes on double-click, then a 44 px toolbar with the views, the filter and the commands (`src/window.ts`) |
-| Glass | the window is transparent over the system's acrylic, but the stage holds the black itself, so a light desktop never shows between the panes; bars, sidebar and panes are the skin's chrome at rising density; dialogs and their scrim blur what is under them, and a dialog opens by drawing its top edge |
-| Lacquer | the black is glossy: bars, heads and buttons carry one sheen that breaks at the middle and a lit top edge; the selected row takes the same sheen in violet |
-| Look | Smooth is the default, Oni is the look Mukade was born with; Settings (the last toolbar button) switches between them and sets the theme, and the choice is kept. Smooth is `src/smooth.css`, every rule under `data-look="smooth"` on the root; the other stylesheets are Oni and do not know it. Smooth keeps Oni's measures, the violet and the glass, at Shinatama's native densities |
-| Theme | each look keeps its own. Oni: dark is the default, the Theme button switches to light and back, the system's setting is not followed. Smooth: follows the system by default, the Theme button walks system, light, dark |
-| Layout | the installations are a sidebar flush with the frame; the sessions and the session are panes beside it |
-| Text | Segoe for titles and text; monospace only for ids, counts, times, paths in code, commands and markers |
-| Selection | the selected row is outlined in the accent on a raised surface (in the line colour when its column is not the one in use) |
-
-Without the system frame the window has no snap-layouts flyout on its maximize button and no
-system menu on its icon; win+arrows, edge snapping, resizing by the borders and Alt+F4 work. In
-the browser (`npm run dev`, the smoke test) there is no acrylic and no window buttons: the page
-keeps an opaque stage.
-
-From the audit of `.claude/skills/tauri-native-desktop`:
+Mukade uses the same Imago release for its web UI and native Tauri shell. Settings keeps the
+existing Smooth and ONI preferences. Smooth follows the system by default, and ONI starts dark.
+The title bar contains the views, command palette and window controls. Sessions has a collapsible
+installations sidebar and a session inspector. Below 1000 px the inspector opens over the list,
+below 850 px the sidebar becomes a rail, and below 620 px the title bar opens the sidebar and Views menu.
+Windows uses the saved theme for the first frame, restores the last window position, and supports
+Snap Layouts on the maximize button. The browser preview uses opaque surfaces.
 
 | surface | state | how |
 |---|---|---|
@@ -111,7 +98,7 @@ From the audit of `.claude/skills/tauri-native-desktop`:
 | Overscroll | no rubber-band on the window; each pane keeps its own scroll | `overscroll-behavior` |
 | Selection | the chrome is not selectable; the reader, the details, code and fields are | `user-select` |
 | A `.json` dropped on the window | opens Import with it | the WebView's drop event |
-| Startup | no white flash | the window's `backgroundColor` is the dark stage |
+| Startup | no white flash | Imago builds the transparent frame with the saved theme before showing it |
 
 Still to try on Windows and macOS: the drop, the close confirmation and the terminal opened by
 Resume.
@@ -129,7 +116,9 @@ Resume.
 | `g` `G`, PgUp PgDn | reader top / bottom, a page |
 | `o` · `r` | scan a folder · reload |
 | `/`, `ctrl+f` | filter the list (in the chat view, the focused column's) |
-| `ctrl+k` | search everything |
+| `ctrl+k` | search rooms, members, messages and sessions |
+| `ctrl+shift+k` | command palette |
+| `F6` / `shift+F6` | next / previous region |
 | `c` | chat ↔ sessions |
 | `m` | harnesses ↔ sessions |
 | `space` | fold the selected parent; in the chat, play the room back |

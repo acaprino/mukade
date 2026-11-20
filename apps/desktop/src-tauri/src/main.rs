@@ -11,6 +11,7 @@ mod harnesses;
 mod locations;
 mod sandbox;
 mod sessions;
+mod shell;
 mod state;
 mod terminal;
 mod view;
@@ -27,6 +28,11 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        .manage(shell::Desktop::default())
+        .setup(|app| {
+            shell::build_window(app.handle())?;
+            Ok(())
+        })
         .on_window_event(|window, event| {
             // The window refuses to close while a hop or import writes; the page asks first and
             // calls `quit` when the person confirms.
@@ -39,6 +45,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            shell::set_window_theme,
+            shell::window_caption_maximize,
             commands::startup,
             commands::installations,
             commands::sessions,
@@ -69,6 +77,7 @@ fn main() {
             commands::sandbox_run,
             commands::quit,
         ])
-        .run(tauri::generate_context!())
-        .expect("the Mukade window failed to start");
+        .build(tauri::generate_context!())
+        .expect("the Mukade window failed to start")
+        .run(shell::on_run_event);
 }

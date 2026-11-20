@@ -12,7 +12,7 @@ command -v npm >/dev/null || { echo "npm is required (Node.js 22+)"; exit 1; }
 command -v cargo >/dev/null || { echo "cargo is required (Rust)"; exit 1; }
 
 echo "[1/4] Frontend dependencies"
-[ -d node_modules/@tauri-apps/cli ] || npm ci
+if [ ! -d node_modules/@tauri-apps/cli ] || [ ! -f node_modules/@acaprino/imago/package.json ]; then npm ci; fi
 
 echo "[2/4] Command line (mukade, release profile)"
 cargo build --release --locked -p mukade --bin mukade
