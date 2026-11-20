@@ -4,12 +4,10 @@
 import assert from 'node:assert/strict';
 import { checkProduction } from './production.mjs';
 import { createServer } from 'vite';
-import { createRequire } from 'node:module';
+import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Playwright is the machine's own (CI image or a global install), not a dependency of the app.
-const { chromium } = createRequire(import.meta.url)('playwright');
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = `${here}out/`;
 mkdirSync(out, { recursive: true });

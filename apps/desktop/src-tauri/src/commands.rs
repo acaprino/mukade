@@ -9,7 +9,7 @@ use crate::sandbox::{self, Sandbox};
 use crate::error::{CmdError, CmdResult};
 use crate::locations::{self, InstallationView, ScanNote};
 use crate::sessions::{self, RawPage, SessionRow, TranscriptView};
-use crate::state::AppState;
+use crate::state::{AppState, WriteKind, WriteOperation};
 use crate::view::ReceiptView;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -229,14 +229,35 @@ pub async fn hop_options(
     blocking(move || actions::hop_options(&state, &source, &id)).await
 }
 
-#[tauri::command]
-pub async fn hop(state: State<'_, AppState>, args: HopArgs) -> CmdResult<ReceiptView> {
-    let state = state.inner().clone();
-    blocking(move || {
-        let _write = state.begin_write();
-        actions::hop(&state, &args)
+/// The worker and its result belong to the native app across WebView reloads.
+fn start_write(
+    state: &AppState,
+    kind: WriteKind,
+    work: impl FnOnce(&AppState) -> CmdResult<ReceiptView> + Send + 'static,
+) -> CmdResult<WriteOperation> {
+    state.start_write(kind, |id| {
+        let owner = state.clone();
+        tauri::async_runtime::spawn(async move {
+            let worker = owner.clone();
+            let result = blocking(move || work(&worker)).await;
+            owner.finish_write(id, result);
+        });
     })
-    .await
+}
+
+#[tauri::command]
+pub fn write_status(state: State<'_, AppState>) -> Option<WriteOperation> {
+    state.write_status()
+}
+
+#[tauri::command]
+pub fn acknowledge_write(state: State<'_, AppState>, id: u64) {
+    state.acknowledge_write(id);
+}
+
+#[tauri::command]
+pub fn hop(state: State<'_, AppState>, args: HopArgs) -> CmdResult<WriteOperation> {
+    start_write(&state, WriteKind::Hop, move |state| actions::hop(state, &args))
 }
 
 #[tauri::command]
@@ -251,18 +272,15 @@ pub async fn export(
 }
 
 #[tauri::command]
-pub async fn import(
+pub fn import(
     state: State<'_, AppState>,
     document: String,
     into: String,
     prompt: Option<String>,
-) -> CmdResult<ReceiptView> {
-    let state = state.inner().clone();
-    blocking(move || {
-        let _write = state.begin_write();
-        actions::import(&state, &document, &into, prompt.as_deref())
+) -> CmdResult<WriteOperation> {
+    start_write(&state, WriteKind::Import, move |state| {
+        actions::import(state, &document, &into, prompt.as_deref())
     })
-    .await
 }
 
 #[tauri::command]

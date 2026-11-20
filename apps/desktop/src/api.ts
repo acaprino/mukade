@@ -7,7 +7,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
 import type {
   ChatEvent, ChatStatus, CmdError, Exported, FolderScan, HarnessView, HopArgs, HopOptions, InstallationList, Member,
-  Page, RawPage, Receipt, Resumed, Room, Sandbox, SessionRow, Startup, TranscriptView,
+  Page, RawPage, WriteOperation, Resumed, Room, Sandbox, SessionRow, Startup, TranscriptView,
 } from './types.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
@@ -44,10 +44,12 @@ export const api = {
   sessionStamp: (installation: string, id: string) => invoke<string | null>('session_stamp', { installation, id }),
   /** Native records of the session's entries `offset` to `offset + limit` (at most 200). */
   raw: (installation: string, id: string, offset: number, limit: number) => invoke<RawPage>('raw', { installation, id, offset, limit }),
+  writeStatus: () => invoke<WriteOperation | null>('write_status'),
+  acknowledgeWrite: (id: number) => invoke<void>('acknowledge_write', { id }),
   hopOptions: (source: string, id: string) => invoke<HopOptions>('hop_options', { source, id }),
-  hop: (args: HopArgs) => invoke<Receipt>('hop', { args }),
+  hop: (args: HopArgs) => invoke<WriteOperation>('hop', { args }),
   export: (installation: string, id: string, to?: string) => invoke<Exported>('export', { installation, id, to }),
-  import: (document: string, into: string, prompt?: string) => invoke<Receipt>('import', { document, into, prompt }),
+  import: (document: string, into: string, prompt?: string) => invoke<WriteOperation>('import', { document, into, prompt }),
   resume: (installation: string, id: string) => invoke<Resumed>('resume', { installation, id }),
   pick: (kind: 'open' | 'save' | 'folder', name?: string) => invoke<string | null>('pick', { kind, name }),
   chatStatus: () => invoke<ChatStatus>('chat_status'),

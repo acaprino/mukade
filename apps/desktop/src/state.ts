@@ -16,11 +16,15 @@ export interface ReaderState {
   error: string | null;
 }
 
+type ReadState = { kind: 'loading' | 'ready' } | { kind: 'error'; message: string };
+
 export interface State {
   view: 'sessions' | 'chat' | 'harnesses';
   focus: Column;
   installations: Installation[];
   installation: string | null;
+  inventoryRead: ReadState;
+  sessionsRead: ReadState;
   rows: SessionRow[];
   /** The folder filter: null All, '' Unknown, else the cwd. */
   folder: string | null;
@@ -40,9 +44,11 @@ export interface State {
 
 export const state: State = {
   view: 'sessions',
-  focus: 'installations',
+  focus: 'sessions',
   installations: [],
   installation: null,
+  inventoryRead: { kind: 'loading' },
+  sessionsRead: { kind: 'ready' },
   rows: [],
   folder: null,
   query: '',

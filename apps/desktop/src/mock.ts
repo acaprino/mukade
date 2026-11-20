@@ -1,7 +1,7 @@
 // What the commands answer outside Tauri: `npm run dev` in a browser and the Playwright smoke
 // test. Made-up sessions shaped like real listings; nothing here touches a store.
 
-import type { ChatEvent, HopArgs, Installation, Member, Receipt, Room, RowView, SessionRow, TranscriptView } from './types.ts';
+import type { ChatEvent, HopArgs, Installation, Member, Receipt, Room, RowView, SessionRow, TranscriptView, WriteOperation } from './types.ts';
 
 const now = Date.now();
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
@@ -237,6 +237,17 @@ const mockSandboxes: { harness: string; name: string; root: string; store: strin
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((resolve) => setTimeout(() => resolve(structuredClone(value)), ms));
 
+let write: WriteOperation | null = null;
+let writeSequence = 0;
+
+function startWrite(kind: WriteOperation['kind'], args: Pick<HopArgs, 'dest'>, duration: number): WriteOperation {
+  if (write) return write;
+  const operation = { id: ++writeSequence, kind, status: 'running' } as const;
+  write = operation;
+  setTimeout(() => { write = { ...operation, status: 'completed', receipt: receipt(args) }; }, duration);
+  return operation;
+}
+
 export async function answer(command: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const key = String(args.installation ?? args.source ?? 'claude_code');
   const installation = installations.find((item) => item.key === key) ?? installations[0];
@@ -269,8 +280,12 @@ export async function answer(command: string, args: Record<string, unknown> = {}
         all_branches_supported: installation.harness === 'codex', live: source?.live,
       });
     }
-    case 'hop': return delay(receipt(args.args as HopArgs), 900);
-    case 'import': return delay(receipt({ dest: String(args.into) }), 700);
+    case 'write_status': return write;
+    case 'acknowledge_write':
+      if (write && write.id === args.id && write.status !== 'running') write = null;
+      return;
+    case 'hop': return startWrite('hop', args.args as HopArgs, 900);
+    case 'import': return startWrite('import', { dest: String(args.into) }, 700);
     case 'export': return delay({ path: String(args.to ?? `C:\\work\\mukade\\mukade-data\\exports\\claude_code-${args.id}.json`), messages: 42 });
     case 'resume': {
       if (installation.harness === 'deepseek_harness') return delay({ launched: false, refusal: `DeepSeek Harness has no terminal UI to open a session in; continue it with a task: dsh --profile headless --session-id ${args.id} "<task>"`, command: ['dsh', '--profile', 'headless', '--session-id', String(args.id), '<task>'] });

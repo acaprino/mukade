@@ -333,40 +333,33 @@ pub fn interactive_resume(
 /// Expand `{home}` and the data-directory tokens of a catalog path. A token the platform does not
 /// provide makes the whole location unknown (`None`), never a path with a literal `{token}` in it.
 pub fn expand(location: &str, vars: &Vars) -> Option<PathBuf> {
-    let mut out = location.to_string();
-    let mut replace = |token: &str, value: Option<&PathBuf>| -> Option<()> {
-        if !out.contains(token) {
-            return Some(());
-        }
-        let value = value?;
-        out = out.replace(token, &value.to_string_lossy());
-        Some(())
-    };
-    replace("{home}", vars.home.as_ref())?;
-    replace("{app_data}", vars.app_data.as_ref())?;
-    replace("{local_app_data}", vars.local_app_data.as_ref())?;
-    if out.contains("{xdg_data_home}") {
-        let data = vars.xdg_data_home.clone().or_else(|| {
-            vars.home
-                .as_ref()
-                .map(|home| home.join(".local").join("share"))
-        })?;
-        out = out.replace("{xdg_data_home}", &data.to_string_lossy());
+    // Only the catalog text is a template. Directory names may contain tokens themselves, or
+    // native filename bytes that cannot be represented by a Rust string.
+    let mut path = std::ffi::OsString::new();
+    let mut rest = location;
+    while let Some((literal, after_open)) = rest.split_once('{') {
+        path.push(literal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let (token, after_close) = after_open.split_once('}')?;
+        let directory = match token {
+            "home" => vars.home.clone(),
+            "app_data" => vars.app_data.clone(),
+            "local_app_data" => vars.local_app_data.clone(),
+            "xdg_data_home" => vars.xdg_data_home.clone().or_else(|| {
+                vars.home
+                    .as_ref()
+                    .map(|home| home.join(".local").join("share"))
+            }),
+            "xdg_config_home" => vars
+                .xdg_config_home
+                .clone()
+                .or_else(|| vars.home.as_ref().map(|home| home.join(".config"))),
+            _ => return None,
+        }?;
+        path.push(directory);
+        rest = after_close;
     }
-    if out.contains("{xdg_config_home}") {
-        let config = vars
-            .xdg_config_home
-            .clone()
-            .or_else(|| vars.home.as_ref().map(|home| home.join(".config")))?;
-        out = out.replace("{xdg_config_home}", &config.to_string_lossy());
-    }
-    if out.contains('{') {
-        return None;
-    }
-    // `/` is valid on every platform; a Windows display reads better with its own separator.
-    Some(PathBuf::from(
-        out.replace('/', std::path::MAIN_SEPARATOR_STR),
-    ))
+    path.push(rest.replace('/', std::path::MAIN_SEPARATOR_STR));
+    Some(path.into())
 }
 
 #[cfg(test)]
@@ -430,6 +423,19 @@ mod tests {
         );
         // An unknown token is not left in a path as text.
         assert!(expand("{nonesuch}/x", &unix).is_none());
+    }
+
+    #[test]
+    fn expanding_home_treats_token_names_in_the_directory_as_literal() {
+        let home = PathBuf::from("/profiles/{app_data}");
+        let vars = Vars {
+            home: Some(home.clone()),
+            ..vars()
+        };
+        assert_eq!(
+            store_default_with(HarnessId::Pi, &vars),
+            Some(home.join(".pi").join("agent"))
+        );
     }
 
     #[test]

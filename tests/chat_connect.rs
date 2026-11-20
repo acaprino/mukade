@@ -385,3 +385,29 @@ fn each_harness_names_its_own_file_and_tables() {
         assert!(target.entry.to_string().contains(TOKEN), "{name}");
     }
 }
+
+fn assert_opencode_config_directory(directory: &Path) {
+    let vars = mukade::catalog::Vars {
+        xdg_config_home: Some(directory.to_owned()),
+        ..Default::default()
+    };
+    let target = connect::target_of(mukade::HarnessId::OpenCode, &vars, &server(4000)).unwrap();
+    assert_eq!(
+        target.path,
+        directory.join("opencode").join("opencode.json")
+    );
+}
+
+#[test]
+fn opencode_keeps_braces_in_its_configuration_directory() {
+    assert_opencode_config_directory(Path::new("/profiles/{work}"));
+}
+
+#[cfg(unix)]
+#[test]
+fn opencode_keeps_non_utf8_configuration_directory_bytes() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    assert_opencode_config_directory(Path::new(OsStr::from_bytes(b"/profiles/\xff")));
+}

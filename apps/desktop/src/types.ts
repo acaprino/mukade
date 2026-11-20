@@ -67,6 +67,12 @@ export interface Receipt {
   reply?: string; warning?: string;
 }
 
+export type WriteOperation = { id: number; kind: 'hop' | 'import' } & (
+  | { status: 'running' }
+  | { status: 'completed'; receipt: Receipt }
+  | { status: 'failed'; error: CmdError }
+);
+
 export interface Exported { path: string; messages: number }
 export interface Resumed { launched: boolean; refusal?: string; command: string[]; cwd?: string }
 

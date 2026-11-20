@@ -23,8 +23,8 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 #installations { flex: 1; min-height: 0; }
 #detail { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 #session-sidebar .im-sidebar-collapse { flex: none; }
-.resizer { position: absolute; inset-block: 0; width: var(--im-s-2); z-index: 2; cursor: col-resize; touch-action: none; }
-.resizer:hover { background: var(--im-hover); }
+#resize-sessions, #resize-installations { position: absolute; inset-block: 0; z-index: 2; }
+.im-shell[data-im-sidebar-collapsed="true"] #resize-installations { display: none; }
 #resize-installations { right: 0; }
 #resize-sessions { left: calc(var(--w-sessions, 52%) - var(--im-s-1)); }
 .back-column { display: none; }

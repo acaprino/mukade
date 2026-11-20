@@ -53,6 +53,8 @@ fn main() {
             commands::transcript,
             commands::session_stamp,
             commands::raw,
+            commands::write_status,
+            commands::acknowledge_write,
             commands::hop_options,
             commands::hop,
             commands::export,

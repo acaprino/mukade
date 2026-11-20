@@ -765,6 +765,48 @@ mod tests {
             written.len(),
             registry.display()
         );
+        check_import_recovery(&state, &scratch);
+    }
+
+    /// Reuse the isolated stores and manifest directory from the fixture hop.
+    fn check_import_recovery(state: &AppState, scratch: &Scratch) {
+        use crate::state::{WriteKind, WriteOutcome};
+        let target = state.location("pi").unwrap();
+        let before = crate::sessions::list(&target).unwrap().len();
+        let file = scratch.join("import.json");
+        let path = file.to_str().unwrap();
+        export(state, "claude_code", CLAUDE_FIXTURE, Some(path)).unwrap();
+
+        // Hold the scheduled import until the replacement renderer has attempted to resubmit.
+        let mut scheduled = None;
+        let pending = state
+            .start_write(WriteKind::Import, |id| scheduled = Some(id))
+            .unwrap();
+        let replacement = state.clone();
+        assert_eq!(
+            replacement
+                .start_write(WriteKind::Import, |_| panic!("duplicate import"))
+                .unwrap(),
+            pending
+        );
+        let id = scheduled.expect("the first request scheduled a worker");
+        state.finish_write(id, import(state, path, "pi", None));
+        let completed = replacement.write_status().unwrap();
+        assert_eq!(completed.id, pending.id);
+        let WriteOutcome::Completed { receipt } = &completed.outcome else {
+            panic!("import did not complete: {completed:?}");
+        };
+        let sessions = crate::sessions::list(&target).unwrap();
+        assert_eq!(sessions.len(), before + 1);
+        assert!(sessions.iter().any(|row| row.id == receipt.dest_id));
+        assert_eq!(
+            replacement
+                .start_write(WriteKind::Hop, |_| panic!("unacknowledged import"))
+                .unwrap(),
+            completed
+        );
+        replacement.acknowledge_write(id);
+        assert!(state.write_status().is_none());
     }
 
     /// The records the registry files in `dir` and its folders hold (each file is a JSON list).

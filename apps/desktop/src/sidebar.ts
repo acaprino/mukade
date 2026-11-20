@@ -10,7 +10,6 @@ import { folders } from './tree.ts';
 export interface SidebarActions {
   pickInstallation(key: string): void;
   pickFolder(cwd: string | null): void;
-  focus(column: 'installations' | 'folders'): void;
 }
 
 export function folderKey(cwd: string | null): string {
@@ -32,12 +31,11 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
     ].filter(Boolean) as Node[],
   });
   const selected = state.installation;
-  const pick = (id: string) => { actions.focus('installations'); actions.pickInstallation(id); };
-  const installationsBox = h('div', { class: `pane${state.focus === 'installations' ? ' focused' : ''}`, 'data-pane': 'installations' },
+  const installationsBox = h('div', { class: 'pane', 'data-pane': 'installations' },
     h('div', { class: 'pane-body im-panel-body' },
-      listbox('Installations', standard.map(row), selected, pick),
+      listbox('Installations', standard.map(row), selected, actions.pickInstallation),
       scanned.length ? h('p', { class: 'label' }, 'Found by scan') : null,
-      scanned.length ? listbox('Scanned installations', scanned.map(row), selected, pick) : null,
+      scanned.length ? listbox('Scanned installations', scanned.map(row), selected, actions.pickInstallation) : null,
     ));
 
   const current = state.installations.find((item) => item.key === state.installation);
@@ -48,12 +46,11 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
     class: folder.cwd === '' ? 'untitled' : undefined,
     cells: [h('span', { class: 'im-avatar im-rail-item', 'aria-hidden': 'true' }, folder.label.slice(0, 2)), h('span', { class: 'grow im-row-text' }, folder.label), h('span', { class: 'num im-num' }, String(folder.count))],
   }));
-  const foldersBox = h('div', { class: `pane${state.focus === 'folders' ? ' focused' : ''}`, 'data-pane': 'folders' },
+  const foldersBox = h('div', { class: 'pane', 'data-pane': 'folders' },
     h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Folders'), h('span', { class: 'spring' }), h('small', {}, current?.label ?? '')),
     h('div', { class: 'pane-body im-panel-body' },
       current?.error ? h('p', { class: 'note err' }, current.error) : null,
       listbox('Folders', folderRows, folderKey(state.folder), (id) => {
-        actions.focus('folders');
         actions.pickFolder(list.find((folder) => folderKey(folder.cwd) === id)?.cwd ?? null);
       }),
     ));

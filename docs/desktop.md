@@ -103,6 +103,15 @@ Snap Layouts on the maximize button. The browser preview uses opaque surfaces.
 Still to try on Windows and macOS: the drop, the close confirmation and the terminal opened by
 Resume.
 
+The desktop verification workflow exercises the embedded frontend on macOS and Linux using the
+production custom protocol. A test-only probe waits for the first view and real startup IPC before
+exiting. The frontend job runs the bundle with simulated IPC for failure and keyboard scenarios.
+Run `npm ci` and `npx playwright install chromium` before running the browser tests locally.
+
+Hop and Import retain the active operation and its receipt in the native process until the result is
+dismissed. If the WebView reloads, the replacement page reconnects to that operation. Closing the
+whole application ends the lifetime of this in-memory record.
+
 ## Keys
 
 | key | does |

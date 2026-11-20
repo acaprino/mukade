@@ -4,8 +4,9 @@
 import { pathField } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { button, commandLine, copyButton, fill, h, kbd } from './dom.ts';
-import { openModal, type Modal } from './modal.ts';
-import type { HopArgs, HopOptions, Installation, Receipt } from './types.ts';
+import type { Modal } from './modal.ts';
+import { openWriteDialog, type WriteDialog } from './write-recovery.ts';
+import type { HopArgs, HopOptions, Installation, Receipt, WriteOperation } from './types.ts';
 
 export interface JobHooks {
   /** A job started (`label` for the status line) or ended. */
@@ -29,10 +30,11 @@ const SHELLS = ['default', 'posix', 'powershell', 'bash', 'pwsh', 'none'];
 /** Enter runs a dialog's primary action only from a one-line text field or the dialog itself; on a
  *  button, a choice, a list or a multi-line field it is that control's own (a hop is a write). */
 function submits(event: KeyboardEvent): boolean {
-  if (event.key !== 'Enter' || event.isComposing) return false;
-  const target = event.target as HTMLElement;
-  if (target instanceof HTMLInputElement) return target.type !== 'checkbox' && target.type !== 'radio';
-  return !target.closest('button, select, textarea, a, [role="radio"], [role="option"]');
+  if (event.key !== 'Enter' || event.isComposing || event.defaultPrevented || event.repeat) return false;
+  const target = event.target;
+  return target instanceof HTMLInputElement
+    ? ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(target.type)
+    : target instanceof HTMLElement && target.matches('.im-form-dialog');
 }
 
 export function segmented<T extends string>(label: string, values: readonly T[], current: T, onPick: (value: T) => void): HTMLElement {
@@ -44,7 +46,8 @@ export function segmented<T extends string>(label: string, values: readonly T[],
 }
 
 export async function openHop(source: string, id: string, hooks: JobHooks): Promise<void> {
-  const modal = openModal({ title: 'Hop', subtitle: 'reading the session…', icon: 'hop', wide: true });
+  if (!writeChecked) return;
+  const modal = openWriteDialog({ title: 'Hop', subtitle: 'reading the session…', icon: 'hop', wide: true }, message => hooks.status(message, true));
   fill(modal.body, h('p', { class: 'muted' }, 'Looking at where it can go…'));
   let options: HopOptions;
   try {
@@ -178,32 +181,66 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
   modal.root.onkeydown = (event) => { if (submits(event) && !go.disabled) { event.preventDefault(); run(); } };
 }
 
-async function runHop(modal: Modal, options: HopOptions, choice: HopArgs, hooks: JobHooks): Promise<void> {
+async function runHop(modal: WriteDialog, options: HopOptions, choice: HopArgs, hooks: JobHooks): Promise<void> {
   const dest = options.destinations.find((d) => d.key === choice.dest)!;
   modal.lock(true);
   modal.root.onkeydown = null;
   fill(modal.foot, h('span', { class: 'mono' }, `Hopping to ${dest.label}…`), h('span', { class: 'spring' }));
   hooks.job(`hopping → ${dest.label}…`);
+  const text = (value?: string) => value?.trim() || undefined;
+  const summary = choice.compaction === 'summary';
+  const native = choice.compaction === 'native';
+  await showWriteResult(modal, () => api.hop({
+    ...choice, prompt: text(choice.prompt), model: text(choice.model), model_provider: text(choice.model_provider),
+    intent: summary ? choice.intent : undefined, summary_model: summary ? text(choice.summary_model) : undefined, keep_turns: summary ? choice.keep_turns : undefined,
+    context_window: native ? choice.context_window : undefined, max_output_tokens: native ? choice.max_output_tokens : undefined,
+  }), hooks, 'hop', options.source_label);
+}
+
+let writeChecked = false;
+
+/** Restore the native operation before accepting a new write from this renderer. */
+export async function recoverWrite(hooks: JobHooks): Promise<void> {
   try {
-    const text = (value?: string) => value?.trim() || undefined;
-    const summary = choice.compaction === 'summary';
-    const native = choice.compaction === 'native';
-    // What belongs to another compaction is not sent with this one.
-    const receipt = await api.hop({
-      ...choice, prompt: text(choice.prompt), model: text(choice.model), model_provider: text(choice.model_provider),
-      intent: summary ? choice.intent : undefined, summary_model: summary ? text(choice.summary_model) : undefined, keep_turns: summary ? choice.keep_turns : undefined,
-      context_window: native ? choice.context_window : undefined, max_output_tokens: native ? choice.max_output_tokens : undefined,
-    });
-    hooks.job(null);
-    hooks.status(receipt.warning ? `hop written, with a warning: ${receipt.warning}` : `hop done → ${dest.label} · ${receipt.dest_id}`, Boolean(receipt.warning));
+    const current = await api.writeStatus();
+    if (current) {
+      const title = current.kind === 'import' ? 'Import' : 'Hop';
+      const modal = openWriteDialog({ title, icon: current.kind, wide: true }, message => hooks.status(message, true));
+      modal.lock(true);
+      const message = `${title} in progress…`;
+      fill(modal.body, h('p', { class: 'note' }, message));
+      hooks.job(message);
+      void showWriteResult(modal, current, hooks, current.kind);
+    }
+  } finally {
+    writeChecked = true;
+  }
+}
+
+async function showWriteResult(modal: WriteDialog, start: WriteOperation | (() => Promise<WriteOperation>), hooks: JobHooks,
+  kind: WriteOperation['kind'], source?: string, retry?: () => void): Promise<boolean> {
+  try {
+    const result = await modal.observe(start);
+    // A retransmission can reattach to an earlier hop or import.
+    if (kind !== result.kind) { source = undefined; retry = undefined; }
+    kind = result.kind;
+    if (result.status === 'failed') throw result.error;
+    const receipt = result.receipt;
+    hooks.status(receipt.warning ? `${kind} written, with a warning: ${receipt.warning}` : `${kind} done → ${receipt.dest_label} · ${receipt.dest_id}`, Boolean(receipt.warning));
     modal.lock(false);
-    showReceipt(modal, receipt, `${options.source_label} → ${dest.label}`, hooks);
+    showReceipt(modal, receipt, `${source ?? (kind === 'import' ? 'document' : 'session')} → ${receipt.dest_label}`, hooks);
+    return true;
   } catch (error) {
-    hooks.job(null);
-    hooks.status(`hop failed: ${errorText(error)}`, true);
+    const reason = errorText(error);
+    hooks.status(`${kind} failed: ${reason}`, true);
     modal.lock(false);
-    fill(modal.body, h('p', { class: 'note err' }, `Nothing was written. ${errorText(error)}`));
-    fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { class: 'primary', onclick: () => modal.close() }));
+    if (!retry) fill(modal.body, h('p', { class: 'note err' }, reason));
+    fill(modal.foot, retry ? h('p', { class: 'note err grow' }, reason) : h('span', { class: 'spring' }),
+      button(['Close ', kbd('esc')], { onclick: () => modal.close() }),
+      retry ? button('Try again', { class: 'primary', onclick: retry }) : null);
+    return false;
+  } finally {
+    hooks.job(null);
   }
 }
 
@@ -248,8 +285,9 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
 
 /** F8: a document written into an installation. */
 export function openImport(installations: Installation[], into: string | null, document: string | null, hooks: JobHooks): void {
+  if (!writeChecked) return;
   const writable = installations.filter((item) => item.destination);
-  const modal = openModal({ title: 'Import', subtitle: 'a dump document into an installation', icon: 'import' });
+  const modal = openWriteDialog({ title: 'Import', subtitle: 'a dump document into an installation', icon: 'import' }, message => hooks.status(message, true));
   const path = Object.assign(modal.body.ownerDocument.createElement('input'), { id: 'import-path', type: 'text', placeholder: 'C:\\…\\mukade-data\\exports\\<harness>-<id>.json', value: document ?? '' });
   const dest = h('select', { id: 'import-into' }) as HTMLSelectElement;
   for (const item of writable) dest.append(h('option', { value: item.key, selected: item.key === into }, item.label));
@@ -273,21 +311,8 @@ export function openImport(installations: Installation[], into: string | null, d
     modal.lock(true);
     fill(modal.foot, h('span', { class: 'mono' }, `Importing into ${target?.label}…`), h('span', { class: 'spring' }));
     hooks.job(`importing → ${target?.label}…`);
-    let receipt: Receipt;
-    try {
-      receipt = await api.import(path.value.trim(), dest.value, prompt.value.trim() || undefined);
-    } catch (error) {
-      importing = false;
-      hooks.job(null);
-      hooks.status(`import failed: ${errorText(error)}`, true);
-      modal.lock(false);
-      fill(modal.foot, h('p', { class: 'note err grow' }, errorText(error)), button(['Close ', kbd('esc')], { onclick: () => modal.close() }), button('Try again', { class: 'primary', onclick: run }));
-      return;
-    }
-    hooks.job(null);
-    hooks.status(`import done → ${receipt.dest_label} · ${receipt.dest_id}`);
-    modal.lock(false);
-    showReceipt(modal, receipt, `document → ${receipt.dest_label}`, hooks);
+    importing = await showWriteResult(modal, () => api.import(path.value.trim(), dest.value, prompt.value.trim() || undefined), hooks,
+      'import', 'document', () => void run());
   };
   fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), button(['Import ', kbd('⏎')], { class: 'primary', onclick: run }));
   modal.root.onkeydown = (event) => { if (submits(event)) { event.preventDefault(); void run(); } };
