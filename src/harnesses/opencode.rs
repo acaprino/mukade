@@ -1,6 +1,6 @@
 //! OpenCode: one SQLite database, named by `OPENCODE_DB`.
 
-use super::{Destination, Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, SandboxInstall, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Kind, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
@@ -19,6 +19,29 @@ pub(super) struct OpenCode;
 impl Harness for OpenCode {
     fn id(&self) -> HarnessId {
         HarnessId::OpenCode
+    }
+
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        Some(SandboxInstall {
+            package: "@opencode/cli",
+            ignore_scripts: false,
+            env: &[
+                ("XDG_DATA_HOME", "share"),
+                ("XDG_CONFIG_HOME", "config"),
+                ("XDG_STATE_HOME", "state"),
+                ("XDG_CACHE_HOME", "cache"),
+            ],
+            store: "share/opencode/opencode.db",
+            store_folders: &[],
+        })
+    }
+
+    fn system_install_command(&self) -> Option<&'static str> {
+        Some(if cfg!(windows) {
+            "npm install -g @opencode/cli"
+        } else {
+            "curl -fsSL https://opencode.ai/v2/install | bash"
+        })
     }
 
     fn reader(&self) -> &'static dyn Reader {

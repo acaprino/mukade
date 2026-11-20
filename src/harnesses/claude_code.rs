@@ -1,6 +1,6 @@
 //! Claude Code: sessions under `CLAUDE_CONFIG_DIR/projects/`.
 
-use super::{Destination, Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, SandboxInstall, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
@@ -16,6 +16,24 @@ pub(super) struct ClaudeCode;
 impl Harness for ClaudeCode {
     fn id(&self) -> HarnessId {
         HarnessId::ClaudeCode
+    }
+
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        Some(SandboxInstall {
+            package: "@anthropic-ai/claude-code",
+            ignore_scripts: false,
+            env: &[("CLAUDE_CONFIG_DIR", ".claude")],
+            store: ".claude",
+            store_folders: &["projects"],
+        })
+    }
+
+    fn system_install_command(&self) -> Option<&'static str> {
+        Some(if cfg!(windows) {
+            "irm https://claude.ai/install.ps1 | iex"
+        } else {
+            "curl -fsSL https://claude.ai/install.sh | bash"
+        })
     }
 
     fn reader(&self) -> &'static dyn Reader {

@@ -214,7 +214,6 @@ function commandField(label: string, argv: string[]): HTMLElement {
 /** The receipt of a hop or import, in `modal` (spec F6 result). */
 export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, hooks: JobHooks): void {
   modal.setTitle(receipt.warning ? 'Written, with a warning' : 'Done', subtitle);
-  modal.root.querySelector('.dialog')?.classList.replace('tone-accent', receipt.warning ? 'tone-error' : 'tone-live');
   const left = h('div', { class: 'col' },
     receipt.warning ? h('p', { class: 'note warn' }, receipt.warning) : null,
     h('dl', { class: 'kv' },

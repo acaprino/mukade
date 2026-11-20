@@ -392,7 +392,7 @@ async function exportSelected(saveAs: boolean): Promise<void> {
     state.lastExport = exported.path;
     setJob(null);
     setStatus(`exported ${exported.messages} messages → ${exported.path}`);
-    const modal = openModal({ title: 'Exported', subtitle: `${exported.messages} messages`, icon: 'export', tone: 'live' });
+    const modal = openModal({ title: 'Exported', subtitle: `${exported.messages} messages`, icon: 'export' });
     fill(modal.body, h('div', { class: 'col' },
       h('dl', { class: 'kv' }, h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
       h('p', { class: 'note' }, 'Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.')));

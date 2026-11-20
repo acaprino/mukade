@@ -64,13 +64,13 @@ try {
     await page.keyboard.press('Escape');
     // Enter on Cancel cancels: it never starts the hop (a write).
     await page.keyboard.press('h');
-    await page.locator('.dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .plan').waitFor();
     await page.getByRole('button', { name: /^Cancel/ }).focus();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(400);
-    if (await page.locator('.dialog').count()) failures.push(`${name}: Enter on Cancel did not cancel the hop`);
+    if (await page.locator('.im-form-dialog').count()) failures.push(`${name}: Enter on Cancel did not cancel the hop`);
     await page.keyboard.press('h');
-    await page.locator('.dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .plan').waitFor();
     await page.screenshot({ path: `${out}hop-${name}.png` });
     await page.keyboard.press('Enter');
     await page.getByText('Losses · 2').waitFor();
@@ -123,10 +123,10 @@ try {
     // Settings switches the look, and the choice is kept.
     await page.locator('#settings').click();
     const other = look === 'smooth' ? 'oni' : 'smooth';
-    await page.locator('.dialog').getByRole('button', { name: other, exact: true }).click();
+    await page.locator('.im-form-dialog').getByRole('button', { name: other, exact: true }).click();
     const kept = await page.evaluate(() => `${document.documentElement.dataset.imLook}/${localStorage.getItem('mukade.look')}`);
     if (kept !== `${other}/${other}`) failures.push(`${name}: Settings did not switch to ${other} (${kept})`);
-    await page.locator('.dialog').getByRole('button', { name: look, exact: true }).click();
+    await page.locator('.im-form-dialog').getByRole('button', { name: look, exact: true }).click();
     await page.screenshot({ path: `${out}settings-${name}.png` });
     await page.close();
   }

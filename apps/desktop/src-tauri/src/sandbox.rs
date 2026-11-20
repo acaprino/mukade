@@ -5,72 +5,12 @@
 //! is recorded in `mukade-data/sandboxes.json` and listed as an installation.
 
 use crate::error::{CmdError, CmdResult};
+use mukade::harnesses::{self, SandboxInstall};
 use mukade::model::HarnessId;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
-
-/// The npm package of each harness that ships as one, and whether its install scripts are left
-/// out (Pi's installer pins its dependencies; npm does not, so its scripts are not needed).
-pub fn package(harness: HarnessId) -> Option<(&'static str, bool)> {
-    match harness {
-        HarnessId::ClaudeCode => Some(("@anthropic-ai/claude-code", false)),
-        HarnessId::Codex => Some(("@openai/codex", false)),
-        HarnessId::OpenCode => Some(("@opencode/cli", false)),
-        HarnessId::Pi => Some(("@earendil-works/pi-coding-agent", true)),
-        HarnessId::DeepSeekHarness => Some(("@deepseek-ai/dsh", false)),
-        HarnessId::Hermes => None,
-    }
-}
-
-/// The variables a sandbox's launcher sets, relative to its `home` folder, and its store there.
-fn isolation(harness: HarnessId) -> (Vec<(&'static str, &'static str)>, &'static str) {
-    match harness {
-        HarnessId::ClaudeCode => (vec![("CLAUDE_CONFIG_DIR", ".claude")], ".claude"),
-        HarnessId::Codex => (vec![("CODEX_HOME", ".codex")], ".codex"),
-        // OpenCode keeps everything in the XDG folders: data (its database), config, state, cache.
-        HarnessId::OpenCode => (
-            vec![
-                ("XDG_DATA_HOME", "share"),
-                ("XDG_CONFIG_HOME", "config"),
-                ("XDG_STATE_HOME", "state"),
-                ("XDG_CACHE_HOME", "cache"),
-            ],
-            "share/opencode/opencode.db",
-        ),
-        HarnessId::Pi => (vec![("PI_CODING_AGENT_DIR", ".pi/agent")], ".pi/agent"),
-        HarnessId::DeepSeekHarness => (vec![("DSH_HOME", ".dsh")], ".dsh"),
-        HarnessId::Hermes => (vec![("HERMES_HOME", ".hermes")], ".hermes"),
-    }
-}
-
-/// Folders a fresh store needs so that its listing reads as empty rather than missing.
-fn store_folders(harness: HarnessId) -> &'static [&'static str] {
-    match harness {
-        HarnessId::ClaudeCode => &["projects"],
-        HarnessId::Codex | HarnessId::Pi => &["sessions"],
-        _ => &[],
-    }
-}
-
-/// The command that installs a harness on the system, as its own documentation gives it
-/// (`docs/harnesses/*.md`); `None` where there is none to run (Hermes's script is not verified).
-pub fn system_command(harness: HarnessId) -> Option<String> {
-    let windows = cfg!(windows);
-    Some(match harness {
-        HarnessId::ClaudeCode if windows => "irm https://claude.ai/install.ps1 | iex".into(),
-        HarnessId::ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash".into(),
-        HarnessId::Codex if windows => "irm https://chatgpt.com/codex/install.ps1 | iex".into(),
-        HarnessId::Codex => "curl -fsSL https://chatgpt.com/codex/install.sh | sh".into(),
-        HarnessId::OpenCode if windows => "npm install -g @opencode/cli".into(),
-        HarnessId::OpenCode => "curl -fsSL https://opencode.ai/v2/install | bash".into(),
-        HarnessId::Pi if windows => "irm https://pi.dev/install.ps1 | iex".into(),
-        HarnessId::Pi => "curl -fsSL https://pi.dev/install.sh | sh".into(),
-        HarnessId::DeepSeekHarness => "npm install -g @deepseek-ai/dsh".into(),
-        HarnessId::Hermes => return None,
-    })
-}
 
 /// The terminal command that runs `line` and keeps the window open to read what it said.
 pub fn terminal_argv(line: &str) -> Vec<String> {
@@ -89,13 +29,13 @@ pub fn terminal_argv(line: &str) -> Vec<String> {
 
 /// Run the system install of a harness in a new terminal; answers the command.
 pub fn install_system(harness: HarnessId) -> CmdResult<Vec<String>> {
-    let line = system_command(harness).ok_or_else(|| {
+    let line = harnesses::get(harness).system_install_command().ok_or_else(|| {
         CmdError::refused(format!(
             "{} installs with its own script: see docs/harnesses",
             harness.as_str()
         ))
     })?;
-    let argv = terminal_argv(&line);
+    let argv = terminal_argv(line);
     crate::terminal::launch(&argv, None, &[]).map_err(CmdError::failed)?;
     Ok(argv)
 }
@@ -145,19 +85,17 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 /// The launcher's text: set each variable under `home`, then run the harness from `app`.
-pub fn launcher(harness: HarnessId, binary: &str) -> String {
-    let (vars, _) = isolation(harness);
-    let display = &mukade::catalog::entry(harness).display;
+fn launcher(spec: &SandboxInstall, display: &str, binary: &str) -> String {
     if cfg!(windows) {
         let mut text = format!("@echo off\r\nrem A sandboxed {display}, installed by Mukade: its own store in home\\.\r\n");
-        for (name, relative) in vars {
+        for (name, relative) in spec.env {
             text.push_str(&format!("set \"{name}=%~dp0home\\{}\"\r\n", relative.replace('/', "\\")));
         }
         text.push_str(&format!("\"%~dp0app\\node_modules\\.bin\\{binary}.cmd\" %*\r\n"));
         text
     } else {
         let mut text = format!("#!/bin/sh\n# A sandboxed {display}, installed by Mukade: its own store in home/.\nhere=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n");
-        for (name, relative) in vars {
+        for (name, relative) in spec.env {
             text.push_str(&format!("export {name}=\"$here/home/{relative}\"\n"));
         }
         text.push_str(&format!("exec \"$here/app/node_modules/.bin/{binary}\" \"$@\"\n"));
@@ -171,9 +109,10 @@ const NPM_DEADLINE: Duration = Duration::from_secs(15 * 60);
 /// Install a harness with npm into `<mukade-data>/sandboxes/<harness>-<name>`, write its launcher,
 /// make its store, and record it. Blocks while npm runs.
 pub fn install(harness: HarnessId, name: &str) -> CmdResult<Sandbox> {
-    let (package, no_scripts) = package(harness).ok_or_else(|| {
+    let spec = harnesses::get(harness).sandbox_install().ok_or_else(|| {
         CmdError::refused(format!("{} is not an npm package: it has no sandbox", harness.as_str()))
     })?;
+    let package = spec.package;
     if !valid_name(name) {
         return Err(CmdError::refused("a sandbox's name: lowercase letters, digits, - and _ (up to 32)"));
     }
@@ -187,7 +126,7 @@ pub fn install(harness: HarnessId, name: &str) -> CmdResult<Sandbox> {
     std::fs::create_dir_all(&app).map_err(|error| CmdError::failed(format!("{}: {error}", app.display())))?;
     let mut command = Command::new(&npm);
     command.args(["install", "--prefix"]).arg(&app).args(["--no-fund", "--no-audit", "--loglevel=error"]);
-    if no_scripts {
+    if spec.ignore_scripts {
         command.arg("--ignore-scripts");
     }
     command.arg(package);
@@ -211,17 +150,17 @@ pub fn install(harness: HarnessId, name: &str) -> CmdResult<Sandbox> {
         }));
     }
     let binary = mukade::exe::binary_name(harness);
-    let (_, store) = isolation(harness);
-    let store = store.split('/').fold(root.join("home"), |path, part| path.join(part));
+    let store = spec.store.split('/').fold(root.join("home"), |path, part| path.join(part));
     let folder = if mukade::catalog::store_is_file(harness) { store.parent().map(Path::to_path_buf) } else { Some(store.clone()) };
     if let Some(folder) = folder {
-        for sub in store_folders(harness) {
+        for sub in spec.store_folders {
             std::fs::create_dir_all(folder.join(sub)).map_err(|error| CmdError::failed(format!("{}: {error}", folder.display())))?;
         }
         std::fs::create_dir_all(&folder).map_err(|error| CmdError::failed(format!("{}: {error}", folder.display())))?;
     }
     let exe = root.join(if cfg!(windows) { format!("{binary}.cmd") } else { binary.to_string() });
-    std::fs::write(&exe, launcher(harness, binary)).map_err(|error| CmdError::failed(format!("{}: {error}", exe.display())))?;
+    let script = launcher(&spec, &mukade::catalog::entry(harness).display, binary);
+    std::fs::write(&exe, script).map_err(|error| CmdError::failed(format!("{}: {error}", exe.display())))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -290,10 +229,12 @@ mod tests {
 
     #[test]
     fn a_launcher_sets_the_store_and_runs_the_npm_binary() {
-        let text = launcher(HarnessId::ClaudeCode, "claude");
+        let claude = harnesses::get(HarnessId::ClaudeCode).sandbox_install().unwrap();
+        let text = launcher(&claude, "Claude Code", "claude");
         assert!(text.contains("CLAUDE_CONFIG_DIR"), "{text}");
         assert!(text.contains("claude"), "{text}");
-        let opencode = launcher(HarnessId::OpenCode, "opencode");
+        let spec = harnesses::get(HarnessId::OpenCode).sandbox_install().unwrap();
+        let opencode = launcher(&spec, "OpenCode", "opencode");
         for var in ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
             assert!(opencode.contains(var), "{var}");
         }
@@ -302,8 +243,9 @@ mod tests {
     #[test]
     fn every_harness_but_hermes_has_a_package_and_a_system_command() {
         for harness in HarnessId::ALL {
-            assert_eq!(package(harness).is_some(), harness != HarnessId::Hermes, "{harness:?}");
-            assert_eq!(system_command(harness).is_some(), harness != HarnessId::Hermes, "{harness:?}");
+            let adapter = harnesses::get(harness);
+            assert_eq!(adapter.sandbox_install().is_some(), harness != HarnessId::Hermes, "{harness:?}");
+            assert_eq!(adapter.system_install_command().is_some(), harness != HarnessId::Hermes, "{harness:?}");
         }
         assert!(valid_name("try-1"));
         assert!(!valid_name("Try"));

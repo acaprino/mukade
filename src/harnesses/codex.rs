@@ -1,6 +1,6 @@
 //! Codex CLI: rollouts under `CODEX_HOME/sessions/`.
 
-use super::{Destination, Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, SandboxInstall, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
@@ -16,6 +16,24 @@ pub(super) struct Codex;
 impl Harness for Codex {
     fn id(&self) -> HarnessId {
         HarnessId::Codex
+    }
+
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        Some(SandboxInstall {
+            package: "@openai/codex",
+            ignore_scripts: false,
+            env: &[("CODEX_HOME", ".codex")],
+            store: ".codex",
+            store_folders: &["sessions"],
+        })
+    }
+
+    fn system_install_command(&self) -> Option<&'static str> {
+        Some(if cfg!(windows) {
+            "irm https://chatgpt.com/codex/install.ps1 | iex"
+        } else {
+            "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        })
     }
 
     fn reader(&self) -> &'static dyn Reader {
