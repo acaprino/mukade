@@ -1,6 +1,7 @@
 // F6, F8: the hop dialog (destination, compaction and its own options, subagents, branches,
 // reasoning, shell, prompt, model and tools, and the plan before anything runs), the import dialog, and the receipt both end in.
 
+import { pathField } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { button, commandLine, copyButton, fill, h, kbd } from './dom.ts';
 import { openModal, type Modal } from './modal.ts';
@@ -249,13 +250,17 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
 export function openImport(installations: Installation[], into: string | null, document: string | null, hooks: JobHooks): void {
   const writable = installations.filter((item) => item.destination);
   const modal = openModal({ title: 'Import', subtitle: 'a dump document into an installation', icon: 'import' });
-  const path = h('input', { id: 'import-path', type: 'text', placeholder: 'C:\\…\\mukade-data\\exports\\<harness>-<id>.json', value: document ?? '' }) as HTMLInputElement;
+  const path = Object.assign(modal.body.ownerDocument.createElement('input'), { id: 'import-path', type: 'text', placeholder: 'C:\\…\\mukade-data\\exports\\<harness>-<id>.json', value: document ?? '' });
   const dest = h('select', { id: 'import-into' }) as HTMLSelectElement;
   for (const item of writable) dest.append(h('option', { value: item.key, selected: item.key === into }, item.label));
   const prompt = h('textarea', { id: 'import-prompt', rows: '2', placeholder: 'continue' }) as HTMLTextAreaElement;
-  const browse = button('Choose…', { onclick: async () => { const picked = await api.pick('open').catch(() => null); if (picked) path.value = picked; } });
+  const source = pathField(path, {
+    buttonLabel: 'Choose…',
+    choose: () => api.pick('open'),
+    onError: error => hooks.status(errorText(error), true),
+  });
   fill(modal.body, h('div', { class: 'col' },
-    h('div', { class: 'field im-field' }, h('label', { for: 'import-path' }, 'Document'), h('div', { class: 'cmd' }, path, browse)),
+    h('div', { class: 'field im-field' }, h('label', { for: 'import-path' }, 'Document'), source),
     h('div', { class: 'field im-field' }, h('label', { for: 'import-into' }, 'Into'), dest),
     h('div', { class: 'field im-field' }, h('label', { for: 'import-prompt' }, 'Prompt · optional, runs the destination once'), prompt),
     h('p', { class: 'note' }, 'The document becomes a new session of the installation, with its own id; the source is not touched.')));

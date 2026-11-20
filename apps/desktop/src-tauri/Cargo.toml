@@ -18,7 +18,7 @@ tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
 mukade = { path = "../../.." }
-imago-shell = { git = "https://github.com/acaprino/imago", tag = "v0.1.1" }
+imago-shell = { git = "https://github.com/acaprino/imago", tag = "v0.1.2" }
 tauri = { version = "2.9", features = [] }
 tauri-plugin-dialog = "=2.8.4"
 serde = { version = "1", features = ["derive"] }

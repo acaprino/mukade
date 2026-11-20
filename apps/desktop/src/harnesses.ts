@@ -4,7 +4,7 @@
 // with npm, with a store of its own.
 
 import './harnesses.css';
-import { setPanelState } from '@acaprino/imago/ui';
+import { loader, setPanelState } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { mark } from './chatviews.ts';
 import { button, fill, h, icon, kbd } from './dom.ts';
@@ -73,7 +73,7 @@ export class HarnessesView {
         : this.reading ? 'looking…' : ''),
       h('span', { class: 'spring' }),
       this.scan
-        ? h('span', { class: 'scan-progress', 'aria-live': 'polite' }, `Scanning ${this.scan.root} · ${this.scan.done} of ${this.scan.total} folders · ${this.scan.found} found`)
+        ? h('span', { class: 'scan-progress' }, loader(this.root.ownerDocument, `Scanning ${this.scan.root} · ${this.scan.done} of ${this.scan.total} folders · ${this.scan.found} found`))
         : null,
       this.scan
         ? button('Stop the scan', { onclick: () => { this.stop = true; this.draw(); } })
