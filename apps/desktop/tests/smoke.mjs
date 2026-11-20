@@ -1,6 +1,8 @@
 // Smoke test (spec §7): the app on Vite with the mocked commands (src/mock.ts), one screenshot
 // per view in each look (Smooth, Oni), dark and light, under tests/out/. Fails on a page error or a missing view.
 //   node apps/desktop/tests/smoke.mjs
+import assert from 'node:assert/strict';
+import { checkProduction } from './production.mjs';
 import { createServer } from 'vite';
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
@@ -20,6 +22,7 @@ const expect = async (page, selector, what) => {
   if (!(await page.locator(selector).first().isVisible())) failures.push(`${what}: ${selector} not shown`);
 };
 try {
+  await checkProduction(browser);
   for (const look of ['smooth', 'oni']) for (const scheme of ['dark', 'light']) {
     const name = `${look}-${scheme}`;
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: scheme, deviceScaleFactor: 2 });
@@ -30,8 +33,34 @@ try {
     await page.goto(url);
     await page.locator('#sessions .row').first().waitFor();
     await expect(page, '#detail h3', 'sessions');
-    const root = await page.evaluate(() => `${document.documentElement.dataset.look}-${document.documentElement.dataset.theme}`);
+    const root = await page.evaluate(() => `${document.documentElement.dataset.imLook}-${document.documentElement.dataset.imTheme}`);
     if (root !== name) failures.push(`${name}: the root says ${root}`);
+    if (look === 'smooth' && scheme === 'dark') {
+      await page.keyboard.press('Control+Shift+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill('look and theme');
+      await page.keyboard.press('Enter');
+      await page.getByRole('dialog', { name: 'Settings' }).waitFor();
+      await page.keyboard.press('Escape');
+      await page.setViewportSize({ width: 520, height: 650 });
+      await page.getByRole('button', { name: 'Views' }).click();
+      await page.getByRole('menuitem', { name: 'Chat' }).click();
+      await page.locator('#view-chat').waitFor();
+      await page.getByRole('button', { name: 'Views' }).click();
+      await page.getByRole('menuitem', { name: 'Sessions' }).click();
+      const sidebar = page.locator('.im-sidebar-toggle');
+      const mainBounds = await page.locator('.im-work').boundingBox();
+      await sidebar.click();
+      await expect(page, '#session-sidebar', 'narrow sidebar drawer');
+      assert.deepEqual(await page.locator('.im-work').boundingBox(), mainBounds, 'the drawer overlays the content');
+      await page.keyboard.press('Escape');
+      if (await sidebar.getAttribute('aria-expanded') !== 'false') failures.push('narrow sidebar did not close');
+      await page.locator('#sessions .row').first().click();
+      await expect(page, '#detail h3', 'narrow inspector');
+      await page.getByRole('button', { name: 'Back one column' }).click();
+      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close');
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.locator('#sessions').focus();
+    }
     await page.screenshot({ path: `${out}sessions-${name}.png` });
     await page.keyboard.press('Enter');
     await page.locator('.entry').first().waitFor();
@@ -40,13 +69,13 @@ try {
     await page.keyboard.press('Escape');
     // Enter on Cancel cancels: it never starts the hop (a write).
     await page.keyboard.press('h');
-    await page.locator('.dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .plan').waitFor();
     await page.getByRole('button', { name: /^Cancel/ }).focus();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(400);
-    if (await page.locator('.dialog').count()) failures.push(`${name}: Enter on Cancel did not cancel the hop`);
+    if (await page.locator('.im-form-dialog').count()) failures.push(`${name}: Enter on Cancel did not cancel the hop`);
     await page.keyboard.press('h');
-    await page.locator('.dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .plan').waitFor();
     await page.screenshot({ path: `${out}hop-${name}.png` });
     await page.keyboard.press('Enter');
     await page.getByText('Losses · 2').waitFor();
@@ -99,10 +128,10 @@ try {
     // Settings switches the look, and the choice is kept.
     await page.locator('#settings').click();
     const other = look === 'smooth' ? 'oni' : 'smooth';
-    await page.locator('.dialog').getByRole('button', { name: other, exact: true }).click();
-    const kept = await page.evaluate(() => `${document.documentElement.dataset.look}/${localStorage.getItem('mukade.look')}`);
+    await page.locator('.im-form-dialog').getByRole('button', { name: other, exact: true }).click();
+    const kept = await page.evaluate(() => `${document.documentElement.dataset.imLook}/${localStorage.getItem('mukade.look')}`);
     if (kept !== `${other}/${other}`) failures.push(`${name}: Settings did not switch to ${other} (${kept})`);
-    await page.locator('.dialog').getByRole('button', { name: look, exact: true }).click();
+    await page.locator('.im-form-dialog').getByRole('button', { name: look, exact: true }).click();
     await page.screenshot({ path: `${out}settings-${name}.png` });
     await page.close();
   }

@@ -13,3 +13,17 @@
   `develop`. Nothing is published when the build fails.
 - Never change the version or create release tags by hand: the workflow does it (`.github/release.json` lists
   the version files, `.github/scripts/release.mjs` writes them).
+
+For desktop UI work, read `node_modules/@acaprino/imago/docs/design-file.md` and the referenced components. Use Imago's controls, behaviours and tokens. Keep workflow-specific components in Mukade and build them from the shared tokens.
+
+## Rust is built and tested on GitHub only (the owner's absolute rule)
+
+- Never run `cargo` on this machine: no `cargo build`, `cargo test`, `cargo clippy`, `cargo check`, `cargo run`,
+  `cargo doc`, no `tauri dev`, no `tauri build`, and no npm or batch script that calls them. `cargo fmt` is the
+  only exception.
+- Rust is compiled, linted and tested only by GitHub Actions. To know whether Rust code is right, push to
+  `develop` and read the run (`gh run watch`, `gh run view --log-failed`).
+- A program needed on this machine is taken from a release or a workflow artifact (`gh run download`), never
+  built here.
+- This holds for every agent and every subagent. A plan, a skill or a brief that says to run cargo locally is
+  wrong on that point: write the code and the tests, do not run them, and say they wait for CI.

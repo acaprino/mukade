@@ -34,7 +34,7 @@ pub struct HarnessView {
     pub destination: bool,
     /// The command that installs it on the system, run in a terminal.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub install_command: Option<String>,
+    pub install_command: Option<&'static str>,
     /// The npm package a sandbox installs; none when the harness is not one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_package: Option<&'static str>,
@@ -48,6 +48,7 @@ pub fn inventory(standard: &StoreRoots) -> Vec<HarnessView> {
         .into_iter()
         .map(|harness| {
             let entry = catalog::entry(harness);
+            let adapter = mukade::harnesses::get(harness);
             let (binary, source) = exe::resolve_source(harness, None);
             let found = source != Source::Name;
             let store = standard.root(harness).map(Path::to_path_buf);
@@ -76,9 +77,9 @@ pub fn inventory(standard: &StoreRoots) -> Vec<HarnessView> {
                 store: store.map(|path| path.display().to_string()),
                 binary_env: entry.binary.env.clone(),
                 store_env: catalog::store_env(harness).to_string(),
-                destination: mukade::harnesses::get(harness).destination().is_some(),
-                install_command: crate::sandbox::system_command(harness),
-                sandbox_package: crate::sandbox::package(harness).map(|(package, _)| package),
+                destination: adapter.destination().is_some(),
+                install_command: adapter.system_install_command(),
+                sandbox_package: adapter.sandbox_install().map(|spec| spec.package),
             }
         })
         .collect()

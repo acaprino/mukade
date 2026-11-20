@@ -3,6 +3,7 @@
 // Tabs: Conversation, and Raw (the native records of one entry, pretty JSON).
 
 import './reader.css';
+import { setPanelState } from '@acaprino/imago/ui';
 import { button, fill, h, kbd } from './dom.ts';
 import type { Block, EntryView, Transcript } from './types.ts';
 
@@ -15,6 +16,7 @@ const ROLE_LABEL: Record<Block['role'], string> = {
 };
 
 export interface ReaderActions {
+  retry(): void;
   back(): void;
   setTab(tab: 'conversation' | 'raw'): void;
   toggleTurns(): void;
@@ -64,20 +66,26 @@ export class Reader {
   /** Draw the head and either tab. */
   render(transcript: Transcript | null, opts: { tab: 'conversation' | 'raw'; turns: number; defaultTurns: number; title: string; error: string | null; raw: unknown[] | null; rawEntry: string | null }): void {
     const turnsLabel = opts.defaultTurns > 0 ? `Last ${opts.defaultTurns} turns` : 'Last turns';
-    const head = h('div', { class: 'column-head' },
+    const head = h('div', { class: 'column-head im-panel-header' },
       button(['‹ Detail ', kbd('esc')], { class: 'ghost', 'aria-label': 'Back to the session detail', onclick: () => this.actions.back() }),
       h('h2', { class: 'reader-title', title: opts.title }, opts.title),
       h('span', { class: 'spring' }),
-      h('div', { class: 'seg', role: 'group', 'aria-label': 'Reader tab' },
+      h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Reader tab' },
         button('Conversation', { 'aria-pressed': String(opts.tab === 'conversation'), onclick: () => this.actions.setTab('conversation') }),
         button('Raw', { 'aria-pressed': String(opts.tab === 'raw'), onclick: () => this.actions.setTab('raw') })),
-      h('div', { class: 'seg', role: 'group', 'aria-label': 'How much to show' },
+      h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'How much to show' },
         button(turnsLabel, { 'aria-pressed': String(opts.turns !== 0), onclick: () => opts.turns === 0 && this.actions.toggleTurns() }),
         button(['All ', kbd('t')], { 'aria-pressed': String(opts.turns === 0), onclick: () => opts.turns !== 0 && this.actions.toggleTurns() })));
     let body: Node;
-    if (opts.error) body = h('div', { class: 'empty' }, h('h2', {}, 'This transcript could not be read'), h('p', {}, opts.error));
-    else if (!transcript) body = h('div', { class: 'empty' }, h('p', {}, 'Reading the transcript…'));
-    else if (opts.tab === 'raw') body = this.rawView(transcript, opts.raw, opts.rawEntry);
+    if (opts.error || !transcript) {
+      fill(this.root, head, h('div', { class: 'im-panel-body' }));
+      setPanelState(this.root, opts.error
+        ? { kind: 'error', text: opts.error, retry: { label: 'Read transcript again', run: this.actions.retry } }
+        : { kind: 'loading', rows: 4 });
+      return;
+    }
+    this.root.removeAttribute('aria-busy');
+    if (opts.tab === 'raw') body = this.rawView(transcript, opts.raw, opts.rawEntry);
     else {
       this.setEntries(transcript);
       body = this.scroller;
@@ -145,7 +153,7 @@ export class Reader {
     this.first = first;
     this.content.style.transform = `translateY(${this.offsets[first]}px)`;
     fill(this.content, ...this.entries.slice(first, last).map((entry) => this.entryNode(entry)));
-    if (!this.entries.length) fill(this.content, h('div', { class: 'empty' }, h('p', {}, 'This session has no conversation entries.')));
+    if (!this.entries.length) fill(this.content, h('div', { class: 'empty im-empty' }, h('p', {}, 'This session has no conversation entries.')));
   }
 
   /** Put the drawn entries' real heights in place of the guesses. */

@@ -1,6 +1,6 @@
 //! Pi: sessions under `PI_CODING_AGENT_DIR/sessions/`.
 
-use super::{Destination, Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, SandboxInstall, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
@@ -16,6 +16,24 @@ pub(super) struct Pi;
 impl Harness for Pi {
     fn id(&self) -> HarnessId {
         HarnessId::Pi
+    }
+
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        Some(SandboxInstall {
+            package: "@earendil-works/pi-coding-agent",
+            ignore_scripts: true,
+            env: &[("PI_CODING_AGENT_DIR", ".pi/agent")],
+            store: ".pi/agent",
+            store_folders: &["sessions"],
+        })
+    }
+
+    fn system_install_command(&self) -> Option<&'static str> {
+        Some(if cfg!(windows) {
+            "irm https://pi.dev/install.ps1 | iex"
+        } else {
+            "curl -fsSL https://pi.dev/install.sh | sh"
+        })
     }
 
     fn reader(&self) -> &'static dyn Reader {

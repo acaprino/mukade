@@ -1,11 +1,12 @@
 {
   "schema": "mukade.harness-catalog/1",
-  "description": "The harnesses mukade reads and writes: how each one is launched, the canonical locations of its binary and store on Windows, macOS and Linux, the layout of its store, the lineage it records, and the resume command mukade returns.",
+  "description": "The harnesses mukade reads and writes: how each one is launched, the canonical locations of its binary, store and configuration folder on Windows, macOS and Linux, the layout of its store, the lineage it records, and the resume command mukade returns.",
   "expansions": {
     "{home}": "USERPROFILE on Windows, HOME elsewhere",
     "{app_data}": "APPDATA (Windows only; a location using it is skipped elsewhere)",
     "{local_app_data}": "LOCALAPPDATA (Windows only; a location using it is skipped elsewhere)",
-    "{xdg_data_home}": "XDG_DATA_HOME, else {home}/.local/share"
+    "{xdg_data_home}": "XDG_DATA_HOME, else {home}/.local/share",
+    "{xdg_config_home}": "XDG_CONFIG_HOME, else {home}/.config"
   },
   "harnesses": [
     {
@@ -32,6 +33,7 @@
         "root_is_a_file": false,
         "layout": ["projects/<project>/<session-id>.jsonl"]
       },
+      "config": { "env": "CLAUDE_CONFIG_DIR", "default": "{home}/.claude" },
       "lineage": {
         "recorded": true,
         "fields": ["forkedFrom"],
@@ -64,6 +66,7 @@
         "root_is_a_file": false,
         "layout": ["sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<thread-id>.jsonl", "session_index.jsonl"]
       },
+      "config": { "env": "CODEX_HOME", "default": "{home}/.codex" },
       "lineage": {
         "recorded": true,
         "fields": ["forked_from_id", "parent_thread_id"],
@@ -96,6 +99,7 @@
         "root_is_a_file": true,
         "layout": ["opencode.db (SQLite; session_v2, session_message)"]
       },
+      "config": { "default": "{xdg_config_home}/opencode" },
       "lineage": {
         "recorded": true,
         "fields": ["parent_id", "fork_session_id", "fork_boundary"],
@@ -128,6 +132,7 @@
         "root_is_a_file": false,
         "layout": ["sessions/--<project>--/<stamp>_<session-id>.jsonl", "models.json"]
       },
+      "config": { "env": "PI_CODING_AGENT_DIR", "default": "{home}/.pi/agent" },
       "lineage": {
         "recorded": true,
         "fields": ["parentSession"],
@@ -161,6 +166,7 @@
         "root_is_a_file": false,
         "layout": ["state.db (SQLite; sessions, messages)"]
       },
+      "config": { "env": "HERMES_HOME", "default": "{home}/.hermes", "default_on": { "windows": "{local_app_data}/hermes" } },
       "lineage": {
         "recorded": true,
         "fields": ["parent_session_id", "model_config._delegate_from", "model_config._branched_from"],

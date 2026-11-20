@@ -1,6 +1,6 @@
 //! OpenCode: one SQLite database, named by `OPENCODE_DB`.
 
-use super::{Destination, Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, SandboxInstall, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Kind, Opaque, Protocol, Session};
 use crate::native_compaction::NativeCompaction;
@@ -21,6 +21,29 @@ impl Harness for OpenCode {
         HarnessId::OpenCode
     }
 
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        Some(SandboxInstall {
+            package: "@opencode/cli",
+            ignore_scripts: false,
+            env: &[
+                ("XDG_DATA_HOME", "share"),
+                ("XDG_CONFIG_HOME", "config"),
+                ("XDG_STATE_HOME", "state"),
+                ("XDG_CACHE_HOME", "cache"),
+            ],
+            store: "share/opencode/opencode.db",
+            store_folders: &[],
+        })
+    }
+
+    fn system_install_command(&self) -> Option<&'static str> {
+        Some(if cfg!(windows) {
+            "npm install -g @opencode/cli"
+        } else {
+            "curl -fsSL https://opencode.ai/v2/install | bash"
+        })
+    }
+
     fn reader(&self) -> &'static dyn Reader {
         &crate::reader::opencode::Opencode
     }
@@ -39,15 +62,7 @@ impl Harness for OpenCode {
         vars: &crate::catalog::Vars,
         server: &crate::chat::connect::Server,
     ) -> Option<crate::chat::connect::Target> {
-        let folder = |name: &str| {
-            std::env::var_os(name)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        };
-        let path = folder("XDG_CONFIG_HOME")
-            .or_else(|| vars.home.as_ref().map(|home| home.join(".config")))?
-            .join("opencode")
-            .join("opencode.json");
+        let path = crate::catalog::config_default_with(self.id(), vars)?.join("opencode.json");
         Some(crate::chat::connect::Target {
             path,
             format: crate::chat::connect::Format::Json,
@@ -642,7 +657,8 @@ fn project_config_files(cwd: &Path) -> Vec<PathBuf> {
 }
 
 /// OpenCode's global file: the configuration beside a self-contained database when there is one,
-/// else `$XDG_CONFIG_HOME/opencode/`, else `~/.config/opencode/`; `.jsonc` before `.json`.
+/// else the catalog's configuration folder (`$XDG_CONFIG_HOME/opencode/`, else
+/// `~/.config/opencode/`); `.jsonc` before `.json`.
 fn global_config_files(roots: &StoreRoots, host: &Host) -> Vec<PathBuf> {
     let in_folder =
         |folder: &Path| vec![folder.join("opencode.jsonc"), folder.join("opencode.json")];
@@ -655,12 +671,13 @@ fn global_config_files(roots: &StoreRoots, host: &Host) -> Vec<PathBuf> {
     if let Some(files) = beside {
         return files;
     }
-    let folder = host
-        .var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| host.home.map(|home| home.join(".config")));
-    folder
-        .map(|folder| in_folder(&folder.join("opencode")))
+    let vars = crate::catalog::Vars {
+        home: host.home.map(Path::to_path_buf),
+        xdg_config_home: host.var("XDG_CONFIG_HOME").map(PathBuf::from),
+        ..Default::default()
+    };
+    crate::catalog::config_default_with(HarnessId::OpenCode, &vars)
+        .map(|folder| in_folder(&folder))
         .unwrap_or_default()
 }
 

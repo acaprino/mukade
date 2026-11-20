@@ -18,22 +18,23 @@ export function folderKey(cwd: string | null): string {
 }
 
 export function renderSidebar(root: HTMLElement, actions: SidebarActions): void {
+  document.getElementById('installation-count')!.textContent = String(state.installations.length);
   const standard = state.installations.filter((item) => !item.scanned);
   const scanned = state.installations.filter((item) => item.scanned);
   const row = (item: (typeof state.installations)[number]): ListRow => ({
     id: item.key,
     title: item.error ? `${item.label}: ${item.error}` : item.store,
     cells: [
-      h('span', { class: 'grow' }, item.label),
-      item.scanned ? h('span', { class: 'tag' }, 'scanned') : null,
-      item.error ? h('span', { class: 'tag bad' }, 'error') : h('span', { class: 'num' }, String(item.count)),
+      h('span', { class: 'im-avatar im-rail-item', 'aria-hidden': 'true' }, item.label.slice(0, 2)),
+      h('span', { class: 'grow im-row-text' }, item.label),
+      item.scanned ? h('span', { class: 'tag im-chip' }, 'scanned') : null,
+      item.error ? h('span', { class: 'tag im-chip bad' }, 'error') : h('span', { class: 'num im-num' }, String(item.count)),
     ].filter(Boolean) as Node[],
   });
   const selected = state.installation;
   const pick = (id: string) => { actions.focus('installations'); actions.pickInstallation(id); };
   const installationsBox = h('div', { class: `pane${state.focus === 'installations' ? ' focused' : ''}`, 'data-pane': 'installations' },
-    h('div', { class: 'column-head' }, h('h2', {}, 'Installations'), h('span', { class: 'spring' }), h('small', {}, String(state.installations.length))),
-    h('div', { class: 'pane-body' },
+    h('div', { class: 'pane-body im-panel-body' },
       listbox('Installations', standard.map(row), selected, pick),
       scanned.length ? h('p', { class: 'label' }, 'Found by scan') : null,
       scanned.length ? listbox('Scanned installations', scanned.map(row), selected, pick) : null,
@@ -45,11 +46,11 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
     id: folderKey(folder.cwd),
     title: folder.cwd || undefined,
     class: folder.cwd === '' ? 'untitled' : undefined,
-    cells: [h('span', { class: 'grow' }, folder.label), h('span', { class: 'num' }, String(folder.count))],
+    cells: [h('span', { class: 'im-avatar im-rail-item', 'aria-hidden': 'true' }, folder.label.slice(0, 2)), h('span', { class: 'grow im-row-text' }, folder.label), h('span', { class: 'num im-num' }, String(folder.count))],
   }));
   const foldersBox = h('div', { class: `pane${state.focus === 'folders' ? ' focused' : ''}`, 'data-pane': 'folders' },
-    h('div', { class: 'column-head' }, h('h2', {}, 'Folders'), h('span', { class: 'spring' }), h('small', {}, current?.label ?? '')),
-    h('div', { class: 'pane-body' },
+    h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Folders'), h('span', { class: 'spring' }), h('small', {}, current?.label ?? '')),
+    h('div', { class: 'pane-body im-panel-body' },
       current?.error ? h('p', { class: 'note err' }, current.error) : null,
       listbox('Folders', folderRows, folderKey(state.folder), (id) => {
         actions.focus('folders');

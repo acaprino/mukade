@@ -191,6 +191,7 @@ a program uses the library or `mukade list` (JSON rows).
 | `binary:` | the **one** resolved executable, not every copy on disk, and where it came from |
 | `version:` | its answer to `--version`; `unknown` otherwise |
 | `store:` | the store path, its variable, and `environment` or `default` |
+| `config:` | the folder the harness keeps its settings, plugins and MCP servers in, its variable, and `environment` or `default`; `unknown` where the catalog has not established it |
 | `status:` | the store's state (below) |
 | `sessions:`, `forks:`, `lineage:`, `layout:` | counts, lineage support and file layout; unknown is shown as unknown, never guessed |
 

@@ -1,6 +1,7 @@
 //! The harness catalog: one versioned JSON file that names, per harness and per platform, the
 //! binary, the canonical install locations, the store variable and default, the store's layout,
-//! the lineage it records and the resume command mukade returns.
+//! the folder its own configuration lives in, the lineage it records and the resume command mukade
+//! returns.
 //!
 //! `catalog/harnesses.json` ships inside the executable (`include_str!`), so the single-file build
 //! still needs nothing beside it. The catalog is data, not a second source of truth about the
@@ -9,7 +10,8 @@
 //! Platform selection is a compile-time fact (`windows`, `macos`, `linux`), and a location that
 //! needs a variable the platform does not have (`{app_data}` elsewhere) is skipped rather than
 //! guessed at. `{home}` is `USERPROFILE` on Windows and `HOME` elsewhere; `{xdg_data_home}` is
-//! `XDG_DATA_HOME`, else `{home}/.local/share`.
+//! `XDG_DATA_HOME`, else `{home}/.local/share`; `{xdg_config_home}` is `XDG_CONFIG_HOME`, else
+//! `{home}/.config`.
 
 use crate::model::HarnessId;
 use serde::Deserialize;
@@ -32,6 +34,10 @@ pub struct Entry {
     pub display: String,
     pub binary: Binary,
     pub store: Store,
+    /// The folder the harness keeps its own settings, plugins and MCP servers in. `None` where the
+    /// catalog has not established it (DeepSeek Harness).
+    #[serde(default)]
+    pub config: Option<Config>,
     pub lineage: Lineage,
     /// The argv mukade returns as the native resume command. `{exe}`, `{id}` and `{file}` are
     /// filled in by [`resume`].
@@ -75,7 +81,20 @@ pub struct Store {
     pub layout: Vec<String>,
 }
 
-/// A store default per platform key; `None` keeps [`Store::default`].
+/// A harness's configuration folder. It is the store's folder for every harness but OpenCode,
+/// whose store is a database under the data directory and whose configuration is under
+/// `XDG_CONFIG_HOME`.
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    /// The variable that moves the folder; `None` when only the tokens' own variables do.
+    #[serde(default)]
+    pub env: Option<String>,
+    pub default: String,
+    #[serde(default)]
+    pub default_on: PlatformDefault,
+}
+
+/// A default per platform key; `None` keeps the entry's own `default`.
 #[derive(Debug, Default, Deserialize)]
 pub struct PlatformDefault {
     #[serde(default)]
@@ -84,6 +103,18 @@ pub struct PlatformDefault {
     pub macos: Option<String>,
     #[serde(default)]
     pub linux: Option<String>,
+}
+
+impl PlatformDefault {
+    /// The default of `platform`, else `fallback`.
+    fn on<'a>(&'a self, platform: &str, fallback: &'a str) -> &'a str {
+        let own = match platform {
+            "windows" => &self.windows,
+            "macos" => &self.macos,
+            _ => &self.linux,
+        };
+        own.as_deref().unwrap_or(fallback)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +132,7 @@ pub struct Vars {
     pub app_data: Option<PathBuf>,
     pub local_app_data: Option<PathBuf>,
     pub xdg_data_home: Option<PathBuf>,
+    pub xdg_config_home: Option<PathBuf>,
 }
 
 impl Vars {
@@ -119,6 +151,7 @@ impl Vars {
             app_data: var("APPDATA"),
             local_app_data: var("LOCALAPPDATA"),
             xdg_data_home: var("XDG_DATA_HOME"),
+            xdg_config_home: var("XDG_CONFIG_HOME"),
         }
     }
 }
@@ -194,12 +227,36 @@ pub fn store_default_with(harness: HarnessId, vars: &Vars) -> Option<PathBuf> {
 /// [`store_default`] on a platform, with the variables stated.
 pub fn store_default_on(harness: HarnessId, platform: &str, vars: &Vars) -> Option<PathBuf> {
     let store = &entry(harness).store;
-    let own = match platform {
-        "windows" => &store.default_on.windows,
-        "macos" => &store.default_on.macos,
-        _ => &store.default_on.linux,
-    };
-    expand(own.as_deref().unwrap_or(&store.default), vars)
+    expand(store.default_on.on(platform, &store.default), vars)
+}
+
+/// The harness's default configuration folder on a platform, with the variables stated. `None`
+/// when the catalog has not established it or a token cannot be expanded.
+pub fn config_default_on(harness: HarnessId, platform: &str, vars: &Vars) -> Option<PathBuf> {
+    let config = entry(harness).config.as_ref()?;
+    expand(config.default_on.on(platform, &config.default), vars)
+}
+
+/// [`config_default_on`] for this machine's platform.
+pub fn config_default_with(harness: HarnessId, vars: &Vars) -> Option<PathBuf> {
+    config_default_on(harness, platform(), vars)
+}
+
+/// The variable that moves a harness's configuration folder, when one does.
+pub fn config_env(harness: HarnessId) -> Option<&'static str> {
+    entry(harness).config.as_ref()?.env.as_deref()
+}
+
+/// Where the harness keeps its configuration on this machine, and why: its variable when set
+/// (`"environment"`), else its own default (`"default"`).
+pub fn config_root(harness: HarnessId) -> Option<(PathBuf, &'static str)> {
+    let set = config_env(harness)
+        .and_then(std::env::var_os)
+        .filter(|value| !value.is_empty());
+    match set {
+        Some(value) => Some((PathBuf::from(value), "environment")),
+        None => config_default_with(harness, &Vars::from_env()).map(|path| (path, "default")),
+    }
 }
 
 /// The variable that points a harness at its store.
@@ -296,6 +353,13 @@ pub fn expand(location: &str, vars: &Vars) -> Option<PathBuf> {
         })?;
         out = out.replace("{xdg_data_home}", &data.to_string_lossy());
     }
+    if out.contains("{xdg_config_home}") {
+        let config = vars
+            .xdg_config_home
+            .clone()
+            .or_else(|| vars.home.as_ref().map(|home| home.join(".config")))?;
+        out = out.replace("{xdg_config_home}", &config.to_string_lossy());
+    }
     if out.contains('{') {
         return None;
     }
@@ -315,6 +379,7 @@ mod tests {
             app_data: Some(PathBuf::from("/app-data")),
             local_app_data: Some(PathBuf::from("/local-app-data")),
             xdg_data_home: None,
+            xdg_config_home: None,
         }
     }
 
@@ -398,6 +463,37 @@ mod tests {
             store_default_on(HarnessId::DeepSeekHarness, "windows", &vars()),
             Some(PathBuf::from("/home/user/.dsh"))
         );
+    }
+
+    /// The configuration folder is the store's folder, except OpenCode's, which follows
+    /// `XDG_CONFIG_HOME`; DeepSeek Harness's is not established.
+    #[test]
+    fn every_harness_states_its_configuration_folder() {
+        let linux = |harness| config_default_on(harness, "linux", &vars());
+        let windows = |harness| config_default_on(harness, "windows", &vars());
+        for harness in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Pi] {
+            assert_eq!(linux(harness), store_default_on(harness, "linux", &vars()));
+            assert_eq!(config_env(harness), Some(store_env(harness)));
+        }
+        assert_eq!(
+            windows(HarnessId::Hermes),
+            Some(PathBuf::from("/local-app-data/hermes"))
+        );
+        assert_eq!(config_env(HarnessId::Hermes), Some("HERMES_HOME"));
+        assert_eq!(
+            windows(HarnessId::OpenCode),
+            Some(PathBuf::from("/home/user/.config/opencode"))
+        );
+        let xdg = Vars {
+            xdg_config_home: Some(PathBuf::from("/xdg-config")),
+            ..vars()
+        };
+        assert_eq!(
+            config_default_on(HarnessId::OpenCode, "linux", &xdg),
+            Some(PathBuf::from("/xdg-config/opencode"))
+        );
+        assert_eq!(config_env(HarnessId::OpenCode), None);
+        assert_eq!(linux(HarnessId::DeepSeekHarness), None);
     }
 
     #[test]

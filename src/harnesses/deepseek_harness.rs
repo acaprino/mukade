@@ -1,6 +1,6 @@
 //! DeepSeek Harness (`dsh`): session logs under `DSH_HOME/sessions/`.
 
-use super::{Destination, Harness, InterchangeDocument, StoreStats};
+use super::{Destination, Harness, InterchangeDocument, SandboxInstall, StoreStats};
 use crate::hop::HopError;
 use crate::model::{CanonicalTool, HarnessId, Opaque, Protocol, Session};
 use crate::reader::Reader;
@@ -19,6 +19,20 @@ pub(super) struct DeepSeekHarness;
 impl Harness for DeepSeekHarness {
     fn id(&self) -> HarnessId {
         HarnessId::DeepSeekHarness
+    }
+
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        Some(SandboxInstall {
+            package: "@deepseek-ai/dsh",
+            ignore_scripts: false,
+            env: &[("DSH_HOME", ".dsh")],
+            store: ".dsh",
+            store_folders: &[],
+        })
+    }
+
+    fn system_install_command(&self) -> Option<&'static str> {
+        Some("npm install -g @deepseek-ai/dsh")
     }
 
     fn reader(&self) -> &'static dyn Reader {

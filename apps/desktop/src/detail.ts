@@ -30,7 +30,7 @@ function lineageRow(row: SessionRow, depth: number, current: boolean, actions: D
   const node = button([
     marker?.kind === 'fork' ? h('span', { class: 'fork' }, icon('fork'), 'fork') : marker ? h('span', { class: marker.kind }, marker.text) : null,
     h('span', { class: 'grow' }, row.title ?? row.id),
-    current ? h('span', { class: 'num' }, 'this session') : null,
+    current ? h('span', { class: 'num im-num' }, 'this session') : null,
   ], { class: `lineage-row${current ? ' current' : ''}`, title: row.id });
   node.style.paddingLeft = `${10 + depth * 18}px`;
   if (!current) node.addEventListener('click', () => actions.pick(row.id));
@@ -40,14 +40,14 @@ function lineageRow(row: SessionRow, depth: number, current: boolean, actions: D
 export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const installation = currentInstallation();
   const row = selectedRow();
-  const head = h('div', { class: 'column-head' }, h('h2', {}, 'Session'), row ? h('small', { title: row.id }, row.id.slice(0, 8)) : null, h('span', { class: 'spring' }),
-    row?.live ? h('span', { class: 'tag live' }, 'live') : null);
+  const head = h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Session'), row ? h('small', { title: row.id }, row.id.slice(0, 8)) : null, h('span', { class: 'spring' }),
+    row?.live ? h('span', { class: 'tag im-chip live' }, 'live') : null);
   if (!installation || !row) {
-    const empty = h('div', { class: 'empty' });
+    const empty = h('div', { class: 'empty im-empty' });
     if (installation?.error) empty.append(h('h2', {}, installation.label), h('p', { class: 'note err' }, installation.error));
     else empty.append(h('p', {}, 'Pick a session to see its details.'));
     if (installation?.scanned) empty.append(kv([['store', installation.store], ['engine', installation.engine]]));
-    fill(root, head, h('div', { class: 'column-body' }, empty));
+    fill(root, head, h('div', { class: 'column-body im-panel-body' }, empty));
     return;
   }
   const parentListed = row.parent !== undefined && state.rows.some((other) => other.id === row.parent);
@@ -69,7 +69,7 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
       ...children.map((child) => lineageRow(child, chain.length + 1, false, actions)))
     : null;
 
-  fill(root, head, h('div', { class: 'column-body' }, h('div', { class: 'pad' },
+  fill(root, head, h('div', { class: 'column-body im-panel-body' }, h('div', { class: 'pad' },
     h('h3', {}, row.title ?? row.id),
     actionsRow,
     row.unreadable ? h('p', { class: 'note err' }, `Cannot be read: ${row.unreadable}`) : null,
@@ -98,6 +98,6 @@ export function inRoomsBox(found: RoomMember[], open: (roomId: string, memberId:
     ...found.map(({ room, member }) => button([
       icon('chat'),
       h('span', { class: 'grow' }, room.name),
-      h('span', { class: 'num' }, `${member.name} · ${member.role}${member.left_at ? ' · left' : ''}${room.closed_at ? ' · closed' : ''}`),
+      h('span', { class: 'num im-num' }, `${member.name} · ${member.role}${member.left_at ? ' · left' : ''}${room.closed_at ? ' · closed' : ''}`),
     ], { class: 'lineage-row', title: 'Show the room at this member', onclick: () => open(room.room_id, member.member_id) })));
 }

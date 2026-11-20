@@ -1,273 +1,66 @@
-/* Mukade skin: Shinatama's structure (frame, spacing, type, square corners), Mukade's own colours,
-   taken from the character: black, graphite grey, and the violet of the armour as the one accent
-   and the tint of the lines. Warning, error and danger are states, not accents. The black is
-   lacquer: every bar, head and button carries one sheen and one lit top edge. No rounded corners.
-   Every chrome colour lives here; dark is the skin, light is the Theme button's other state. */
-:root {
-  color-scheme: dark;
-  --stage: #000000;
-  --chrome: #060607;
-  --chrome-2: #0a0a0c;
-  --surface: #131317;
-  --surface-2: #1c1c22;
-  --pane: #030304;
-  --line: #26252d;
-  --line-strong: #756e8c;
-  --ice: #cbc5dc;
-  --text: #ececf0;
-  --text-2: #c0bfc8;
-  --muted: #95939f;
-  --accent: #9d6bff;
-  --accent-soft: #b794ff;
-  --accent-ink: #0d0618;
-  --live: #6fd6b0;
-  --warning: #e6c36a;
-  --error: #ff8a7a;
-  --danger: #a0294e;
-  --danger-line: #e35f87;
-  --on-danger: #ffffff;
-  --selection: #33264f;
-  --scrim: #030304cc;
-  --shadow: #000000aa;
-  --spawn: #b9a6ff;
-  --fork: #e6c36a;
-  /* Lacquer: a bright upper half that breaks at the middle, and the edge the light catches. */
-  --sheen: linear-gradient(180deg, #ffffff1c 0%, #ffffff0a 49%, #ffffff00 50%, #00000040 100%);
-  --sheen-soft: linear-gradient(180deg, #ffffff12 0%, #ffffff05 49%, #ffffff00 50%, #00000030 100%);
-  --edge: inset 0 1px 0 #ffffff26, inset 0 -1px 0 #000000a0;
-  --specular: linear-gradient(158deg, #ffffff12 0%, #ffffff05 14%, #ffffff00 30%);
-  /* Glass, as Shinatama's: every value derives from the skin tokens, so each theme gets its own. */
-  --glass: color-mix(in srgb, var(--chrome-2) 74%, transparent);
-  --glass-strong: color-mix(in srgb, var(--chrome-2) 90%, transparent);
-  --glass-bar: color-mix(in srgb, var(--chrome) 64%, transparent);
-  --glass-pane: color-mix(in srgb, var(--pane) 86%, transparent);
-  --glass-blur: blur(18px) saturate(150%);
-  --ambient-a: color-mix(in srgb, var(--line-strong) 26%, transparent);
-  --ambient-b: color-mix(in srgb, var(--accent) 12%, transparent);
-  --ease-out: cubic-bezier(.2, .8, .2, 1);
-  --fast: 120ms;
-  --base: 180ms;
-  --slow: 320ms;
-  --titlebar-height: 34px;
-  --mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
-  --display: Bahnschrift, 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
-  font: 13px/1.45 'Segoe UI Variable Text', 'Segoe UI', sans-serif;
-  background: var(--stage);
-  color: var(--text);
-}
-:root[data-theme='light'] { color-scheme: light; }
-:root[data-theme='dark'] { color-scheme: dark; }
-/* Light: paper-white panes on a grey stage, the same grey-violet lines, a deeper violet. */
-:root[data-theme='light'] {
-  --stage: #e9e9ec; --chrome: #f5f5f7; --chrome-2: #ededf0; --surface: #ffffff; --surface-2: #e3e2e8;
-  --pane: #fbfbfc; --line: #cfced6; --line-strong: #6a6480; --ice: #4b3f78; --text: #101012;
-  --text-2: #3a3942; --muted: #686670; --accent: #6a35d9; --accent-soft: #5426b8; --accent-ink: #ffffff;
-  --live: #0b6b4a; --warning: #7a5600; --error: #a3122a; --danger: #a0294e; --danger-line: #7d1c3c;
-  --selection: #e4dcf7; --scrim: #10101266; --shadow: #10101244; --spawn: #5a3fc0; --fork: #7a5600;
-  --sheen: linear-gradient(180deg, #ffffffcc 0%, #ffffff40 49%, #ffffff00 50%, #0000000d 100%);
-  --sheen-soft: linear-gradient(180deg, #ffffff99 0%, #ffffff26 49%, #ffffff00 50%, #0000000a 100%);
-  --edge: inset 0 1px 0 #ffffff, inset 0 -1px 0 #00000014;
-  --specular: linear-gradient(158deg, #ffffffb0 0%, #ffffff40 14%, #ffffff00 30%);
-}
-
-* { box-sizing: border-box; }
-html, body, #app { height: 100%; margin: 0; }
-body { overflow: hidden; background: var(--stage); }
-button, input, select, textarea { font: inherit; color: inherit; }
-::selection { background: var(--selection); color: var(--text); }
+html, body { height: 100%; margin: 0; overflow: hidden; }
 [hidden] { display: none !important; }
-:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
-button:focus:not(:focus-visible) { outline: none; }
-.icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: square; stroke-linejoin: miter; }
+.icon { width: 1rem; height: 1rem; flex: none; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .spring { flex: 1; }
-.muted { color: var(--muted); }
-.mono { font-family: var(--mono); }
-
-/* Controls */
-button {
-  display: inline-flex; gap: 7px; align-items: center; justify-content: center;
-  min-height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 0; background: transparent;
-  font: 500 12px/1 var(--display); letter-spacing: .07em; text-transform: uppercase; white-space: nowrap;
-  cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms;
-}
-button:hover { border-color: var(--line-strong); background: var(--surface-2); }
-button:active { background: var(--line); }
-button:disabled { opacity: .45; cursor: not-allowed; }
-button:disabled:hover { border-color: var(--line); background: transparent; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
-button.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
-button.primary:disabled:hover { background: var(--accent); border-color: var(--accent); }
-button.danger { background: var(--danger); border-color: var(--danger-line); color: var(--on-danger); font-weight: 600; }
-kbd { font: 12px var(--mono); color: var(--muted); letter-spacing: 0; text-transform: none; }
-button.primary kbd { color: inherit; opacity: .7; }
-input[type='text'], input[type='search'], input:not([type]), textarea, select {
-  min-height: 28px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 0; background: var(--surface);
-  color: var(--text); font: 13px var(--mono);
-}
-input:hover, textarea:hover, select:hover { border-color: var(--line-strong); }
-input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; }
-input::placeholder { color: var(--muted); }
-
-/* Shell: Shinatama's frame. A 34 px title bar the window is dragged by, a 44 px toolbar, the
-   views, the status bar. */
-#app { display: grid; grid-template-rows: var(--titlebar-height) 44px minmax(0, 1fr) 28px; }
-.titlebar { position: relative; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--chrome); font: 12px var(--mono); }
-.titlebar-drag { display: flex; align-items: center; flex: 1; gap: 12px; height: 100%; min-width: 0; margin-left: -14px; padding-left: 14px; user-select: none; }
-.titlebar-drag > * { pointer-events: none; }
-.brand-mark { width: 18px; height: 18px; color: var(--accent); }
-.wordmark { height: 12px; width: 107px; flex: none; color: var(--ice); fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: miter; stroke-linecap: butt; }
-.version { padding-left: 12px; border-left: 1px solid var(--line); color: var(--muted); }
-.version:empty { display: none; }
-.title-description { position: absolute; left: 50%; transform: translateX(-50%); color: var(--text-2); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
-.window-controls { display: flex; align-self: stretch; margin-right: -14px; }
-.window-controls button { width: 44px; height: 100%; min-height: 0; padding: 0; border: 0; color: var(--muted); background: transparent; }
-.window-controls button:hover { color: var(--ice); background: var(--surface-2); }
-.window-controls button:active { color: var(--text); background: var(--line); }
-.window-controls button:focus-visible { outline-offset: -3px; }
-.window-controls #window-close:hover { color: var(--accent-ink); background: var(--accent); }
-.window-controls svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: square; }
-/* Outside the desktop window (the browser) there is no window to control. */
-.window-controls button:disabled { display: none; }
-.toolbar { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
-.toolbar-divider { width: 1px; height: 22px; margin: 0 4px; background: var(--line); flex: none; }
-.toolbar .tabs { align-self: stretch; align-items: flex-end; }
-.toolbar .tabs button { min-height: 36px; }
-.view { display: flex; min-height: 0; min-width: 0; overflow: hidden; background: var(--stage); padding: 8px; gap: 0; position: relative; }
-#view-chat { gap: 8px; }
-/* The installations are a sidebar flush with the frame (Shinatama's threads); the sessions and
-   the session are panes beside it. */
-#view-sessions { padding: 0; }
-#view-sessions > #installations { border-width: 0 1px 0 0; background: var(--chrome); }
-#view-sessions > #sessions, #view-sessions > #detail { margin: 8px 0; }
-#view-sessions > #detail { margin-right: 8px; }
-.column { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--line); border-top-width: 2px; background: var(--pane); overflow: hidden; }
-.column.focused { border-color: var(--line-strong); border-top-color: var(--accent); }
-#installations { flex: 0 0 var(--w-installations, 248px); }
-#sessions { flex: 0 0 var(--w-sessions, clamp(340px, 34%, 520px)); }
-#detail { flex: 1 1 0; }
-/* The reader takes the room the installations had. */
-#view-sessions.reading #installations, #view-sessions.reading #resize-installations { display: none; }
-.resizer { flex: 0 0 8px; cursor: col-resize; position: relative; touch-action: none; }
-.resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background-color 120ms; }
-.resizer:hover::after, .resizer:active::after { background: var(--line-strong); }
+.muted { color: var(--im-muted); }
+.mono { font-family: var(--im-font-code); }
+.brand-mark { color: var(--im-accent-text); }
+.wordmark { width: 6em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.version { color: var(--im-muted); }
+.im-window-button:disabled { display: none; }
+.im-brand { flex-shrink: 1; overflow: hidden; }
+.im-status { flex-wrap: wrap; padding-block: var(--im-s-1); }
+.mk-filter { flex: 1 1 10em; max-width: 26em; }
+.mk-filter:has(input[hidden]) { display: none; }
+.im-actions { flex-wrap: wrap; }
+.im-work > .view, #view-sessions { grid-row: 2; }
+.im-work > .im-actions { grid-row: 3; }
+.im-work > .im-footer { grid-row: 4; }
+.view { display: flex; overflow: hidden; position: relative; min-height: 0; padding: var(--im-s-2); }
+.column { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.column-head small { color: var(--im-muted); }
+.column-head h2 { font: 600 1em var(--im-font-head); }
+#installations { flex: 1; min-height: 0; }
+#detail { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+#session-sidebar .im-sidebar-collapse { flex: none; }
+.resizer { position: absolute; inset-block: 0; width: var(--im-s-2); z-index: 2; cursor: col-resize; touch-action: none; }
+.resizer:hover { background: var(--im-hover); }
+#resize-installations { right: 0; }
+#resize-sessions { left: calc(var(--w-sessions, 52%) - var(--im-s-1)); }
 .back-column { display: none; }
-#search { flex: 0 1 320px; min-width: 140px; }
-#search:disabled { opacity: .5; }
-.hints { display: flex; gap: 12px; overflow: hidden; }
-.hints b { font-weight: 400; color: var(--ice); }
-.note.err { border-left-color: var(--error); color: var(--error); }
-.warn-text { color: var(--warning); }
+@container im-shell (width >= 850px) {
+  #session-sidebar { position: relative; }
+  .im-shell[data-im-sidebar="on"]:not([data-im-sidebar-collapsed="true"]) .im-body { grid-template-columns: min(var(--w-installations, var(--im-w-sidebar)), 45%) minmax(0,1fr); }
+}
+@container im-shell (width >= 1000px) {
+  #view-sessions { grid-template-columns: clamp(12em,var(--w-sessions,52%),80%) minmax(0,1fr); }
+  #resize-sessions { left: calc(clamp(12em,var(--w-sessions,52%),80%) - var(--im-s-1)); }
+}
+@container im-shell (width < 1000px) {
+  #resize-sessions { display: none; }
+  #view-sessions:is([data-focus="detail"],.reading) .back-column { display: inline-flex; position: absolute; bottom: var(--im-s-2); right: var(--im-s-2); z-index: 4; }
+}
+@container im-shell (width < 850px) { #resize-installations { display: none; } }
+@container im-shell (width < 620px) {
+  .im-actions { justify-content: start; }
+  .im-actions kbd, .version { display: none; }
+}
+.statusbar.busy .im-dot { background: var(--im-accent); }
+.statusbar.error .im-dot { background: var(--im-err); }
+.statusbar.error #status { color: var(--im-err); }
+.hints { overflow: hidden; }
+.warn-text { color: var(--im-warn); }
 .row-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
 .row-fields > * { flex: 1 1 180px; }
 .hint { font-size: 12px; }
-.plan.losses li::before { content: '· '; color: var(--warning); }
+.plan.losses li::before { content: '· '; color: var(--im-warn); }
 dl.kv.keys { grid-template-columns: 140px minmax(0, 1fr); }
-button.ghost { border-color: transparent; color: var(--muted); }
-button.ghost:hover { color: var(--text); }
-.tabs { display: flex; }
-.tabs button { border-color: transparent; border-bottom: 2px solid transparent; min-height: 32px; color: var(--muted); }
-.tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); background: var(--surface); }
+.empty h2 { margin: 0 0 8px; font: 500 15px var(--im-font-head); letter-spacing: .07em; text-transform: uppercase; color: var(--im-text); }
+.empty p { max-width: 360px; margin: 0 0 6px; line-height: 1.6; color: var(--im-text-2); }
+.empty code, .hint code { font: 12px var(--im-font-code); color: var(--im-accent-text); }
+.note { margin: 0; padding: 8px 10px; border-left: 2px solid var(--im-line-strong); background: var(--im-field); color: var(--im-text-2); font-size: 12px; }
+.note.warn { border-left-color: var(--im-warn); color: var(--im-warn); }
+.note.err { border-left-color: var(--im-err); color: var(--im-err); }
 
-/* Below 1000 px the detail column is a drawer over the sessions; below 700 px one column at a
-   time, with a back button (spec §2). */
-@media (max-width: 999px) {
-  #view-sessions #detail { position: absolute; top: 8px; right: 8px; bottom: 8px; width: min(560px, calc(100% - 40px)); z-index: 5; box-shadow: -18px 0 40px var(--shadow); transform: translateX(calc(100% + 16px)); transition: transform 160ms ease-out; }
-  #view-sessions[data-focus='detail'] #detail, #view-sessions.reading #detail { transform: none; }
-  #sessions { flex: 1 1 auto; }
-  #resize-sessions { display: none; }
-}
-@media (max-width: 699px) {
-  #view-sessions > .column, #view-sessions > .resizer { display: none !important; }
-  #view-sessions[data-focus='installations'] #installations,
-  #view-sessions[data-focus='sessions'] #sessions,
-  #view-sessions[data-focus='detail'] #detail { display: flex !important; flex: 1 1 auto; position: static; width: auto; transform: none; box-shadow: none; }
-  #view-sessions:not([data-focus='installations']) .back-column { display: inline-flex; position: absolute; left: 12px; bottom: 12px; z-index: 6; background: var(--chrome); }
-  .toolbar { flex-wrap: wrap; height: auto; padding: 6px 10px; }
-  #app { grid-template-rows: var(--titlebar-height) auto minmax(0, 1fr) 28px; }
-  .title-description { display: none; }
-  #view-sessions > .column { margin: 8px; border-width: 2px 1px 1px; }
-  .hints { display: none; }
-}
-@media (prefers-reduced-motion: reduce) { #view-sessions #detail { transition: none; } }
-.column-head { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 5px 12px; border-bottom: 1px solid var(--line); background: var(--chrome-2); }
-.column-head h2 { margin: 0; font: 500 12px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--text); }
-.column-head small { font: 12px var(--mono); color: var(--muted); }
-.column-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
-.statusbar { display: flex; align-items: center; gap: 15px; padding: 0 10px; overflow: hidden; border-top: 1px solid var(--line); background: var(--chrome); font: 12px var(--mono); color: var(--text-2); white-space: nowrap; }
-.statusbar i { display: inline-block; width: 6px; height: 6px; background: var(--live); }
-.statusbar.busy i { background: var(--accent); animation: pulse 900ms ease-in-out infinite alternate; }
-.statusbar.error i { background: var(--error); }
-.statusbar.error #status { color: var(--error); }
-@keyframes pulse { to { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) { .statusbar.busy i { animation: none; } }
 
-.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: 28px; text-align: center; color: var(--muted); }
-.empty h2 { margin: 0 0 8px; font: 500 15px var(--display); letter-spacing: .07em; text-transform: uppercase; color: var(--text); }
-.empty p { max-width: 360px; margin: 0 0 6px; line-height: 1.6; color: var(--text-2); }
-.empty code, .hint code { font: 12px var(--mono); color: var(--ice); }
-.note { margin: 0; padding: 8px 10px; border-left: 2px solid var(--line-strong); background: var(--surface); color: var(--text-2); font-size: 12px; }
-.note.warn { border-left-color: var(--warning); color: var(--warning); }
-.note.err { border-left-color: var(--error); color: var(--error); }
-
-/* Glass and motion (Shinatama's): chrome is translucent over a still ambient field; whatever
-   floats over content blurs what is under it. Corners stay square and nothing glows: depth comes
-   from blur, a dark drop shadow and one drawn top edge. */
-body { background: radial-gradient(1100px 640px at 6% -14%, var(--ambient-a), transparent 64%), radial-gradient(900px 620px at 106% 112%, var(--ambient-b), transparent 62%), var(--stage); }
-.titlebar, .toolbar, .statusbar { background: var(--glass-bar); backdrop-filter: var(--glass-blur); }
-#view-sessions > #installations { background: var(--glass-bar); }
-.view { background: transparent; }
-.column { background: var(--glass-pane); transition: border-color var(--base) var(--ease-out); }
-.column-head { background: color-mix(in srgb, var(--chrome-2) 82%, transparent); }
-button { transition: background-color var(--fast) var(--ease-out), border-color var(--fast) var(--ease-out), color var(--fast) var(--ease-out), scale var(--fast) var(--ease-out); }
-.toolbar button:active:not(:disabled), .dialog button:active:not(:disabled), .actions button:active:not(:disabled) { scale: .96; }
-/* The one cut corner pair marks the primary action. The focus ring moves inside the cut. */
-button.primary { clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
-button.primary:focus-visible { outline-color: var(--accent-ink); outline-offset: -4px; }
-#view-sessions #detail { transition: transform var(--base) var(--ease-out), border-color var(--base) var(--ease-out); }
-@media (max-width: 999px) { #view-sessions #detail { background: var(--glass); backdrop-filter: var(--glass-blur); } }
-
-/* Desktop, not a page (tauri-native-desktop skill): no rubber-band on the window, scrolling stays
-   inside each pane, the chrome is not selectable text, controls keep the arrow cursor. Text in
-   the reader, the detail, fields and code stays selectable. */
-html, body { overscroll-behavior: none; }
-.column-body, .pane-body, .reader-scroll, .dialog-body, .messages-body { overscroll-behavior: contain; }
-.titlebar, .toolbar, .statusbar, .column-head, .tabs, .dialog-head, .dialog-foot, button, .row, .label { -webkit-user-select: none; user-select: none; }
-button { cursor: default; }
-.entry .what, dl.kv dd, .code, .msg .body, .note, input, textarea { -webkit-user-select: text; user-select: text; }
-
-/* Native glass (the desktop window only, set in window.ts): the window is transparent over the
-   system's acrylic, as Shinatama's. One material in the skin's own colours: the chrome with a
-   measure of the line colour, denser from the panes to the bars to what floats. */
-:root.native-glass, .native-glass body, .native-glass .view { background: transparent; }
-/* The stage itself holds the black: the system's tint alone leaves a light desktop showing. */
-.native-glass #app { background: color-mix(in srgb, var(--stage) 88%, transparent); }
-.native-glass {
-  --tint: color-mix(in srgb, var(--chrome-2) 95%, var(--line-strong));
-  --glass: color-mix(in srgb, var(--tint) 80%, transparent);
-  --glass-strong: color-mix(in srgb, var(--tint) 92%, transparent);
-  --glass-bar: color-mix(in srgb, color-mix(in srgb, var(--chrome) 97%, var(--line-strong)) 72%, transparent);
-  --glass-pane: color-mix(in srgb, var(--pane) 86%, transparent);
-}
-/* Seams stay, in the line colour, thinned so they read as light on glass. On body because the
-   theme writes its tokens on the root element. */
-.native-glass body { --line: color-mix(in srgb, var(--line-strong) 40%, transparent); }
-.native-glass .titlebar { background: color-mix(in srgb, var(--stage) 80%, transparent); }
-.native-glass .titlebar, .native-glass .toolbar, .native-glass .statusbar { backdrop-filter: none; }
-.native-glass .column-head { background: transparent; }
-.native-glass .scrim { background: color-mix(in srgb, var(--stage) 36%, transparent); }
-.native-glass #app { outline: 1px solid color-mix(in srgb, var(--line-strong) 60%, transparent); outline-offset: -1px; }
-
-/* Lacquer. `:root` lifts these over the backgrounds above, which only set the colour under it. */
-:root .titlebar, :root .toolbar, :root .statusbar, :root .column-head, :root .dialog-head, :root .dialog-foot { background-image: var(--sheen-soft); box-shadow: var(--edge); }
-:root .titlebar { background-image: var(--sheen); }
-:root .column, :root #view-sessions > #installations { background-image: var(--specular); background-repeat: no-repeat; }
-:root button:not(.ghost), :root input, :root select { background-image: var(--sheen-soft); box-shadow: var(--edge); }
-:root .window-controls button, :root .tabs button { background-image: none; box-shadow: none; }
-:root .tabs button[aria-selected='true'] { background-image: var(--sheen); box-shadow: var(--edge); }
-:root button.primary, :root button.danger { background-image: var(--sheen); box-shadow: inset 0 1px 0 #ffffff59, inset 0 -1px 0 #00000059; }
-:root #installations .pane.focused .column-head { box-shadow: inset 0 2px 0 var(--accent), var(--edge); }
-.row[aria-selected='true'] { background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 30%, transparent) 0%, color-mix(in srgb, var(--accent) 10%, transparent) 49%, transparent 50%); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent-soft) 45%, transparent); }
-
-@media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; animation: none !important; }
-}
+.entry .what, dl.kv dd, .code, .msg .body, .note { user-select: text; }

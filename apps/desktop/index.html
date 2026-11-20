@@ -39,9 +39,9 @@
     <symbol id="i-caret" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></symbol>
     <symbol id="i-fork" viewBox="0 0 16 16"><path d="M4 2v3q0 3 4 3t4-3V2M8 8v6"/></symbol>
   </svg>
-  <main id="app">
-    <header class="titlebar">
-      <div class="titlebar-drag" data-tauri-drag-region>
+  <main id="app" class="im-shell" data-im-sidebar="on">
+    <header class="im-titlebar" data-tauri-drag-region>
+      <div class="im-brand" data-tauri-drag-region>
         <svg class="brand-mark icon" aria-hidden="true"><use href="#i-mark"/></svg>
         <svg class="wordmark" viewBox="0 0 89 10" role="img" aria-label="Mukade">
           <path d="M.8 10V1L7 7l6.2-6v9"/>
@@ -51,48 +51,62 @@
           <path transform="translate(62)" d="M.8.800h8.400l2 2v4.400l-2 2H.8z"/>
           <path transform="translate(77)" d="M11.200.800H.8v8.400h10.400M.8 5h8.400"/>
         </svg><span class="version" id="version"></span>
-        <span class="title-description">harness sessions</span>
       </div>
-      <div class="window-controls" role="group" aria-label="Window controls">
-        <button id="window-minimize" type="button" aria-label="Minimize window" title="Minimize" disabled>
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.500h10"/></svg>
+      <button class="im-icon-btn im-sidebar-toggle" type="button" aria-label="Installations and folders" aria-controls="session-sidebar" aria-expanded="false">☰</button>
+      <div class="im-tabs" role="tablist" aria-label="Views">
+        <button type="button" role="tab" class="im-tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions</button>
+        <button type="button" role="tab" class="im-tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd class="im-key">c</kbd></button>
+        <button type="button" role="tab" class="im-tab" id="tab-harnesses" aria-selected="false" data-view="harnesses"><svg class="icon" aria-hidden="true"><use href="#i-harness"/></svg>Harnesses <kbd class="im-key">m</kbd></button>
+      </div>
+      <button type="button" id="views-menu" class="im-btn im-views-menu" aria-haspopup="menu" aria-expanded="false">Views <svg class="im-icon icon" aria-hidden="true"><use href="#i-caret"/></svg></button>
+      <span class="im-spacer" data-tauri-drag-region></span>
+      <button type="button" class="im-titlebar-command" id="commands" aria-label="Commands"><svg class="im-icon icon" aria-hidden="true"><use href="#i-list"/></svg><b>Commands</b><kbd class="im-key">Ctrl ⇧ K</kbd></button>
+      <div class="im-window-buttons" role="group" aria-label="Window controls">
+        <button id="window-minimize" class="im-window-button" data-im-window="minimize" type="button" aria-label="Minimize window" title="Minimize" disabled>
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.500h10"/></svg>
         </button>
-        <button id="window-maximize" type="button" aria-label="Maximize window" title="Maximize" disabled>
-          <svg class="maximize-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.500" y="3.500" width="9" height="9"/></svg>
-          <svg class="restore-icon" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M5.500 5.500v-3h8v8h-3"/><rect x="2.500" y="5.500" width="8" height="8"/></svg>
+        <button id="window-maximize" class="im-window-button" data-im-window="maximize" type="button" aria-label="Maximize window" title="Maximize" disabled>
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.500" y="3.500" width="9" height="9"/></svg>
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.500 5.500v-3h8v8h-3"/><rect x="2.500" y="5.500" width="8" height="8"/></svg>
         </button>
-        <button id="window-close" type="button" aria-label="Close window" title="Close" disabled>
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+        <button id="window-close" class="im-window-button" data-im-window="close" type="button" aria-label="Close window" title="Close" disabled>
+          <svg class="im-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
         </button>
       </div>
     </header>
-    <nav class="toolbar" aria-label="Views and commands">
-      <div class="tabs" role="tablist" aria-label="Views">
-        <button type="button" role="tab" id="tab-sessions" aria-selected="true" data-view="sessions"><svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>Sessions</button>
-        <button type="button" role="tab" id="tab-chat" aria-selected="false" data-view="chat"><svg class="icon" aria-hidden="true"><use href="#i-chat"/></svg>Chat <kbd>c</kbd></button>
-        <button type="button" role="tab" id="tab-harnesses" aria-selected="false" data-view="harnesses"><svg class="icon" aria-hidden="true"><use href="#i-harness"/></svg>Harnesses <kbd>m</kbd></button>
+    <div class="im-body">
+      <aside id="session-sidebar" class="im-panel im-sidebar" aria-label="Installations and folders">
+        <header class="column-head im-panel-header"><h2 class="im-panel-title">Installations</h2>
+          <span class="im-spacer"></span><small id="installation-count"></small>
+          <button type="button" class="im-icon-btn im-sidebar-collapse" aria-label="Collapse sidebar" aria-controls="session-sidebar" data-im-label-expand="Expand sidebar" data-im-label-collapse="Collapse sidebar">⇔</button>
+        </header>
+        <div id="installations"></div>
+        <div class="resizer" id="resize-installations" role="separator" aria-orientation="vertical" aria-label="Resize the installations column" title="Drag to resize · double-click to reset"></div>
+      </aside>
+      <div class="im-work">
+        <nav class="im-status toolbar" aria-label="Views and commands">
+          <button type="button" class="im-btn" id="search-everything" title="Search rooms, members, messages and sessions"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Search <kbd class="im-key">ctrl K</kbd></button>
+          <label class="im-input mk-filter"><input type="search" id="search" aria-label="Filter sessions" placeholder="Filter by title, id, folder   /" autocomplete="off" spellcheck="false"></label>
+          <span class="im-spacer"></span>
+        </nav>
+        <section id="view-sessions" class="im-columns" aria-label="Sessions" data-focus="installations">
+          <section id="sessions" class="im-panel im-content" tabindex="0" aria-label="Sessions of the installation"></section>
+          <div class="resizer" id="resize-sessions" role="separator" aria-orientation="vertical" aria-label="Resize the sessions column" title="Drag to resize · double-click to reset"></div>
+          <section class="im-panel im-inspector" aria-label="Session"><div id="detail" tabindex="-1"></div></section>
+          <button type="button" class="im-btn back-column" data-back aria-label="Back one column">‹ Back</button>
+        </section>
+        <section id="view-chat" class="view" tabindex="0" aria-label="Chat" hidden></section>
+        <section id="view-harnesses" class="view" tabindex="0" aria-label="Harnesses" hidden></section>
+        <div class="im-actions">
+          <button class="im-btn" type="button" id="scan" title="Look for portable or custom installations in a folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Scan folder <kbd class="im-key">o</kbd></button>
+          <button class="im-btn" type="button" id="import" title="Write a dump document into an installation"><svg class="icon" aria-hidden="true"><use href="#i-import"/></svg>Import <kbd class="im-key">i</kbd></button>
+          <button class="im-btn" type="button" id="reload" title="Read every store again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Reload <kbd class="im-key">r</kbd></button>
+          <button class="im-btn" type="button" id="theme" title="Theme: dark" aria-label="Theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-name">Dark</span></button>
+          <button class="im-btn" type="button" id="settings" title="Settings: look and theme" aria-label="Settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg></button>
+        </div>
+        <footer class="im-footer statusbar" id="statusbar"><i class="im-dot" data-im-tone="ok"></i><span class="im-footer-text" id="status">starting…</span><span id="status-counts" class="muted"></span><span class="im-spacer"></span><span id="status-right" class="im-footer-keys hints"></span></footer>
       </div>
-      <span class="toolbar-divider"></span>
-      <button type="button" id="search-everything" title="Search rooms, members, messages and sessions"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Search <kbd>ctrl K</kbd></button>
-      <input type="search" id="search" aria-label="Filter sessions" placeholder="Filter by title, id, folder   /" autocomplete="off" spellcheck="false">
-      <span class="spring"></span>
-      <button type="button" id="scan" title="Look for portable or custom installations in a folder"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>Scan folder <kbd>o</kbd></button>
-      <button type="button" id="import" title="Write a dump document into an installation"><svg class="icon" aria-hidden="true"><use href="#i-import"/></svg>Import <kbd>i</kbd></button>
-      <button type="button" id="reload" title="Read every store again"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Reload <kbd>r</kbd></button>
-      <button type="button" id="theme" title="Theme: dark" aria-label="Theme"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg><span id="theme-name">Dark</span></button>
-      <button type="button" id="settings" title="Settings: look and theme" aria-label="Settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg></button>
-    </nav>
-    <section id="view-sessions" class="view" aria-label="Sessions" data-focus="installations">
-      <aside id="installations" class="column" aria-label="Installations and folders"></aside>
-      <div class="resizer" id="resize-installations" role="separator" aria-orientation="vertical" aria-label="Resize the installations column" title="Drag to resize · double-click to reset"></div>
-      <section id="sessions" class="column" aria-label="Sessions of the installation"></section>
-      <div class="resizer" id="resize-sessions" role="separator" aria-orientation="vertical" aria-label="Resize the sessions column" title="Drag to resize · double-click to reset"></div>
-      <section id="detail" class="column" aria-label="Session"></section>
-      <button type="button" class="back-column" data-back aria-label="Back one column">‹ Back</button>
-    </section>
-    <section id="view-chat" class="view" aria-label="Chat" hidden></section>
-    <section id="view-harnesses" class="view" aria-label="Harnesses" hidden></section>
-    <footer class="statusbar" id="statusbar"><i></i><span id="status">starting…</span><span id="status-counts" class="muted"></span><span class="spring"></span><span id="status-right" class="hints"></span></footer>
+    </div>
   </main>
   <script type="module" src="/src/main.ts"></script>
 </body>

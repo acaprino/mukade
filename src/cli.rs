@@ -1018,6 +1018,16 @@ fn print_harnesses() -> Result<()> {
             store_env_name(harness),
             store.origin
         );
+        let config = crate::catalog::config_root(harness);
+        println!(
+            "  config:   {}",
+            match (&config, crate::catalog::config_env(harness)) {
+                (Some((path, origin)), Some(env)) =>
+                    format!("{} [{env}; {origin}]", path.display()),
+                (Some((path, origin)), None) => format!("{} [{origin}]", path.display()),
+                (None, _) => "unknown".into(),
+            }
+        );
         println!("  status:   {}", store.state);
         println!("  sessions: {}", store.sessions);
         println!("  forks:    {}", store.forks);

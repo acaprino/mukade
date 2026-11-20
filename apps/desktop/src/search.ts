@@ -41,7 +41,7 @@ export function openSearch(hooks: SearchHooks): void {
   // The sessions of every installation are read once per opening.
   listings = null;
 
-  const scopes = (): HTMLElement => h('div', { class: 'seg', role: 'group', 'aria-label': 'Search in' },
+  const scopes = (): HTMLElement => h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Search in' },
     ...SCOPES.map(([value, text]) => button(text, { 'aria-pressed': String(scope === value), onclick: () => { scope = value; void run(); drawTop(); } })));
   const top = h('div', { class: 'search-top' });
   const drawTop = () => fill(top, input, scopes());
@@ -51,7 +51,7 @@ export function openSearch(hooks: SearchHooks): void {
     let group = '';
     results.forEach((result, i) => {
       if (result.group !== group) { group = result.group; list.append(h('p', { class: 'label' }, group)); }
-      const row = button([h('span', { class: 'grow' }, ...result.label), h('span', { class: 'num' }, result.detail)], {
+      const row = button([h('span', { class: 'grow' }, ...result.label), h('span', { class: 'num im-num' }, result.detail)], {
         class: 'search-row', role: 'option', 'aria-selected': String(i === active), id: `sr-${i}`,
         onclick: () => { modal.close(); result.open(); },
       });

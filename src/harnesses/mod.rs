@@ -34,9 +34,31 @@ pub struct StoreStats {
     pub forks: Option<Result<usize, String>>,
 }
 
+/// How to install one harness with npm and keep its sessions inside a sandbox.
+pub struct SandboxInstall {
+    pub package: &'static str,
+    pub ignore_scripts: bool,
+    /// Environment variables set by the launcher, with paths relative to the sandbox home.
+    pub env: &'static [(&'static str, &'static str)],
+    /// Store path relative to the sandbox home (a directory or a database).
+    pub store: &'static str,
+    /// Directories to create inside a fresh store so it lists as empty.
+    pub store_folders: &'static [&'static str],
+}
+
 /// What mukade knows about one harness: its store, how its sessions are read and summarized.
 pub trait Harness: Send + Sync {
     fn id(&self) -> HarnessId;
+
+    /// Installation in an isolated npm prefix, when this harness supports it.
+    fn sandbox_install(&self) -> Option<SandboxInstall> {
+        None
+    }
+
+    /// The supported system installation command for the current OS.
+    fn system_install_command(&self) -> Option<&'static str> {
+        None
+    }
 
     /// The reader of this harness's sessions.
     fn reader(&self) -> &'static dyn Reader;
