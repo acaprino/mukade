@@ -9,7 +9,8 @@ with Codex's own model and compacts natively.
 
 | | |
 |---|---|
-| Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`); subagent and guardian threads with `list --children` |
+| Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`); subagent and guardian threads with `list --children`. ⚠️ Chats the Desktop app hosts on ChatGPT, when their project has a local folder: listed `unreadable`, never read ([below](#chats-hosted-by-chatgpt)) |
+| Work on disk, handoff | ✅ `mukade work` and `mukade handoff` for any session with a folder, a hosted chat included; started in Claude Code or Codex CLI ([below](#chats-hosted-by-chatgpt)) |
 | Write | ✅ a new rollout under `sessions/`; needs the destination's `cli_version` |
 | Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), compressed rollouts; a fork is hopped as a self-contained copy; subagent threads travel only with `--children` |
 | Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form; `hop --children` writes each subagent as a rollout of its own, unlinked (below) |
@@ -19,7 +20,7 @@ with Codex's own model and compacts natively.
 | Versions | researched and readers verified on 0.164.0; writers live-tested on the installed 0.166.0 [48][49]; CLI 0.165.0 (published 2026-10-27) never exercised [17]; Desktop rollouts read up to 0.164.0-alpha.11.1 [21], 0.165.0-alpha.1.2 [26], 0.167.0 / 0.167.0-alpha.3.2 / 0.167.1 [50] |
 
 `[n]` = an entry in [Sources](#sources). **[U]** = not verified. Repository paths are relative to
-the repository root. Page updated 2026-11-12.
+the repository root. Page updated 2026-11-21.
 
 ## Quick start
 
@@ -181,6 +182,152 @@ legacy sessions to "paginated thread history" [18]. Their on-disk form **[U]**.
   database links spawns in `thread_spawn_edges` (not guardian reviews) and keeps `agent_role`.
 - Fork: `session_meta.forked_from_id` = the origin thread, with `forked_from_ordinal_exclusive` (the origin's record the copy ends before) and `attached_thread` **[V]** (`openai/codex` source, `protocol.rs`; 13 forked *subagents* on this machine, no top-level fork). A thread forked by copy holds the history in its own rollout (`ForkPersistence::Copied`); a paginated one forks by reference: its `session_meta.history_base` = `{thread_id: <origin>, end_ordinal_exclusive, end_byte_offset}` names a prefix of the origin's file. A forked subagent is a spawn that also copies its parent's turns (`parent_thread_id` and `forked_from_id`, `subagent_history_start_ordinal`; line 1 of the copy is the parent's own `session_meta`). mukade reads `forked_from_id` of a thread no spawn started as `parent` with `parent_kind` `fork` (`at` = the origin's last record copied, one before the exclusive ordinal; none when it is 0), in the listing's header peek and when read; a forked subagent stays a spawn with `inherits_context`. The state database has no fork column, so a thread that survives only as a row cannot be told as a fork.
 - `mukade harnesses` counts forks for Codex from the listing (catalog `lineage.recorded: true`).
+
+## Chats hosted by ChatGPT
+
+The Desktop app lists chats whose conversation lives on ChatGPT beside its local threads. They are
+not rollouts and have no row in `threads`. Mukade lists the ones that have a local folder, shows the
+work they left in it, and starts another harness on that work. It does **not** read their
+conversation: the text is not on this machine, and reading ChatGPT's export (phase 2) is not built.
+Decision and invariants: [ADR-0005](../adr/ADR-0005-hosted-chats-read-locally.md) (Proposed). Design and
+the facts it rests on: [2026-11-21-chatgpt-hosted-chats-design.md](../superpowers/specs/2026-11-21-chatgpt-hosted-chats-design.md).
+
+**Where the catalogue is** [54]
+
+| what | holds |
+|---|---|
+| `<CODEX_HOME>/sqlite/codex.db` | table `local_thread_catalog`: one row per chat the app lists, local or hosted. Table `local_thread_catalog_hosts`: the kind of each host. A hosted chat's `host_id` is `chatgpt:<accountId>:<userId>` |
+| `<CODEX_HOME>/state_<n>.sqlite` (the newest) | tables `projects` and `project_roots`: a ChatGPT project and the local folder the app gave it |
+| `<CODEX_HOME>/sqlite/codex.db`, table `codex_schema_migrations` | 40 rows on the version checked. Mukade does not read it |
+
+**Which rows are listed** (`src/reader/codex_hosted.rs`, and the hosted part of `list_in` in `src/reader/codex.rs`)
+
+1. The row's host has `host_kind = 'chatgpt'`, and the row has a `project_id`. `local`, `ssh`, `wsl` and
+   `remote-control` hosts are not read here.
+2. The ChatGPT project has a local folder. The link is `projects.metadata`: its value
+   `codex.chatGptBacking` is itself a JSON string, and its `projectId` equals the row's `project_id`.
+   The folder is the `project_roots.path` at `position` 0 of that project. The folder is not a
+   repository: it holds clones one level down.
+3. A chat whose project has no local folder is **not listed in this version**: there is nothing on disk
+   for mukade to show or hand off before phase 2. On the checked machine 15 of the 137 rows belong to a
+   project, and the other 122 are plain chats.
+4. A thread id that Codex also has a rollout or a `threads` row for keeps that listing, so a hosted chat
+   is not listed twice. The same chat under two accounts is listed once.
+5. A row with `missing_candidate = 1` is listed like the others (37 of the 137 on the checked machine).
+   What the app means by it is not known, and the work on disk is local whatever happened to the chat.
+
+A listed hosted chat has these fields:
+
+| field | from |
+|---|---|
+| `id` | `thread_id` |
+| `title` | `display_title` (a blank one is `null`) |
+| `timestamp` | `source_updated_at`, epoch seconds, as RFC 3339 |
+| `cwd` | the project's folder |
+| `location` | `sqlite/codex.db` |
+| `unreadable` | the reason below |
+
+**Why it is unreadable.** Every read of a hosted chat (`dump`, `hop`, the transcript, `read_clipped`,
+`read_streamed`) is refused with
+
+```text
+hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder
+```
+
+and `mukade dump codex <id>` prints `not found: Codex thread <id> is hosted by ChatGPT: …` and exits 2.
+The reasons it is not on disk, as found on 2026-11-21 [54]: there is no rollout and nothing in the app's web
+cache, the app's log shows the web layer fetching the conversation again (`chatgpt_conversation_refetch_completed`), and
+`codex app-server` does not serve it (`thread/list` is empty, `thread/read` answers `thread not
+loaded`, `thread/items/list` answers `not supported yet`), nor does `codex cloud list` (0 tasks).
+Mukade does not open `auth.json`, does not sign in and makes no request for a chat's text.
+
+**What can be done with it.** The folder is local, so two things work without the conversation:
+
+- `mukade work codex <id>`: the git work in the folder, read-only ([usage](../usage.md#mukade-work)).
+- `mukade handoff codex <id> claude_code`: a note about that work and the command that starts Claude Code
+  or Codex CLI on it ([usage](../usage.md#mukade-handoff)). The desktop app has both as "Work on disk" and
+  "Start in…" ([desktop](../desktop.md#work-on-disk-and-start-in)).
+
+Both work for any session that has a folder. A Codex thread whose rollout is gone is the same case.
+
+**Reading the tables.** Both databases are opened read-only with a 2 s busy timeout, and only read.
+Mukade checks with `PRAGMA table_info` that the tables and columns below exist. Like the `threads`
+reader it is best effort: a database that is missing, locked, damaged or laid out otherwise gives no
+hosted chats, and the rest of the Codex listing is what it was. A newer app version with the same
+columns is read. Rows come newest first by `source_updated_at`.
+
+Columns read: `local_thread_catalog.{host_id, thread_id, display_title, source_updated_at, project_id}`,
+`local_thread_catalog_hosts.{host_id, host_kind}`, `projects.{id, metadata}`,
+`project_roots.{project_id, position, path}`.
+
+**The tables, as found** (Codex Desktop 26.1117, 2026-11-21 [54]). `<CODEX_HOME>/sqlite/codex.db`:
+
+```sql
+CREATE TABLE "local_thread_catalog" (
+  host_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  display_title TEXT NOT NULL,
+  source_created_at REAL NOT NULL,
+  source_updated_at REAL NOT NULL,
+  cwd TEXT,
+  source_kind TEXT NOT NULL,
+  source_detail TEXT,
+  model_provider TEXT,
+  git_branch TEXT,
+  observation_sequence INTEGER NOT NULL,
+  missing_candidate INTEGER NOT NULL DEFAULT 0 CHECK (missing_candidate IN (0, 1)),
+  thread_source TEXT,
+  source_recency_at REAL NOT NULL DEFAULT 0,
+  pending_observed_title INTEGER NOT NULL DEFAULT 0,
+  project_id TEXT,
+  conversation_origin TEXT, trial_conversation_type TEXT, chatgpt_async_status INTEGER,
+  PRIMARY KEY (host_id, thread_id)
+);
+CREATE TABLE "local_thread_catalog_hosts" (
+  host_id TEXT PRIMARY KEY,
+  host_kind TEXT NOT NULL CHECK (host_kind IN ('local', 'ssh', 'wsl', 'remote-control', 'chatgpt'))
+);
+```
+
+`<CODEX_HOME>/state_<n>.sqlite` (n = 5):
+
+```sql
+CREATE TABLE projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  position INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE TABLE project_roots (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  PRIMARY KEY (project_id, position)
+);
+```
+
+`projects.metadata` of a project the app backs with a ChatGPT project. The inner value is a JSON string:
+
+```json
+{"codex.chatGptBacking": "{\"accountId\":\"<uuid>\",\"userId\":\"user-<id>\",\"projectId\":\"g-p-<hex>\"}",
+ "codex.localProjectId": "<uuid>"}
+```
+
+**Versions checked** [54]: Codex Desktop 26.1117.41037 (MSIX `OpenAI.Codex_2p2nqsd0c76g0`), `codex-cli`
+0.167.0-alpha.3.2, Windows 11, `codex_schema_migrations` with 40 rows. Every one of the 137 rows had
+`host_kind = 'chatgpt'` and `cwd` NULL, and `threads` in `state_5.sqlite` had 0 rows.
+
+**Not verified**
+
+- Nothing of this was run on a Windows build of mukade: CI builds on Ubuntu and macOS. Reading the
+  catalogue is covered by tests over fixture databases built from the tables above, not by a run on the
+  owner's real ones.
+- Whether the catalogue's `thread_id` is the id of the chat in ChatGPT's export (the app's route
+  `/g/<project>/c/<thread_id>` says it is). Phase 2 depends on it.
+- The layout of ChatGPT's export as it is today. Nothing reads it yet.
+- What `missing_candidate` means.
 
 ## Features
 
@@ -660,3 +807,4 @@ files of `openai/codex` at that tag, under `codex-rs/`, at
 51. [`docs/verification/listing-coverage-2026-11-08.md`](../verification/listing-coverage-2026-11-08.md): listing coverage of 2026-11-08 (Codex 0.166; 8598 `threads` rows, none with an existing rollout; 1105 listed threads, 7493 subagent and guardian threads left out).
 52. Codex CLI 0.167.1 and Desktop 26.1106 code, read only, 2026-11-12: `shell_detect.rs` (the shell per platform), the `<environment_context>` and `world_state` shell names. Decisions: [`docs/superpowers/specs/2026-11-12-destination-shell-design.md`](../superpowers/specs/2026-11-12-destination-shell-design.md).
 53. The author's Codex home, read only for shape (no content copied), 2026-11-12, 0.167.0-alpha.3.2 to 0.167.1: 19 subagent and 6 guardian `session_meta` headers; `state_5.sqlite` columns (`agent_role`, `thread_source`) and `thread_spawn_edges`; 320 `agent_message` rows in 29 rollouts (265 with `encrypted_content`). Decisions: [`docs/superpowers/specs/2026-11-12-subagents-design.md`](../superpowers/specs/2026-11-12-subagents-design.md).
+54. The author's Codex Desktop 26.1117.41037 and `codex-cli` 0.167.0-alpha.3.2 on Windows 11, read only, 2026-11-21: `sqlite/codex.db` (`local_thread_catalog` 137 rows, `local_thread_catalog_hosts`, `codex_schema_migrations` 40 rows) opened `mode=ro`, `state_5.sqlite` (`projects`, `project_roots`), `git status` of the project folder, the app's log, and a live probe of `codex app-server` (`thread/list`, `thread/read`, `thread/items/list`) and `codex cloud list`. No conversation text was read or copied. Decisions: [`docs/superpowers/specs/2026-11-21-chatgpt-hosted-chats-design.md`](../superpowers/specs/2026-11-21-chatgpt-hosted-chats-design.md), [ADR-0005](../adr/ADR-0005-hosted-chats-read-locally.md).

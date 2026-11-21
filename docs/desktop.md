@@ -50,7 +50,7 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 |---|---|
 | Rust: listing, transcript and raw pages on fixture stores, export, a real hop into every writable harness, the receipt, chat replies, terminal commands | `cargo test -p mukade-desktop` |
 | No harness branch outside its adapter (the desktop crate included) | `cargo test --test architecture` |
-| TypeScript: tree and collapse, search, folders, marks, keys, transcript rows into entries, chat ledger, receipt commands | `npm test` |
+| TypeScript: tree and collapse, search, folders, marks, keys, transcript rows into entries, chat ledger, receipt commands, the lines of Work on disk | `npm test` |
 | Smoke: every view in each look (Smooth, Oni), dark and light, on the mocked commands, Enter on Cancel never hops, the chat's three views, join and send, a new room, search everything, the chat filter survives a poll; screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
 
 ## The window
@@ -59,8 +59,8 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 |---|---|
 | Installations | the six standard stores, then the ones a scan found (`scanned`); `error` when a store cannot be read (the reason is in the Folders pane and the tooltip) |
 | Folders | All, every folder with its count, Unknown |
-| Sessions | the tree: subagents (`↳ agent Explore`) and forks under their parent, newest first; `live`, `archived`, `unreadable`; a parent folds with space or its caret; the search box filters by title, id or folder and keeps a matching parent's children |
-| Session | harness, id, kind, parent (`not listed`), children `3 (2 subagents, 1 fork)`, folder, updated, archived, live, path, store and engine for a scanned installation; the lineage; Open, Hop, Export, Save as…, Resume |
+| Sessions | the tree: subagents (`↳ agent Explore`) and forks under their parent, newest first; `live`, `archived`, `unreadable`, and `hosted` for a chat ChatGPT hosts (below); a parent folds with space or its caret; the search box filters by title, id or folder and keeps a matching parent's children |
+| Session | harness, id, kind, parent (`not listed`), children `3 (2 subagents, 1 fork)`, folder, updated, archived, live, path, store and engine for a scanned installation; the lineage; Open, Hop, Export, Save as…, Resume. A session with a folder also has [Work on disk](#work-on-disk-and-start-in), and Start in… when it cannot be read |
 | Reader | the conversation in native order, opening at its end: user, assistant, reasoning, tool calls (input past 240 characters behind Show all), results, compactions; the last N turns or all; the Raw tab shows one entry's native records. Only the entries in sight are drawn. A live session is read again when its file changes (looked at every 3 s); the reader follows the end only when it was there |
 | Hop | destination, compaction (none, portable, summary with its intent, model and turns kept whole, native with the destination model's context window), subagents carry or leave, all branches (where the source keeps them), reasoning, destination shell (default: the destination's own), prompt, and under More options the destination's model and provider, unfinished turns keep or drop, and without tools; the plan before anything is written |
 | Receipt | new id, location, manifest path (saved under `mukade-data/manifests/`), interactive and headless resume with Copy, subagents written and whether each is linked, losses, the destination's reply; Show in sessions, Resume in terminal |
@@ -76,6 +76,50 @@ macOS; `$TERMINAL` or `x-terminal-emulator` on Linux. A harness with no terminal
 Harness) shows its headless command with a copy button instead.
 
 The window refuses to close while a hop or import runs, and asks first.
+
+## Work on disk and Start in…
+
+A session can have a folder and no readable conversation: a thread Codex still has a row for whose rollout
+is gone, or a chat the Codex desktop app hosts on ChatGPT whose project has a local folder. The window
+shows the work such a session left and starts another harness on it.
+Decision: [ADR-0005](adr/ADR-0005-hosted-chats-read-locally.md) (Proposed). Codex side:
+[Chats hosted by ChatGPT](harnesses/codex.md#chats-hosted-by-chatgpt).
+
+**The chip `hosted`.** A session whose reason starts with `hosted by ChatGPT` shows a neutral `hosted`
+chip in the list, with the reason as its tooltip, in place of the red `unreadable`. The detail panel still
+says `Cannot be read: …`. Open transcript, Hop, Export, Save as… and Resume stay disabled, as for any
+session that cannot be read. Its conversation is not read, and the text is not in this version at all.
+
+**Work on disk.** Any session with a folder has a "Work on disk" section in its detail panel: the folder's
+path and one row for each repository in it (the folder itself, or each direct child that is a git
+repository). It is the same read as [`mukade work`](usage.md#mukade-work) and runs the same git commands,
+none of which changes a repository or fetches. A row is `<branch> · <upstream> · <state>`, with `no
+upstream` when there is none and a state of `clean`, `N commits on no remote`, `N ahead` or
+`N uncommitted`. A repository is marked `at risk` when it has uncommitted paths or commits on no remote:
+that is the work that exists only in this folder. Other worktrees and branches that hold such work are
+listed under it, and a repository git refuses shows what git said. What it says about a remote is as of
+the last fetch.
+
+- The read starts 200 ms after a row is selected and is dropped when the selection has moved on, so
+  moving down the list does not run git on every row.
+- The result is kept while the same row stays selected. A commit made meanwhile shows after you select
+  another row and come back.
+
+**Start in….** For a session that cannot be read and has a folder, `Start in…` (key `s`) is the primary
+button. It opens a dialog with the destination (every installation of Claude Code and Codex CLI the
+window knows, the session's own included) and the note, composed from the same template as
+[`mukade handoff`](usage.md#mukade-handoff) (`handoff-prompts/continue.md` beside the executable) and
+editable before anything happens. A session with no folder shows the reason in place of the form.
+
+`Start` (ctrl+⏎) saves the note you edited as `mukade-data/handoffs/<harness>-<id>.md`, never in the
+project folder, and opens the destination's command in a new terminal in the session's folder, with the
+store variables of the chosen installation, the same way Resume opens one. The command carries one first
+prompt, `Read <path> and continue from it.`, that points at the note. The status line then reads
+`Started <label> in <folder>; note saved to <path>`. A refusal or a failure (the folder is gone, no data
+folder, the terminal did not start) stays in the dialog and Start can be tried again.
+
+Not verified: nothing of this was run on a Windows build, and that the one-line prompt reaches the harness
+whole through Windows Terminal is not seen yet. The owner's live check settles both.
 
 ## Look and desktop behaviour
 
@@ -121,6 +165,7 @@ whole application ends the lifetime of this in-memory record.
 | `⏎` | next column, or open the transcript |
 | `esc` | close a dialog or the reader, or back one column |
 | `h` · `e` · `i` · `R` | hop · export · import · resume |
+| `s` | start another harness in the folder of an unreadable session (Start in…) |
 | `t` | last N turns ↔ all |
 | `g` `G`, PgUp PgDn | reader top / bottom, a page |
 | `o` · `r` | scan a folder · reload |

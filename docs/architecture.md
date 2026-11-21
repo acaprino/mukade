@@ -85,6 +85,8 @@ and from `writer::for_harness` a writer that refuses every write (exit 2) withou
 | `src/writer/plan.rs` | the rendering plan; it asks the adapter for its flags and image shapes |
 | `src/native_compaction.rs` | native compaction records, harness-neutral |
 | `src/catalog.rs` | reading `catalog/harnesses.json` |
+| `src/work.rs` | the work on disk of a folder, for any session that has one: its git repositories, worktrees and branches, with the commits on no remote and the uncommitted paths, read with the installed `git` and a 10 s deadline per command. It never fetches, sets `GIT_OPTIONAL_LOCKS=0` and runs no command that changes a repository ([ADR-0005](adr/ADR-0005-hosted-chats-read-locally.md), INV-003). It names no harness |
+| `src/handoff.rs` | the note that starts another harness on a folder whose session cannot be read: the editable template `handoff-prompts/continue.md` (the default is `assets/handoff-prompts/continue.md`), the note's file under `mukade-data/handoffs/`, the one-line first prompt, and the destinations, which are the harnesses whose catalog entry has `interactive_start`. The CLI (`work`, `handoff`) and the desktop app (`actions.rs`) call it. It names no harness |
 
 ## Reading a session of any size
 
@@ -199,7 +201,9 @@ list missed are marked (added).
 8. The registry arm in `harnesses::get`; the array length in the signatures of `harnesses::all`
    and `detect::layout::layouts` (both state `6` now).
 9. The catalog entry in `catalog/harnesses.json`: `binary`, `store` (`default_on` for a platform that
-   differs), `lineage`, `resume`, and `interactive_resume` when the harness has a terminal UI.
+   differs), `lineage`, `resume`, `interactive_resume` when the harness has a terminal UI, and
+   `interactive_start` when its way of starting with a first prompt has been seen to work (it is then a
+   handoff destination).
 10. The per-harness lines of `USAGE` in `src/cli.rs`: its CLI name in the `harnesses:` line, its
     `--<harness>-exe` flag in the options, and its `MUKADE_*_EXE` variable in the executable
     resolution (`the_usage_text_names_what_the_catalog_names` in `tests/harnesses.rs` checks the
