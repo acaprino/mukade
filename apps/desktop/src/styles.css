@@ -15,9 +15,9 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 #view-chat { padding: var(--im-s-2); }
 .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 .column-head small { color: var(--im-muted); }
-.column-head h2 { font: 600 1em var(--im-font-head); }
+.column-head h2 { font: 600 var(--im-fs-title) var(--im-font-head); }
 .warn-text { color: var(--im-warn); }
-.hint { font-size: 12px; }
+.hint { font-size: var(--im-fs-meta); }
 
 
 .entry .what, .code, .msg .body { user-select: text; }

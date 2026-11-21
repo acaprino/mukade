@@ -1,29 +1,29 @@
 /* The harnesses page: a bar, a card per harness, the folders kept. */
-#view-harnesses { flex-direction: column; gap: 8px; overflow: auto; overscroll-behavior: contain; }
-.harness-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 38px; padding: 0 2px; }
-.harness-bar h2 { margin: 0; font: 500 13px var(--im-font-head); letter-spacing: .07em; text-transform: uppercase; }
-.scan-progress { font: 12px var(--im-font-code); color: var(--im-accent-hi); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.harness-body { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
-.harness-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 8px; }
-.harness-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--im-line); border-top-width: 2px; background: var(--im-sheet); min-width: 0; }
+#view-harnesses { flex-direction: column; gap: var(--im-s-2); overflow: auto; overscroll-behavior: contain; }
+.harness-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-2) var(--im-s-3); min-height: 38px; padding: 0 var(--im-s-1); }
+.harness-bar h2 { margin: 0; font: 500 var(--im-fs-body) var(--im-font-head); letter-spacing: var(--im-track); text-transform: var(--im-case); }
+.scan-progress { font: var(--im-fs-meta) var(--im-font-code); color: var(--im-accent-hi); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harness-body { display: flex; flex-direction: column; gap: var(--im-s-2); padding-bottom: var(--im-s-2); }
+.harness-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--im-s-2); }
+.harness-card { display: flex; flex-direction: column; gap: var(--im-s-2); padding: var(--im-s-3) var(--im-s-3); border: 1px solid var(--im-line); border-top-width: 2px; background: var(--im-sheet); min-width: 0; }
 .harness-card.st-installed, .harness-card.st-configured { border-top-color: var(--im-ok); }
 .harness-card.st-missing { border-top-color: var(--im-line-strong); }
-.harness-card header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.harness-card header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-2); }
 .harness-card header .glyph { width: 20px; height: 20px; }
-.harness-card h3 { margin: 0; font: 500 15px var(--im-font-head); letter-spacing: .02em; }
+.harness-card h3 { margin: 0; font: 500 var(--im-fs-title) var(--im-font-head); letter-spacing: var(--im-track); }
 .harness-card dl.kv { grid-template-columns: 76px minmax(0, 1fr); }
-.harness-card dd.mono { font: 12px var(--im-font-code); overflow-wrap: anywhere; }
+.harness-card dd.mono { font: var(--im-fs-meta) var(--im-font-code); overflow-wrap: anywhere; }
 .harness-more { display: flex; flex-direction: column; border-top: 1px solid var(--im-line); }
 .harness-more .label { padding-left: 0; }
-.install-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0; border-bottom: 1px solid var(--im-line); }
+.install-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1) var(--im-s-2); padding: var(--im-s-1) 0; border-bottom: 1px solid var(--im-line); }
 .install-row:last-child { border-bottom: 0; }
-.install-row .grow { flex: 1 1 220px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.install-row .grow { flex: 1 1 220px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1) var(--im-s-1); }
 .install-row b { font-weight: 500; color: var(--im-text); }
-.install-row .block { flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; }
+.install-row .block { flex-basis: 100%; font-size: var(--im-fs-meta); overflow-wrap: anywhere; }
 .install-row button { min-height: 24px; }
-.harness-folders ul.plain { list-style: none; margin: 0; padding: 0 0 6px; }
-.harness-folders li { display: flex; align-items: center; gap: 8px; padding: 2px 12px; }
-.harness-folders li .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.harness-folders ul.plain { list-style: none; margin: 0; padding: 0 0 var(--im-s-1); }
+.harness-folders li { display: flex; align-items: center; gap: var(--im-s-2); padding: var(--im-s-1) var(--im-s-3); }
+.harness-folders li .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--im-fs-meta); }
 :root[data-im-look="smooth"] {
   & .harness-card { border-top-width: 1px; border-radius: var(--im-r-sheet); background: var(--im-sheet); }
   & .harness-card.st-installed, & .harness-card.st-configured { border-color: color-mix(in srgb, var(--im-ok) 40%, var(--im-line)); }

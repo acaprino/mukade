@@ -1,5 +1,5 @@
 #sessions .row { min-height: 30px; }
 #sessions .row.child .grow { color: var(--im-text-2); }
 #sessions .row[aria-selected='true'].child .grow { color: var(--im-text); }
-#sessions .row:not(.child) .grow { font: 500 13px var(--im-font-head); color: var(--im-text); }
-#sessions .row.untitled .grow { font: 12px var(--im-font-code); color: var(--im-muted); }
+#sessions .row:not(.child) .grow { font: 500 var(--im-fs-body) var(--im-font-head); color: var(--im-text); }
+#sessions .row.untitled .grow { font: var(--im-fs-meta) var(--im-font-code); color: var(--im-muted); }
