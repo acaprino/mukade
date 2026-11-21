@@ -129,6 +129,8 @@ try {
     await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
     await page.keyboard.press('ArrowUp');
     await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
+    // Enter belongs to the primary button: focus goes back to it (a radio's Enter starts no hop).
+    await page.getByRole('button', { name: /^Hop to/ }).focus();
     await page.screenshot({ path: `${out}hop-${name}.png` });
     await page.keyboard.press('Enter');
     await page.getByText('Losses · 2').waitFor();
