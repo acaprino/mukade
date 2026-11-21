@@ -68,7 +68,7 @@ export class Reader {
   render(transcript: Transcript | null, opts: { tab: 'conversation' | 'raw'; turns: number; defaultTurns: number; title: string; error: string | null; raw: unknown[] | null; rawEntry: string | null }): void {
     const turnsLabel = opts.defaultTurns > 0 ? `Last ${opts.defaultTurns} turns` : 'Last turns';
     const head = h('div', { class: 'column-head im-panel-header' },
-      button(['‹ Detail ', caps('Escape')], { class: 'ghost', 'aria-label': 'Back to the session detail', onclick: () => this.actions.back() }),
+      button(['‹ Sessions ', caps('Escape')], { class: 'ghost', 'aria-label': 'Back to the sessions list', onclick: () => this.actions.back() }),
       h('h2', { class: 'reader-title', title: opts.title }, opts.title),
       h('span', { class: 'spring' }),
       h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Reader tab' },

@@ -3,8 +3,7 @@
 
 import '@acaprino/imago/css/imago.css';
 import { parseLook } from '@acaprino/imago/shell';
-import { claimKey, closeLayers, createRegistry, footerKeys, formatKeys, hasModal, inspector, keyCaps, keyClaimed, mountApp, openMenu, roving } from '@acaprino/imago/ui';
-import { mountColumnSplitters } from './column-splitters.ts';
+import { claimKey, closeLayers, createRegistry, footerKeys, formatKeys, hasModal, inspector, keyCaps, keyClaimed, mountApp, openMenu, roving, sidebarResize, splitView } from '@acaprino/imago/ui';
 import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
@@ -13,6 +12,7 @@ import { inRoomsBox, renderDetail } from './detail.ts';
 import { button, caps, commandLine, fill, h } from './dom.ts';
 import { canStartIn, openHandoff } from './handoff.ts';
 import { openHop, openImport, recoverWrite, type JobHooks } from './hop.ts';
+import { VIEWS, writeFrame } from './frame.ts';
 import { COMMANDS, FOOTER, type Place } from './keys.ts';
 import { LOOK_KEY, THEME_KEY, storedTheme, type Look, type Theme } from './look.ts';
 import { confirmModal, modalOpen, openModal } from './modal.ts';
@@ -30,9 +30,12 @@ import { initializeWindow, paintWindow } from './window.ts';
 
 const $ = (id: string) => document.getElementById(id)!;
 const registry = createRegistry();
+const frame = writeFrame($('app'));
 const sessionInspector = inspector($('app'));
-const narrowSessions = matchMedia('(max-width: 999.98px)');
-const columns = { installations: $('installations'), sessions: $('sessions'), detail: $('detail') };
+const columns = { installations: frame.sidebar.body, sessions: frame.views.sessions, reader: frame.views.reader, detail: frame.detail };
+
+/** Under 1000 the inspector is a drawer over the content: its drawn position says so (the package owns the breakpoint). */
+const isDrawer = (): boolean => getComputedStyle($('app').querySelector<HTMLElement>('.im-inspector')!).position === 'absolute';
 let rawRecords: unknown[] | null = null;
 
 // --- status line --------------------------------------------------------------------------------
@@ -49,11 +52,14 @@ function setJob(label: string | null): void {
 }
 
 function drawStatus(): void {
-  const bar = $('statusbar');
-  bar.classList.toggle('busy', state.job !== null);
-  bar.classList.toggle('error', state.job === null && state.statusError);
-  $('status').textContent = state.job ?? state.status;
-  $('status-counts').textContent = state.counts;
+  const failed = state.job === null && state.statusError;
+  const text = state.job ?? state.status;
+  frame.footer.text.textContent = text;
+  frame.footer.dot.dataset.imTone = state.job !== null ? 'info' : failed ? 'err' : 'ok';
+  frame.footer.counts.textContent = state.counts;
+  frame.status.chip.dataset.imTone = state.job !== null ? 'info' : failed ? 'err' : 'ok';
+  frame.status.chip.textContent = state.job !== null ? 'Working' : failed ? 'Error' : 'Ready';
+  frame.status.text.textContent = text;
   const place = state.view === 'chat' ? 'chat' : state.view === 'harnesses' ? 'harnesses' : state.reader ? 'reader' : 'sessions';
   const keys = footerKeys(document, registry, FOOTER[place]);
   keys.id = 'status-right';
@@ -94,7 +100,7 @@ function drawSidebar(): void {
 function drawSessions(): void {
   const hadFocus = columns.sessions.contains(document.activeElement);
   renderSessions(columns.sessions, {
-    pick: (id) => { pickSession(id); if (narrowSessions.matches) focusColumn('detail'); },
+    pick: (id) => { pickSession(id); if (isDrawer()) focusColumn('detail'); },
     reload: () => void loadInventory(),
     retry: (key) => void pickInstallation(key, true),
     open: (id) => { pickSession(id); void openReader(); },
@@ -107,29 +113,86 @@ function drawSessions(): void {
 }
 
 function syncSidebar(): void {
-  const visible = state.view === 'sessions' && !state.reader;
+  const visible = state.view === 'sessions';
   const toggle = document.querySelector<HTMLButtonElement>('.im-sidebar-toggle')!;
   if (!visible && $('app').dataset.imSidebarOpen === 'true') toggle.click();
   $('app').dataset.imSidebar = visible ? 'on' : 'off';
-  $('session-sidebar').hidden = !visible;
+  $('sidebar').hidden = !visible;
   toggle.hidden = !visible;
+}
+
+// The list and the reader stand side by side in the content region (splitView, the width kept under mukade.width.sessions);
+// where the inspector is a drawer the window is narrow, and the reader takes the place of the list while it is open.
+const SESSIONS_WIDTH = 'mukade.width.sessions';
+let split: ReturnType<typeof splitView> | null = null;
+
+function storedWidth(key: string): number | null {
+  const stored = localStorage.getItem(key);
+  return stored && /^\d+(?:\.\d+)?px$/.test(stored) ? Number.parseFloat(stored) : null;
+}
+
+function unsplit(): void {
+  if (!split) return;
+  split.destroy();
+  split.element.replaceWith();
+  frame.views.sessionsView.append(frame.views.sessions, frame.views.reader);
+  split = null;
+}
+
+function mountSplit(fraction?: number): void {
+  const view = frame.views.sessionsView;
+  const width = view.clientWidth;
+  let saved: number | null = null;
+  try { saved = storedWidth(SESSIONS_WIDTH); } catch { /* the default fraction stands */ }
+  const start = fraction ?? (saved && width ? Math.min(0.8, Math.max(0.2, saved / width)) : 0.5);
+  split = splitView(frame.views.sessions, frame.views.reader, {
+    label: 'Resize the sessions list', fraction: start, minFirst: 180, minSecond: 240,
+    onCommit: () => {
+      try { localStorage.setItem(SESSIONS_WIDTH, `${Math.round(frame.views.sessions.getBoundingClientRect().width)}px`); } catch { /* the resize still applies */ }
+    },
+  });
+  split.element.classList.add('mk-split');
+  const handle = split.element.querySelector<HTMLElement>('[role="separator"]')!;
+  handle.id = 'resize-sessions';
+  handle.title = 'Drag or use arrow keys to resize · double-click to reset';
+  handle.addEventListener('dblclick', () => {
+    try { localStorage.removeItem(SESSIONS_WIDTH); } catch { /* the reset still applies */ }
+    unsplit();
+    mountSplit(0.5);
+    layoutSessions();
+  });
+  view.append(split.element);
+}
+
+function layoutSessions(): void {
+  const reading = state.reader !== null;
+  const drawer = isDrawer();
+  if (reading && !drawer) {
+    if (!split) mountSplit();
+    frame.views.sessions.hidden = false;
+    frame.views.reader.hidden = false;
+    return;
+  }
+  unsplit();
+  frame.views.sessions.hidden = reading;
+  frame.views.reader.hidden = !reading;
 }
 
 function drawDetail(): void {
   syncSidebar();
-  const view = $('view-sessions');
-  view.classList.toggle('reading', state.reader !== null);
-  view.classList.toggle('has-selection', state.selected !== null);
+  layoutSessions();
   if (state.reader) {
     const r = state.reader;
     reader.render(r.transcript, {
       tab: r.tab, turns: r.turns, defaultTurns: state.defaultTurns, title: r.transcript?.title ?? selectedRow()?.title ?? r.id,
       error: r.error, raw: rawRecords, rawEntry: r.rawEntry,
     });
-    if (!columns.detail.contains(reader.root)) fill(columns.detail, reader.root);
-    return;
+    if (!columns.reader.contains(reader.root)) fill(columns.reader, reader.root);
+  } else if (columns.reader.firstChild) {
+    columns.reader.replaceChildren();
   }
   renderDetail(columns.detail, {
+    close: () => closeDetail(),
     open: () => void openReader(),
     hop: () => startHop(),
     exportTo: (saveAs) => void exportSelected(saveAs),
@@ -146,7 +209,7 @@ async function drawInRooms(): Promise<void> {
   const ticket = ++roomsTicket;
   const row = selectedRow();
   const installation = currentInstallation();
-  if (!row || !installation || state.reader) return;
+  if (!row || !installation) return;
   const index = await chatIndex().catch(() => null);
   const pad = columns.detail.querySelector('.pad');
   if (ticket !== roomsTicket || !index || !pad) return;
@@ -165,19 +228,28 @@ function searchEverything(): void {
 }
 
 function syncInspector(): void {
-  const visible = !narrowSessions.matches || state.focus === 'detail' || Boolean(state.reader);
+  const visible = isDrawer() ? state.focus === 'detail' : !state.detailClosed;
   if (visible && !sessionInspector.isOpen()) sessionInspector.open(columns.detail);
   if (!visible && sessionInspector.isOpen()) sessionInspector.close();
 }
 
+/** The close button of the detail: a drawer goes away and the list takes the focus; the docked inspector stays closed until
+ *  another session is picked. */
+function closeDetail(): void {
+  if (!isDrawer()) state.detailClosed = true;
+  state.focus = 'sessions';
+  syncInspector();
+  focusColumn('sessions');
+  drawFocus();
+}
+
 function drawFocus(): void {
   syncInspector();
-  const focused: Record<Column, HTMLElement> = { installations: columns.installations, folders: columns.installations, sessions: columns.sessions, detail: columns.detail };
+  const focused: Record<Column, HTMLElement> = { installations: columns.installations, folders: columns.installations, sessions: columns.sessions, reader: columns.reader, detail: columns.detail };
   for (const column of Object.values(columns)) column.classList.toggle('focused', column === focused[state.focus]);
   for (const pane of columns.installations.querySelectorAll<HTMLElement>('[data-pane]')) {
     pane.classList.toggle('focused', pane.dataset.pane === state.focus);
   }
-  $('view-sessions').dataset.focus = state.focus === 'folders' ? 'installations' : state.focus;
 }
 
 function drawAll(): void {
@@ -292,6 +364,7 @@ function pickFolder(cwd: string | null): void {
 
 function pickSession(id: string): void {
   if (state.selected === id && !state.reader) return;
+  state.detailClosed = false;
   state.selected = id;
   if (state.reader && state.reader.id !== id) closeReader(false);
   drawSessions();
@@ -329,7 +402,7 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
   const mine: NonNullable<typeof state.reader> = { key, id: row.id, transcript: null, turns, tab: 'conversation', rawEntry: null, error: null };
   state.reader = mine;
   rawRecords = null;
-  state.focus = 'detail';
+  state.focus = 'reader';
   drawDetail();
   drawFocus();
   setJob(`reading ${row.title ?? row.id}…`);
@@ -549,7 +622,7 @@ function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   if (state.view === view) return;
   const leavingDrawer = $('app').dataset.imSidebarOpen === 'true';
   const moveFocus = leavingDrawer || $(`view-${state.view}`).contains(document.activeElement)
-    || $('session-sidebar').contains(document.activeElement);
+    || $('sidebar').contains(document.activeElement);
   state.view = view;
   syncSidebar();
   if (leavingDrawer) setFocus('sessions');
@@ -557,15 +630,16 @@ function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   $('view-chat').hidden = view !== 'chat';
   $('view-harnesses').hidden = view !== 'harnesses';
   if (view === 'harnesses') harnesses.show();
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.setAttribute('aria-selected', String(tab.dataset.view === view));
-  // The chat view has its own filter, on its messages; the harnesses page has none.
-  $('search').hidden = view !== 'sessions';
-  for (const content of [columns.sessions, $('view-chat'), $('view-harnesses')]) {
-    content.classList.toggle('im-content', content === (view === 'sessions' ? columns.sessions : $(`view-${view}`)));
+  for (const tab of document.querySelectorAll<HTMLElement>('.im-tab[data-id]')) {
+    const current = tab.dataset.id === view;
+    tab.setAttribute('aria-selected', String(current));
+    tab.tabIndex = current ? 0 : -1;
+    if (current) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
   }
+  frame.main.setAttribute('aria-label', VIEWS.find((one) => one.id === view)!.label);
   if (view === 'chat') chat.show(); else chat.hide();
   if (moveFocus) {
-    if (view === 'sessions') focusColumn(state.reader ? 'detail' : 'sessions');
+    if (view === 'sessions') focusColumn(state.reader ? 'reader' : 'sessions');
     else $(`view-${view}`).focus();
   }
   drawStatus();
@@ -594,7 +668,7 @@ const appearance = {
 
 // --- keys ---------------------------------------------------------------------------------------
 
-const ORDER: Column[] = ['installations', 'folders', 'sessions', 'detail'];
+const ORDER: Column[] = ['installations', 'folders', 'sessions', 'reader', 'detail'];
 
 function focusColumn(column: Column): void {
   if (column === 'installations' || column === 'folders') {
@@ -606,13 +680,16 @@ function focusColumn(column: Column): void {
   } else {
     setFocus(column);
     // The list holds the focus (one tab stop, its own keys); the column itself when it has none (an empty state).
-    (column === 'sessions' ? columns.sessions.querySelector<HTMLElement>('[role="listbox"]') ?? columns.sessions : columns[column]).focus();
+    (column === 'sessions' ? columns.sessions.querySelector<HTMLElement>('[role="listbox"]') ?? columns.sessions
+      : column === 'reader' ? (state.reader ? reader.root.querySelector<HTMLElement>('.reader-scroll') ?? columns.reader : columns.sessions)
+      : columns[column]).focus();
   }
 }
 
 function column(step: number): void {
-  const index = ORDER.indexOf(state.focus);
-  const next = ORDER[Math.max(0, Math.min(ORDER.length - 1, index + step))];
+  const order = ORDER.filter((one) => one !== 'reader' || state.reader);
+  const index = order.indexOf(state.focus);
+  const next = order[Math.max(0, Math.min(order.length - 1, index + step))];
   if (next === 'detail' && !state.selected) return;
   focusColumn(next);
 }
@@ -648,6 +725,30 @@ function showHelp(): void {
 }
 
 // --- start --------------------------------------------------------------------------------------
+
+const SIDEBAR_WIDTH = 'mukade.width.installations';
+let stopSidebarWidth: (() => void) | null = null;
+
+/** The sidebar is resized by Imago's separator; Mukade keeps the width (a saved "240px" reads as 240) and forgets it on a double click. */
+function mountSidebarWidth(): void {
+  const shell = $('app');
+  stopSidebarWidth?.();
+  let saved: number | undefined;
+  try { saved = storedWidth(SIDEBAR_WIDTH) ?? undefined; } catch { /* the token width stands */ }
+  if (saved !== undefined) shell.style.setProperty('--im-w-sidebar', `${saved}px`);
+  stopSidebarWidth = sidebarResize(shell, {
+    label: 'Resize the sidebar',
+    width: saved,
+    onChange: (width) => { try { localStorage.setItem(SIDEBAR_WIDTH, `${Math.round(width)}px`); } catch { /* the resize still applies */ } },
+  });
+  const handle = shell.querySelector<HTMLElement>('.im-sidebar-splitter')!;
+  handle.id = 'resize-installations';
+  handle.title = 'Drag or use arrow keys to resize · double-click to reset';
+  handle.addEventListener('dblclick', () => {
+    try { localStorage.removeItem(SIDEBAR_WIDTH); } catch { /* the reset still applies */ }
+    mountSidebarWidth();
+  });
+}
 
 /** Where each command is available (keys.ts says which place a command is for). */
 const WHEN: Record<Place, () => boolean> = {
@@ -702,12 +803,13 @@ function drawCaps(): void {
 function wire(): void {
   const shell = $('app');
   roving(shell.querySelector<HTMLElement>('.im-tabs')!, { item: '[role="tab"]', orientation: 'horizontal', onSelect: tab => tab.click() });
-  narrowSessions.addEventListener('change', syncInspector);
+  // Escape in the detail: a drawer closes; the docked inspector stays and the focus goes back to the list. The detail's own
+  // handler runs before the inspector's, which closes on any Escape it finds unclaimed.
   columns.detail.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !event.isComposing && !hasModal() && !keyClaimed(event)) {
       event.preventDefault();
       claimKey(event);
-      back();
+      if (isDrawer()) closeDetail(); else focusColumn(state.reader ? 'reader' : 'sessions');
     }
   });
   columns.installations.addEventListener('focusin', event => {
@@ -716,6 +818,7 @@ function wire(): void {
   });
   columns.sessions.addEventListener('focusin', () => setFocus('sessions'));
   columns.detail.addEventListener('focusin', () => setFocus('detail'));
+  columns.reader.addEventListener('focusin', () => setFocus('reader'));
 
   const views = ['sessions', 'chat', 'harnesses'] as const;
   for (const spec of COMMANDS) registry.register({ id: spec.id, title: spec.title, keys: spec.keys, when: WHEN[spec.view], run: runnerOf(spec.id) });
@@ -732,7 +835,7 @@ function wire(): void {
   $('views-menu').addEventListener('click', () => {
     if (!hasModal()) openMenu($('views-menu'), views.map(view => ({ label: registry.get(view)!.title, checked: () => state.view === view, run: () => { switchView(view); closeLayers(['menu']); } })));
   });
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => run(tab.dataset.view!));
+  for (const tab of document.querySelectorAll<HTMLElement>('.im-tab[data-id]')) tab.addEventListener('click', () => run(tab.dataset.id!));
   for (const [buttonId, commandId] of [['scan', 'scan'], ['import', 'import'], ['reload', 'reload'], ['search-everything', 'search-everything']]) {
     $(buttonId).addEventListener('click', () => run(commandId));
   }
@@ -749,8 +852,9 @@ function wire(): void {
   search.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); focusColumn('sessions'); } });
   columns.sessions.addEventListener('mousedown', () => setFocus('sessions'), { capture: true });
   columns.detail.addEventListener('mousedown', () => { if (state.selected) setFocus('detail'); });
-  mountColumnSplitters(shell);
-  for (const back of document.querySelectorAll<HTMLElement>('[data-back]')) back.addEventListener('click', () => { if (state.reader) closeReader(); else focusColumn('sessions'); });
+  mountSidebarWidth();
+  // The layout follows the window: the inspector turns into a drawer under 1000, and the reader then replaces the list.
+  new ResizeObserver(() => { syncInspector(); layoutSessions(); }).observe(shell);
   // A document dropped on the window opens the import dialog with it.
   onFilesDropped((paths) => {
     if (modalOpen()) return;

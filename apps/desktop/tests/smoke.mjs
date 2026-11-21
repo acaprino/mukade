@@ -52,16 +52,41 @@ try {
       const sidebar = page.locator('.im-sidebar-toggle');
       const mainBounds = await page.locator('.im-work').boundingBox();
       await sidebar.click();
-      await expect(page, '#session-sidebar', 'narrow sidebar drawer');
+      await expect(page, '#sidebar', 'narrow sidebar drawer');
       assert.deepEqual(await page.locator('.im-work').boundingBox(), mainBounds, 'the drawer overlays the content');
       await page.keyboard.press('Escape');
       if (await sidebar.getAttribute('aria-expanded') !== 'false') failures.push('narrow sidebar did not close');
       await page.locator('#sessions .row').first().click();
       await expect(page, '#detail h3', 'narrow inspector');
-      await page.getByRole('button', { name: 'Back one column' }).click();
-      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close');
+      // At 520 the detail is a drawer: the close button of its header closes it, and so does Escape.
+      await page.getByRole('button', { name: 'Close details' }).click();
+      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close with its button');
+      await page.locator('#sessions .row').first().click();
+      await expect(page, '#detail h3', 'narrow inspector again');
+      await page.keyboard.press('Escape');
+      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close with Escape');
+      // At 520 Enter opens the reader in place of the list, and Escape goes back to it.
+      await page.getByRole('listbox', { name: 'Sessions' }).focus();
+      await page.keyboard.press('Enter');
+      await page.locator('#reader .entry').first().waitFor();
+      if (await page.locator('#sessions').isVisible()) failures.push('narrow: the list stayed beside the reader');
+      await page.keyboard.press('Escape');
+      await page.locator('#sessions .row').first().waitFor();
+      if (await page.locator('#reader').isVisible()) failures.push('narrow: the reader stayed after Escape');
       await page.setViewportSize({ width: 1440, height: 900 });
     }
+    // The frame is the package's: the skip link first, one content region and one inspector, the mark, the version in the status row.
+    const frameFacts = await page.evaluate(() => ({
+      skip: document.getElementById('app').firstElementChild.className,
+      mains: document.querySelectorAll('.im-columns > main.im-content').length,
+      inspectors: document.querySelectorAll('.im-inspector').length,
+      mark: document.querySelector('.im-mark')?.textContent,
+      word: document.querySelector('.im-wordmark')?.textContent,
+      version: Boolean(document.querySelector('.im-status-end #version')),
+      windowButtons: document.querySelectorAll('.im-window-buttons').length,
+    }));
+    if (frameFacts.skip !== 'im-shell-skip-link' || frameFacts.mains !== 1 || frameFacts.inspectors !== 1 || frameFacts.mark !== 'M' || frameFacts.word !== 'Mukade'
+      || !frameFacts.version || frameFacts.windowButtons !== 0) failures.push(`${name}: the frame is not the canonical one ${JSON.stringify(frameFacts)}`);
     await page.getByRole('listbox', { name: 'Sessions' }).focus();
     // The list answers its own keys: End and Home move the selection, with the focus kept in the list.
     await page.keyboard.press('End');
@@ -69,11 +94,16 @@ try {
     await page.keyboard.press('Home');
     await page.waitForFunction(() => document.querySelector('#sessions [role="option"]')?.getAttribute('aria-selected') === 'true');
     await page.screenshot({ path: `${out}sessions-${name}.png` });
+    // Docked at 1440: Enter opens the reader beside the list, with the detail still docked; Escape goes back, the same session selected.
+    const selectedBefore = await page.locator('#sessions [role="option"][aria-selected="true"]').getAttribute('data-id');
     await page.keyboard.press('Enter');
-    await page.locator('.entry').first().waitFor();
+    await page.locator('#reader .entry').first().waitFor();
     await page.waitForTimeout(300);
+    if (!(await page.locator('#sessions').isVisible()) || !(await page.locator('#detail h3').isVisible())) failures.push(`${name}: the list or the detail is gone while reading`);
     await page.screenshot({ path: `${out}reader-${name}.png` });
     await page.keyboard.press('Escape');
+    if (await page.locator('#reader').isVisible()) failures.push(`${name}: Escape did not close the reader`);
+    if (await page.locator('#sessions [role="option"][aria-selected="true"]').getAttribute('data-id') !== selectedBefore) failures.push(`${name}: the selected session changed`);
     // Enter on Cancel cancels: it never starts the hop (a write).
     await page.keyboard.press('h');
     await page.locator('.im-form-dialog .plan').waitFor();

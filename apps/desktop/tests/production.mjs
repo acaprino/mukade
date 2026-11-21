@@ -60,6 +60,10 @@ export async function checkProduction(browser) {
     assert.equal(await page.locator('#hop-model').evaluate(el => el === document.activeElement), true);
     assert.equal(await page.evaluate(() => window.testIpc.hops), 0);
     await page.keyboard.press('Escape');
+    // The reader beside the list: the list's separator (kept under mukade.width.sessions) exists only while it is open.
+    await page.locator('#detail').getByRole('button', { name: /Open transcript/ }).click();
+    await page.locator('#reader .entry').first().waitFor();
+    assert.equal(await page.locator('[role="separator"]').count(), 2, 'one separator for the sidebar and one for the list');
     for (const name of ['installations', 'sessions']) {
       const divider = page.locator('#resize-' + name);
       await page.waitForFunction(id => {

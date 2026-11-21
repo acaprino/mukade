@@ -47,11 +47,13 @@ export function renderSessions(root: HTMLElement, actions: SessionsActions): voi
   const installation = currentInstallation();
   const places = visiblePlaces();
   const folder = state.folder === null ? 'All folders' : state.folder || 'Unknown folder';
-  const head = h('div', { class: 'column-head im-panel-header' },
-    h('h2', {}, 'Sessions'), h('small', { title: folder }, folder), h('span', { class: 'spring' }),
+  // The header, the tools (the filter) and the body are the frame's and live as long as the window: what is typed in the
+  // filter keeps its caret across a repaint.
+  const head = root.querySelector<HTMLElement>(':scope > .im-panel-header')!;
+  const body = root.querySelector<HTMLElement>(':scope > .im-panel-body')!;
+  fill(head, h('h4', { class: 'im-panel-title' }, 'Sessions'), h('small', { title: folder }, folder), h('span', { class: 'im-spacer' }),
     h('small', {}, state.query.trim() ? `${places.length} match` : String(places.length)));
-  const body = h('div', { class: 'column-body im-panel-body' });
-  fill(root, head, body);
+  fill(body);
   if (!installation) {
     if (state.inventoryRead.kind === 'error') setPanelState(root, { kind: 'error', text: state.inventoryRead.message, retry: { label: 'Reload stores', run: actions.reload } });
     else if (state.inventoryRead.kind === 'loading') setPanelState(root, { kind: 'loading', rows: 4 });

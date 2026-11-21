@@ -13,8 +13,6 @@ export function paintWindow(look: Look, theme: ThemeChoice): void {
 export function initializeWindow(reportError: (error: unknown) => void): void {
   if (!inTauri) return;
   const bar = document.querySelector<HTMLElement>('.im-titlebar')!;
-  for (const child of bar.querySelectorAll('.im-brand *')) child.setAttribute('data-tauri-drag-region', '');
-  for (const button of bar.querySelectorAll<HTMLButtonElement>('[data-im-window]')) button.disabled = false;
   mountWindowControls(bar, tauriWindowApi((_what, error) => reportError(error)), { onError: (_action, error) => reportError(error) });
   mountZoom(document, { apply: level => getCurrentWebview().setZoom(level), storageKey: 'mukade.zoom' });
   if (!import.meta.env.DEV) guardDesktop(document);

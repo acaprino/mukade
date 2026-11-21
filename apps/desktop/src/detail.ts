@@ -2,6 +2,7 @@
 // reader takes this column over when it opens (reader.ts).
 
 import './detail.css';
+import { iconHtml } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { button, fill, h, icon, caps } from './dom.ts';
 import { canStartIn } from './handoff.ts';
@@ -12,6 +13,7 @@ import type { SessionRow, Work } from './types.ts';
 import { isHosted, renderWork, workCache } from './work.ts';
 
 export interface DetailActions {
+  close(): void;
   open(): void;
   hop(): void;
   exportTo(saveAs: boolean): void;
@@ -82,11 +84,19 @@ function loadWork(key: string, row: SessionRow): void {
   }, WORK_DELAY);
 }
 
+/** The close control of the inspector: the package writes none, the content carries it. */
+function closeButton(actions: DetailActions): HTMLButtonElement {
+  const close = h('button', { type: 'button', class: 'im-icon-btn', 'aria-label': 'Close details', title: 'Close details' });
+  close.innerHTML = iconHtml('close');
+  close.addEventListener('click', () => actions.close());
+  return close;
+}
+
 export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const installation = currentInstallation();
   const row = selectedRow();
   const head = h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Session'), row ? h('small', { title: row.id }, row.id.slice(0, 8)) : null, h('span', { class: 'spring' }),
-    row?.live ? h('span', { class: 'tag im-chip live' }, 'live') : null);
+    row?.live ? h('span', { class: 'tag im-chip live' }, 'live') : null, closeButton(actions));
   if (!installation || !row) {
     const empty = h('div', { class: 'empty im-empty' });
     if (installation?.error) empty.append(h('h2', {}, installation.label), h('p', { class: 'note err' }, installation.error));

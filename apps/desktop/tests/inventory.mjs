@@ -92,7 +92,7 @@ export async function checkInventory(browser, url) {
     await failure.getByRole('button', { name: 'Retry' }).click();
     await selectedSession.filter({ hasText: 'Beta first' }).waitFor();
     await page.locator('#detail').getByRole('button', { name: /Open transcript/ }).click();
-    await page.locator('#detail .entry').first().waitFor();
+    await page.locator('#reader .entry').first().waitFor();
     await page.evaluate(() => Object.assign(window.inventoryTest, { sessions: 'defer', resolve: null }));
     await page.keyboard.press('r');
     await page.waitForFunction(() => typeof window.inventoryTest.resolve === 'function');
@@ -100,7 +100,7 @@ export async function checkInventory(browser, url) {
     await page.keyboard.press('r');
     await page.locator('#sessions').getByText('No installations found.').waitFor();
     await page.evaluate(() => window.inventoryTest.resolve([{ id: 'stale', title: 'Old inventory' }]));
-    assert.equal(await page.locator('#sessions .row, #detail .entry, #detail h3').count(), 0);
+    assert.equal(await page.locator('#sessions .row, #reader .entry, #detail h3').count(), 0);
     assert.equal(await page.locator('#installation-count').innerText(), '0');
     assert.equal(await page.locator('#status-counts').innerText(), '0 installations · 0 sessions');
     await page.keyboard.press('Control+k');

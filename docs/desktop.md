@@ -61,7 +61,7 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 | Folders | All, every folder with its count, Unknown |
 | Sessions | the tree: subagents (`↳ agent Explore`) and forks under their parent, newest first; `live`, `archived`, `unreadable`, and `hosted` for a chat ChatGPT hosts (below); a parent folds with space or its caret; the search box filters by title, id or folder and keeps a matching parent's children |
 | Session | harness, id, kind, parent (`not listed`), children `3 (2 subagents, 1 fork)`, folder, updated, archived, live, path, store and engine for a scanned installation; the lineage; Open, Hop, Export, Save as…, Resume. A session with a folder also has [Work on disk](#work-on-disk-and-start-in), and Start in… when it cannot be read |
-| Reader | the conversation in native order, opening at its end: user, assistant, reasoning, tool calls (input past 240 characters behind Show all), results, compactions; the last N turns or all; the Raw tab shows one entry's native records. Only the entries in sight are drawn. A live session is read again when its file changes (looked at every 3 s); the reader follows the end only when it was there |
+| Reader | beside the sessions list, the conversation in native order, opening at its end: user, assistant, reasoning, tool calls (input past 240 characters behind Show all), results, compactions; the last N turns or all; the Raw tab shows one entry's native records. Only the entries in sight are drawn. A live session is read again when its file changes (looked at every 3 s); the reader follows the end only when it was there |
 | Hop | destination, compaction (none, portable, summary with its intent, model and turns kept whole, native with the destination model's context window), subagents carry or leave, all branches (where the source keeps them), reasoning, destination shell (default: the destination's own), prompt, and under More options the destination's model and provider, unfinished turns keep or drop, and without tools; the plan before anything is written |
 | Receipt | new id, location, manifest path (saved under `mukade-data/manifests/`), interactive and headless resume with Copy, subagents written and whether each is linked, losses, the destination's reply; Show in sessions, Resume in terminal |
 | Import | a document (typed or chosen), the installation, an optional prompt; ends in the receipt |
@@ -201,10 +201,13 @@ guard refuses: `r` reads the stores again); `←` `→` between columns (`F6`, `
 
 ## Where it differs from the specification
 
-- Installations and Folders share the first column (the spec draws four); the reader hides it to
-  take the room. Widths are dragged and kept per machine; a double-click resets one.
-- `tab` keeps moving the focus between controls, as every window does, instead of between columns
-  (`←` `→` do that): taking it away leaves the buttons out of reach without a mouse.
+- The window is Imago's one frame (`src/frame.ts` writes it): title bar with the mark and the view tabs, status row (last result, summary,
+  the version at its end), sidebar (Installations and Folders share it), content, inspector, action bar, footer. The Sessions view holds the
+  list and, while a transcript is open, the reader beside it (`splitView`); the inspector docked from 1000 up holds the selected session's
+  detail. Under 1000 the inspector is a drawer (its header has Close details, and Escape closes it) and the reader takes the list's place
+  until Escape. Widths are dragged and kept per machine (`mukade.width.installations`, `mukade.width.sessions`); a double-click on a
+  separator forgets its width. In the docked inspector Escape moves the focus back to the list or the reader and does not close it.
+- `tab` keeps moving the focus between controls, as every window does; `F6` and `shift+F6` move between the regions.
 - The plan in the hop dialog is drawn from the chosen options; the library has no dry run that
   states what a write would lose, so the losses are the receipt's.
 - `folders` is computed in the window from the listing rather than by a command of its own.
