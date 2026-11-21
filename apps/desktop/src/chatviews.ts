@@ -2,6 +2,7 @@
 // with one event selected in all three. Built with the DOM, never with innerHTML: a message's
 // text is always text.
 
+import { roving } from '@acaprino/imago/ui';
 import { button, chip, h, icon, iconButton } from './dom.ts';
 import { shortTime } from './tree.ts';
 import {
@@ -282,7 +283,7 @@ export function graphView(ctx: RoomContext, options: GraphOptions): SVGElement {
     const state = left ? 'left' : member.member_id === ctx.mine ? 'you' : '';
     const plate = svg('g', {
       class: ['node', left ? 'left' : '', dim ? 'dim' : '', options.open === member.member_id ? 'sel' : '', member.member_id === ctx.mine ? 'mine' : ''].filter(Boolean).join(' '),
-      transform: `translate(${place.x.toFixed(1)} ${place.y.toFixed(1)})`, tabindex: 0, role: 'button',
+      transform: `translate(${place.x.toFixed(1)} ${place.y.toFixed(1)})`, tabindex: 0, role: 'button', 'aria-pressed': String(options.open === member.member_id),
       'aria-label': [member.name, member.role, member.harness, state].filter(Boolean).join(', '),
     },
     svg('rect', { class: 'plate', x: -HALF.width, y: -HALF.height, width: HALF.width * 2, height: HALF.height * 2 }),
@@ -295,6 +296,8 @@ export function graphView(ctx: RoomContext, options: GraphOptions): SVGElement {
     plate.addEventListener('keydown', (key) => { if ((key as KeyboardEvent).key === 'Enter' || (key as KeyboardEvent).key === ' ') { key.preventDefault(); options.pickMember(member.member_id); } });
     root.append(plate);
   }
+  // The nodes are one tab stop, with the arrows between them.
+  roving(root as unknown as HTMLElement, { item: '.node', orientation: 'horizontal' });
   return root;
 }
 

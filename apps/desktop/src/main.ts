@@ -294,11 +294,6 @@ function closeDetail(): void {
 
 function drawFocus(): void {
   syncInspector();
-  const focused: Record<Column, HTMLElement> = { installations: columns.installations, folders: columns.installations, sessions: columns.sessions, reader: columns.reader, detail: columns.detail };
-  for (const column of Object.values(columns)) column.classList.toggle('focused', column === focused[state.focus]);
-  for (const pane of columns.installations.querySelectorAll<HTMLElement>('[data-pane]')) {
-    pane.classList.toggle('focused', pane.dataset.pane === state.focus);
-  }
 }
 
 function drawAll(): void {

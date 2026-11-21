@@ -561,7 +561,7 @@ export class ChatView {
     else if (!shown.length) body = emptyState('', 'Nothing in this room matches the filter.', button('Clear the filter', { onclick: () => this.clearFilter() }));
     else body = this.view === 'lanes' ? lanesView(ctx, shown) : feedView(ctx, shown);
     if (this.view !== 'graph' || !current || !this.events.length) this.graphHost = null;
-    return h('section', { class: `column im-panel stage${this.focus === 'messages' ? ' focused' : ''}`, id: 'chat-messages', 'aria-label': current ? `Room ${current.name}` : 'Room' },
+    return h('section', { class: 'column im-panel stage', id: 'chat-messages', 'aria-label': current ? `Room ${current.name}` : 'Room' },
       head, current ? tools : null, h('div', { class: 'stage-body' }, body), current ? this.composerBlock(current) : null);
   }
 

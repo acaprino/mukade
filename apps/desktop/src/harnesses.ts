@@ -66,7 +66,7 @@ export class HarnessesView {
     if (!this.root.isConnected || this.root.hidden) return;
     const installations = this.hooks.installations();
     const found = installations.filter((item) => item.scanned).length;
-    const head = h('div', { class: 'harness-bar' },
+    const head = h('div', { class: 'harness-bar im-content-toolbar' },
       h('h2', {}, 'Harnesses'),
       h('span', { class: 'muted' }, this.inventory
         ? `${this.inventory.filter((one) => one.status !== 'missing').length} of ${this.inventory.length} found · ${found} more installation${found === 1 ? '' : 's'}`
@@ -104,7 +104,7 @@ export class HarnessesView {
     const others = installations.filter((item) => item.harness === harness.id && item.scanned);
     const sandboxes = this.sandboxes.filter((one) => one.harness === harness.id);
     const installing = this.installing.has(harness.id);
-    return h('article', { class: `harness-card st-${harness.status}` },
+    return h('section', { class: 'im-surface harness-card', 'data-im-surface': 'sheet' },
       h('header', {},
         mark(harness.id),
         h('h3', {}, harness.display),

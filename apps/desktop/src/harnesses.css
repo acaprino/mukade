@@ -5,14 +5,10 @@
 .scan-progress { font: var(--im-fs-meta) var(--im-font-code); color: var(--im-accent-hi); max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .harness-body { display: flex; flex-direction: column; gap: var(--im-s-2); padding-bottom: var(--im-s-2); }
 .harness-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--im-s-2); }
-.harness-card { display: flex; flex-direction: column; gap: var(--im-s-2); padding: var(--im-s-3) var(--im-s-3); border: 1px solid var(--im-line); border-top-width: 2px; background: var(--im-sheet); min-width: 0; }
-.harness-card.st-installed, .harness-card.st-configured { border-top-color: var(--im-ok); }
-.harness-card.st-missing { border-top-color: var(--im-line-strong); }
+.harness-card { display: flex; flex-direction: column; gap: var(--im-s-2); padding: var(--im-s-3) var(--im-s-3); min-width: 0; }
 .harness-card header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-2); }
 .harness-card header .glyph { width: 20px; height: 20px; }
 .harness-card h3 { margin: 0; font: 500 var(--im-fs-title) var(--im-font-head); letter-spacing: var(--im-track); }
-.harness-card dl.kv { grid-template-columns: 76px minmax(0, 1fr); }
-.harness-card dd.mono { font: var(--im-fs-meta) var(--im-font-code); overflow-wrap: anywhere; }
 .harness-more { display: flex; flex-direction: column; border-top: 1px solid var(--im-line); }
 .harness-more .label { padding-left: 0; }
 .install-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1) var(--im-s-2); padding: var(--im-s-1) 0; border-bottom: 1px solid var(--im-line); }
@@ -24,8 +20,3 @@
 .harness-folders ul.plain { list-style: none; margin: 0; padding: 0 0 var(--im-s-1); }
 .harness-folders li { display: flex; align-items: center; gap: var(--im-s-2); padding: var(--im-s-1) var(--im-s-3); }
 .harness-folders li .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--im-fs-meta); }
-:root[data-im-look="smooth"] {
-  & .harness-card { border-top-width: 1px; border-radius: var(--im-r-sheet); background: var(--im-sheet); }
-  & .harness-card.st-installed, & .harness-card.st-configured { border-color: color-mix(in srgb, var(--im-ok) 40%, var(--im-line)); }
-  & .harness-bar h2 { font-weight: 600; }
-}
