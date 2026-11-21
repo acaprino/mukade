@@ -40,6 +40,7 @@ pub mod summary;
 pub mod timing;
 pub mod tools;
 pub mod wire;
+pub mod work;
 pub mod writer;
 
 pub use hop::{HopError, HopRequest, Receipt, export, hop, hop_into, import, import_document};
