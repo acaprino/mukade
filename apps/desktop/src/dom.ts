@@ -1,7 +1,7 @@
 // A small element builder: the views build their DOM with it, never with innerHTML, so text from a
 // session is always text.
 
-import { chipHtml, componentElement, keyCaps, noteHtml, segmentedControl, type ChipTone, type Tone } from '@acaprino/imago/ui';
+import { chipHtml, componentElement, emptyStateHtml, keyCaps, noteHtml, roving, segmentedControl, type ChipTone, type Tone } from '@acaprino/imago/ui';
 
 type Child = Node | string | number | null | undefined | false;
 type Attrs = Record<string, string | number | boolean | null | undefined | EventListener>;
@@ -169,3 +169,18 @@ export function iconButton(label: string, glyph: string, attrs: Attrs = {}): HTM
   const node = h('button', { type: 'button', class: 'im-icon-btn', 'aria-label': label, title: label, ...attrs }, icon(glyph));
   return node;
 }
+
+/** The empty layer of a panel (what setPanelState draws), with the app's own actions and notes after its text. */
+export function emptyState(title: string, description: string, ...extras: Child[]): HTMLElement {
+  const element = componentElement<HTMLElement>(emptyStateHtml(title, description));
+  append(element, extras);
+  return element;
+}
+
+/** A list of rows that is one tab stop, with the arrows inside. */
+export function rovingList(list: HTMLElement): HTMLElement {
+  list.setAttribute('role', 'group');
+  roving(list, { item: '.im-row', orientation: 'vertical' });
+  return list;
+}
+

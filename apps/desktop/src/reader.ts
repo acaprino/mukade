@@ -4,7 +4,7 @@
 
 import './reader.css';
 import { claimKey, setPanelState } from '@acaprino/imago/ui';
-import { button, caps, choice, fill, h, viewSwitch } from './dom.ts';
+import { button, caps, choice, emptyState, fill, h, viewSwitch } from './dom.ts';
 import type { Block, EntryView, Transcript } from './types.ts';
 
 /** Tool input shown before "Show all" (spec F5). */
@@ -151,7 +151,7 @@ export class Reader {
     this.first = first;
     this.content.style.transform = `translateY(${this.offsets[first]}px)`;
     fill(this.content, ...this.entries.slice(first, last).map((entry) => this.entryNode(entry)));
-    if (!this.entries.length) fill(this.content, h('div', { class: 'empty im-empty' }, h('p', {}, 'This session has no conversation entries.')));
+    if (!this.entries.length) fill(this.content, emptyState('', 'This session has no conversation entries.'));
   }
 
   /** Put the drawn entries' real heights in place of the guesses. */

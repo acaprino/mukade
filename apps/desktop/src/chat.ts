@@ -8,7 +8,7 @@
 import './chat.css';
 import { api, errorKind, errorText } from './api.ts';
 import { claimKey, iconHtml, keyClaimed } from '@acaprino/imago/ui';
-import { button, caps, chip, choice as pickChoice, commandLine, field, fill, group, h, icon, inlineNote, toggle, viewSwitch } from './dom.ts';
+import { button, caps, chip, emptyState, choice as pickChoice, commandLine, field, fill, group, h, icon, inlineNote, rovingList, toggle, viewSwitch } from './dom.ts';
 import { listbox, reveal, stepIn } from './lists.ts';
 import { confirmModal, openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
@@ -482,8 +482,8 @@ export class ChatView {
 
   private drawOff(bar: HTMLElement): void {
     const status = this.status;
-    fill(this.root, bar, h('div', { class: 'column chat-off' }, h('div', { class: 'empty im-empty' },
-      h('h2', {}, status ? (status.state === 'stopped' ? 'The chat service is not running' : 'The chat service does not answer') : 'Looking for the chat service…'),
+    fill(this.root, bar, h('div', { class: 'column chat-off' }, emptyState(
+      status ? (status.state === 'stopped' ? 'The chat service is not running' : 'The chat service does not answer') : 'Looking for the chat service…', '',
       status ? h('p', {}, 'Start it here, or in a terminal with ', h('code', {}, 'mukade chat start'), '.') : null,
       status?.message ? inlineNote(status.message) : null,
       status?.state === 'stopped'
@@ -512,7 +512,7 @@ export class ChatView {
     }));
     const body = rooms.length
       ? listbox('Rooms', rows, this.room, (id) => { this.focus = 'rooms'; this.pickRoom(id); })
-      : h('div', { class: 'empty im-empty' }, h('p', {}, this.rooms.length ? 'No room matches the filter.' : 'No rooms yet.'),
+      : emptyState('', this.rooms.length ? 'No room matches the filter.' : 'No rooms yet.',
         this.rooms.length
           ? button('Clear the filter', { onclick: () => { this.roomInput.value = ''; this.draw(); } })
           : button([icon('plus'), 'New room'], { onclick: () => this.newRoomDialog() }));
@@ -553,12 +553,12 @@ export class ChatView {
         : null,
       filtered ? button('Clear', { class: 'ghost', onclick: () => this.clearFilter() }) : null);
     let body: HTMLElement;
-    if (!current) body = h('div', { class: 'empty im-empty' }, h('p', {}, 'Pick a room, or open a new one.'));
+    if (!current) body = emptyState('', 'Pick a room, or open a new one.');
     else if (!this.events.length) {
-      body = h('div', { class: 'empty im-empty' }, h('p', {}, this.text ? 'No message matches the filter.' : 'No events yet.'),
+      body = emptyState('', this.text ? 'No message matches the filter.' : 'No events yet.',
         this.text ? button('Clear the filter', { onclick: () => this.clearFilter() }) : null);
     } else if (this.view === 'graph') body = this.graphBody(ctx);
-    else if (!shown.length) body = h('div', { class: 'empty im-empty' }, h('p', {}, 'Nothing in this room matches the filter.'), button('Clear the filter', { onclick: () => this.clearFilter() }));
+    else if (!shown.length) body = emptyState('', 'Nothing in this room matches the filter.', button('Clear the filter', { onclick: () => this.clearFilter() }));
     else body = this.view === 'lanes' ? lanesView(ctx, shown) : feedView(ctx, shown);
     if (this.view !== 'graph' || !current || !this.events.length) this.graphHost = null;
     return h('section', { class: `column im-panel stage${this.focus === 'messages' ? ' focused' : ''}`, id: 'chat-messages', 'aria-label': current ? `Room ${current.name}` : 'Room' },
@@ -621,15 +621,16 @@ export class ChatView {
       h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Members'), h('small', {}, String(this.members.length)), h('span', { class: 'spring' }), close),
       h('div', { class: 'column-body im-panel-body' },
         this.members.length
-          ? h('div', { class: 'members' }, ...this.members.map((member) => this.memberRow(member, mine?.member_id === member.member_id)))
+          ? rovingList(h('div', { class: 'members' }, ...this.members.map((member) => this.memberRow(member, mine?.member_id === member.member_id))))
           : h('p', { class: 'hint muted pad-x' }, current ? 'Nobody joined yet.' : ''),
         h('p', { class: 'label' }, `Instructions · ${owed.length}`),
         owed.length
-          ? h('div', { class: 'instructions' }, ...owed.map((one) => button([
-            h('span', { class: `state st-${one.state}` }, one.state),
-            h('span', { class: 'grow' }, h('b', {}, one.worker.name), ' ', String(one.event.payload.text ?? '')),
-            h('span', { class: 'num im-num' }, `#${one.event.event_id}`),
-          ], { class: 'instruction', title: 'Show the instruction', onclick: () => { this.stopPlay(); this.select(one.event.event_id); } })))
+          ? rovingList(h('div', { class: 'instructions' }, ...owed.map((one) => h('button', {
+            type: 'button', class: 'im-row', title: 'Show the instruction', onclick: () => { this.stopPlay(); this.select(one.event.event_id); },
+          },
+          h('span', { class: `state st-${one.state}` }, one.state),
+          h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title' }, h('b', {}, one.worker.name), ' ', String(one.event.payload.text ?? ''))),
+          h('span', { class: 'im-row-meta' }, `#${one.event.event_id}`)))))
           : h('p', { class: 'hint muted pad-x' }, 'A lead’s message to a worker shows here, with what the worker signalled.')),
     ];
   }
@@ -637,13 +638,12 @@ export class ChatView {
   private memberRow(member: Member, mine: boolean): HTMLElement {
     const open = this.openMember === member.member_id;
     const state = member.left_at ? 'left' : member.last_command_at ? `last command ${shortTime(member.last_command_at)}` : 'joined';
-    const row = button([
+    const row = h('button', { type: 'button', class: 'im-row member-row', 'aria-expanded': String(open), onclick: () => this.toggleMember(member.member_id) },
       mark(member.harness),
-      h('span', { class: 'grow' }, h('span', { class: 'member-name' }, member.name),
-        mine ? chip('you') : null, member.host && !mine ? chip('user') : null),
+      h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title' }, h('span', { class: 'member-name' }, member.name),
+        mine ? chip('you') : null, member.host && !mine ? chip('user') : null)),
       h('span', { class: 'role' }, member.role),
-      h('span', { class: `state${member.left_at ? ' left' : ''}` }, state),
-    ], { class: `member-row${open ? ' open' : ''}`, 'aria-expanded': String(open), onclick: () => this.toggleMember(member.member_id) });
+      h('span', { class: `im-row-meta state${member.left_at ? ' left' : ''}` }, state));
     if (!open) return h('div', { class: `member${member.left_at ? ' left' : ''}` }, row);
     const session = member.session;
     return h('div', { class: `member open${member.left_at ? ' left' : ''}` }, row,

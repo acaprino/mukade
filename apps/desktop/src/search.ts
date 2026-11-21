@@ -52,10 +52,10 @@ export function openSearch(hooks: SearchHooks): void {
     let group = '';
     results.forEach((result, i) => {
       if (result.group !== group) { group = result.group; list.append(h('p', { class: 'label' }, group)); }
-      const row = button([h('span', { class: 'grow' }, ...result.label), h('span', { class: 'num im-num' }, result.detail)], {
-        class: 'search-row', role: 'option', 'aria-selected': String(i === active), id: `sr-${i}`,
+      const row = h('div', {
+        class: 'im-row search-row', role: 'option', 'aria-selected': String(i === active), id: `sr-${i}`,
         onclick: () => { modal.close(); result.open(); },
-      });
+      }, h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title' }, ...result.label)), h('span', { class: 'im-row-meta' }, result.detail));
       list.append(row);
     });
     if (results.length) list.setAttribute('aria-activedescendant', `sr-${active}`);

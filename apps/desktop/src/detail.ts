@@ -4,7 +4,7 @@
 import './detail.css';
 import { iconHtml, loader } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
-import { button, caps, chip, facts, fill, h, icon, inlineNote } from './dom.ts';
+import { button, caps, chip, emptyState, facts, fill, h, icon, inlineNote, rovingList } from './dom.ts';
 import { canStartIn } from './handoff.ts';
 import { currentInstallation, selectedRow, state } from './state.ts';
 import { ancestors, childrenText, kindText, mark } from './tree.ts';
@@ -33,12 +33,11 @@ function kv(pairs: [string, Node | string | null | undefined][]): HTMLElement {
 
 function lineageRow(row: SessionRow, depth: number, current: boolean, actions: DetailActions): HTMLElement {
   const marker = mark(row);
-  const node = button([
+  const node = h('button', { type: 'button', class: 'im-row mk-depth', title: row.id, 'aria-current': current ? 'true' : null },
     marker?.kind === 'fork' ? h('span', { class: 'fork' }, icon('fork'), 'fork') : marker ? h('span', { class: marker.kind }, marker.text) : null,
-    h('span', { class: 'grow' }, row.title ?? row.id),
-    current ? h('span', { class: 'num im-num' }, 'this session') : null,
-  ], { class: `lineage-row${current ? ' current' : ''}`, title: row.id });
-  node.style.paddingLeft = `${10 + depth * 18}px`;
+    h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title' }, row.title ?? row.id)),
+    current ? h('span', { class: 'im-row-meta' }, 'this session') : null);
+  node.style.setProperty('--mk-depth', String(depth));
   if (!current) node.addEventListener('click', () => actions.pick(row.id));
   return node;
 }
@@ -98,9 +97,9 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const head = h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Session'), row ? h('small', { title: row.id }, row.id.slice(0, 8)) : null, h('span', { class: 'spring' }),
     row?.live ? chip('live', 'ok') : null, closeButton(actions));
   if (!installation || !row) {
-    const empty = h('div', { class: 'empty im-empty' });
-    if (installation?.error) empty.append(h('h2', {}, installation.label), inlineNote(installation.error, 'err'));
-    else empty.append(h('p', {}, 'Pick a session to see its details.'));
+    const empty = installation?.error
+      ? emptyState(installation.label, '', inlineNote(installation.error, 'err'))
+      : emptyState('', 'Pick a session to see its details.');
     if (installation?.scanned) empty.append(kv([['store', installation.store], ['engine', installation.engine]]));
     fill(root, head, h('div', { class: 'column-body im-panel-body' }, empty));
     return;
@@ -133,10 +132,10 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const chain = ancestors(state.rows, row.id);
   const children = state.rows.filter((other) => other.parent === row.id && other.id !== row.id);
   const lineage = chain.length || children.length
-    ? h('div', { class: 'box lineage' }, h('p', { class: 'label' }, 'Lineage'),
+    ? rovingList(h('div', { class: 'box lineage' }, h('p', { class: 'label' }, 'Lineage'),
       ...chain.map((id, depth) => lineageRow(state.rows.find((other) => other.id === id)!, depth, false, actions)),
       lineageRow(row, chain.length, true, actions),
-      ...children.map((child) => lineageRow(child, chain.length + 1, false, actions)))
+      ...children.map((child) => lineageRow(child, chain.length + 1, false, actions))))
     : null;
 
   fill(root, head, h('div', { class: 'column-body im-panel-body' }, h('div', { class: 'pad' },
@@ -167,10 +166,9 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
 
 /** The rooms where a member is bound to the session: each opens the room at that member. */
 export function inRoomsBox(found: RoomMember[], open: (roomId: string, memberId: string) => void): HTMLElement {
-  return h('div', { class: 'box lineage in-rooms' }, h('p', { class: 'label' }, `In rooms · ${found.length}`),
-    ...found.map(({ room, member }) => button([
+  return rovingList(h('div', { class: 'box lineage in-rooms' }, h('p', { class: 'label' }, `In rooms · ${found.length}`),
+    ...found.map(({ room, member }) => h('button', { type: 'button', class: 'im-row', title: 'Show the room at this member', onclick: () => open(room.room_id, member.member_id) },
       icon('chat'),
-      h('span', { class: 'grow' }, room.name),
-      h('span', { class: 'num im-num' }, `${member.name} · ${member.role}${member.left_at ? ' · left' : ''}${room.closed_at ? ' · closed' : ''}`),
-    ], { class: 'lineage-row', title: 'Show the room at this member', onclick: () => open(room.room_id, member.member_id) })));
+      h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title' }, room.name)),
+      h('span', { class: 'im-row-meta' }, `${member.name} · ${member.role}${member.left_at ? ' · left' : ''}${room.closed_at ? ' · closed' : ''}`)))));
 }
