@@ -243,6 +243,14 @@ try {
       await page.waitForTimeout(300);
       if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: Escape did not close the members at 900`);
       await page.getByRole('tab', { name: /^Graph/ }).click();
+      // The graph's nodes are one tab stop and the arrows move between them.
+      await page.locator('.graph-canvas svg .node').first().waitFor();
+      const stops = await page.locator('.graph-canvas svg .node[tabindex="0"]').count();
+      if (stops !== 1) failures.push(`${name}: the graph has ${stops} tab stops, not one`);
+      await page.locator('.graph-canvas svg .node').first().focus();
+      await page.keyboard.press('ArrowRight');
+      const at = await page.evaluate(() => [...document.querySelectorAll('.graph-canvas svg .node')].indexOf(document.activeElement));
+      if (at !== 1) failures.push(`${name}: ArrowRight did not move to the second node of the graph (${at})`);
       await page.locator('.graph-canvas svg .node').first().click();
       await page.locator('#chat-members .member').first().waitFor();
       await page.keyboard.press('Escape');

@@ -2,7 +2,7 @@
 // with one event selected in all three. Built with the DOM, never with innerHTML: a message's
 // text is always text.
 
-import { roving } from '@acaprino/imago/ui';
+import { claimKey } from '@acaprino/imago/ui';
 import { button, chip, h, icon, iconButton } from './dom.ts';
 import { shortTime } from './tree.ts';
 import {
@@ -296,8 +296,27 @@ export function graphView(ctx: RoomContext, options: GraphOptions): SVGElement {
     plate.addEventListener('keydown', (key) => { if ((key as KeyboardEvent).key === 'Enter' || (key as KeyboardEvent).key === ' ') { key.preventDefault(); options.pickMember(member.member_id); } });
     root.append(plate);
   }
-  // The nodes are one tab stop, with the arrows between them.
-  roving(root as unknown as HTMLElement, { item: '.node', orientation: 'horizontal' });
+  // The nodes are one tab stop, with the arrows between them. `roving` serves HTML elements only (it ignores the key of an SVG
+  // target), so the graph does it itself, on the same rules: the arrows and Home and End stop at the first and the last node.
+  const nodes = [...root.querySelectorAll<SVGGElement>('.node')];
+  const stop = nodes.find((node) => node.getAttribute('aria-pressed') === 'true') ?? nodes[0];
+  for (const node of nodes) node.setAttribute('tabindex', node === stop ? '0' : '-1');
+  root.addEventListener('focusin', (event) => {
+    const node = (event.target as Element).closest('.node');
+    if (node) for (const one of nodes) one.setAttribute('tabindex', one === node ? '0' : '-1');
+  });
+  root.addEventListener('keydown', (event) => {
+    const key = (event as KeyboardEvent).key;
+    const from = nodes.indexOf((event.target as Element).closest('.node') as SVGGElement);
+    if (from < 0 || (event as KeyboardEvent).altKey || (event as KeyboardEvent).ctrlKey || (event as KeyboardEvent).metaKey) return;
+    const next = key === 'ArrowRight' || key === 'ArrowDown' ? Math.min(nodes.length - 1, from + 1)
+      : key === 'ArrowLeft' || key === 'ArrowUp' ? Math.max(0, from - 1)
+      : key === 'Home' ? 0 : key === 'End' ? nodes.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    claimKey(event);
+    nodes[next].focus();
+  });
   return root;
 }
 
