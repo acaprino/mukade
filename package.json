@@ -13,7 +13,7 @@
     "smoke": "node apps/desktop/tests/smoke.mjs"
   },
   "dependencies": {
-    "@acaprino/imago": "git+https://github.com/acaprino/imago.git#12da9f375dbcf84ce443f9b49449c9aa258f3e4b",
+    "@acaprino/imago": "git+https://github.com/acaprino/imago.git#v0.2.0",
     "@tauri-apps/api": "2.12.4"
   },
   "devDependencies": {
@@ -21,5 +21,29 @@
     "playwright": "1.63.0",
     "typescript": "7.0.2",
     "vite": "8.3.5"
+  },
+  "imago": {
+    "src": [
+      "apps/desktop/src",
+      "apps/desktop/index.html"
+    ],
+    "tests": [
+      "apps/desktop/tests"
+    ],
+    "cargo": "apps/desktop/src-tauri/Cargo.toml",
+    "agents": [
+      "AGENTS.md",
+      "CLAUDE.md"
+    ],
+    "entry": "apps/desktop/src/main.ts",
+    "app": "mukade",
+    "icons": {
+      "apps/desktop/src-tauri/icons/32x32.png": "32x32.png",
+      "apps/desktop/src-tauri/icons/128x128.png": "128x128.png",
+      "apps/desktop/src-tauri/icons/128x128@2x.png": "256x256.png",
+      "apps/desktop/src-tauri/icons/icon.png": "icon.png",
+      "apps/desktop/src-tauri/icons/icon.ico": "icon.ico",
+      "assets/windows/mukade.ico": "icon.ico"
+    }
   }
 }
