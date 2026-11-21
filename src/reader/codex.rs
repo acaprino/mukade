@@ -1401,6 +1401,23 @@ fn list_in(
         };
         listed.insert(thread.id, info);
     }
+    // The chats ChatGPT hosts for a project with a folder here: only their catalogue row is local.
+    // One already listed keeps its own row; the same chat under two accounts is listed once.
+    for chat in super::codex_hosted::hosted_chats(home) {
+        if only.is_some_and(|only| only != chat.id) || listed.contains_key(&chat.id) {
+            continue;
+        }
+        let info = SessionInfo {
+            id: chat.id.clone(),
+            title: chat.title,
+            cwd: Some(chat.folder.to_string_lossy().into_owned()),
+            updated: chat.updated,
+            path: chat.database.to_string_lossy().into_owned(),
+            unreadable: Some(super::codex_hosted::HOSTED.into()),
+            ..Default::default()
+        };
+        listed.insert(chat.id, info);
+    }
     let mut out: Vec<SessionInfo> = listed.into_values().collect();
     out.sort_by(|a, b| a.path.cmp(&b.path).then_with(|| a.id.cmp(&b.id)));
     Ok(out)
@@ -1534,7 +1551,30 @@ fn read_through_catalogue(id: &str, roots: &StoreRoots, sessions: &Path) -> Resu
         .filter(|thread| !id.is_empty() && thread.id.starts_with(id))
         .collect();
     match known.as_slice() {
-        [] => Err(not_found().into()),
+        [] => {
+            // Not a thread of the database either: it may be a chat ChatGPT hosts, whose
+            // conversation is not on this machine.
+            let mut hosted: Vec<String> = super::codex_hosted::hosted_chats(home)
+                .into_iter()
+                .map(|chat| chat.id)
+                .filter(|chat| !id.is_empty() && chat.starts_with(id))
+                .collect();
+            hosted.sort();
+            hosted.dedup();
+            match hosted.as_slice() {
+                [] => Err(not_found().into()),
+                [chat] => Err(super::Lookup::NotFound(format!(
+                    "Codex thread {chat} is {}",
+                    super::codex_hosted::HOSTED
+                ))
+                .into()),
+                many => Err(super::Lookup::Ambiguous(format!(
+                    "{id:?} matches {} Codex threads",
+                    many.len()
+                ))
+                .into()),
+            }
+        }
         [thread] => match thread.rollout.as_deref().filter(|file| file.is_file()) {
             Some(file) => Ok(file.to_path_buf()),
             None => Err(super::Lookup::NotFound(format!(

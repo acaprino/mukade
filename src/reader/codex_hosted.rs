@@ -517,6 +517,114 @@ mod tests {
         );
     }
 
+    fn roots_of(home: &Path) -> crate::roots::StoreRoots {
+        crate::roots::StoreRoots {
+            codex_home: Some(home.to_path_buf()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_codex_listing_holds_the_hosted_chat_as_unreadable() {
+        use crate::reader::Reader;
+        let scratch = crate::detect::tests::scratch("hosted");
+        let home = scratch.to_path_buf();
+        let folder = scratch.join("Daodan");
+        one_chat(&home, &folder);
+        let roots = roots_of(&home);
+
+        let listed = crate::reader::codex::Codex.list(&roots).unwrap();
+        let chat = listed.iter().find(|info| info.id == "t1").unwrap();
+        let folder = folder.to_string_lossy().into_owned();
+        assert_eq!(chat.cwd.as_deref(), Some(folder.as_str()));
+        assert_eq!(chat.title.as_deref(), Some("Capire lo stack di Daodan"));
+        assert_eq!(chat.unreadable.as_deref(), Some(HOSTED));
+        assert_eq!(
+            chat.path,
+            home.join("sqlite")
+                .join("codex.db")
+                .to_string_lossy()
+                .into_owned()
+        );
+        assert_eq!(
+            crate::reader::codex::Codex
+                .overview("t1", &roots)
+                .unwrap()
+                .id,
+            "t1"
+        );
+    }
+
+    #[test]
+    fn a_thread_codex_already_lists_is_not_added_twice() {
+        use crate::reader::Reader;
+        let scratch = crate::detect::tests::scratch("hosted");
+        let home = scratch.to_path_buf();
+        one_chat(&home, &scratch.join("Daodan"));
+        // The same chat again under a second ChatGPT account.
+        let catalogue = Connection::open(home.join("sqlite").join("codex.db")).unwrap();
+        catalogue
+            .execute(
+                "INSERT INTO local_thread_catalog_hosts VALUES ('chatgpt:acc:user-2', 'chatgpt')",
+                [],
+            )
+            .unwrap();
+        add_chat(
+            &catalogue,
+            "chatgpt:acc:user-2",
+            "t1",
+            "Same chat",
+            1795254700.0,
+            Some("g-p-abc"),
+            0,
+        );
+        drop(catalogue);
+        let roots = roots_of(&home);
+        let listed = crate::reader::codex::Codex.list(&roots).unwrap();
+        assert_eq!(
+            listed.iter().filter(|info| info.id == "t1").count(),
+            1,
+            "a chat under two accounts is listed once"
+        );
+
+        // A `threads` row of the same id, whose rollout is gone, is the one that is listed.
+        let state = Connection::open(home.join("state_5.sqlite")).unwrap();
+        state
+            .execute_batch(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, cwd TEXT, title TEXT, \
+                 updated_at INTEGER); \
+                 INSERT INTO threads VALUES ('t1', 'sessions/gone.jsonl', '/work', 'Local title', 1700000000);",
+            )
+            .unwrap();
+        drop(state);
+        let listed = crate::reader::codex::Codex.list(&roots).unwrap();
+        let chats: Vec<_> = listed.iter().filter(|info| info.id == "t1").collect();
+        assert_eq!(chats.len(), 1, "not added twice");
+        assert_eq!(chats[0].title.as_deref(), Some("Local title"));
+        let reason = chats[0].unreadable.as_deref().unwrap();
+        assert!(reason.starts_with("rollout file is gone"), "{reason}");
+    }
+
+    #[test]
+    fn reading_a_hosted_chat_is_refused_with_the_reason() {
+        use crate::reader::Reader;
+        let scratch = crate::detect::tests::scratch("hosted");
+        let home = scratch.to_path_buf();
+        one_chat(&home, &scratch.join("Daodan"));
+        let roots = roots_of(&home);
+
+        let error = crate::reader::codex::Codex.read("t1", &roots).unwrap_err();
+        assert!(format!("{error:#}").contains(HOSTED), "{error:#}");
+        let error = crate::reader::codex::Codex
+            .read_clipped("t1", &roots, 1024)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains(HOSTED), "{error:#}");
+        let error = crate::reader::codex::Codex
+            .read("nothing", &roots)
+            .unwrap_err();
+        assert!(!format!("{error:#}").contains(HOSTED), "{error:#}");
+    }
+
     #[test]
     fn reading_leaves_both_databases_byte_identical() {
         let scratch = crate::detect::tests::scratch("hosted");
