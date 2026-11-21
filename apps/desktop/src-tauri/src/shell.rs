@@ -4,7 +4,7 @@ use imago_shell::{
     clamp_to_screens, disable_browser_accelerators, drawn_by_page, glass_window_config,
     guard_navigation_with_scheme, install_reload_menu, install_snap_layouts, load_state,
     parse_theme, recovery_action, save_state, save_theme, saved_theme, state_to_save,
-    watch_process_failures,
+    trim_context_menu, watch_process_failures,
 };
 use std::sync::{
     Mutex,
@@ -312,6 +312,7 @@ fn configure_and_show(
     }
     if !tauri::is_dev() {
         disable_browser_accelerators(window)?;
+        trim_context_menu(window)?;
     }
     *window.state::<Desktop>().overlay.lock().unwrap() = Some(install_snap_layouts(window)?);
     let watched = window.clone();
