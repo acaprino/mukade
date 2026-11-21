@@ -2,17 +2,21 @@
 // reader takes this column over when it opens (reader.ts).
 
 import './detail.css';
+import { api, errorText } from './api.ts';
 import { button, fill, h, icon, kbd } from './dom.ts';
+import { canStartIn } from './handoff.ts';
 import { currentInstallation, selectedRow, state } from './state.ts';
 import { ancestors, childrenText, kindText, mark } from './tree.ts';
 import type { RoomMember } from './chatindex.ts';
-import type { SessionRow } from './types.ts';
+import type { SessionRow, Work } from './types.ts';
+import { isHosted, renderWork, workCache } from './work.ts';
 
 export interface DetailActions {
   open(): void;
   hop(): void;
   exportTo(saveAs: boolean): void;
   resume(): void;
+  startIn(): void;
   pick(id: string): void;
 }
 
@@ -37,6 +41,47 @@ function lineageRow(row: SessionRow, depth: number, current: boolean, actions: D
   return node;
 }
 
+type WorkRead = { token: number; key: string; id: string } & ({ kind: 'loading' } | { kind: 'ready'; work: Work } | { kind: 'error'; message: string });
+/** The work of the selected row: read once per selection, kept while the panel is drawn again. */
+let workRead: WorkRead | null = null;
+/** Where the section is on the page now: an answer draws into it only while it is still there. */
+let workHost: HTMLElement | null = null;
+let workToken = 0;
+const WORK_DELAY = 200;
+
+function drawWork(host: HTMLElement): void {
+  const read = workRead;
+  if (!read) return;
+  if (read.kind === 'loading') fill(host, h('p', { class: 'work-wait muted' }, 'Reading…'));
+  else if (read.kind === 'error') fill(host, h('p', { class: 'note' }, read.message));
+  else fill(host, renderWork(read.work));
+}
+
+function loadWork(key: string, row: SessionRow): void {
+  if (workRead && workRead.key === key && workRead.id === row.id) return;
+  const token = ++workToken;
+  const folder = row.cwd ?? '';
+  // A folder read a moment ago (by a session that shares it) is drawn at once, with no call.
+  const cached = workCache.get(folder, Date.now());
+  if (cached) {
+    workRead = { token, key, id: row.id, kind: 'ready', work: cached };
+    return;
+  }
+  workRead = { token, key, id: row.id, kind: 'loading' };
+  const settle = (next: { kind: 'ready'; work: Work } | { kind: 'error'; message: string }): void => {
+    // The selection moved on: this answer is for a row no longer shown.
+    if (workRead?.token !== token) return;
+    if (next.kind === 'ready') workCache.set(folder, next.work, Date.now());
+    workRead = { token, key, id: row.id, ...next };
+    if (workHost?.isConnected) drawWork(workHost);
+  };
+  // Moving through the list quickly asks for no repository it does not stop on.
+  setTimeout(() => {
+    if (workRead?.token !== token) return;
+    api.work(key, row.id).then((work) => settle({ kind: 'ready', work }), (error) => settle({ kind: 'error', message: errorText(error) }));
+  }, WORK_DELAY);
+}
+
 export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const installation = currentInstallation();
   const row = selectedRow();
@@ -53,12 +98,27 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const parentListed = row.parent !== undefined && state.rows.some((other) => other.id === row.parent);
   const unreadable = Boolean(row.unreadable);
   const actionsRow = h('div', { class: 'actions' },
-    button(['Open transcript ', kbd('⏎')], { class: 'primary', disabled: unreadable, onclick: () => actions.open() }),
+    // One primary action: for a session that cannot be read it is Start in….
+    button(['Open transcript ', kbd('⏎')], { class: unreadable ? '' : 'primary', disabled: unreadable, onclick: () => actions.open() }),
     button([icon('hop'), 'Hop ', kbd('h')], { disabled: unreadable, onclick: () => actions.hop() }),
     button([icon('export'), 'Export ', kbd('e')], { disabled: unreadable, onclick: () => actions.exportTo(false) }),
     button('Save as…', { disabled: unreadable, title: 'Export to a file you choose', onclick: () => actions.exportTo(true) }),
     button([icon('play'), 'Resume ', kbd('R')], { disabled: unreadable, onclick: () => actions.resume() }),
+    canStartIn(row) ? button([icon('play'), 'Start in… ', kbd('s')], { class: 'primary', title: 'Start another harness in this folder, with a note on what was done', onclick: () => actions.startIn() }) : null,
   );
+
+  // The git work in the session's folder: read when the row is selected, drawn from what is held
+  // when the panel is drawn again.
+  let work: HTMLElement | null = null;
+  if (row.cwd) {
+    loadWork(installation.key, row);
+    workHost = h('div', { class: 'work-host' });
+    work = h('div', { class: 'box work' }, h('p', { class: 'label' }, 'Work on disk'), workHost);
+    drawWork(workHost);
+  } else {
+    workRead = null;
+    workHost = null;
+  }
 
   const chain = ancestors(state.rows, row.id);
   const children = state.rows.filter((other) => other.parent === row.id && other.id !== row.id);
@@ -72,7 +132,9 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   fill(root, head, h('div', { class: 'column-body im-panel-body' }, h('div', { class: 'pad' },
     h('h3', {}, row.title ?? row.id),
     actionsRow,
-    row.unreadable ? h('p', { class: 'note err' }, `Cannot be read: ${row.unreadable}`) : null,
+    row.unreadable ? (isHosted(row)
+      ? h('p', { class: 'note' }, 'Hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder')
+      : h('p', { class: 'note err' }, `Cannot be read: ${row.unreadable}`)) : null,
     kv([
       ['harness', installation.label],
       ['id', row.id],
@@ -87,6 +149,7 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
       ['store', installation.store],
       ['engine', installation.engine],
     ]),
+    work,
     lineage,
     row.live ? h('p', { class: 'note' }, `This session is open in ${installation.label}. A hop or export copies what is on disk now.`) : null,
   )));

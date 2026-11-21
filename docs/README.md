@@ -43,6 +43,7 @@ Install, store, compaction, tools, hooks; read before touching that harness's re
 | [ADR index](adr/README.md) | before touching what an active record governs; how a record is Accepted |
 | [ADR-0001](adr/ADR-0001-installation-scan-in-library-and-cli.md) | you work on `scan`: a library capability the CLI exposes first (Accepted) |
 | [ADR-0002](adr/ADR-0002-hermes-and-deepseek-harness-read-first.md) | you change how Hermes or DeepSeek Harness are read or written: read-first plan, amended 2026-11-12 (Accepted with changes) |
+| [ADR-0005](adr/ADR-0005-hosted-chats-read-locally.md) | you work on the chats the Codex app hosts on ChatGPT, the work view or the handoff: what is read, what is never done (Proposed, with its [design](superpowers/specs/2026-11-21-chatgpt-hosted-chats-design.md)) |
 
 ## Verification records
 

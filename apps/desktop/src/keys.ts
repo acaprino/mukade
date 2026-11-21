@@ -3,7 +3,7 @@
 
 export type Action =
   | 'down' | 'up' | 'left' | 'right' | 'enter' | 'back'
-  | 'hop' | 'export' | 'import' | 'resume' | 'turns'
+  | 'hop' | 'export' | 'import' | 'resume' | 'start' | 'turns'
   | 'top' | 'bottom' | 'pageUp' | 'pageDown'
   | 'scan' | 'reload' | 'search' | 'chat' | 'fold' | 'help'
   | 'searchAll' | 'graph' | 'lanes' | 'feed' | 'newRoom' | 'launch' | 'harnesses';
@@ -30,6 +30,7 @@ export function actionFor(event: KeyLike, inField: boolean): Action | null {
     case 'e': return 'export';
     case 'i': return 'import';
     case 'R': return 'resume';
+    case 's': return 'start';
     case 't': return 'turns';
     case 'g': return 'top';
     case 'G': return 'bottom';

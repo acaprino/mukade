@@ -40,7 +40,8 @@
         "note": "a fork (/branch) names its origin session and row in forkedFrom on every row it copies; a subagent's transcript names its parent in sessionId and meta.json"
       },
       "resume": ["{exe}", "-p", "--resume", "{id}"],
-      "interactive_resume": ["{exe}", "--resume", "{id}"]
+      "interactive_resume": ["{exe}", "--resume", "{id}"],
+      "interactive_start": ["{exe}", "{prompt}"]
     },
     {
       "id": "codex",
@@ -73,7 +74,8 @@
         "note": "a fork names its origin thread in session_meta.forked_from_id; a subagent thread names the thread that spawned it (session_meta.parent_thread_id)"
       },
       "resume": ["{exe}", "exec", "resume", "{id}"],
-      "interactive_resume": ["{exe}", "resume", "{id}"]
+      "interactive_resume": ["{exe}", "resume", "{id}"],
+      "interactive_start": ["{exe}", "{prompt}"]
     },
     {
       "id": "opencode",

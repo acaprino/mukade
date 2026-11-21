@@ -105,3 +105,11 @@ export interface Found { harness: string; store: string; engine?: string }
 export interface FolderScan { dir: string; found: Found[]; visited: number; truncated: boolean }
 export interface Sandbox { harness: string; name: string; root: string; store: string; exe: string; package: string; created: string }
 export interface Page<T> { items: T[]; next_cursor: string | null; high_water?: string }
+
+// The work a session left on disk, and handing it to another harness (src-tauri/src/actions.rs).
+export interface Branch { name: string; upstream: string | null; ahead: number | null; unpushed: number }
+export interface Worktree { path: string; branch: string | null; head: string; uncommitted: number; error: string | null }
+export interface Repository { path: string; worktrees: Worktree[]; branches: Branch[]; error: string | null }
+export interface Work { folder: string; repositories: Repository[]; note: string | null }
+export interface HandoffOptions { refusal?: string; destinations: Destination[]; note: string; cwd?: string | null }
+export interface HandedOff { launched: boolean; command: string[]; note_path: string; cwd: string }

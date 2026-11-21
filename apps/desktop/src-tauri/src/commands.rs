@@ -2,7 +2,7 @@
 //! module of its own (`sessions`, `actions`, `chat`), run off the UI thread, so the unit tests
 //! need no window.
 
-use crate::actions::{self, Exported, HopArgs, HopOptions, Resumed};
+use crate::actions::{self, Exported, HandedOff, HandoffOptions, HopArgs, HopOptions, Resumed};
 use crate::chat;
 use crate::harnesses::{self, HarnessView};
 use crate::sandbox::{self, Sandbox};
@@ -11,6 +11,7 @@ use crate::locations::{self, InstallationView, ScanNote};
 use crate::sessions::{self, RawPage, SessionRow, TranscriptView};
 use crate::state::{AppState, WriteKind, WriteOperation};
 use crate::view::ReceiptView;
+use mukade::work::Work;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -291,6 +292,34 @@ pub async fn resume(
 ) -> CmdResult<Resumed> {
     let state = state.inner().clone();
     blocking(move || actions::resume(&state, &installation, &id)).await
+}
+
+#[tauri::command]
+pub async fn work(state: State<'_, AppState>, installation: String, id: String) -> CmdResult<Work> {
+    let state = state.inner().clone();
+    blocking(move || actions::work(&state, &installation, &id)).await
+}
+
+#[tauri::command]
+pub async fn handoff_options(
+    state: State<'_, AppState>,
+    installation: String,
+    id: String,
+) -> CmdResult<HandoffOptions> {
+    let state = state.inner().clone();
+    blocking(move || actions::handoff_options(&state, &installation, &id)).await
+}
+
+#[tauri::command]
+pub async fn handoff(
+    state: State<'_, AppState>,
+    installation: String,
+    id: String,
+    dest: String,
+    note: String,
+) -> CmdResult<HandedOff> {
+    let state = state.inner().clone();
+    blocking(move || actions::handoff(&state, &installation, &id, &dest, &note)).await
 }
 
 /// A native dialog: `open` a JSON document, `save` one (with `name` proposed), or a `folder`.

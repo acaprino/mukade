@@ -13,3 +13,17 @@ dl.kv dd { margin: 0; color: var(--im-text-2); overflow-wrap: anywhere; }
 .lineage-row .spawn { color: var(--im-info); font: 12px var(--im-font-code); }
 .lineage-row .fork { color: var(--im-warn); font: 12px var(--im-font-code); display: inline-flex; gap: 3px; align-items: center; }
 .lineage-row .fork .icon { width: 13px; height: 13px; }
+/* The work a session left in its folder. The section holds a row's height while it reads, so the
+   panel does not move when the answer lands. */
+.work-host { min-height: var(--im-h-row-2); padding: 0 var(--im-s-3) var(--im-s-3); display: flex; flex-direction: column; gap: var(--im-s-2); }
+.work-wait { margin: 0; font: 12px var(--im-font-text); }
+.work-body { display: flex; flex-direction: column; gap: var(--im-s-2); }
+.work-folder { margin: 0; font: 12px var(--im-font-code); color: var(--im-muted); overflow-wrap: anywhere; user-select: text; }
+.work-repo { display: flex; flex-direction: column; gap: var(--im-s-1); padding-top: var(--im-s-2); border-top: 1px solid var(--im-line-soft); }
+.work-head { display: flex; align-items: center; gap: var(--im-s-2); min-height: var(--im-h-control-sm); }
+.work-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 13px var(--im-font-head); color: var(--im-text); }
+.work-head .im-chip { flex: none; }
+.work-line { margin: 0; font: 12px var(--im-font-code); color: var(--im-text-2); overflow-wrap: anywhere; user-select: text; }
+.work-other { padding-left: var(--im-s-3); border-left: 1px solid var(--im-line); }
+.work-other b { font-weight: 500; color: var(--im-text); }
+.work-kind { color: var(--im-muted); }

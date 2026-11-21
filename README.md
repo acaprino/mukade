@@ -25,6 +25,7 @@ Start a task in Claude Code, then pick it up in Pi, Codex, or another supported 
 - **Browse and resume** sessions from multiple harnesses in one desktop window.
 - **Export and import** sessions as JSON for backups or handoffs to another machine.
 - **Connect running agents** in a local MCP room so they can exchange messages and follow each other's work.
+- **Find the work of a chat you cannot read.** A chat the Codex desktop app hosts on ChatGPT is listed when its project has a local folder. `mukade work` shows what git holds there, and `mukade handoff` prepares a note on it and the command that starts Claude Code or Codex CLI there (with `--run` it starts it). The conversation's text is not read yet.
 - **Embed the handoff** in your own tool through the Rust library.
 
 ## Quickstart
@@ -69,7 +70,7 @@ All six adapters can list and export sessions, and can act as both the source an
 | Harness | CLI ID | Session support | Chat connection |
 | --- | --- | --- | --- |
 | <img src="docs/assets/branding/harnesses/claude-code.svg" width="24" alt=""> **[Claude Code](docs/harnesses/claude-code.md)** | `claude_code` | Read and write · detects running sessions · carries every branch of its tree | CLI · MCP live-tested |
-| <img src="docs/assets/branding/harnesses/codex.svg" width="24" alt=""> **[Codex CLI](docs/harnesses/codex.md)** | `codex` | Read and write · carries every branch of a thread (redone pages, rollbacks) | CLI · MCP live-tested |
+| <img src="docs/assets/branding/harnesses/codex.svg" width="24" alt=""> **[Codex CLI](docs/harnesses/codex.md)** | `codex` | Read and write · carries every branch of a thread (redone pages, rollbacks) · lists the hosted chats of the Codex app that have a local folder, as unreadable | CLI · MCP live-tested |
 | <img src="docs/assets/branding/harnesses/opencode.svg" width="24" alt=""> **[OpenCode](docs/harnesses/opencode.md)** | `opencode` | Read and write · imports via OpenCode | CLI · MCP setup · launch plugin (seen live with OpenCode 2.2.5) |
 | <img src="docs/assets/branding/harnesses/pi.svg" width="24" alt=""> **[Pi](docs/harnesses/pi.md)** | `pi` | Read and write · carries every branch of its tree | CLI · MCP setup · launch extension (seen live with Pi 1.4.0) |
 | <img src="docs/assets/branding/harnesses/hermes.png" width="24" alt=""> **[Hermes Agent](docs/harnesses/hermes-agent.md)** | `hermes` | Read and write · imported tool history travels as text | CLI |

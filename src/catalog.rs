@@ -45,6 +45,10 @@ pub struct Entry {
     /// The argv that opens the session interactively in the harness's own TUI.
     #[serde(default)]
     pub interactive_resume: Vec<String>,
+    /// The argv that starts a new interactive session with a first prompt; `{exe}` and `{prompt}`
+    /// are filled in by [`interactive_start`]. Empty: the form has not been verified.
+    #[serde(default)]
+    pub interactive_start: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,6 +334,25 @@ pub fn interactive_resume(
         .collect()
 }
 
+/// The command that starts a new interactive session with `prompt` as its first message. `None`
+/// for a harness whose form has not been verified.
+pub fn interactive_start(harness: HarnessId, exe: &str, prompt: &str) -> Option<Vec<String>> {
+    let template = &entry(harness).interactive_start;
+    if template.is_empty() {
+        return None;
+    }
+    Some(
+        template
+            .iter()
+            .map(|part| match part.as_str() {
+                "{exe}" => exe.to_string(),
+                "{prompt}" => prompt.to_string(),
+                other => other.to_string(),
+            })
+            .collect(),
+    )
+}
+
 /// Expand `{home}` and the data-directory tokens of a catalog path. A token the platform does not
 /// provide makes the whole location unknown (`None`), never a path with a literal `{token}` in it.
 pub fn expand(location: &str, vars: &Vars) -> Option<PathBuf> {
@@ -538,5 +561,25 @@ mod tests {
             tail(HarnessId::DeepSeekHarness),
             ["--profile", "headless", "--session-id", "abc"]
         );
+    }
+
+    #[test]
+    fn claude_code_and_codex_start_with_a_prompt_and_no_other_harness_does() {
+        assert_eq!(
+            interactive_start(HarnessId::ClaudeCode, "claude", "p q"),
+            Some(vec!["claude".into(), "p q".into()])
+        );
+        assert_eq!(
+            interactive_start(HarnessId::Codex, "codex", "p"),
+            Some(vec!["codex".into(), "p".into()])
+        );
+        for other in [
+            HarnessId::OpenCode,
+            HarnessId::Pi,
+            HarnessId::Hermes,
+            HarnessId::DeepSeekHarness,
+        ] {
+            assert_eq!(interactive_start(other, "x", "p"), None);
+        }
     }
 }

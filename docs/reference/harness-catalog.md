@@ -30,6 +30,7 @@ Top level: `schema`, `description`, `expansions` (the tokens below, for readers;
 | `lineage.recorded` / `fields` / `note` | what the format records about forks, and what not |
 | `resume` | native resume argv; `{exe}`, `{id}`, `{file}` filled in (`{file}` is the session file, or the id when none) |
 | `interactive_resume` | argv that opens the session in the harness's terminal UI (the desktop app's resume); when empty, `resume` is used |
+| `interactive_start` | argv that starts a new interactive session with a first prompt, with `{exe}` and `{prompt}` filled in (`src/catalog.rs` `interactive_start()`). Only Claude Code and Codex CLI have one, `["{exe}", "{prompt}"]`, from their own help text (`claude [prompt]` 2.1.330, `codex [PROMPT]` 0.167). Empty, or absent: the form has not been seen to work, and the harness is not offered as a handoff destination |
 
 ## Platform locations
 
@@ -138,6 +139,7 @@ fall back to them when the store variable is unset or empty; other commands use 
 | `mukade harnesses` (`src/cli.rs` `print_harnesses()`) | `display`, `binary.flag`/`binary.env` (labels), `store.env`, `store.default`, `store.layout`, `config`, `lineage` |
 | OpenCode's MCP target and global configuration file (`src/harnesses/opencode.rs` `chat_mcp_target()`, `global_config_files()`) | `config.default` |
 | writers' receipts (`src/catalog.rs` `resume()`) | `resume` |
+| `mukade handoff`, the desktop app's Start in… (`src/handoff.rs` `destinations()`, `src/catalog.rs` `interactive_start()`) | `interactive_start`: a harness is a handoff destination when it has one |
 | the desktop app (`apps/desktop/src-tauri`) | `display`, `store.default`, `store.root_is_a_file`, `resume`, `interactive_resume` |
 
 OpenCode's counts: one read-only query; Pi's forks: the session headers.
@@ -163,3 +165,5 @@ OpenCode's counts: one read-only query; Pi's forks: the session headers.
    - the exact `resume` argv of Claude Code, OpenCode and Pi, and Hermes's store default per
      platform (`src/catalog.rs`); `interactive_resume` of all six (`src/catalog.rs`
      `every_harness_has_the_exact_interactive_resume_argv`).
+   - `interactive_start` is `["{exe}", "{prompt}"]` for Claude Code and Codex CLI and empty for the rest
+     (`src/catalog.rs` `claude_code_and_codex_start_with_a_prompt_and_no_other_harness_does`).

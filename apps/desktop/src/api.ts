@@ -6,8 +6,8 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  ChatEvent, ChatStatus, CmdError, Exported, FolderScan, HarnessView, HopArgs, HopOptions, InstallationList, Member,
-  Page, RawPage, WriteOperation, Resumed, Room, Sandbox, SessionRow, Startup, TranscriptView,
+  ChatEvent, ChatStatus, CmdError, Exported, FolderScan, HandedOff, HandoffOptions, HarnessView, HopArgs, HopOptions, InstallationList,
+  Member, Page, RawPage, WriteOperation, Resumed, Room, Sandbox, SessionRow, Startup, TranscriptView, Work,
 } from './types.ts';
 
 export const inTauri = typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !== 'undefined';
@@ -51,6 +51,11 @@ export const api = {
   export: (installation: string, id: string, to?: string) => invoke<Exported>('export', { installation, id, to }),
   import: (document: string, into: string, prompt?: string) => invoke<WriteOperation>('import', { document, into, prompt }),
   resume: (installation: string, id: string) => invoke<Resumed>('resume', { installation, id }),
+  /** The git work in the session's folder, read-only. */
+  work: (installation: string, id: string) => invoke<Work>('work', { installation, id }),
+  handoffOptions: (installation: string, id: string) => invoke<HandoffOptions>('handoff_options', { installation, id }),
+  /** Saves the note and starts the destination's harness on it, in a new terminal. */
+  handoff: (installation: string, id: string, dest: string, note: string) => invoke<HandedOff>('handoff', { installation, id, dest, note }),
   pick: (kind: 'open' | 'save' | 'folder', name?: string) => invoke<string | null>('pick', { kind, name }),
   chatStatus: () => invoke<ChatStatus>('chat_status'),
   chatRooms: (cursor?: string) => invoke<Page<Room>>('chat_rooms', { cursor }),
