@@ -222,6 +222,7 @@ mod tests {
                     branch: Some("main".to_string()),
                     head: "abc1234".to_string(),
                     uncommitted: 2,
+                    error: None,
                 }],
                 branches: vec![
                     Branch {

@@ -3,7 +3,10 @@
 //! A session has a working folder; this module says which repositories it holds and what in them
 //! exists nowhere else (commits on no remote, uncommitted paths). It runs the installed `git` and
 //! only reads: no fetch, no command that writes, and `GIT_OPTIONAL_LOCKS=0` so `git status` does
-//! not even refresh the index. It names no harness.
+//! not even refresh the index. The folder comes from session data, so git is also run with
+//! `core.fsmonitor` and `core.untrackedCache` off (a repository's own configuration cannot start a
+//! program or a daemon) and without the `GIT_DIR`-style variables of the environment. It names no
+//! harness.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -13,18 +16,34 @@ use std::time::Duration;
 /// How long one git command may take.
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How many repositories are read in one folder.
+const MAX_REPOSITORIES: usize = 20;
+
+/// Variables that make git look somewhere other than the folder it is given.
+const INHERITED_GIT_VARIABLES: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_OBJECT_DIRECTORY",
+];
+
 /// The git state of one folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Work {
     pub folder: PathBuf,
     pub repositories: Vec<Repository>,
-    /// Why there is nothing to show: the folder is missing, git is not installed, no repository.
+    /// Why there is nothing to show (the folder is missing, git is not installed, no repository),
+    /// or what was left out (only the first repositories of a folder are read).
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Repository {
-    /// The folder as it was given, not resolved.
+    /// The folder as it was given, not resolved. For a folder inside a repository: the top level
+    /// of the repository, as git prints it.
     pub path: PathBuf,
     /// The main worktree first, then the linked ones.
     pub worktrees: Vec<Worktree>,
@@ -43,6 +62,8 @@ pub struct Worktree {
     pub head: String,
     /// Tracked changes and untracked files; ignored files are not counted.
     pub uncommitted: usize,
+    /// What git answered when it refused to read this worktree; `uncommitted` is then 0.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -65,18 +86,27 @@ impl Repository {
     }
 }
 
-/// The repositories of `folder`: itself when it is one, else each direct child that is, by name.
+/// The repositories of `folder`: itself when it is one, the repository that holds it when it is a
+/// subfolder, else each direct child that is one, by name (the first 20).
 pub fn work_in(folder: &Path) -> Work {
+    work_in_capped(folder, MAX_REPOSITORIES)
+}
+
+fn work_in_capped(folder: &Path, cap: usize) -> Work {
     if !folder.exists() {
         return nothing(folder, format!("{} does not exist", folder.display()));
     }
     if !folder.is_dir() {
         return nothing(folder, format!("{} is not a folder", folder.display()));
     }
-    let paths = repository_paths(folder);
+    let mut paths = repository_paths(folder);
     if paths.is_empty() {
         return nothing(folder, format!("no git repository in {}", folder.display()));
     }
+    let found = paths.len();
+    paths.truncate(cap);
+    let note = (found > paths.len())
+        .then(|| format!("only the first {cap} of {found} repositories were read"));
     let mut repositories = Vec::new();
     for path in paths {
         match inspect(&path) {
@@ -93,7 +123,7 @@ pub fn work_in(folder: &Path) -> Work {
     Work {
         folder: folder.to_path_buf(),
         repositories,
-        note: None,
+        note,
     }
 }
 
@@ -113,6 +143,14 @@ fn holds_git(path: &Path) -> bool {
 fn repository_paths(folder: &Path) -> Vec<PathBuf> {
     if holds_git(folder) {
         return vec![folder.to_path_buf()];
+    }
+    // A subfolder of a repository is that repository. Any failure (no repository, git missing,
+    // a refusal) leaves the children to be looked at.
+    if let Ok(top) = git(folder, &["rev-parse", "--show-toplevel"]) {
+        let top = top.trim_end_matches(['\r', '\n']);
+        if !top.is_empty() {
+            return vec![PathBuf::from(top)];
+        }
     }
     let Ok(entries) = std::fs::read_dir(folder) else {
         return Vec::new();
@@ -142,8 +180,21 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
     command
         .arg("-C")
         .arg(dir)
+        // The repository's own configuration must not start a program (`core.fsmonitor=<command>`)
+        // or leave a daemon running (`core.fsmonitor=true`).
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+        ])
         .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0");
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        // The words of `for-each-ref --format=%(upstream:track)` are read, so they stay English.
+        .env("LC_ALL", "C");
+    for variable in INHERITED_GIT_VARIABLES {
+        command.env_remove(variable);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -242,6 +293,23 @@ fn rev_count(path: &Path, args: &[&str]) -> Result<usize, GitError> {
         .map_err(|_| GitError::Refused(format!("git answered `{}` to a commit count", out.trim())))
 }
 
+/// Commits ahead of the upstream, from `%(upstream:track)`: `[ahead 2]`, `[behind 1]`,
+/// `[ahead 2, behind 1]`, `[gone]` or nothing. `None` without an upstream or when it is gone: that
+/// is not an error of the repository.
+fn ahead_of(upstream_ref: &str, track: &str) -> Option<usize> {
+    if upstream_ref.is_empty() {
+        return None;
+    }
+    let inner = track.trim().trim_start_matches('[').trim_end_matches(']');
+    if inner == "gone" {
+        return None;
+    }
+    let ahead = inner
+        .split(", ")
+        .find_map(|part| part.strip_prefix("ahead ")?.trim().parse::<usize>().ok());
+    Some(ahead.unwrap_or(0))
+}
+
 fn inspect(path: &Path) -> Result<Repository, GitError> {
     let listing = git(path, &["worktree", "list", "--porcelain"])?;
     let mut worktrees = Vec::new();
@@ -250,39 +318,44 @@ fn inspect(path: &Path) -> Result<Repository, GitError> {
         if listed.bare || listed.prunable {
             continue;
         }
-        let uncommitted = uncommitted(&listed.path)?;
+        // One worktree git cannot read is told apart: the other worktrees and the branches stay.
+        let (uncommitted, error) = match uncommitted(&listed.path) {
+            Ok(count) => (count, None),
+            Err(GitError::NotInstalled) => return Err(GitError::NotInstalled),
+            Err(GitError::Refused(error)) => (0, Some(error)),
+        };
         worktrees.push(Worktree {
             path: listed.path,
             branch: listed.branch,
             head: listed.head,
             uncommitted,
+            error,
         });
     }
     // The full names are what the counts are made with: a short name turns into `heads/<name>`
-    // when a tag has the same one. The short upstream is for display only.
+    // when a tag has the same one. The short upstream is for display only. `upstream:track` says
+    // how far ahead the branch is, so no command is run for it.
     let refs = git(
         path,
         &[
             "for-each-ref",
-            "--format=%(refname)%09%(upstream)%09%(upstream:short)",
+            "--format=%(refname)%09%(upstream)%09%(upstream:short)%09%(upstream:track)",
             "refs/heads",
         ],
     )?;
     let mut branches = Vec::new();
     for line in refs.lines() {
-        let mut fields = line.splitn(3, '\t');
+        let mut fields = line.splitn(4, '\t');
         let full = fields.next().unwrap_or("");
         let upstream_ref = fields.next().unwrap_or("");
         let upstream_short = fields.next().unwrap_or("");
+        let track = fields.next().unwrap_or("");
         let name = full.strip_prefix("refs/heads/").unwrap_or(full);
         if name.is_empty() {
             continue;
         }
         let upstream = (!upstream_short.is_empty()).then(|| upstream_short.to_string());
-        // An upstream that is gone has no count: that is not an error of the repository.
-        let ahead = (!upstream_ref.is_empty())
-            .then(|| rev_count(path, &[format!("{upstream_ref}..{full}").as_str(), "--"]).ok())
-            .flatten();
+        let ahead = ahead_of(upstream_ref, track);
         let unpushed = rev_count(path, &[full, "--not", "--remotes", "--"])?;
         branches.push(Branch {
             name: name.to_string(),
@@ -337,6 +410,12 @@ fn repository_lines(repository: &Repository, out: &mut Vec<String>) {
     let main_branch = main.and_then(|worktree| worktree.branch.as_deref());
     match main {
         None => out.push(format!("{name}: no worktree")),
+        Some(worktree) if worktree.error.is_some() => {
+            out.push(format!(
+                "{name}: {}",
+                worktree.error.as_deref().unwrap_or("")
+            ));
+        }
         Some(worktree) => {
             let text = match &worktree.branch {
                 Some(branch) => {
@@ -373,7 +452,14 @@ fn repository_lines(repository: &Repository, out: &mut Vec<String>) {
         }
     }
     for worktree in linked {
-        if worktree.branch.is_none() && worktree.uncommitted > 0 {
+        if let Some(error) = &worktree.error {
+            let leaf = worktree
+                .path
+                .file_name()
+                .map(|leaf| leaf.to_string_lossy().into_owned())
+                .unwrap_or_else(|| worktree.path.display().to_string());
+            out.push(format!("  {leaf}: {error}"));
+        } else if worktree.branch.is_none() && worktree.uncommitted > 0 {
             out.push(format!(
                 "  {}",
                 detached_text(&worktree.head, worktree.uncommitted)
@@ -788,12 +874,201 @@ mod tests {
         assert!(before == after, "the index was rewritten");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_repository_cannot_run_a_program_through_fsmonitor() {
+        use std::os::unix::fs::PermissionsExt;
+        if skip() {
+            return;
+        }
+        let (dir, clone) = clone_of_origin("work-fsmonitor");
+        let marker = dir.join("marker");
+        let hook = dir.join("hook.sh");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\necho fired > '{}'\nprintf '\\0'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(
+            &clone,
+            &["config", "core.fsmonitor", hook.to_str().unwrap()],
+        );
+        let work = work_in(&clone);
+        assert_eq!(only(&work).error, None);
+        assert_eq!(only(&work).worktrees[0].error, None);
+        assert!(!marker.exists(), "the fsmonitor hook of the repository ran");
+    }
+
+    #[test]
+    fn a_gone_upstream_has_no_count_and_is_not_an_error() {
+        if skip() {
+            return;
+        }
+        let (_dir, clone) = clone_of_origin("work-gone");
+        git(&clone, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let work = work_in(&clone);
+        let repository = only(&work);
+        assert_eq!(repository.error, None);
+        let main = branch(repository, "main");
+        assert_eq!(main.ahead, None);
+        assert_eq!(main.unpushed, 1);
+    }
+
+    #[test]
+    fn commits_behind_the_upstream_are_not_ahead() {
+        if skip() {
+            return;
+        }
+        let (dir, clone) = clone_of_origin("work-behind");
+        commit(&dir.join("origin"), "b.txt", "two\n");
+        git(&clone, &["fetch", "-q"]);
+        let work = work_in(&clone);
+        assert_eq!(branch(only(&work), "main").ahead, Some(0));
+        // Ahead and behind at once still counts what is ahead.
+        commit(&clone, "c.txt", "three\n");
+        let work = work_in(&clone);
+        assert_eq!(branch(only(&work), "main").ahead, Some(1));
+    }
+
+    #[test]
+    fn only_the_first_repositories_of_a_folder_are_read() {
+        if skip() {
+            return;
+        }
+        let dir = scratch("work-cap");
+        for name in ["c", "a", "b"] {
+            std::fs::create_dir(dir.join(name)).unwrap();
+            git(&dir.join(name), &["init", "-q"]);
+        }
+        let work = work_in_capped(&dir, 2);
+        let names: Vec<_> = work
+            .repositories
+            .iter()
+            .map(|repository| repository.path.file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["a", "b"]);
+        assert_eq!(
+            work.note.as_deref(),
+            Some("only the first 2 of 3 repositories were read")
+        );
+        // At the cap exactly, nothing is left out.
+        let work = work_in_capped(&dir, 3);
+        assert_eq!(work.repositories.len(), 3);
+        assert_eq!(work.note, None);
+    }
+
+    #[test]
+    fn a_subfolder_of_a_repository_reports_that_repository() {
+        if skip() {
+            return;
+        }
+        let (_dir, clone) = clone_of_origin("work-subfolder");
+        let deep = clone.join("src").join("deep");
+        std::fs::create_dir_all(&deep).unwrap();
+        let work = work_in(&deep);
+        let repository = only(&work);
+        assert!(
+            same_folder(&repository.path, &clone),
+            "{:?}",
+            repository.path
+        );
+        assert_eq!(repository.error, None);
+        assert_eq!(work.folder, deep);
+    }
+
+    #[test]
+    fn a_folder_of_repositories_inside_no_repository_still_reports_the_children() {
+        if skip() {
+            return;
+        }
+        let dir = scratch("work-children-again");
+        std::fs::create_dir(dir.join("app")).unwrap();
+        git(&dir.join("app"), &["init", "-q"]);
+        let work = work_in(&dir);
+        let repository = only(&work);
+        assert!(same_folder(&repository.path, &dir.join("app")));
+    }
+
+    #[test]
+    fn a_linked_worktree_git_cannot_read_keeps_the_rest() {
+        if skip() {
+            return;
+        }
+        let (dir, clone) = clone_of_origin("work-broken-linked");
+        let linked = dir.join("wt");
+        git(&clone, &["worktree", "add", "-q", "../wt", "-b", "side/x"]);
+        // Git still lists the worktree (its folder is there) but cannot open it.
+        std::fs::write(linked.join(".git"), "garbage\n").unwrap();
+        std::fs::write(clone.join("new.txt"), "x").unwrap();
+        let work = work_in(&clone);
+        let repository = only(&work);
+        assert_eq!(repository.error, None, "{repository:?}");
+        assert_eq!(repository.worktrees.len(), 2, "{repository:?}");
+        assert_eq!(repository.worktrees[0].error, None);
+        assert_eq!(repository.worktrees[0].uncommitted, 1);
+        let broken = &repository.worktrees[1];
+        assert!(broken.error.is_some(), "{broken:?}");
+        assert_eq!(broken.uncommitted, 0);
+        assert!(branch(repository, "main").upstream.is_some());
+        assert!(repository.branches.iter().any(|b| b.name == "side/x"));
+        let said = lines(&work);
+        assert!(
+            said.iter().any(|line| line.starts_with("  wt: ")),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn the_lines_name_a_worktree_with_an_error() {
+        let mut broken = worktree(Some("side"), 0);
+        broken.path = PathBuf::from("/work/app-side");
+        broken.error = Some("fatal: nope".to_string());
+        let app = repository(
+            "app",
+            vec![worktree(Some("main"), 0), broken],
+            vec![tracking("main", Some("origin/main"), Some(0), 0)],
+        );
+        assert_eq!(
+            lines(&work_of(vec![app.clone()])),
+            [
+                "app: branch main, upstream origin/main, clean",
+                "  app-side: fatal: nope",
+                "(remote state as of the last fetch)",
+            ]
+        );
+        // Nothing is lost on it, so the repository is not at risk.
+        assert!(!app.at_risk());
+        let mut main_broken = worktree(Some("main"), 0);
+        main_broken.error = Some("fatal: nope".to_string());
+        let main_repo = repository("app", vec![main_broken], Vec::new());
+        assert_eq!(
+            lines(&work_of(vec![main_repo])),
+            ["app: fatal: nope", "(remote state as of the last fetch)"]
+        );
+    }
+
+    #[test]
+    fn the_track_words_give_the_commits_ahead() {
+        assert_eq!(ahead_of("", ""), None);
+        assert_eq!(ahead_of("", "[ahead 2]"), None);
+        assert_eq!(ahead_of("refs/remotes/o/m", ""), Some(0));
+        assert_eq!(ahead_of("refs/remotes/o/m", "[ahead 2]"), Some(2));
+        assert_eq!(ahead_of("refs/remotes/o/m", "[behind 1]"), Some(0));
+        assert_eq!(ahead_of("refs/remotes/o/m", "[ahead 3, behind 1]"), Some(3));
+        assert_eq!(ahead_of("refs/remotes/o/m", "[gone]"), None);
+    }
+
     fn worktree(branch: Option<&str>, uncommitted: usize) -> Worktree {
         Worktree {
             path: PathBuf::from("/work/tree"),
             branch: branch.map(str::to_string),
             head: "abc1234".to_string(),
             uncommitted,
+            error: None,
         }
     }
 
