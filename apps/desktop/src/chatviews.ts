@@ -2,7 +2,7 @@
 // with one event selected in all three. Built with the DOM, never with innerHTML: a message's
 // text is always text.
 
-import { button, h, icon } from './dom.ts';
+import { button, chip, h, icon, iconButton } from './dom.ts';
 import { shortTime } from './tree.ts';
 import {
   actorOf, groupOf, harnessKey, instructionOf, instructions, linesUpTo, passes, presentAt, recipientsOf, segments,
@@ -89,7 +89,7 @@ export function feedCard(event: ChatEvent, ctx: RoomContext, plain = false): HTM
     const instruction = event.kind === 'signal' ? instructionOf(event, ctx.events) : undefined;
     return h('div', { ...attrs, class: `msg sys k-${kind}` },
       h('span', {}, `${time(event)} · #${event.event_id} · ${describe(event, ctx)}`),
-      instruction ? button(`show #${instruction.event_id}`, { class: 'link', onclick: (click: Event) => { click.stopPropagation(); ctx.select(instruction.event_id); } }) : null);
+      instruction ? button(`show #${instruction.event_id}`, { class: 'im-btn--ghost im-btn--sm', onclick: (click: Event) => { click.stopPropagation(); ctx.select(instruction.event_id); } }) : null);
   }
   const member = ctx.members.find((one) => one.member_id === actorOf(event));
   const to = recipientsOf(event, ctx.members).map((id) => nameOf(id, ctx.members));
@@ -98,7 +98,7 @@ export function feedCard(event: ChatEvent, ctx: RoomContext, plain = false): HTM
   return h('article', { ...attrs, class: `msg${actorOf(event) === ctx.mine ? ' mine' : ''}` },
     h('div', { class: 'meta' },
       h('span', { class: 'who' }, mark(member?.harness ?? 'other'), actorName(event),
-        actorOf(event) === ctx.mine ? h('span', { class: 'tag im-chip' }, 'you') : host ? h('span', { class: 'tag im-chip', title: 'The host’s member: what it sends is the user’s' }, 'user') : null),
+        actorOf(event) === ctx.mine ? chip('you') : host ? chip('user', '', 'The host’s member: what it sends is the user’s') : null),
       h('span', {}, `${event.actor.type === 'member' ? `${event.actor.role ?? ''} · ` : ''}${time(event)} · #${event.event_id}`)),
     h('div', { class: 'body' },
       richText(String(event.payload.text ?? ''), ctx.members),
@@ -330,9 +330,9 @@ export function stripView(ctx: RoomContext, playing: boolean, controls: { play()
     }));
   });
   return h('div', { class: 'scrub', role: 'group', 'aria-label': 'Replay the room' },
-    button([icon(playing ? 'pause' : 'play')], { class: 'small', 'aria-label': playing ? 'Pause' : 'Play from here', title: 'space', onclick: () => controls.play() }),
-    button([icon('prev')], { class: 'small', 'aria-label': 'Previous event', disabled: at <= 0, onclick: () => controls.step(-1) }),
-    button([icon('next')], { class: 'small', 'aria-label': 'Next event', disabled: at >= events.length - 1, onclick: () => controls.step(1) }),
+    iconButton(playing ? 'Pause' : 'Play from here', playing ? 'pause' : 'play', { onclick: () => controls.play() }),
+    iconButton('Previous event', 'prev', { disabled: at <= 0, onclick: () => controls.step(-1) }),
+    iconButton('Next event', 'next', { disabled: at >= events.length - 1, onclick: () => controls.step(1) }),
     ticks,
     h('span', { class: 'pos' }, events.length ? `${at + 1} / ${events.length}` : '0 / 0'));
 }

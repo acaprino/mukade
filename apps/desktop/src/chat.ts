@@ -8,7 +8,7 @@
 import './chat.css';
 import { api, errorKind, errorText } from './api.ts';
 import { claimKey, iconHtml, keyClaimed } from '@acaprino/imago/ui';
-import { button, caps, choice as pickChoice, commandLine, field, fill, group, h, icon, toggle, viewSwitch } from './dom.ts';
+import { button, caps, chip, choice as pickChoice, commandLine, field, fill, group, h, icon, inlineNote, toggle, viewSwitch } from './dom.ts';
 import { listbox, reveal, stepIn } from './lists.ts';
 import { confirmModal, openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
@@ -466,7 +466,7 @@ export class ChatView {
     const state = status?.state ?? 'checking';
     const label = state === 'running' ? 'service running' : state === 'stopped' ? 'service stopped' : state === 'checking' ? 'checking…' : 'unreachable';
     return h('div', { class: 'chat-status im-content-toolbar' },
-      h('span', { class: `tag im-chip ${state === 'running' ? 'live' : state === 'stopped' ? '' : 'bad'}` }, label),
+      chip(label, state === 'running' ? 'ok' : state === 'stopped' ? '' : 'err'),
       h('span', { class: 'mono muted' }, status?.endpoint ?? status?.data_dir ?? ''),
       h('span', { class: 'spring' }),
       this.error ? h('span', { class: 'err-text' }, this.error) : null,
@@ -485,7 +485,7 @@ export class ChatView {
     fill(this.root, bar, h('div', { class: 'column chat-off' }, h('div', { class: 'empty im-empty' },
       h('h2', {}, status ? (status.state === 'stopped' ? 'The chat service is not running' : 'The chat service does not answer') : 'Looking for the chat service…'),
       status ? h('p', {}, 'Start it here, or in a terminal with ', h('code', {}, 'mukade chat start'), '.') : null,
-      status?.message ? h('p', { class: 'note' }, status.message) : null,
+      status?.message ? inlineNote(status.message) : null,
       status?.state === 'stopped'
         ? button([icon('play'), this.busy ? 'Starting…' : 'Start the service'], { class: 'primary', disabled: this.busy !== null, onclick: () => void this.startService() })
         : null)));
@@ -506,8 +506,8 @@ export class ChatView {
         h('span', { class: 'im-avatar im-rail-item', 'aria-hidden': 'true' }, room.name.slice(0, 2).toUpperCase()),
         h('span', { class: 'grow' }, h('span', { class: 'room-name' }, room.name),
           h('span', { class: 'num im-num room-meta' }, `${room.members} members · ${room.events} events · ${shortTime(room.last_activity ?? room.opened_at)}`)),
-        ...(this.mine[room.room_id] ? [h('span', { class: 'tag im-chip', title: 'The window is a member of this room' }, 'joined')] : []),
-        h('span', { class: `tag im-chip ${room.closed_at ? '' : 'live'}` }, room.closed_at ? 'closed' : 'open'),
+        ...(this.mine[room.room_id] ? [chip('joined', '', 'The window is a member of this room')] : []),
+        chip(room.closed_at ? 'closed' : 'open', room.closed_at ? '' : 'ok'),
       ] as Node[],
     }));
     const body = rooms.length
@@ -538,7 +538,7 @@ export class ChatView {
     const head = h('div', { class: 'column-head im-panel-header' },
       h('h2', {}, current?.name ?? 'Room'),
       current ? h('small', {}, `${this.events.length} events${filtered ? ` · ${shown.length} shown` : ''}`) : null,
-      current?.closed_at ? h('span', { class: 'tag im-chip' }, 'closed') : null,
+      current?.closed_at ? chip('closed') : null,
       h('span', { class: 'spring' }),
       button('Members', { class: 'ghost', title: 'Show the members and the instructions', onclick: () => this.hooks.showMembers() }),
       viewSwitch('View', VIEWS.map((view, i) => ({ value: view, content: [icon(view), view[0].toUpperCase() + view.slice(1), caps(String(i + 1))] })), this.view, (view) => this.setView(view)),
@@ -640,17 +640,17 @@ export class ChatView {
     const row = button([
       mark(member.harness),
       h('span', { class: 'grow' }, h('span', { class: 'member-name' }, member.name),
-        mine ? h('span', { class: 'tag im-chip' }, 'you') : null, member.host && !mine ? h('span', { class: 'tag im-chip' }, 'user') : null),
+        mine ? chip('you') : null, member.host && !mine ? chip('user') : null),
       h('span', { class: 'role' }, member.role),
       h('span', { class: `state${member.left_at ? ' left' : ''}` }, state),
     ], { class: `member-row${open ? ' open' : ''}`, 'aria-expanded': String(open), onclick: () => this.toggleMember(member.member_id) });
     if (!open) return h('div', { class: `member${member.left_at ? ' left' : ''}` }, row);
     const session = member.session;
     return h('div', { class: `member open${member.left_at ? ' left' : ''}` }, row,
-      h('dl', { class: 'kv' },
+      facts(
         h('dt', {}, 'harness'), h('dd', {}, member.harness),
-        h('dt', {}, 'session'), h('dd', { class: session ? 'mono' : 'muted' }, session ? session.id : 'not bound'),
-        session?.cwd ? h('dt', {}, 'folder') : null, session?.cwd ? h('dd', { class: 'mono' }, session.cwd) : null,
+        h('dt', {}, 'session'), h('dd', { class: session ? 'im-facts-code' : 'im-muted' }, session ? session.id : 'not bound'),
+        session?.cwd ? h('dt', {}, 'folder') : null, session?.cwd ? h('dd', { class: 'im-facts-code' }, session.cwd) : null,
         h('dt', {}, 'joined'), h('dd', {}, new Date(member.joined_at).toLocaleString()),
         member.last_command_at ? h('dt', {}, 'last command') : null, member.last_command_at ? h('dd', {}, new Date(member.last_command_at).toLocaleString()) : null,
         member.left_at ? h('dt', {}, 'left') : null, member.left_at ? h('dd', {}, new Date(member.left_at).toLocaleString()) : null),
@@ -884,9 +884,9 @@ export class ChatView {
       go.disabled = !name || refusal !== null || existing !== undefined;
       if (refusal) fill(note, h('span', { class: 'warn-text' }, refusal));
       else if (existing && existing.closed_at === null) {
-        fill(note, h('span', {}, `${name} is open already. `), button('Go to it', { class: 'link', onclick: () => { modal.close(); this.pickRoom(existing.room_id); } }));
+        fill(note, h('span', {}, `${name} is open already. `), button('Go to it', { class: 'im-btn--ghost im-btn--sm', onclick: () => { modal.close(); this.pickRoom(existing.room_id); } }));
       } else if (existing) {
-        fill(note, h('span', {}, `${name} is closed. `), button('Reopen it', { class: 'link', onclick: () => { modal.close(); this.pickRoom(existing.room_id); void this.reopen(existing); } }));
+        fill(note, h('span', {}, `${name} is closed. `), button('Reopen it', { class: 'im-btn--ghost im-btn--sm', onclick: () => { modal.close(); this.pickRoom(existing.room_id); void this.reopen(existing); } }));
       } else fill(note, h('span', { class: 'muted' }, 'Lowercase letters, digits, - and _.'));
     };
     input.addEventListener('input', paint);
@@ -977,7 +977,7 @@ export class ChatView {
           field('Folder', 'launch-folder', h('div', { class: 'mk-cmd' }, folder, browse))),
         group('It runs, in a new terminal', preview),
         note,
-        h('p', { class: 'note' }, choice.harness === 'codex'
+        inlineNote(choice.harness === 'codex'
           ? 'Codex runs the launch hooks only once they are trusted: mukade chat trust codex, once.'
           : 'The window does not join for the agent: its member appears when it joins.')));
     };

@@ -7,7 +7,7 @@ import './harnesses.css';
 import { loader, setPanelState } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { mark } from './chatviews.ts';
-import { button, caps, field, fill, group, h, icon } from './dom.ts';
+import { button, caps, chip, facts, field, fill, group, h, icon, inlineNote } from './dom.ts';
 import { openModal } from './modal.ts';
 import type { HarnessView, Installation, Sandbox } from './types.ts';
 
@@ -108,14 +108,14 @@ export class HarnessesView {
       h('header', {},
         mark(harness.id),
         h('h3', {}, harness.display),
-        h('span', { class: `tag im-chip ${harness.status === 'missing' ? 'bad' : 'live'}` }, STATUS_TEXT[harness.status]),
+        chip(STATUS_TEXT[harness.status], harness.status === 'missing' ? 'err' : 'ok'),
         harness.version ? h('span', { class: 'mono muted' }, harness.version) : null,
         h('span', { class: 'spring' }),
         button([icon('import'), installing ? 'Installing…' : 'Install…'], { disabled: installing, onclick: () => this.installDialog(harness) })),
-      h('dl', { class: 'kv' },
-        h('dt', {}, 'binary'), h('dd', { class: harness.binary ? 'mono' : 'muted' }, harness.binary ?? `not on PATH and not at its usual place; name one with ${harness.binary_env}`),
+      facts(
+        h('dt', {}, 'binary'), h('dd', { class: harness.binary ? 'im-facts-code' : 'im-muted' }, harness.binary ?? `not on PATH and not at its usual place; name one with ${harness.binary_env}`),
         harness.binary ? h('dt', {}, 'found by') : null, harness.binary ? h('dd', {}, harness.source) : null,
-        h('dt', {}, 'store'), h('dd', { class: 'mono' }, harness.store ?? 'none known',
+        h('dt', {}, 'store'), h('dd', { class: 'im-facts-code' }, harness.store ?? 'none known',
           harness.store && !harness.store_exists ? h('span', { class: 'muted' }, ' · not there yet') : null),
         h('dt', {}, 'sessions'), h('dd', {}, standard?.error ? h('span', { class: 'err-text' }, standard.error) : String(standard?.count ?? 0)),
         h('dt', {}, 'writes'), h('dd', {}, harness.destination ? 'yes: a hop or an import can land here' : 'no: read only')),
@@ -125,7 +125,7 @@ export class HarnessesView {
           ...others.map((item) => {
             const sandbox = sandboxes.find((one) => one.store === item.store);
             return h('div', { class: 'install-row' },
-              h('span', { class: 'grow' }, h('b', {}, item.label), sandbox ? h('span', { class: 'tag im-chip' }, 'sandbox') : null,
+              h('span', { class: 'grow' }, h('b', {}, item.label), sandbox ? chip('sandbox') : null,
                 h('span', { class: 'mono muted block' }, item.store ?? ''), item.engine ? h('span', { class: 'mono muted block' }, `engine ${item.engine}`) : null),
               h('span', { class: 'num im-num' }, item.error ? 'error' : `${item.count} sessions`),
               item.count > 0 ? button('Show', { class: 'ghost', onclick: () => this.hooks.showInstallation(item.key) }) : null,
@@ -133,7 +133,7 @@ export class HarnessesView {
               sandbox ? button('Forget', { class: 'ghost', title: 'Stop listing it; its folder stays', onclick: () => void this.forgetSandbox(sandbox) }) : null);
           }),
           ...sandboxes.filter((one) => !others.some((item) => item.store === one.store)).map((sandbox) => h('div', { class: 'install-row' },
-            h('span', { class: 'grow' }, h('b', {}, `sandbox ${sandbox.name}`), h('span', { class: 'tag im-chip' }, 'sandbox'),
+            h('span', { class: 'grow' }, h('b', {}, `sandbox ${sandbox.name}`), chip('sandbox'),
               h('span', { class: 'mono muted block' }, sandbox.root), h('span', { class: 'muted block' }, 'Its store appears at the first run.')),
             button([icon('term'), 'Run'], { class: 'ghost', onclick: () => void this.runSandbox(sandbox) }),
             button('Forget', { class: 'ghost', onclick: () => void this.forgetSandbox(sandbox) }))))
@@ -187,8 +187,8 @@ export class HarnessesView {
       group('On the system',
         harness.install_command
           ? h('pre', { class: 'code' }, harness.install_command)
-          : h('p', { class: 'note' }, `${harness.display} installs with its own script; its page in docs/harnesses says how.`)),
-      h('p', { class: 'note' }, harness.status === 'missing'
+          : inlineNote(`${harness.display} installs with its own script; its page in docs/harnesses says how.`)),
+      inlineNote(harness.status === 'missing'
         ? 'It runs in a new terminal, with the harness’s own installer; check again when it ends.'
         : `${harness.display} is already installed: the same command updates it. It runs in a new terminal; check again when it ends.`),
       harness.install_command ? button([icon('term'), 'Run in a terminal'], { onclick: () => void this.installSystem(harness, modal.close) }) : null);
@@ -197,7 +197,7 @@ export class HarnessesView {
         harness.sandbox_package
           ? h('p', {}, 'npm installs ', h('code', {}, harness.sandbox_package), ' into ', h('code', {}, `mukade-data/sandboxes/${harness.id}-<name>`),
             ', with a store of its own: it touches neither the installed harness nor its sessions. Hops can land in it, and Run opens it in a terminal. It needs Node.js 22 or later, and its own sign-in.')
-          : h('p', { class: 'note' }, `${harness.display} is not an npm package: it has no sandbox.`)),
+          : inlineNote(`${harness.display} is not an npm package: it has no sandbox.`)),
       harness.sandbox_package ? field('Name', 'sandbox-name', name) : null,
       note,
       harness.sandbox_package ? button([icon('import'), 'Install in a sandbox'], { class: 'primary', onclick: () => void run() }) : null);

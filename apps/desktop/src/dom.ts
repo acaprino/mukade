@@ -1,7 +1,7 @@
 // A small element builder: the views build their DOM with it, never with innerHTML, so text from a
 // session is always text.
 
-import { keyCaps, segmentedControl } from '@acaprino/imago/ui';
+import { chipHtml, componentElement, keyCaps, noteHtml, segmentedControl, type ChipTone, type Tone } from '@acaprino/imago/ui';
 
 type Child = Node | string | number | null | undefined | false;
 type Attrs = Record<string, string | number | boolean | null | undefined | EventListener>;
@@ -19,11 +19,6 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
   if (tag === 'select') node.classList.add('im-select');
   if (tag === 'textarea') node.classList.add('im-textarea');
   if (tag === 'input') node.classList.add(attrs.type === 'checkbox' ? 'im-check' : attrs.type === 'radio' ? 'im-radio' : 'im-input');
-  if (node.classList.contains('im-chip')) {
-    if (node.classList.contains('live')) node.dataset.imTone = 'ok';
-    if (node.classList.contains('bad')) node.dataset.imTone = 'err';
-    if (node.classList.contains('warn')) node.dataset.imTone = 'warn';
-  }
   append(node, children);
   return node;
 }
@@ -46,7 +41,7 @@ const SVG = 'http://www.w3.org/2000/svg';
 /** One of the `<symbol>`s in index.html. */
 export function icon(name: string, extra = ''): SVGSVGElement {
   const svg = document.createElementNS(SVG, 'svg');
-  svg.setAttribute('class', `icon ${extra}`.trim());
+  svg.setAttribute('class', `im-icon ${extra}`.trim());
   svg.setAttribute('aria-hidden', 'true');
   const use = document.createElementNS(SVG, 'use');
   use.setAttribute('href', `#i-${name}`);
@@ -140,4 +135,37 @@ export function viewSwitch<T extends string>(label: string, items: readonly { va
 /** A toggle: a small button that is pressed or not (the kinds of events, a member, a recipient). */
 export function toggle(label: Child | Child[], pressed: boolean, onClick: () => void, attrs: Attrs = {}): HTMLButtonElement {
   return button(label, { ...attrs, class: 'im-btn--sm', 'aria-pressed': String(pressed), onclick: onClick });
+}
+
+// --- facts, notes, chips and small controls: the package's markup ----------------------------------
+
+/** A list of names and values: the values are content and can be selected. A code value is `im-facts-code` on its dd. */
+export function facts(...children: Child[]): HTMLElement {
+  return h('dl', { class: 'im-facts' }, ...children);
+}
+
+/** A message that stays in the panel it is about: a warning or an error is announced (role alert). Content may be nodes. */
+export function inlineNote(content: Child | Child[], tone?: 'warn' | 'err'): HTMLElement {
+  const parts = Array.isArray(content) ? content : [content];
+  const plain = parts.length === 1 && typeof parts[0] === 'string';
+  const element = componentElement<HTMLElement>(noteHtml({ message: plain ? (parts[0] as string) : ' ', tone }));
+  if (!plain) {
+    const span = element.querySelector('span')!;
+    span.replaceChildren();
+    append(span, parts);
+  }
+  return element;
+}
+
+/** A status chip with its tone (the accent is data, not a status). */
+export function chip(label: string, tone: ChipTone = '', title?: string): HTMLElement {
+  const element = componentElement<HTMLElement>(chipHtml(label, tone));
+  if (title) element.title = title;
+  return element;
+}
+
+/** A button that is an icon alone: its name is its accessible name and its tooltip. */
+export function iconButton(label: string, glyph: string, attrs: Attrs = {}): HTMLButtonElement {
+  const node = h('button', { type: 'button', class: 'im-icon-btn', 'aria-label': label, title: label, ...attrs }, icon(glyph));
+  return node;
 }

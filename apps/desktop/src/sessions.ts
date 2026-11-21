@@ -3,7 +3,7 @@
 
 import './sessions.css';
 import { setPanelState } from '@acaprino/imago/ui';
-import { fill, h, icon } from './dom.ts';
+import { chip, fill, h, icon } from './dom.ts';
 import { listbox, reveal, type ListRow } from './lists.ts';
 import { currentInstallation, state } from './state.ts';
 import { mark, shortTime, visible, type Place } from './tree.ts';
@@ -34,10 +34,10 @@ function cells(place: Place, actions: SessionsActions): Node[] {
   else if (marker) out.push(h('span', { class: marker.kind }, marker.text));
   out.push(h('span', { class: 'grow' }, row.title ?? `${row.id.slice(0, 8)} (no title)`));
   if (children && !open) out.push(h('span', { class: 'num im-num' }, `${children} inside`));
-  if (row.live) out.push(h('span', { class: 'tag im-chip live' }, 'live'));
-  if (row.archived) out.push(h('span', { class: 'tag im-chip' }, 'archived'));
-  if (isHosted(row)) out.push(h('span', { class: 'tag im-chip', title: row.unreadable }, 'hosted'));
-  else if (row.unreadable) out.push(h('span', { class: 'tag im-chip bad', title: row.unreadable }, 'unreadable'));
+  if (row.live) out.push(chip('live', 'ok'));
+  if (row.archived) out.push(chip('archived'));
+  if (isHosted(row)) out.push(chip('hosted', '', row.unreadable));
+  else if (row.unreadable) out.push(chip('unreadable', 'err', row.unreadable));
   out.push(h('span', { class: 'time', title: row.updated ?? '' }, shortTime(row.updated)));
   if (depth) (out[0] as HTMLElement).style.marginLeft = `${Math.min(depth, 6) * 18}px`;
   return out;

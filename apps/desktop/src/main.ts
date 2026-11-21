@@ -9,7 +9,7 @@ import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
 import { boundTo, chatIndex } from './chatindex.ts';
 import { inRoomsBox, renderDetail } from './detail.ts';
-import { button, caps, commandLine, fill, h } from './dom.ts';
+import { button, caps, commandLine, facts, fill, h, inlineNote } from './dom.ts';
 import { canStartIn, openHandoff } from './handoff.ts';
 import { openHop, openImport, recoverWrite, type JobHooks } from './hop.ts';
 import { VIEWS, writeFrame } from './frame.ts';
@@ -572,8 +572,8 @@ async function exportSelected(saveAs: boolean): Promise<void> {
     report(`exported ${exported.messages} messages → ${exported.path}`);
     const modal = openModal({ title: 'Exported', subtitle: `${exported.messages} messages`, icon: 'export' });
     fill(modal.body, h('div', { class: 'mk-col' },
-      h('dl', { class: 'kv' }, h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
-      h('p', { class: 'note' }, 'Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.')));
+      facts( h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
+      inlineNote(['Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.'])));
     fill(modal.foot, h('span', { class: 'spring' }),
       button(['Import it… ', caps('I')], { onclick: () => { modal.close(); importDocument(); } }),
       button(['Close ', caps('Escape')], { class: 'primary', onclick: () => modal.close() }));
@@ -600,7 +600,7 @@ async function resume(key: string, id: string): Promise<void> {
       const modal = openModal({ title: 'Resume', subtitle: 'this harness has no terminal UI', icon: 'play' });
       // The backend sends the command that continues it instead, as data.
       const command = commandLine(result.command);
-      fill(modal.body, h('div', { class: 'mk-col' }, h('p', { class: 'note' }, result.refusal),
+      fill(modal.body, h('div', { class: 'mk-col' }, inlineNote(result.refusal),
         command ? h('div', { class: 'mk-cmd' }, h('pre', { class: 'code' }, command)) : null));
       const copy = button('Copy the command', { class: 'primary', onclick: async () => { await navigator.clipboard.writeText(command || result.refusal!).catch(() => {}); copy.textContent = 'Copied'; } });
       fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }), copy);
@@ -772,7 +772,7 @@ function showHelp(): void {
     ['Enter', 'open the transcript of the selected session'], ['Space', 'fold a parent session; in the chat, play the room'],
     ['Esc', 'close the top layer, leave a field, close the reader, go back'], ['F6 · Shift+F6', 'next · previous region'], ['Ctrl+Enter', 'chat: send'],
   ];
-  fill(modal.body, h('dl', { class: 'kv keys' },
+  fill(modal.body, facts(
     ...bound.flatMap((command) => [h('dt', {}, formatKeys(command.keys!).join(' ')), h('dd', {}, command.title)]),
     ...lists.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
 }

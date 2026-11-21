@@ -2,6 +2,7 @@
 // or folder, in one list over the window. A result opens its place: the room, a member's details,
 // the room at that event in the feed, or the session in the tree.
 
+import { loader } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { chatIndex } from './chatindex.ts';
 import { matches } from './chatmodel.ts';
@@ -65,7 +66,7 @@ export function openSearch(hooks: SearchHooks): void {
     const mine = ++ticket;
     const query = input.value.trim();
     if (!query) { results = []; active = 0; paint(); fill(note, 'Type to search. ↑ ↓ to move, ⏎ to open.'); return; }
-    fill(note, 'Searching…');
+    fill(note, loader(document, 'Searching…'));
     const limit = scope === 'all' ? FEW : MANY;
     const found: Result[] = [];
     const errors: string[] = [];

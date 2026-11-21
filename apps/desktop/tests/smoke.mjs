@@ -136,13 +136,14 @@ try {
     await page.keyboard.press('Escape');
     // A chat hosted by ChatGPT: its chip, the work it left in its folder, and starting another harness there.
     await page.locator('[data-id="codex"]').click();
-    await page.locator('#sessions .row .tag', { hasText: 'hosted' }).waitFor();
+    await page.locator('#sessions .row .im-chip', { hasText: 'hosted' }).waitFor();
     await page.locator('#detail .work-repo').nth(2).waitFor();
     const repositories = await page.locator('#detail .work-repo').allInnerTexts();
     if (repositories.length !== 3) failures.push(`${name}: ${repositories.length} repositories in the work, not 3`);
     if (!repositories.some((text) => text.includes('feature/stack-detection · no upstream · 3 commits on no remote · 133 uncommitted'))) failures.push(`${name}: the line of stack-analyser is missing`);
-    if (await page.locator('#detail .note:not(.err)', { hasText: 'Hosted by ChatGPT: the conversation is not on this machine' }).count() !== 1) failures.push(`${name}: the hosted note is missing or red`);
+    if (await page.locator('#detail .im-note:not([data-im-tone="err"])', { hasText: 'Hosted by ChatGPT: the conversation is not on this machine' }).count() !== 1) failures.push(`${name}: the hosted note is missing or red`);
     if (await page.locator('#detail .work .im-chip', { hasText: 'at risk' }).count() !== 2) failures.push(`${name}: two repositories should be at risk`);
+    if (!(await page.locator('#detail dl.im-facts').count()) || await page.locator('#detail dl.kv').count()) failures.push(`${name}: the detail does not write its facts as im-facts`);
     await page.screenshot({ path: `${out}hosted-${name}.png` });
     await page.getByRole('button', { name: /^Start in/ }).waitFor();
     await page.getByRole('listbox', { name: 'Sessions' }).focus();

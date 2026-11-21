@@ -90,7 +90,7 @@ export class Reader {
     }
     fill(this.root, head, transcript && transcript.hidden_turns > 0 && opts.tab === 'conversation'
       ? h('div', { class: 'reader-hidden' }, `${transcript.hidden_turns} earlier turn${transcript.hidden_turns === 1 ? '' : 's'} not shown · `,
-        button(['Show all ', caps('T')], { class: 'link', onclick: () => this.actions.toggleTurns() }))
+        button(['Show all ', caps('T')], { class: 'im-btn--ghost im-btn--sm', onclick: () => this.actions.toggleTurns() }))
       : null, body);
     if (body === this.scroller) this.schedule();
   }

@@ -5,7 +5,7 @@
 .row .caret { width: 12px; flex: none; color: var(--im-muted); text-align: center; cursor: pointer; }
 .row .spawn { color: var(--im-info); font: 12px var(--im-font-code); white-space: nowrap; }
 .row .fork { color: var(--im-warn); font: 12px var(--im-font-code); white-space: nowrap; display: inline-flex; align-items: center; gap: 3px; }
-.row .fork .icon { width: 13px; height: 13px; }
+.row .fork svg { width: 13px; height: 13px; }
 .row .other { color: var(--im-muted); }
 .row.untitled .grow { color: var(--im-muted); }
 .row mark { background: none; color: var(--im-accent-text); }

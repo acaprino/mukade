@@ -2,9 +2,9 @@
 // reader takes this column over when it opens (reader.ts).
 
 import './detail.css';
-import { iconHtml } from '@acaprino/imago/ui';
+import { iconHtml, loader } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
-import { button, fill, h, icon, caps } from './dom.ts';
+import { button, caps, chip, facts, fill, h, icon, inlineNote } from './dom.ts';
 import { canStartIn } from './handoff.ts';
 import { currentInstallation, selectedRow, state } from './state.ts';
 import { ancestors, childrenText, kindText, mark } from './tree.ts';
@@ -23,7 +23,7 @@ export interface DetailActions {
 }
 
 function kv(pairs: [string, Node | string | null | undefined][]): HTMLElement {
-  const list = h('dl', { class: 'kv' });
+  const list = facts();
   for (const [key, value] of pairs) {
     if (value === null || value === undefined || value === '') continue;
     list.append(h('dt', {}, key), h('dd', {}, value));
@@ -54,8 +54,8 @@ const WORK_DELAY = 200;
 function drawWork(host: HTMLElement): void {
   const read = workRead;
   if (!read) return;
-  if (read.kind === 'loading') fill(host, h('p', { class: 'work-wait muted' }, 'Reading…'));
-  else if (read.kind === 'error') fill(host, h('p', { class: 'note' }, read.message));
+  if (read.kind === 'loading') fill(host, loader(document, 'Reading…'));
+  else if (read.kind === 'error') fill(host, inlineNote(read.message));
   else fill(host, renderWork(read.work));
 }
 
@@ -96,10 +96,10 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const installation = currentInstallation();
   const row = selectedRow();
   const head = h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Session'), row ? h('small', { title: row.id }, row.id.slice(0, 8)) : null, h('span', { class: 'spring' }),
-    row?.live ? h('span', { class: 'tag im-chip live' }, 'live') : null, closeButton(actions));
+    row?.live ? chip('live', 'ok') : null, closeButton(actions));
   if (!installation || !row) {
     const empty = h('div', { class: 'empty im-empty' });
-    if (installation?.error) empty.append(h('h2', {}, installation.label), h('p', { class: 'note err' }, installation.error));
+    if (installation?.error) empty.append(h('h2', {}, installation.label), inlineNote(installation.error, 'err'));
     else empty.append(h('p', {}, 'Pick a session to see its details.'));
     if (installation?.scanned) empty.append(kv([['store', installation.store], ['engine', installation.engine]]));
     fill(root, head, h('div', { class: 'column-body im-panel-body' }, empty));
@@ -143,8 +143,8 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
     h('h3', {}, row.title ?? row.id),
     actionsRow,
     row.unreadable ? (isHosted(row)
-      ? h('p', { class: 'note' }, 'Hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder')
-      : h('p', { class: 'note err' }, `Cannot be read: ${row.unreadable}`)) : null,
+      ? inlineNote('Hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder')
+      : inlineNote(`Cannot be read: ${row.unreadable}`, 'err')) : null,
     kv([
       ['harness', installation.label],
       ['id', row.id],
@@ -161,7 +161,7 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
     ]),
     work,
     lineage,
-    row.live ? h('p', { class: 'note' }, `This session is open in ${installation.label}. A hop or export copies what is on disk now.`) : null,
+    row.live ? inlineNote(`This session is open in ${installation.label}. A hop or export copies what is on disk now.`) : null,
   )));
 }
 

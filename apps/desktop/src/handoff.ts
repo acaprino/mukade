@@ -1,8 +1,9 @@
 // Start another harness in a session's folder, with a note on what the session was doing. The
 // note is composed by the backend and edited here; nothing is written until Start.
 
+import { loader } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
-import { button, caps, field, fill, h } from './dom.ts';
+import { button, caps, field, fill, h, inlineNote } from './dom.ts';
 import { openModal } from './modal.ts';
 import { state } from './state.ts';
 import type { HandedOff, HandoffOptions, SessionRow } from './types.ts';
@@ -20,19 +21,19 @@ export function openHandoff(row: SessionRow, done: (result: HandedOff, label: st
 
 async function run(key: string, row: SessionRow, done: (result: HandedOff, label: string) => void): Promise<void> {
   const modal = openModal({ title: 'Start in…', subtitle: `${row.title ?? row.id.slice(0, 8)} · reading the session…`, icon: 'play' });
-  fill(modal.body, h('p', { class: 'muted' }, 'Composing the note…'));
+  fill(modal.body, loader(document, 'Composing the note…'));
   const close = button(['Close ', caps('Escape')], { onclick: () => modal.close() });
   let options: HandoffOptions;
   try {
     options = await api.handoffOptions(key, row.id);
   } catch (error) {
-    fill(modal.body, h('p', { class: 'note err' }, errorText(error)));
+    fill(modal.body, inlineNote(errorText(error), 'err'));
     fill(modal.foot, h('span', { class: 'spring' }), close);
     return;
   }
   modal.setTitle('Start in…', row.title ?? row.id.slice(0, 8));
   if (options.refusal || !options.destinations.length) {
-    fill(modal.body, h('p', { class: 'note warn' }, options.refusal ?? 'No installation mukade can start from a note.'));
+    fill(modal.body, inlineNote(options.refusal ?? 'No installation mukade can start from a note.', 'warn'));
     fill(modal.foot, h('span', { class: 'spring' }), close);
     return;
   }
@@ -41,12 +42,14 @@ async function run(key: string, row: SessionRow, done: (result: HandedOff, label
   for (const item of options.destinations) dest.append(h('option', { value: item.key }, item.label));
   const note = h('textarea', { id: 'handoff-note', rows: '12', spellcheck: 'false' }) as HTMLTextAreaElement;
   note.value = options.note;
-  const problem = h('p', { class: 'note err', role: 'alert', hidden: true });
+  const problem = inlineNote(' ', 'err');
+  problem.hidden = true;
+  const say = (text: string): void => { problem.querySelector('span')!.textContent = text; };
   const cwd = options.cwd ?? row.cwd;
   fill(modal.body, h('div', { class: 'mk-col' },
     field('Harness', 'handoff-dest', dest),
     field('Note · the first thing it reads', 'handoff-note', note),
-    cwd ? h('p', { class: 'note' }, `It starts in ${cwd}. The note is saved in mukade’s data folder and the harness is told to read it.`) : null,
+    cwd ? inlineNote(`It starts in ${cwd}. The note is saved in mukade’s data folder and the harness is told to read it.`) : null,
     problem));
 
   dest.focus({ preventScroll: true });
@@ -65,7 +68,7 @@ async function run(key: string, row: SessionRow, done: (result: HandedOff, label
     } catch (error) {
       modal.lock(false);
       starting = false;
-      problem.textContent = errorText(error);
+      say(errorText(error));
       problem.hidden = false;
       go.focus({ preventScroll: true });
     }

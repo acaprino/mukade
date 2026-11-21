@@ -1,9 +1,9 @@
 // F6, F8: the hop dialog (destination, compaction and its own options, subagents, branches,
 // reasoning, shell, prompt, model and tools, and the plan before anything runs), the import dialog, and the receipt both end in.
 
-import { pathField } from '@acaprino/imago/ui';
+import { loader, pathField } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
-import { button, caps, checkbox, choice as pickChoice, commandLine, copyButton, field, fill, group, h, radios } from './dom.ts';
+import { button, caps, checkbox, choice as pickChoice, commandLine, copyButton, facts, field, fill, group, h, inlineNote, radios } from './dom.ts';
 import type { Modal } from './modal.ts';
 import { openWriteDialog, type WriteDialog } from './write-recovery.ts';
 import type { HopArgs, HopOptions, Installation, Receipt, WriteOperation } from './types.ts';
@@ -48,18 +48,18 @@ function segmented<T extends string>(label: string, values: readonly T[], curren
 export async function openHop(source: string, id: string, hooks: JobHooks): Promise<void> {
   if (!writeChecked) return;
   const modal = openWriteDialog({ title: 'Hop', subtitle: 'reading the session…', icon: 'hop', wide: true }, message => hooks.report(message, true));
-  fill(modal.body, h('p', { class: 'muted' }, 'Looking at where it can go…'));
+  fill(modal.body, loader(document, 'Looking at where it can go…'));
   let options: HopOptions;
   try {
     options = await api.hopOptions(source, id);
   } catch (error) {
-    fill(modal.body, h('p', { class: 'note err' }, errorText(error)));
+    fill(modal.body, inlineNote(errorText(error), 'err'));
     fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }));
     return;
   }
   modal.setTitle('Hop', `${options.source_label} · ${options.title} · ${id.slice(0, 8)}`);
   if (!options.destinations.length) {
-    fill(modal.body, h('p', { class: 'note warn' }, 'No other installation mukade can write into.'));
+    fill(modal.body, inlineNote('No other installation mukade can write into.', 'warn'));
     return;
   }
   const choice: HopArgs = {
@@ -165,9 +165,9 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
   ].filter(Boolean);
   const right = h('div', { class: 'mk-col' },
     group('Plan · nothing is written yet', plan),
-    notTravelling.length ? h('p', { class: 'note warn' }, `Will not travel: ${notTravelling.join('; ')}.`) : null,
-    h('p', { class: 'note' }, 'What the destination cannot hold is listed as a loss in the receipt; no loss is silent.'),
-    options.live ? h('p', { class: 'note' }, 'The source session is live. The hop copies what is on disk now.') : null);
+    notTravelling.length ? inlineNote(`Will not travel: ${notTravelling.join('; ')}.`, 'warn') : null,
+    inlineNote('What the destination cannot hold is listed as a loss in the receipt; no loss is silent.'),
+    options.live ? inlineNote('The source session is live. The hop copies what is on disk now.') : null);
   const focused = document.activeElement;
   fill(modal.body, left, right);
   fill(modal.foot, h('span', { class: 'mono muted' }, 'A hop cannot be stopped once it starts.'), h('span', { class: 'spring' }),
@@ -204,7 +204,7 @@ export async function recoverWrite(hooks: JobHooks): Promise<void> {
       const modal = openWriteDialog({ title, icon: current.kind, wide: true }, message => hooks.report(message, true));
       modal.lock(true);
       const message = `${title} in progress…`;
-      fill(modal.body, h('p', { class: 'note' }, message));
+      fill(modal.body, inlineNote(message));
       hooks.job(message);
       void showWriteResult(modal, current, hooks, current.kind);
     }
@@ -230,8 +230,8 @@ async function showWriteResult(modal: WriteDialog, start: WriteOperation | (() =
     const reason = errorText(error);
     hooks.report(`${kind} failed: ${reason}`, true);
     modal.lock(false);
-    if (!retry) fill(modal.body, h('p', { class: 'note err' }, reason));
-    fill(modal.foot, retry ? h('p', { class: 'note err grow' }, reason) : h('span', { class: 'spring' }),
+    if (!retry) fill(modal.body, inlineNote(reason, 'err'));
+    fill(modal.foot, retry ? inlineNote(reason, 'err') : h('span', { class: 'spring' }),
       button(['Close ', caps('Escape')], { onclick: () => modal.close() }),
       retry ? button('Try again', { class: 'primary', onclick: retry }) : null);
     return false;
@@ -249,14 +249,14 @@ function commandField(label: string, argv: string[]): HTMLElement {
 export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, hooks: JobHooks): void {
   modal.setTitle(receipt.warning ? 'Written, with a warning' : 'Done', subtitle);
   const left = h('div', { class: 'mk-col' },
-    receipt.warning ? h('p', { class: 'note warn' }, receipt.warning) : null,
-    h('dl', { class: 'kv' },
+    receipt.warning ? inlineNote(receipt.warning, 'warn') : null,
+    facts(
       h('dt', {}, 'new id'), h('dd', {}, receipt.dest_id),
       h('dt', {}, 'into'), h('dd', {}, receipt.dest_label),
       h('dt', {}, 'location'), h('dd', {}, receipt.location),
       h('dt', {}, 'manifest'), h('dd', {}, receipt.manifest_path ?? 'not saved (no mukade-data folder)')),
     receipt.refusal
-      ? group('Resume · interactive', h('p', { class: 'note' }, receipt.refusal))
+      ? group('Resume · interactive', inlineNote(receipt.refusal))
       : commandField('Resume · interactive', receipt.interactive),
     receipt.headless.length ? commandField('Resume · headless', receipt.headless) : null,
     receipt.children.length ? group(`Subagents written · ${receipt.children.length}`,
@@ -264,7 +264,7 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
         h('span', { class: child.linked ? 'muted' : 'warn-text' }, child.linked ? ' · linked to its parent' : ' · not linked: the destination has no link'))))) : null);
   const right = h('div', { class: 'mk-col' },
     group(receipt.losses.length ? `Losses · ${receipt.losses.length}` : 'Losses',
-      receipt.losses.length ? h('ul', { class: 'mk-plan mk-losses' }, ...receipt.losses.map((loss) => h('li', {}, loss))) : h('p', { class: 'note' }, 'None: everything travelled.')),
+      receipt.losses.length ? h('ul', { class: 'mk-plan mk-losses' }, ...receipt.losses.map((loss) => h('li', {}, loss))) : inlineNote('None: everything travelled.')),
     receipt.reply ? group(`Reply from ${receipt.dest_label}`, h('pre', { class: 'code' }, receipt.reply)) : null);
   fill(modal.body, left, right);
   const close = button(['Close ', caps('Enter')], { class: 'primary', onclick: () => modal.close() });
@@ -297,7 +297,7 @@ export function openImport(installations: Installation[], into: string | null, d
     field('Document', 'import-path', source),
     field('Into', 'import-into', dest),
     field('Prompt · optional, runs the destination once', 'import-prompt', prompt),
-    h('p', { class: 'note' }, 'The document becomes a new session of the installation, with its own id; the source is not touched.')));
+    inlineNote('The document becomes a new session of the installation, with its own id; the source is not touched.')));
   let importing = false;
   const run = async () => {
     if (importing) return;
