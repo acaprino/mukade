@@ -18,10 +18,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 .column-head small { color: var(--im-muted); }
 .column-head h2 { font: 600 1em var(--im-font-head); }
 .warn-text { color: var(--im-warn); }
-.row-fields { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
-.row-fields > * { flex: 1 1 180px; }
 .hint { font-size: 12px; }
-.plan.losses li::before { content: '· '; color: var(--im-warn); }
 dl.kv.keys { grid-template-columns: 140px minmax(0, 1fr); }
 .empty h2 { margin: 0 0 8px; font: 500 15px var(--im-font-head); letter-spacing: .07em; text-transform: uppercase; color: var(--im-text); }
 .empty p { max-width: 360px; margin: 0 0 6px; line-height: 1.6; color: var(--im-text-2); }

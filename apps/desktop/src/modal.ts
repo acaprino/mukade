@@ -23,6 +23,7 @@ export function openModal(opts: { title: string; subtitle?: string; icon?: strin
     closeLabel: 'Close',
     onClose() { forms.delete(form); opts.onClose?.(); },
   });
+  form.body.classList.add('mk-body');
   forms.add(form);
   return form;
 }

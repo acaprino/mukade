@@ -111,13 +111,24 @@ try {
     if (await page.locator('#sessions [role="option"][aria-selected="true"]').getAttribute('data-id') !== selectedBefore) failures.push(`${name}: the selected session changed`);
     // Enter on Cancel cancels: it never starts the hop (a write).
     await page.keyboard.press('h');
-    await page.locator('.im-form-dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .mk-plan').waitFor();
     await page.getByRole('button', { name: /^Cancel/ }).focus();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(400);
     if (await page.locator('.im-form-dialog').count()) failures.push(`${name}: Enter on Cancel did not cancel the hop`);
     await page.keyboard.press('h');
-    await page.locator('.im-form-dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .mk-plan').waitFor();
+    // Fields: a visible label above each, "All branches" a checkbox, and the destinations radios the arrows walk (the focus follows the pick).
+    const unlabelled = await page.evaluate(() => [...document.querySelectorAll('.im-form-dialog .im-field')]
+      .filter((one) => !one.querySelector(':scope > label.im-field-label, :scope > legend.im-field-label')).length);
+    if (unlabelled) failures.push(`${name}: ${unlabelled} fields of the hop have no visible label`);
+    await page.getByRole('checkbox', { name: /^All branches/ }).waitFor();
+    const firstDestination = page.getByRole('radio').first();
+    await firstDestination.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
     await page.screenshot({ path: `${out}hop-${name}.png` });
     await page.keyboard.press('Enter');
     await page.getByText('Losses · 2').waitFor();
@@ -211,7 +222,7 @@ try {
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
       if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: Escape did not close the members at 900`);
-      await page.getByRole('button', { name: /^Graph/ }).click();
+      await page.getByRole('tab', { name: /^Graph/ }).click();
       await page.locator('.graph-canvas svg .node').first().click();
       await page.locator('#chat-members .member').first().waitFor();
       await page.keyboard.press('Escape');

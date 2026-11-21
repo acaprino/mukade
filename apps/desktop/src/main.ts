@@ -571,7 +571,7 @@ async function exportSelected(saveAs: boolean): Promise<void> {
     setJob(null);
     report(`exported ${exported.messages} messages → ${exported.path}`);
     const modal = openModal({ title: 'Exported', subtitle: `${exported.messages} messages`, icon: 'export' });
-    fill(modal.body, h('div', { class: 'col' },
+    fill(modal.body, h('div', { class: 'mk-col' },
       h('dl', { class: 'kv' }, h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
       h('p', { class: 'note' }, 'Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.')));
     fill(modal.foot, h('span', { class: 'spring' }),
@@ -600,8 +600,8 @@ async function resume(key: string, id: string): Promise<void> {
       const modal = openModal({ title: 'Resume', subtitle: 'this harness has no terminal UI', icon: 'play' });
       // The backend sends the command that continues it instead, as data.
       const command = commandLine(result.command);
-      fill(modal.body, h('div', { class: 'col' }, h('p', { class: 'note' }, result.refusal),
-        command ? h('div', { class: 'cmd' }, h('pre', { class: 'code' }, command)) : null));
+      fill(modal.body, h('div', { class: 'mk-col' }, h('p', { class: 'note' }, result.refusal),
+        command ? h('div', { class: 'mk-cmd' }, h('pre', { class: 'code' }, command)) : null));
       const copy = button('Copy the command', { class: 'primary', onclick: async () => { await navigator.clipboard.writeText(command || result.refusal!).catch(() => {}); copy.textContent = 'Copied'; } });
       fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }), copy);
       report('resume refused: no terminal UI');

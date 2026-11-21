@@ -52,12 +52,18 @@ export async function checkProduction(browser) {
     await page.waitForTimeout(400);
     assert.equal(await page.evaluate(() => window.testIpc.reads), reads + 1, 'F5 and Ctrl+R read nothing');
     await page.locator('#detail').getByRole('button', { name: 'Hop H', exact: true }).click();
-    const summary = page.locator('details.more > summary');
+    const summary = page.locator('details.mk-more > summary');
     await summary.focus();
     await summary.press('Enter');
     assert.equal(await summary.evaluate(el => el.parentElement.open), true);
     await summary.press('Tab');
     assert.equal(await page.locator('#hop-model').evaluate(el => el === document.activeElement), true);
+    assert.equal(await page.evaluate(() => window.testIpc.hops), 0);
+    // Enter on a radio or a checkbox is the control's own: it starts no hop (a write).
+    for (const target of [page.getByRole('radio').first(), page.locator('#hop-no-tools')]) {
+      await target.focus();
+      await target.press('Enter');
+    }
     assert.equal(await page.evaluate(() => window.testIpc.hops), 0);
     await page.keyboard.press('Escape');
     // The reader beside the list: the list's separator (kept under mukade.width.sessions) exists only while it is open.

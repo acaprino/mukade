@@ -7,7 +7,7 @@ import './harnesses.css';
 import { loader, setPanelState } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { mark } from './chatviews.ts';
-import { button, fill, h, icon, caps } from './dom.ts';
+import { button, caps, field, fill, group, h, icon } from './dom.ts';
 import { openModal } from './modal.ts';
 import type { HarnessView, Installation, Sandbox } from './types.ts';
 
@@ -183,8 +183,8 @@ export class HarnessesView {
     const modal = openModal({ title: `Install ${harness.display}`, icon: 'import', wide: true });
     const name = h('input', { id: 'sandbox-name', type: 'text', value: 'try', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
     const note = h('div', { class: 'field-note', 'aria-live': 'polite' });
-    const system = h('div', { class: 'col' },
-      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'On the system'),
+    const system = h('div', { class: 'mk-col' },
+      group('On the system',
         harness.install_command
           ? h('pre', { class: 'code' }, harness.install_command)
           : h('p', { class: 'note' }, `${harness.display} installs with its own script; its page in docs/harnesses says how.`)),
@@ -192,13 +192,13 @@ export class HarnessesView {
         ? 'It runs in a new terminal, with the harness’s own installer; check again when it ends.'
         : `${harness.display} is already installed: the same command updates it. It runs in a new terminal; check again when it ends.`),
       harness.install_command ? button([icon('term'), 'Run in a terminal'], { onclick: () => void this.installSystem(harness, modal.close) }) : null);
-    const sandbox = h('div', { class: 'col' },
-      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'In a sandbox'),
+    const sandbox = h('div', { class: 'mk-col' },
+      group('In a sandbox',
         harness.sandbox_package
           ? h('p', {}, 'npm installs ', h('code', {}, harness.sandbox_package), ' into ', h('code', {}, `mukade-data/sandboxes/${harness.id}-<name>`),
             ', with a store of its own: it touches neither the installed harness nor its sessions. Hops can land in it, and Run opens it in a terminal. It needs Node.js 22 or later, and its own sign-in.')
           : h('p', { class: 'note' }, `${harness.display} is not an npm package: it has no sandbox.`)),
-      harness.sandbox_package ? h('div', { class: 'field im-field' }, h('label', { for: 'sandbox-name' }, 'Name'), name) : null,
+      harness.sandbox_package ? field('Name', 'sandbox-name', name) : null,
       note,
       harness.sandbox_package ? button([icon('import'), 'Install in a sandbox'], { class: 'primary', onclick: () => void run() }) : null);
     const run = async (): Promise<void> => {

@@ -2,7 +2,7 @@
 // note is composed by the backend and edited here; nothing is written until Start.
 
 import { api, errorText } from './api.ts';
-import { button, fill, h, caps } from './dom.ts';
+import { button, caps, field, fill, h } from './dom.ts';
 import { openModal } from './modal.ts';
 import { state } from './state.ts';
 import type { HandedOff, HandoffOptions, SessionRow } from './types.ts';
@@ -43,9 +43,9 @@ async function run(key: string, row: SessionRow, done: (result: HandedOff, label
   note.value = options.note;
   const problem = h('p', { class: 'note err', role: 'alert', hidden: true });
   const cwd = options.cwd ?? row.cwd;
-  fill(modal.body, h('div', { class: 'col' },
-    h('div', { class: 'field im-field' }, h('label', { for: 'handoff-dest' }, 'Harness'), dest),
-    h('div', { class: 'field im-field' }, h('label', { for: 'handoff-note' }, 'Note · the first thing it reads'), note),
+  fill(modal.body, h('div', { class: 'mk-col' },
+    field('Harness', 'handoff-dest', dest),
+    field('Note · the first thing it reads', 'handoff-note', note),
     cwd ? h('p', { class: 'note' }, `It starts in ${cwd}. The note is saved in mukade’s data folder and the harness is told to read it.`) : null,
     problem));
 

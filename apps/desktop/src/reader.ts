@@ -4,7 +4,7 @@
 
 import './reader.css';
 import { claimKey, setPanelState } from '@acaprino/imago/ui';
-import { button, fill, h, caps } from './dom.ts';
+import { button, caps, choice, fill, h, viewSwitch } from './dom.ts';
 import type { Block, EntryView, Transcript } from './types.ts';
 
 /** Tool input shown before "Show all" (spec F5). */
@@ -71,12 +71,9 @@ export class Reader {
       button(['‹ Sessions ', caps('Escape')], { class: 'ghost', 'aria-label': 'Back to the sessions list', onclick: () => this.actions.back() }),
       h('h2', { class: 'reader-title', title: opts.title }, opts.title),
       h('span', { class: 'spring' }),
-      h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Reader tab' },
-        button('Conversation', { 'aria-pressed': String(opts.tab === 'conversation'), onclick: () => this.actions.setTab('conversation') }),
-        button('Raw', { 'aria-pressed': String(opts.tab === 'raw'), onclick: () => this.actions.setTab('raw') })),
-      h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'How much to show' },
-        button(turnsLabel, { 'aria-pressed': String(opts.turns !== 0), onclick: () => opts.turns === 0 && this.actions.toggleTurns() }),
-        button(['All ', caps('T')], { 'aria-pressed': String(opts.turns === 0), onclick: () => opts.turns !== 0 && this.actions.toggleTurns() })));
+      viewSwitch('Reader tab', [{ value: 'conversation' as const, content: ['Conversation'] }, { value: 'raw' as const, content: ['Raw'] }], opts.tab, (tab) => this.actions.setTab(tab)),
+      choice('How much to show', [{ value: 'last', label: turnsLabel }, { value: 'all', label: 'All' }], opts.turns === 0 ? 'all' : 'last',
+        (value) => { if ((value === 'all') !== (opts.turns === 0)) this.actions.toggleTurns(); }));
     let body: Node;
     if (opts.error || !transcript) {
       fill(this.root, head, h('div', { class: 'im-panel-body' }));
@@ -107,7 +104,7 @@ export class Reader {
     select.addEventListener('change', () => this.actions.showRaw(select.value));
     if (!entryId && transcript.entries[0]) queueMicrotask(() => this.actions.showRaw(transcript.entries[0].id));
     return h('div', { class: 'raw' },
-      h('div', { class: 'raw-head' }, h('label', { class: 'lab' }, 'Native records of'), select),
+      h('div', { class: 'raw-head' }, h('label', { class: 'im-field-label', for: 'reader-raw-entry' }, 'Native records of'), Object.assign(select, { id: 'reader-raw-entry' })),
       h('pre', { class: 'code raw-json' }, raw === null ? 'Reading…' : JSON.stringify(raw.length === 1 ? raw[0] : raw, null, 2)));
   }
 

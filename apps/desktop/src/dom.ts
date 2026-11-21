@@ -1,7 +1,7 @@
 // A small element builder: the views build their DOM with it, never with innerHTML, so text from a
 // session is always text.
 
-import { keyCaps } from '@acaprino/imago/ui';
+import { keyCaps, segmentedControl } from '@acaprino/imago/ui';
 
 type Child = Node | string | number | null | undefined | false;
 type Attrs = Record<string, string | number | boolean | null | undefined | EventListener>;
@@ -15,8 +15,10 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
     else if (value === true) node.setAttribute(name, '');
     else node.setAttribute(name, String(value));
   }
+  // Each native control carries the class of its drawing: input.im-input for a text, textarea.im-textarea, input.im-check, input.im-radio, select.im-select.
   if (tag === 'select') node.classList.add('im-select');
-  if (tag === 'textarea' || (tag === 'input' && !['checkbox', 'radio'].includes(String(attrs.type)))) node.classList.add('im-input');
+  if (tag === 'textarea') node.classList.add('im-textarea');
+  if (tag === 'input') node.classList.add(attrs.type === 'checkbox' ? 'im-check' : attrs.type === 'radio' ? 'im-radio' : 'im-input');
   if (node.classList.contains('im-chip')) {
     if (node.classList.contains('live')) node.dataset.imTone = 'ok';
     if (node.classList.contains('bad')) node.dataset.imTone = 'err';
@@ -80,4 +82,62 @@ export function copyButton(text: string): HTMLButtonElement {
 /** A command line as one shell-ish line, each part quoted when it holds a space or a quote. */
 export function commandLine(argv: string[]): string {
   return argv.map((part) => (/[\s"']/.test(part) || part === '' ? `"${part.replace(/"/g, '\\"')}"` : part)).join(' ');
+}
+
+// --- fields and choices: one markup each, the package's -------------------------------------------
+
+/** A labelled control: the label sits above it, tied by `for`. */
+export function field(label: string, forId: string, ...controls: Child[]): HTMLElement {
+  return h('div', { class: 'im-field' }, h('label', { class: 'im-field-label', for: forId }, label), ...controls);
+}
+
+/** A labelled group of controls (radios, a choice, a receipt part): a fieldset with its legend. */
+export function group(label: string, ...controls: Child[]): HTMLElement {
+  return h('fieldset', { class: 'im-field' }, h('legend', { class: 'im-field-label' }, label), ...controls);
+}
+
+/** A checkbox with its text, in an option. Disabled by `disabled`, never by a class. */
+export function checkbox(label: Child, attrs: Attrs, onChange: (checked: boolean) => void, title?: string): { element: HTMLElement; input: HTMLInputElement } {
+  const input = h('input', { type: 'checkbox', ...attrs }) as HTMLInputElement;
+  input.addEventListener('change', () => onChange(input.checked));
+  return { input, element: h('label', { class: 'im-option', title }, input, label) };
+}
+
+/** The checked input of the choice named `key`, focused again: a choice redraws its window, so the focus is given back. */
+function refocus(key: string): void {
+  queueMicrotask(() => document.querySelector<HTMLElement>(`[data-mk-choice="${CSS.escape(key)}"] input:checked`)?.focus());
+}
+
+/** Radios in a fieldset, each with its content (a destination and its shell, say). */
+export function radios<T extends string>(label: string, items: readonly { value: T; content: Child[] }[], current: T, onPick: (value: T) => void): HTMLElement {
+  const name = `mk-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  const legend = h('legend', { class: 'im-field-label' }, label);
+  const set = h('fieldset', { class: 'im-field', 'data-mk-choice': name }, legend, ...items.map((item) => {
+    const input = h('input', { type: 'radio', name, value: item.value, checked: item.value === current }) as HTMLInputElement;
+    input.addEventListener('change', () => { if (input.checked) { onPick(item.value); refocus(name); } });
+    return h('label', { class: 'im-option' }, input, ...item.content);
+  }));
+  return set;
+}
+
+/** One choice among a few values, as the package's segmented control (radios in `im-seg`). */
+export function choice<T extends string>(label: string, values: readonly { value: T; label: string }[], current: T, onPick: (value: T) => void): HTMLElement {
+  const control = segmentedControl(document, { label, choices: values, value: current, onChange: (value) => { onPick(value as T); refocus(name); } });
+  const name = `mk-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  control.element.setAttribute('data-mk-choice', name);
+  return control.element;
+}
+
+/** A choice of view: buttons with `aria-selected` in a tablist of `im-seg`. */
+export function viewSwitch<T extends string>(label: string, items: readonly { value: T; content: Child[] }[], current: T, onPick: (value: T) => void): HTMLElement {
+  return h('div', { class: 'im-seg', role: 'tablist', 'aria-label': label }, ...items.map((item) => {
+    const node = h('button', { type: 'button', role: 'tab', 'aria-selected': String(item.value === current), tabindex: item.value === current ? '0' : '-1' }, ...item.content);
+    node.addEventListener('click', () => onPick(item.value));
+    return node;
+  }));
+}
+
+/** A toggle: a small button that is pressed or not (the kinds of events, a member, a recipient). */
+export function toggle(label: Child | Child[], pressed: boolean, onClick: () => void, attrs: Attrs = {}): HTMLButtonElement {
+  return button(label, { ...attrs, class: 'im-btn--sm', 'aria-pressed': String(pressed), onclick: onClick });
 }

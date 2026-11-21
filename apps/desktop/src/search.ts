@@ -6,7 +6,7 @@ import { api, errorText } from './api.ts';
 import { chatIndex } from './chatindex.ts';
 import { matches } from './chatmodel.ts';
 import { mark } from './chatviews.ts';
-import { button, fill, h, caps } from './dom.ts';
+import { button, caps, choice, fill, h } from './dom.ts';
 import { openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
 import type { Installation, SessionRow } from './types.ts';
@@ -41,8 +41,8 @@ export function openSearch(hooks: SearchHooks): void {
   // The sessions of every installation are read once per opening.
   listings = null;
 
-  const scopes = (): HTMLElement => h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Search in' },
-    ...SCOPES.map(([value, text]) => button(text, { 'aria-pressed': String(scope === value), onclick: () => { scope = value; void run(); drawTop(); } })));
+  const scopes = (): HTMLElement => choice('Search in', SCOPES.map(([value, text]) => ({ value, label: text })), scope,
+    (value) => { scope = value; void run(); drawTop(); });
   const top = h('div', { class: 'search-top' });
   const drawTop = () => fill(top, input, scopes());
 

@@ -8,7 +8,7 @@
 import './chat.css';
 import { api, errorKind, errorText } from './api.ts';
 import { claimKey, iconHtml, keyClaimed } from '@acaprino/imago/ui';
-import { button, caps, commandLine, fill, h, icon } from './dom.ts';
+import { button, caps, choice as pickChoice, commandLine, field, fill, group, h, icon, toggle, viewSwitch } from './dom.ts';
 import { listbox, reveal, stepIn } from './lists.ts';
 import { confirmModal, openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
@@ -44,10 +44,9 @@ function save(key: string, value: unknown): void {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private window: kept until it closes */ }
 }
 
-/** One choice among a few, as pressed buttons. */
+/** One choice among a few values: the package's segmented control. */
 function pickOne<T extends string>(label: string, options: readonly (readonly [T, string])[], current: T, pick: (value: T) => void): HTMLElement {
-  return h('div', { class: 'seg im-seg', role: 'group', 'aria-label': label },
-    ...options.map(([value, text]) => button(text, { 'aria-pressed': String(value === current), onclick: () => pick(value) })));
+  return pickChoice(label, options.map(([value, text]) => ({ value, label: text })), current, pick);
 }
 
 export interface ChatHooks {
@@ -542,20 +541,15 @@ export class ChatView {
       current?.closed_at ? h('span', { class: 'tag im-chip' }, 'closed') : null,
       h('span', { class: 'spring' }),
       button('Members', { class: 'ghost', title: 'Show the members and the instructions', onclick: () => this.hooks.showMembers() }),
-      h('div', { class: 'seg im-seg views', role: 'group', 'aria-label': 'View' },
-        ...VIEWS.map((view, i) => button([icon(view), view[0].toUpperCase() + view.slice(1), caps(String(i + 1))], {
-          'aria-pressed': String(this.view === view), onclick: () => this.setView(view),
-        }))),
+      viewSwitch('View', VIEWS.map((view, i) => ({ value: view, content: [icon(view), view[0].toUpperCase() + view.slice(1), caps(String(i + 1))] })), this.view, (view) => this.setView(view)),
       ...(current ? this.roomActions(current) : []));
     const tools = h('div', { class: 'stage-tools' },
       this.textInput,
-      h('div', { class: 'seg im-seg kinds', role: 'group', 'aria-label': 'Kinds of events' },
-        ...GROUPS.map((group) => button(KIND_LABEL[group], { 'aria-pressed': String(this.kinds.includes(group)), onclick: () => this.toggleKind(group) }))),
+      h('div', { class: 'im-cluster', role: 'group', 'aria-label': 'Kinds of events' },
+        ...GROUPS.map((kind) => toggle(KIND_LABEL[kind], this.kinds.includes(kind), () => this.toggleKind(kind)))),
       this.members.length > 1
-        ? h('div', { class: 'who-filter', role: 'group', 'aria-label': 'Only these members' },
-          ...this.members.map((member) => button([mark(member.harness), member.name], {
-            class: 'chip', 'aria-pressed': String(this.only.includes(member.member_id)), onclick: () => this.toggleOnly(member.member_id),
-          })))
+        ? h('div', { class: 'im-cluster', role: 'group', 'aria-label': 'Only these members' },
+          ...this.members.map((member) => toggle([mark(member.harness), member.name], this.only.includes(member.member_id), () => this.toggleOnly(member.member_id))))
         : null,
       filtered ? button('Clear', { class: 'ghost', onclick: () => this.clearFilter() }) : null);
     let body: HTMLElement;
@@ -695,13 +689,11 @@ export class ChatView {
     draft.to = draft.to.filter((name) => others.some((member) => member.name === name));
     const sending = this.busy === 'sending';
     return h('div', { class: 'composer' },
-      h('div', { class: 'recipients', role: 'group', 'aria-label': 'Recipients' },
-        h('span', { class: 'lab' }, 'To'),
-        button('everyone', { class: 'chip', 'aria-pressed': String(draft.to.length === 0), onclick: () => { draft.to = []; this.saveDrafts(); this.draw(); } }),
-        ...others.map((member) => button([mark(member.harness), member.name], {
-          class: 'chip', 'aria-pressed': String(draft.to.includes(member.name)),
-          onclick: () => { draft.to = draft.to.includes(member.name) ? draft.to.filter((name) => name !== member.name) : [...draft.to, member.name]; this.saveDrafts(); this.draw(); },
-        }))),
+      h('div', { class: 'im-cluster', role: 'group', 'aria-label': 'Recipients' },
+        h('span', { class: 'im-muted' }, 'To'),
+        toggle('everyone', draft.to.length === 0, () => { draft.to = []; this.saveDrafts(); this.draw(); }),
+        ...others.map((member) => toggle([mark(member.harness), member.name], draft.to.includes(member.name),
+          () => { draft.to = draft.to.includes(member.name) ? draft.to.filter((name) => name !== member.name) : [...draft.to, member.name]; this.saveDrafts(); this.draw(); }))),
       this.composer,
       h('div', { class: 'composer-foot' },
         this.composerNote,
@@ -716,8 +708,8 @@ export class ChatView {
     return h('div', { class: 'composer join' },
       h('p', { class: 'muted' }, 'To write here, the window joins the room as a member of its own; what it sends reaches the agents as yours.'),
       h('div', { class: 'join-line' },
-        h('div', { class: 'field im-field' }, h('label', { for: 'chat-join-name' }, 'Name'), this.nameInput),
-        h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Role'),
+        field('Name', 'chat-join-name', this.nameInput),
+        group('Role',
           pickOne('Role', [['peer', 'peer'], ['lead', 'lead']] as const, this.joinRole, (role) => { this.joinRole = role; this.draw(); })),
         button(this.busy === 'joining' ? 'Joining…' : 'Join', { class: 'primary', disabled: this.busy !== null, onclick: () => void this.join(room) })),
       this.joinNote);
@@ -898,7 +890,7 @@ export class ChatView {
       } else fill(note, h('span', { class: 'muted' }, 'Lowercase letters, digits, - and _.'));
     };
     input.addEventListener('input', paint);
-    fill(modal.body, h('div', { class: 'col' }, h('div', { class: 'field im-field' }, h('label', { for: 'room-name' }, 'Name'), input), note));
+    fill(modal.body, h('div', { class: 'mk-col' }, field('Name', 'room-name', input), note));
     fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }), go);
     modal.root.onkeydown = (key) => { if (key.key === 'Enter' && key.target === input) { key.preventDefault(); void run(); } };
     paint();
@@ -977,13 +969,13 @@ export class ChatView {
     const browse = button('Choose…', { onclick: async () => { const picked = await api.pick('folder').catch(() => null); if (picked) folder.value = picked; } });
     const draw = (): void => {
       paintPreview();
-      fill(modal.body, h('div', { class: 'col' },
-        h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Harness'), pickOne('Harness', HARNESSES, choice.harness, (value) => { choice.harness = value; draw(); })),
-        h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Role'), pickOne('Role', ROLES, choice.role, (value) => { choice.role = value; draw(); })),
-        h('div', { class: 'row-fields' },
-          h('div', { class: 'field im-field' }, h('label', { for: 'launch-listen' }, 'Listens · seconds between turns'), listen),
-          h('div', { class: 'field im-field' }, h('label', { for: 'launch-folder' }, 'Folder'), h('div', { class: 'cmd' }, folder, browse))),
-        h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'It runs, in a new terminal'), preview),
+      fill(modal.body, h('div', { class: 'mk-col' },
+        group('Harness', pickOne('Harness', HARNESSES, choice.harness, (value) => { choice.harness = value; draw(); })),
+        group('Role', pickOne('Role', ROLES, choice.role, (value) => { choice.role = value; draw(); })),
+        h('div', { class: 'mk-row-fields' },
+          field('Listens · seconds between turns', 'launch-listen', listen),
+          field('Folder', 'launch-folder', h('div', { class: 'mk-cmd' }, folder, browse))),
+        group('It runs, in a new terminal', preview),
         note,
         h('p', { class: 'note' }, choice.harness === 'codex'
           ? 'Codex runs the launch hooks only once they are trusted: mukade chat trust codex, once.'
