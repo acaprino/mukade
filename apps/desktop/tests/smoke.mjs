@@ -34,17 +34,21 @@ try {
     const root = await page.evaluate(() => `${document.documentElement.dataset.imLook}-${document.documentElement.dataset.imTheme}`);
     if (root !== name) failures.push(`${name}: the root says ${root}`);
     if (look === 'smooth' && scheme === 'dark') {
-      await page.keyboard.press('Control+Shift+k');
-      await page.getByRole('combobox', { name: 'Type a command' }).fill('look and theme');
+      // The look and the theme are the palette's: ONI from Ctrl+K, kept, and back to Smooth.
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill('ONI look');
       await page.keyboard.press('Enter');
-      await page.getByRole('dialog', { name: 'Settings' }).waitFor();
-      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.documentElement.dataset.imLook === 'oni' && localStorage.getItem('mukade.look') === 'oni');
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill('Smooth look');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.documentElement.dataset.imLook === 'smooth' && localStorage.getItem('mukade.look') === 'smooth');
       await page.setViewportSize({ width: 520, height: 650 });
       await page.getByRole('button', { name: 'Views' }).click();
-      await page.getByRole('menuitem', { name: 'Chat' }).click();
+      await page.getByRole('menuitemradio', { name: 'Chat' }).click();
       await page.locator('#view-chat').waitFor();
       await page.getByRole('button', { name: 'Views' }).click();
-      await page.getByRole('menuitem', { name: 'Sessions' }).click();
+      await page.getByRole('menuitemradio', { name: 'Sessions' }).click();
       const sidebar = page.locator('.im-sidebar-toggle');
       const mainBounds = await page.locator('.im-work').boundingBox();
       await sidebar.click();
@@ -57,8 +61,13 @@ try {
       await page.getByRole('button', { name: 'Back one column' }).click();
       if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close');
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.locator('#sessions').focus();
     }
+    await page.getByRole('listbox', { name: 'Sessions' }).focus();
+    // The list answers its own keys: End and Home move the selection, with the focus kept in the list.
+    await page.keyboard.press('End');
+    await page.waitForFunction(() => document.querySelector('#sessions [role="option"]:last-child')?.getAttribute('aria-selected') === 'true');
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('#sessions [role="option"]')?.getAttribute('aria-selected') === 'true');
     await page.screenshot({ path: `${out}sessions-${name}.png` });
     await page.keyboard.press('Enter');
     await page.locator('.entry').first().waitFor();
@@ -90,7 +99,7 @@ try {
     if (await page.locator('#detail .work .im-chip', { hasText: 'at risk' }).count() !== 2) failures.push(`${name}: two repositories should be at risk`);
     await page.screenshot({ path: `${out}hosted-${name}.png` });
     await page.getByRole('button', { name: /^Start in/ }).waitFor();
-    await page.locator('#sessions').focus();
+    await page.getByRole('listbox', { name: 'Sessions' }).focus();
     await page.keyboard.press('s');
     await page.locator('.im-form-dialog #handoff-note').waitFor();
     if (!(await page.locator('#handoff-note').inputValue()).includes('Capire lo stack di Daodan')) failures.push(`${name}: the note does not name the session`);
@@ -128,7 +137,7 @@ try {
     await page.keyboard.press('Enter');
     await page.locator('#chat-rooms .row', { hasText: 'smoke-room' }).waitFor();
     // Search everything finds a member of another room.
-    await page.keyboard.press('Control+k');
+    await page.keyboard.press('Control+Shift+f');
     await page.locator('#search-all').fill('codex');
     await page.locator('.search-row').first().waitFor();
     await page.screenshot({ path: `${out}search-${name}.png` });
@@ -147,14 +156,16 @@ try {
     await page.waitForTimeout(3400);
     const typed = await page.locator('#chat-filter').inputValue();
     if (typed !== 'sub') failures.push(`${name}: the chat filter lost what was typed (${JSON.stringify(typed)})`);
-    // Settings switches the look, and the choice is kept.
-    await page.locator('#settings').click();
+    // The palette switches the look, and the choice is kept.
     const other = look === 'smooth' ? 'oni' : 'smooth';
-    await page.locator('.im-form-dialog').getByRole('button', { name: other, exact: true }).click();
-    const kept = await page.evaluate(() => `${document.documentElement.dataset.imLook}/${localStorage.getItem('mukade.look')}`);
-    if (kept !== `${other}/${other}`) failures.push(`${name}: Settings did not switch to ${other} (${kept})`);
-    await page.locator('.im-form-dialog').getByRole('button', { name: look, exact: true }).click();
-    await page.screenshot({ path: `${out}settings-${name}.png` });
+    await page.keyboard.press('Escape');
+    for (const [to, title] of [[other, other === 'oni' ? 'ONI look' : 'Smooth look'], [look, look === 'oni' ? 'ONI look' : 'Smooth look']]) {
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill(title);
+      await page.keyboard.press('Enter');
+      const kept = await page.evaluate(() => `${document.documentElement.dataset.imLook}/${localStorage.getItem('mukade.look')}`);
+      if (kept !== `${to}/${to}`) failures.push(`${name}: the palette did not switch to ${to} (${kept})`);
+    }
     await page.close();
   }
 } finally {

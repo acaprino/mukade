@@ -3,7 +3,7 @@
 
 import { pathField } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
-import { button, commandLine, copyButton, fill, h, kbd } from './dom.ts';
+import { button, commandLine, copyButton, fill, h, caps } from './dom.ts';
 import type { Modal } from './modal.ts';
 import { openWriteDialog, type WriteDialog } from './write-recovery.ts';
 import type { HopArgs, HopOptions, Installation, Receipt, WriteOperation } from './types.ts';
@@ -54,7 +54,7 @@ export async function openHop(source: string, id: string, hooks: JobHooks): Prom
     options = await api.hopOptions(source, id);
   } catch (error) {
     fill(modal.body, h('p', { class: 'note err' }, errorText(error)));
-    fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { onclick: () => modal.close() }));
+    fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }));
     return;
   }
   modal.setTitle('Hop', `${options.source_label} · ${options.title} · ${id.slice(0, 8)}`);
@@ -94,7 +94,7 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
   // The plan and the primary button follow what is typed without a redraw, which would take the
   // caret out of the field.
   const plan = h('ul', { class: 'plan' });
-  const go = button(['Hop to ', dest.label, ' ', kbd('⏎')], { class: 'primary', onclick: run });
+  const go = button(['Hop to ', dest.label, ' ', caps('Enter')], { class: 'primary', onclick: run });
   const summary = choice.compaction === 'summary';
   const native = choice.compaction === 'native';
   const drawPlan = (): void => {
@@ -175,7 +175,7 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
   const focused = document.activeElement;
   fill(modal.body, left, right);
   fill(modal.foot, h('span', { class: 'mono muted' }, 'A hop cannot be stopped once it starts.'), h('span', { class: 'spring' }),
-    button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), go);
+    button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }), go);
   // The first draw starts on the primary action; a redraw keeps the control the person was on.
   if (!focused || !focused.isConnected || !modal.body.contains(focused)) go.focus({ preventScroll: true });
   modal.root.onkeydown = (event) => { if (submits(event) && !go.disabled) { event.preventDefault(); run(); } };
@@ -236,7 +236,7 @@ async function showWriteResult(modal: WriteDialog, start: WriteOperation | (() =
     modal.lock(false);
     if (!retry) fill(modal.body, h('p', { class: 'note err' }, reason));
     fill(modal.foot, retry ? h('p', { class: 'note err grow' }, reason) : h('span', { class: 'spring' }),
-      button(['Close ', kbd('esc')], { onclick: () => modal.close() }),
+      button(['Close ', caps('Escape')], { onclick: () => modal.close() }),
       retry ? button('Try again', { class: 'primary', onclick: retry }) : null);
     return false;
   } finally {
@@ -271,7 +271,7 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
       receipt.losses.length ? h('ul', { class: 'plan losses' }, ...receipt.losses.map((loss) => h('li', {}, loss))) : h('p', { class: 'note' }, 'None: everything travelled.')),
     receipt.reply ? h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, `Reply from ${receipt.dest_label}`), h('pre', { class: 'code' }, receipt.reply)) : null);
   fill(modal.body, left, right);
-  const close = button(['Close ', kbd('⏎')], { class: 'primary', onclick: () => modal.close() });
+  const close = button(['Close ', caps('Enter')], { class: 'primary', onclick: () => modal.close() });
   fill(modal.foot,
     receipt.manifest_path ? copyButton(receipt.manifest_path) : null,
     receipt.manifest_path ? h('span', { class: 'mono muted' }, 'manifest path') : null,
@@ -314,6 +314,6 @@ export function openImport(installations: Installation[], into: string | null, d
     importing = await showWriteResult(modal, () => api.import(path.value.trim(), dest.value, prompt.value.trim() || undefined), hooks,
       'import', 'document', () => void run());
   };
-  fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), button(['Import ', kbd('⏎')], { class: 'primary', onclick: run }));
+  fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }), button(['Import ', caps('Enter')], { class: 'primary', onclick: run }));
   modal.root.onkeydown = (event) => { if (submits(event)) { event.preventDefault(); void run(); } };
 }

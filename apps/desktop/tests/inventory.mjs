@@ -56,9 +56,9 @@ export async function checkInventory(browser, url) {
     await page.keyboard.press('c');
     await page.locator('#sessions').waitFor();
     assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
-    assert.ok(await page.locator('#sessions').evaluate(el => el === document.activeElement));
+    assert.ok(await page.locator('#sessions').evaluate(el => el.contains(document.activeElement)));
     await page.setViewportSize({ width: 1200, height: 800 });
-    await page.keyboard.press('Control+Shift+k');
+    await page.keyboard.press('Control+k');
     await page.getByRole('combobox', { name: 'Type a command' }).fill('Harnesses');
     await page.keyboard.press('Enter');
     await page.locator('#view-harnesses').waitFor();
@@ -67,10 +67,10 @@ export async function checkInventory(browser, url) {
 
     const mode = value => page.evaluate(value => { window.inventoryTest.sessions = value; }, value);
     await mode('defer');
-    await page.keyboard.press('F5');
+    await page.keyboard.press('r');
     await page.waitForFunction(() => typeof window.inventoryTest.reject === 'function');
     await mode('fail');
-    await page.keyboard.press('F5');
+    await page.keyboard.press('r');
     const failure = page.locator('#sessions').getByRole('alert');
     await failure.filter({ hasText: 'Temporary session read failure' }).waitFor();
     await mode('empty');
@@ -79,14 +79,14 @@ export async function checkInventory(browser, url) {
     assert.equal(await page.locator('#sessions .row').count(), 0);
     assert.equal(await failure.count(), 0);
     await mode('normal');
-    await page.keyboard.press('F5');
+    await page.keyboard.press('r');
     await selectedSession.filter({ hasText: 'Beta first' }).waitFor();
     await page.evaluate(() => window.inventoryTest.reject(new Error('Stale failure')));
     assert.equal(await failure.count(), 0);
     assert.ok(!(await page.locator('#status').innerText()).includes('Stale failure'));
 
     await mode('fail');
-    await page.keyboard.press('F5');
+    await page.keyboard.press('r');
     await failure.waitFor();
     await mode('normal');
     await failure.getByRole('button', { name: 'Retry' }).click();
@@ -94,16 +94,16 @@ export async function checkInventory(browser, url) {
     await page.locator('#detail').getByRole('button', { name: /Open transcript/ }).click();
     await page.locator('#detail .entry').first().waitFor();
     await page.evaluate(() => Object.assign(window.inventoryTest, { sessions: 'defer', resolve: null }));
-    await page.keyboard.press('F5');
+    await page.keyboard.press('r');
     await page.waitForFunction(() => typeof window.inventoryTest.resolve === 'function');
     await page.evaluate(() => { window.inventoryTest.empty = true; });
-    await page.keyboard.press('F5');
+    await page.keyboard.press('r');
     await page.locator('#sessions').getByText('No installations found.').waitFor();
     await page.evaluate(() => window.inventoryTest.resolve([{ id: 'stale', title: 'Old inventory' }]));
     assert.equal(await page.locator('#sessions .row, #detail .entry, #detail h3').count(), 0);
     assert.equal(await page.locator('#installation-count').innerText(), '0');
     assert.equal(await page.locator('#status-counts').innerText(), '0 installations · 0 sessions');
-    await page.keyboard.press('Control+Shift+k');
+    await page.keyboard.press('Control+k');
     const commands = page.getByRole('combobox', { name: 'Type a command' });
     await commands.waitFor();
     for (const name of ['Hop to another installation', 'Open transcript', 'Export session']) {

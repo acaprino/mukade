@@ -3,8 +3,8 @@
 // Tabs: Conversation, and Raw (the native records of one entry, pretty JSON).
 
 import './reader.css';
-import { setPanelState } from '@acaprino/imago/ui';
-import { button, fill, h, kbd } from './dom.ts';
+import { claimKey, setPanelState } from '@acaprino/imago/ui';
+import { button, fill, h, caps } from './dom.ts';
 import type { Block, EntryView, Transcript } from './types.ts';
 
 /** Tool input shown before "Show all" (spec F5). */
@@ -57,6 +57,7 @@ export class Reader {
     this.spacer = h('div', { class: 'reader-spacer' }, this.content);
     this.scroller = h('div', { class: 'reader-scroll', tabindex: '-1' }, this.spacer);
     this.root = h('div', { class: 'reader' });
+    this.root.addEventListener('keydown', (event) => this.key(event));
     this.scroller.addEventListener('scroll', () => this.schedule());
     this.observer = new ResizeObserver(() => this.measure());
     this.observer.observe(this.content);
@@ -67,7 +68,7 @@ export class Reader {
   render(transcript: Transcript | null, opts: { tab: 'conversation' | 'raw'; turns: number; defaultTurns: number; title: string; error: string | null; raw: unknown[] | null; rawEntry: string | null }): void {
     const turnsLabel = opts.defaultTurns > 0 ? `Last ${opts.defaultTurns} turns` : 'Last turns';
     const head = h('div', { class: 'column-head im-panel-header' },
-      button(['‹ Detail ', kbd('esc')], { class: 'ghost', 'aria-label': 'Back to the session detail', onclick: () => this.actions.back() }),
+      button(['‹ Detail ', caps('Escape')], { class: 'ghost', 'aria-label': 'Back to the session detail', onclick: () => this.actions.back() }),
       h('h2', { class: 'reader-title', title: opts.title }, opts.title),
       h('span', { class: 'spring' }),
       h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Reader tab' },
@@ -75,7 +76,7 @@ export class Reader {
         button('Raw', { 'aria-pressed': String(opts.tab === 'raw'), onclick: () => this.actions.setTab('raw') })),
       h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'How much to show' },
         button(turnsLabel, { 'aria-pressed': String(opts.turns !== 0), onclick: () => opts.turns === 0 && this.actions.toggleTurns() }),
-        button(['All ', kbd('t')], { 'aria-pressed': String(opts.turns === 0), onclick: () => opts.turns !== 0 && this.actions.toggleTurns() })));
+        button(['All ', caps('T')], { 'aria-pressed': String(opts.turns === 0), onclick: () => opts.turns !== 0 && this.actions.toggleTurns() })));
     let body: Node;
     if (opts.error || !transcript) {
       fill(this.root, head, h('div', { class: 'im-panel-body' }));
@@ -92,7 +93,7 @@ export class Reader {
     }
     fill(this.root, head, transcript && transcript.hidden_turns > 0 && opts.tab === 'conversation'
       ? h('div', { class: 'reader-hidden' }, `${transcript.hidden_turns} earlier turn${transcript.hidden_turns === 1 ? '' : 's'} not shown · `,
-        button(['Show all ', kbd('t')], { class: 'link', onclick: () => this.actions.toggleTurns() }))
+        button(['Show all ', caps('T')], { class: 'link', onclick: () => this.actions.toggleTurns() }))
       : null, body);
     if (body === this.scroller) this.schedule();
   }
@@ -217,6 +218,19 @@ export class Reader {
   }
 
   // Keys (spec §4.1).
+  /** ↑ ↓ j k and Page Up, Page Down scroll the transcript; a field keeps its keys, a button its Space and Enter. */
+  private key(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+    if ((event.target as HTMLElement).closest('input, textarea, select')) return;
+    if (event.key === 'ArrowDown' || event.key === 'j') this.scrollBy(2);
+    else if (event.key === 'ArrowUp' || event.key === 'k') this.scrollBy(-2);
+    else if (event.key === 'PageDown') this.page(1);
+    else if (event.key === 'PageUp') this.page(-1);
+    else return;
+    event.preventDefault();
+    claimKey(event);
+  }
+
   scrollBy(lines: number): void { this.pinned = false; this.scroller.scrollTop += lines * 20; }
   page(direction: 1 | -1): void { this.pinned = false; this.scroller.scrollTop += direction * (this.scroller.clientHeight - 40); }
   top(): void { this.pinned = false; this.scroller.scrollTop = 0; }

@@ -140,7 +140,7 @@ Snap Layouts on the maximize button. The browser preview uses opaque surfaces.
 | Open, save, folder | OS dialogs | `tauri-plugin-dialog`, from the backend |
 | Hop, import, receipt, export, keys, close confirmation | surfaces inside the main window | they belong to it; long content scrolls and the actions stay in reach at the minimum window size |
 | Window close | refused while a hop or import runs, with a confirmation | `CloseRequested` in `main.rs`; covers the title bar's close button and Alt+F4 |
-| F5, ctrl+R | read the stores again (as `r`) | a page reload would drop the window's state mid-hop |
+| F5, ctrl+R | do nothing (the guard refuses the browser's reload) | a page reload would drop the window's state mid-hop; `r` reads the stores again |
 | ctrl+P, ctrl+S, ctrl+O, ctrl+U, ctrl+J, and devtools in a release build | do nothing | page commands a desktop window does not have; zoom (ctrl +/−) stays |
 | Context menu | the WebView's only where text is edited or selected | the page menu (Back, Reload, Print) has no meaning here |
 | Overscroll | no rubber-band on the window; each pane keeps its own scroll | `overscroll-behavior` |
@@ -162,30 +162,42 @@ whole application ends the lifetime of this in-memory record.
 
 ## Keys
 
-| key | does |
+Every key of the window is a command of one registry (`src/keys.ts` is the table, `main.ts` registers it, `mountApp` of Imago
+attaches it). The key caps on the buttons, the footer's key list, the Keys dialog (`?`) and the palette all come from it.
+
+| key | command |
 |---|---|
-| `↑` `↓`, `j` `k` | move in the focused list, scroll the reader |
-| `←` `→` | previous / next column |
-| `⏎` | next column, or open the transcript |
-| `esc` | close a dialog or the reader, or back one column |
-| `h` · `e` · `i` · `R` | hop · export · import · resume |
-| `s` | start another harness in the folder of an unreadable session (Start in…) |
-| `t` | last N turns ↔ all |
-| `g` `G`, PgUp PgDn | reader top / bottom, a page |
-| `o` · `r` | scan a folder · reload |
-| `/`, `ctrl+f` | filter the list (in the chat view, the focused column's) |
-| `ctrl+k` | search rooms, members, messages and sessions |
-| `ctrl+shift+k` | command palette |
-| `F6` / `shift+F6` | next / previous region |
-| `c` | chat ↔ sessions |
-| `m` | harnesses ↔ sessions |
-| `space` | fold the selected parent; in the chat, play the room back |
-| `1` `2` `3` | chat: graph · lanes · feed |
-| `n` · `l` | chat: new room · launch an agent |
-| `ctrl+⏎` | chat: send |
+| `ctrl+k` | the palette (every command by name, and the look and the theme: Smooth, ONI, follow Windows, light, dark) |
+| `ctrl+f` | filter the view: the sessions filter; in the chat the rooms filter (from the sidebar) or the messages filter; on Harnesses it opens Search everything |
+| `ctrl+shift+f` | search rooms, members, messages and sessions |
+| `c` · `m` | chat ↔ sessions · harnesses ↔ sessions |
+| `o` · `i` · `r` | scan a folder · import · reload the stores |
+| `h` · `e` · `shift+R` · `s` | with a session selected: hop · export · resume · start another harness in its folder (Start in…) |
+| `t` · `g` · `shift+G` | with the reader open: last N turns ↔ all · top · bottom |
+| `1` `2` `3` · `n` · `l` | in the chat: graph, lanes, feed · new room · launch an agent (in an open room) |
+| `esc` | the top layer; else leave a field, back in the chat, close the reader (Raw, then Conversation, then the list), one column |
+| `F6` / `shift+F6` | next / previous region (sidebar, content, inspector) |
 | `?` | the keys |
 
-Keys do nothing while a text field has the focus, except `esc` and `⏎`.
+Commands with no key, in the palette and on their buttons: Sessions, Open transcript, Export as…, Play the room back, Start the
+chat service, Stop the chat service.
+
+The focused list or the reader owns these, not the registry:
+
+| key | does |
+|---|---|
+| `↑` `↓`, `j` `k` | move in the focused list; scroll the reader; in the chat, the event or member |
+| `Home` `End`, `PgUp` `PgDn` | first, last, ten rows, in a list; a page in the reader |
+| `⏎` | open the transcript of the selected session; on a sidebar row, on to the sessions |
+| `space` | fold the selected parent; in the chat, play the room back |
+| `ctrl+⏎` | chat: send; in a dialog: the dialog's own button |
+
+Single letters do nothing while a text field has the focus, and no command runs while a dialog or the palette is open.
+
+Dropped with this move, and what replaces them: `/` (use `ctrl+f`); `F5` and `ctrl+R` (the browser's reload, which the desktop
+guard refuses: `r` reads the stores again); `←` `→` between columns (`F6`, `shift+F6` and `Tab`); `ctrl+shift+k` for the palette
+(it is `ctrl+k`, which was Search everything: that is now `ctrl+shift+f`); the Theme and Settings buttons and the Settings dialog
+(look and theme are five commands of the palette, the same in every Imago app).
 
 ## Where it differs from the specification
 

@@ -7,7 +7,7 @@ import './harnesses.css';
 import { loader, setPanelState } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { mark } from './chatviews.ts';
-import { button, fill, h, icon, kbd } from './dom.ts';
+import { button, fill, h, icon, caps } from './dom.ts';
 import { openModal } from './modal.ts';
 import type { HarnessView, Installation, Sandbox } from './types.ts';
 
@@ -78,7 +78,7 @@ export class HarnessesView {
       this.scan
         ? button('Stop the scan', { onclick: () => { this.stop = true; this.draw(); } })
         : button([icon('search'), 'Scan this computer'], { class: 'primary', title: 'Look in your home and in every folder of every drive', onclick: () => void this.scanComputer() }),
-      button([icon('folder'), 'Scan folder… ', kbd('o')], { onclick: () => this.hooks.scanFolder() }),
+      button([icon('folder'), 'Scan folder… ', caps('O')], { onclick: () => this.hooks.scanFolder() }),
       button([icon('refresh'), 'Check again'], { disabled: this.reading, onclick: () => void this.refresh() }));
     if (this.error || !this.inventory) {
       fill(this.root, head, h('div', { class: 'im-panel-body' }));
@@ -224,7 +224,7 @@ export class HarnessesView {
       }
     };
     fill(modal.body, system, sandbox);
-    fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { onclick: () => modal.close() }));
+    fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }));
   }
 
   private async installSystem(harness: HarnessView, close: () => void): Promise<void> {

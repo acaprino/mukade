@@ -3,29 +3,28 @@
 
 import '@acaprino/imago/css/imago.css';
 import { parseLook } from '@acaprino/imago/shell';
-import { attachLayers, createRegistry, hasModal, inspector, openMenu, openPalette, regions, roving, sidebarCollapse, sidebarDrawer, topLayer } from '@acaprino/imago/ui';
+import { claimKey, closeLayers, createRegistry, footerKeys, formatKeys, hasModal, inspector, keyCaps, keyClaimed, mountApp, openMenu, roving } from '@acaprino/imago/ui';
 import { mountColumnSplitters } from './column-splitters.ts';
 import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
 import { boundTo, chatIndex } from './chatindex.ts';
 import { inRoomsBox, renderDetail } from './detail.ts';
-import { button, commandLine, fill, h, kbd } from './dom.ts';
+import { button, caps, commandLine, fill, h } from './dom.ts';
 import { canStartIn, openHandoff } from './handoff.ts';
-import { openHop, openImport, recoverWrite, segmented, type JobHooks } from './hop.ts';
-import { HINTS, actionFor, type Action } from './keys.ts';
-import { stepIn } from './lists.ts';
-import { LOOK_KEY, THEMES, THEME_KEY, nextTheme, storedTheme, type Look, type Theme } from './look.ts';
-import { closeModal, confirmModal, modalOpen, openModal } from './modal.ts';
+import { openHop, openImport, recoverWrite, type JobHooks } from './hop.ts';
+import { COMMANDS, FOOTER, type Place } from './keys.ts';
+import { LOOK_KEY, THEME_KEY, storedTheme, type Look, type Theme } from './look.ts';
+import { confirmModal, modalOpen, openModal } from './modal.ts';
 import { Reader } from './reader.ts';
 import { HarnessesView } from './harnesses.ts';
 import { openSearch } from './search.ts';
 import { renderSessions, visiblePlaces } from './sessions.ts';
-import { folderKey, renderSidebar } from './sidebar.ts';
+import { renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
 import { toTranscript } from './transcript.ts';
 import type { SessionRow } from './types.ts';
-import { ancestors, folders } from './tree.ts';
+import { ancestors } from './tree.ts';
 import { initializeWindow, paintWindow } from './window.ts';
 
 
@@ -55,8 +54,10 @@ function drawStatus(): void {
   bar.classList.toggle('error', state.job === null && state.statusError);
   $('status').textContent = state.job ?? state.status;
   $('status-counts').textContent = state.counts;
-  const hints = state.view === 'chat' ? HINTS.chat : state.view === 'harnesses' ? HINTS.harnesses : state.reader ? HINTS.reader : HINTS.sessions;
-  fill($('status-right'), ...hints.map(([key, what]) => h('span', {}, h('b', {}, key), ` ${what}`)));
+  const place = state.view === 'chat' ? 'chat' : state.view === 'harnesses' ? 'harnesses' : state.reader ? 'reader' : 'sessions';
+  const keys = footerKeys(document, registry, FOOTER[place]);
+  keys.id = 'status-right';
+  $('status-right').replaceWith(keys);
 }
 
 const hooks: JobHooks = {
@@ -81,6 +82,7 @@ function drawSidebar(): void {
   renderSidebar(columns.installations, {
     pickInstallation: (key) => void pickInstallation(key),
     pickFolder: (cwd) => pickFolder(cwd),
+    focusSessions: () => focusColumn('sessions'),
   });
   if (focused) {
     const lists = [...columns.installations.querySelectorAll<HTMLElement>('[role="listbox"]')];
@@ -451,8 +453,8 @@ async function exportSelected(saveAs: boolean): Promise<void> {
       h('dl', { class: 'kv' }, h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
       h('p', { class: 'note' }, 'Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.')));
     fill(modal.foot, h('span', { class: 'spring' }),
-      button(['Import it… ', kbd('i')], { onclick: () => { modal.close(); importDocument(); } }),
-      button(['Close ', kbd('esc')], { class: 'primary', onclick: () => modal.close() }));
+      button(['Import it… ', caps('I')], { onclick: () => { modal.close(); importDocument(); } }),
+      button(['Close ', caps('Escape')], { class: 'primary', onclick: () => modal.close() }));
   } catch (error) {
     setJob(null);
     setStatus(`export failed: ${errorText(error)}`, true);
@@ -479,7 +481,7 @@ async function resume(key: string, id: string): Promise<void> {
       fill(modal.body, h('div', { class: 'col' }, h('p', { class: 'note' }, result.refusal),
         command ? h('div', { class: 'cmd' }, h('pre', { class: 'code' }, command)) : null));
       const copy = button('Copy the command', { class: 'primary', onclick: async () => { await navigator.clipboard.writeText(command || result.refusal!).catch(() => {}); copy.textContent = 'Copied'; } });
-      fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { onclick: () => modal.close() }), copy);
+      fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }), copy);
       setStatus('resume refused: no terminal UI');
     } else {
       setStatus(`resume → ${result.command.join(' ')}${result.cwd ? `  (in ${result.cwd})` : ''}`);
@@ -575,52 +577,22 @@ let look: Look = parseLook(stored(LOOK_KEY));
 const themes: Record<Look, Theme> = { oni: storedTheme('oni', stored(THEME_KEY.oni)), smooth: storedTheme('smooth', stored(THEME_KEY.smooth)) };
 const systemLight = matchMedia('(prefers-color-scheme: light)');
 function applyLook(): void {
-  const theme = themes[look];
-  paintWindow(look, theme);
-  $('theme-name').textContent = theme[0].toUpperCase() + theme.slice(1);
-  $('theme').title = `Theme: ${theme}`;
+  paintWindow(look, themes[look]);
 }
 
-/** Settings: the look and its theme. Each pick applies and is kept at once. */
-function openSettings(): void {
-  const modal = openModal({ title: 'Settings', icon: 'settings' });
-  const draw = (): void => {
-    fill(modal.body, h('div', { class: 'col' },
-      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Look'),
-        segmented('Look', ['smooth', 'oni'], look, (value) => { look = value; keep(LOOK_KEY, look); applyLook(); draw(); }),
-        h('span', { class: 'muted hint' }, look === 'smooth' ? 'Clean and modern, the default.' : 'The look Mukade was born with.')),
-      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Theme'),
-        segmented('Theme', THEMES[look], themes[look], (value) => { themes[look] = value; keep(THEME_KEY[look], value); applyLook(); draw(); }))));
-    // The pick keeps the keyboard: the redraw made a new button of it.
-    modal.body.querySelector<HTMLElement>('[aria-label="Look"] [aria-pressed="true"]')?.focus();
-  };
-  fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { class: 'primary', onclick: () => modal.close() }));
-  draw();
-}
+/** The look and the theme are picked from the palette (`mountApp`'s `appearance`): Mukade keeps the choice, a theme for each look. */
+const appearance = {
+  get: () => ({ look, theme: themes[look] }),
+  set: (next: { look: Look; theme: Theme }): void => {
+    look = next.look;
+    themes[look] = next.theme;
+    keep(LOOK_KEY, look);
+    keep(THEME_KEY[look], themes[look]);
+    applyLook();
+  },
+};
 
 // --- keys ---------------------------------------------------------------------------------------
-
-function move(step: number): void {
-  if (state.focus === 'installations') {
-    const list = columns.installations.querySelector('[role="listbox"]:focus');
-    const ids = list ? Array.from(list.querySelectorAll<HTMLElement>('[role="option"]'), item => item.dataset.id!)
-      : state.installations.map(item => item.key);
-    const next = stepIn(ids, state.installation, step);
-    if (next !== null && next !== state.installation) void pickInstallation(next);
-  } else if (state.focus === 'folders') {
-    const list = folders(state.rows);
-    const next = stepIn(list.map((f) => folderKey(f.cwd)), folderKey(state.folder), step);
-    const folder = list.find((f) => folderKey(f.cwd) === next);
-    if (folder) pickFolder(folder.cwd);
-  } else if (state.focus === 'sessions') {
-    const next = stepIn(visiblePlaces().map((place) => place.row.id), state.selected, step);
-    if (next) pickSession(next);
-  } else if (state.reader) {
-    reader.scrollBy(step * 2);
-  } else {
-    columns.detail.querySelector('.column-body')?.scrollBy({ top: step * 40 });
-  }
-}
 
 const ORDER: Column[] = ['installations', 'folders', 'sessions', 'detail'];
 
@@ -633,7 +605,8 @@ function focusColumn(column: Column): void {
     list?.focus();
   } else {
     setFocus(column);
-    columns[column].focus();
+    // The list holds the focus (one tab stop, its own keys); the column itself when it has none (an empty state).
+    (column === 'sessions' ? columns.sessions.querySelector<HTMLElement>('[role="listbox"]') ?? columns.sessions : columns[column]).focus();
   }
 }
 
@@ -644,117 +617,97 @@ function column(step: number): void {
   focusColumn(next);
 }
 
-function act(action: Action, event: KeyboardEvent): boolean {
-  if (action === 'search') {
-    if (state.view === 'chat') chat.focusFilter(); else ($('search') as HTMLInputElement).focus();
-    return true;
-  }
-  if (action === 'searchAll') { if (!modalOpen()) searchEverything(); return true; }
-  if (action === 'back') {
-    if (closeModal()) return true;
-    if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) { (document.activeElement as HTMLElement).blur(); return true; }
-    if (state.view === 'chat') { chat.column(-1); return true; }
-    if (state.reader) { if (state.reader.tab === 'raw') { state.reader.tab = 'conversation'; drawDetail(); } else closeReader(); return true; }
-    column(-1);
-    return true;
-  }
-  if (modalOpen()) return false;
-  if (action === 'chat') { switchView(state.view === 'chat' ? 'sessions' : 'chat'); return true; }
-  if (action === 'harnesses') { switchView(state.view === 'harnesses' ? 'sessions' : 'harnesses'); return true; }
-  if (action === 'reload') { void loadInventory(); return true; }
-  if (action === 'scan') { void scanFolder(); return true; }
-  if (action === 'import') { importDocument(); return true; }
-  if (state.view === 'chat') {
-    if (action === 'down' || action === 'up') { chat.move(action === 'down' ? 1 : -1); return true; }
-    if (action === 'left' || action === 'right') { chat.column(action === 'right' ? 1 : -1); return true; }
-    if (action === 'graph' || action === 'lanes' || action === 'feed') { chat.setView(action); return true; }
-    if (action === 'fold') { chat.togglePlay(); return true; }
-    if (action === 'newRoom') { chat.newRoomDialog(); return true; }
-    if (action === 'launch') { chat.launchDialog(); return true; }
-    return false;
-  }
-  switch (action) {
-    case 'down': case 'up': move(action === 'down' ? 1 : -1); return true;
-    case 'left': if (!state.reader) column(-1); return !state.reader;
-    case 'right': if (!state.reader) column(1); return !state.reader;
-    case 'enter':
-      if (event.target instanceof HTMLInputElement && event.target.id === 'search') { focusColumn('sessions'); return true; }
-      if (state.focus === 'sessions' || state.focus === 'detail') { if (!state.reader) void openReader(); return true; }
-      column(1);
-      return true;
-    case 'fold': if (state.focus === 'sessions' && state.selected) { fold(state.selected); return true; } return false;
-    case 'hop': startHop(); return true;
-    case 'export': void exportSelected(false); return true;
-    case 'resume': { const row = selectedRow(); if (row && state.installation !== null) void resume(state.installation, row.id); return true; }
-    case 'start': { const row = selectedRow(); if (row && canStartIn(row)) { startIn(row); return true; } return false; }
-    case 'turns': if (state.reader) void toggleTurns(); return Boolean(state.reader);
-    case 'top': if (state.reader) reader.top(); return Boolean(state.reader);
-    case 'bottom': if (state.reader) reader.bottom(); return Boolean(state.reader);
-    case 'pageUp': case 'pageDown':
-      if (state.reader) reader.page(action === 'pageDown' ? 1 : -1); else move(action === 'pageDown' ? 10 : -10);
-      return true;
-    case 'help': showHelp(); return true;
-    default: return false;
-  }
+/** Escape, when no layer, field or list of the package answered it: leave the field, go back in the chat, in the reader (Raw,
+ *  then Conversation, then the list), or one column. */
+function back(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) { active.blur(); return; }
+  if (state.view === 'chat') { chat.column(-1); return; }
+  if (state.reader) { if (state.reader.tab === 'raw') { state.reader.tab = 'conversation'; drawDetail(); } else closeReader(); return; }
+  column(-1);
+}
+
+/** Ctrl+F: the filter of the current view. The harnesses page has none: it opens the search of everything. */
+function filterView(): void {
+  if (state.view === 'chat') chat.focusFilter();
+  else if (state.view === 'harnesses') searchEverything();
+  else ($('search') as HTMLInputElement).focus();
 }
 
 function showHelp(): void {
   const modal = openModal({ title: 'Keys', subtitle: 'mouse works everywhere too' });
-  const rows: [string, string][] = [
-    ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['← →', 'previous / next column'], ['⏎', 'next column, or open the transcript'],
-    ['esc', 'close the reader or a dialog, or back one column'], ['h · e · i · R · s', 'hop · export · import · resume · start in (a session that cannot be read)'], ['t', 'last turns ↔ all'],
-    ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['ctrl+k', 'search everything'], ['c', 'chat ↔ sessions'], ['m', 'harnesses ↔ sessions'], ['space', 'fold a parent; in the chat, play the room'],
-    ['1 2 3', 'chat: graph · lanes · feed'], ['n · l', 'chat: new room · launch an agent'], ['ctrl+⏎', 'chat: send'],
+  const bound = registry.list().filter((command) => command.keys);
+  const lists: [string, string][] = [
+    ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['Home · End · Page Up · Page Down', 'first · last · by ten in a list; page in the reader'],
+    ['Enter', 'open the transcript of the selected session'], ['Space', 'fold a parent session; in the chat, play the room'],
+    ['Esc', 'close the top layer, leave a field, close the reader, go back'], ['F6 · Shift+F6', 'next · previous region'], ['Ctrl+Enter', 'chat: send'],
   ];
-  fill(modal.body, h('dl', { class: 'kv keys' }, ...rows.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
+  fill(modal.body, h('dl', { class: 'kv keys' },
+    ...bound.flatMap((command) => [h('dt', {}, formatKeys(command.keys!).join(' ')), h('dd', {}, command.title)]),
+    ...lists.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
 }
-
-/** The WebView's own page commands, which a desktop window does not have (tauri-native-desktop):
- *  F5 and ctrl+R would reload the page and drop the window's state mid-hop, so they read the
- *  stores again instead, as `r` does; ctrl+P would print the page. Zoom (ctrl +/−) stays. */
-function pageCommand(event: KeyboardEvent): boolean {
-  const ctrl = event.ctrlKey || event.metaKey;
-  const key = event.key.toLowerCase();
-  if (event.key === 'F5' || (ctrl && key === 'r')) {
-    if (!modalOpen()) void loadInventory();
-    return true;
-  }
-  if (ctrl && (key === 'p' || key === 's' || key === 'o' || key === 'u' || key === 'j')) return true;
-  if (!import.meta.env.DEV && (event.key === 'F12' || (ctrl && event.shiftKey && (key === 'i' || key === 'c')))) return true;
-  return false;
-}
-
-document.addEventListener('keydown', (event) => {
-  if (event.defaultPrevented || event.isComposing || topLayer()) return;
-  if (event.key === 'Escape' && $('app').dataset.imSidebarOpen === 'true') return;
-  if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element && event.target.closest('button, summary, [role="tab"]')) return;
-  const command = registry.match(event);
-  if (command) {
-    event.preventDefault();
-    void Promise.resolve(command.run()).catch(error => setStatus(errorText(error), true));
-    return;
-  }
-  if (pageCommand(event)) { event.preventDefault(); return; }
-  const target = event.target as HTMLElement;
-  const inField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
-  // Inside a dialog only Escape is the window's; its own controls take the rest.
-  if (modalOpen() && event.key !== 'Escape') return;
-  const action = actionFor(event, inField);
-  if (action && act(action, event)) event.preventDefault();
-});
 
 // --- start --------------------------------------------------------------------------------------
 
+/** Where each command is available (keys.ts says which place a command is for). */
+const WHEN: Record<Place, () => boolean> = {
+  always: () => true,
+  session: () => state.view === 'sessions' && Boolean(selectedRow()),
+  reader: () => state.view === 'sessions' && Boolean(state.reader),
+  chat: () => state.view === 'chat',
+  room: () => state.view === 'chat' && chat.hasRoom(),
+};
+
+function runnerOf(id: string): () => void | Promise<void> {
+  switch (id) {
+    case 'search-everything': return searchEverything;
+    case 'sessions': return () => switchView('sessions');
+    case 'chat': return () => switchView(state.view === 'chat' ? 'sessions' : 'chat');
+    case 'harnesses': return () => switchView(state.view === 'harnesses' ? 'sessions' : 'harnesses');
+    case 'scan': return scanFolder;
+    case 'import': return importDocument;
+    case 'reload': return loadInventory;
+    case 'hop': return startHop;
+    case 'export': return () => exportSelected(false);
+    case 'export-as': return () => exportSelected(true);
+    case 'resume': return () => { const row = selectedRow(); if (row && state.installation !== null) return resume(state.installation, row.id); };
+    case 'start-in': return () => { const row = selectedRow(); if (row && canStartIn(row)) startIn(row); };
+    case 'open-reader': return () => openReader();
+    case 'turns': return toggleTurns;
+    case 'reader-top': return () => reader.top();
+    case 'reader-bottom': return () => reader.bottom();
+    case 'chat-graph': return () => chat.setView('graph');
+    case 'chat-lanes': return () => chat.setView('lanes');
+    case 'chat-feed': return () => chat.setView('feed');
+    case 'new-room': return () => chat.newRoomDialog();
+    case 'launch': return () => chat.launchDialog();
+    case 'play': return () => chat.togglePlay();
+    case 'start-service': return () => chat.startService();
+    case 'stop-service': return () => chat.stopService();
+    case 'back': return back;
+    case 'keys': return showHelp;
+    default: throw new Error(`no runner for the command ${id}`);
+  }
+}
+
+/** The key caps of a button come from the registry: `data-command` names the command. */
+function drawCaps(): void {
+  for (const element of document.querySelectorAll<HTMLElement>('[data-command]')) {
+    element.querySelector(':scope > .im-keys, :scope > kbd')?.remove();
+    const keys = registry.get(element.dataset.command!)?.keys;
+    if (keys) element.append(keyCaps(document, keys));
+  }
+}
+
 function wire(): void {
   const shell = $('app');
-  attachLayers(shell);
-  regions(shell);
   roving(shell.querySelector<HTMLElement>('.im-tabs')!, { item: '[role="tab"]', orientation: 'horizontal', onSelect: tab => tab.click() });
   narrowSessions.addEventListener('change', syncInspector);
   columns.detail.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !event.isComposing && !topLayer()) {
+    if (event.key === 'Escape' && !event.isComposing && !hasModal() && !keyClaimed(event)) {
       event.preventDefault();
-      act('back', event);
+      claimKey(event);
+      back();
     }
   });
   columns.installations.addEventListener('focusin', event => {
@@ -763,37 +716,26 @@ function wire(): void {
   });
   columns.sessions.addEventListener('focusin', () => setFocus('sessions'));
   columns.detail.addEventListener('focusin', () => setFocus('detail'));
-  sidebarDrawer(shell);
-  sidebarCollapse(shell, { collapsed: stored('mukade.sidebar.collapsed') === 'true', onChange: value => keep('mukade.sidebar.collapsed', String(value)) });
 
   const views = ['sessions', 'chat', 'harnesses'] as const;
-  for (const view of views) registry.register({ id: view, title: $(`tab-${view}`).textContent!.split(' ')[0].trim(), run: () => switchView(view) });
-  registry.register({ id: 'search', keys: 'Ctrl+K', title: 'Search rooms, messages and sessions', run: searchEverything });
-  registry.register({ id: 'scan', keys: 'O', title: 'Scan folder', run: scanFolder });
-  registry.register({ id: 'import', keys: 'I', title: 'Import document', run: importDocument });
-  registry.register({ id: 'reload', keys: 'R', title: 'Reload stores', run: loadInventory });
-  registry.register({ id: 'settings', title: 'Look and theme', run: openSettings });
-  registry.register({ id: 'keys', title: 'Keyboard shortcuts', run: showHelp });
-  const hasSession = () => state.view === 'sessions' && Boolean(selectedRow());
-  registry.register({ id: 'open-reader', title: 'Open transcript', when: hasSession, run: () => openReader() });
-  registry.register({ id: 'hop', title: 'Hop to another installation', keys: 'H', when: hasSession, run: startHop });
-  registry.register({ id: 'export', title: 'Export session', keys: 'E', when: hasSession, run: () => exportSelected(false) });
-  registry.register({ id: 'new-room', title: 'Create chat room', keys: 'N', when: () => state.view === 'chat', run: () => chat.newRoomDialog() });
-  const commands = () => { if (!hasModal()) openPalette(shell, registry); };
-  registry.register({ id: 'commands', title: 'Commands', keys: 'Ctrl+Shift+K', run: commands });
-  $('commands').addEventListener('click', commands);
+  for (const spec of COMMANDS) registry.register({ id: spec.id, title: spec.title, keys: spec.keys, when: WHEN[spec.view], run: runnerOf(spec.id) });
+  // Registered before mountApp, so the keys reach the registry before the guard refuses them to the browser.
+  mountApp(shell, registry, {
+    search: filterView,
+    labels: { palette: 'Commands', search: 'Search in this view' },
+    sidebar: { collapsed: stored('mukade.sidebar.collapsed') === 'true', onChange: value => keep('mukade.sidebar.collapsed', String(value)) },
+    appearance,
+  });
+  drawCaps();
+  const run = (id: string) => { if (!hasModal()) void registry.get(id)?.run(); };
+  $('commands').addEventListener('click', () => run('imago.palette'));
   $('views-menu').addEventListener('click', () => {
-    if (!hasModal()) openMenu($('views-menu'), views.map(view => ({ label: registry.get(view)!.title, run: () => switchView(view) })));
+    if (!hasModal()) openMenu($('views-menu'), views.map(view => ({ label: registry.get(view)!.title, checked: () => state.view === view, run: () => { switchView(view); closeLayers(['menu']); } })));
   });
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => { if (!hasModal()) void registry.get(tab.dataset.view!)?.run(); });
-  for (const [buttonId, commandId] of [['scan', 'scan'], ['import', 'import'], ['reload', 'reload'], ['settings', 'settings'], ['search-everything', 'search']]) {
-    $(buttonId).addEventListener('click', () => { if (!hasModal()) void registry.get(commandId)!.run(); });
+  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => run(tab.dataset.view!));
+  for (const [buttonId, commandId] of [['scan', 'scan'], ['import', 'import'], ['reload', 'reload'], ['search-everything', 'search-everything']]) {
+    $(buttonId).addEventListener('click', () => run(commandId));
   }
-  $('theme').addEventListener('click', () => {
-    themes[look] = nextTheme(look, themes[look]);
-    keep(THEME_KEY[look], themes[look]);
-    applyLook();
-  });
   systemLight.addEventListener('change', applyLook);
   const search = $('search') as HTMLInputElement;
   search.addEventListener('input', () => {
@@ -804,6 +746,7 @@ function wire(): void {
     if (!state.reader) drawDetail();
   });
   search.addEventListener('focus', () => setFocus('sessions'));
+  search.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); focusColumn('sessions'); } });
   columns.sessions.addEventListener('mousedown', () => setFocus('sessions'), { capture: true });
   columns.detail.addEventListener('mousedown', () => { if (state.selected) setFocus('detail'); });
   mountColumnSplitters(shell);

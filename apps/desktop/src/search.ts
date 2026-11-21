@@ -6,7 +6,7 @@ import { api, errorText } from './api.ts';
 import { chatIndex } from './chatindex.ts';
 import { matches } from './chatmodel.ts';
 import { mark } from './chatviews.ts';
-import { button, fill, h, kbd } from './dom.ts';
+import { button, fill, h, caps } from './dom.ts';
 import { openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
 import type { Installation, SessionRow } from './types.ts';
@@ -141,7 +141,7 @@ export function openSearch(hooks: SearchHooks): void {
   };
   drawTop();
   fill(modal.body, h('div', { class: 'col search' }, top, note, list));
-  fill(modal.foot, h('span', { class: 'mono muted' }, '↑ ↓ move · ⏎ open'), h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { onclick: () => modal.close() }));
+  fill(modal.foot, h('span', { class: 'mono muted' }, '↑ ↓ move · ⏎ open'), h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }));
   void run();
   queueMicrotask(() => input.focus());
 }

@@ -1,6 +1,8 @@
 // A small element builder: the views build their DOM with it, never with innerHTML, so text from a
 // session is always text.
 
+import { keyCaps } from '@acaprino/imago/ui';
+
 type Child = Node | string | number | null | undefined | false;
 type Attrs = Record<string, string | number | boolean | null | undefined | EventListener>;
 
@@ -13,7 +15,6 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
     else if (value === true) node.setAttribute(name, '');
     else node.setAttribute(name, String(value));
   }
-  if (tag === 'kbd') node.classList.add('im-key');
   if (tag === 'select') node.classList.add('im-select');
   if (tag === 'textarea' || (tag === 'input' && !['checkbox', 'radio'].includes(String(attrs.type)))) node.classList.add('im-input');
   if (node.classList.contains('im-chip')) {
@@ -60,8 +61,9 @@ export function button(label: Child | Child[], attrs: Attrs = {}): HTMLButtonEle
   return node;
 }
 
-export function kbd(text: string): HTMLElement {
-  return h('kbd', {}, text);
+/** The key caps of a binding (`Escape`, `Ctrl+Enter`, `H`): Imago writes them, in the one form every app has. */
+export function caps(keys: string): HTMLElement {
+  return keyCaps(document, keys);
 }
 
 /** A copy button for `text`. */

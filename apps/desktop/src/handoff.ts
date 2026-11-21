@@ -2,7 +2,7 @@
 // note is composed by the backend and edited here; nothing is written until Start.
 
 import { api, errorText } from './api.ts';
-import { button, fill, h, kbd } from './dom.ts';
+import { button, fill, h, caps } from './dom.ts';
 import { openModal } from './modal.ts';
 import { state } from './state.ts';
 import type { HandedOff, HandoffOptions, SessionRow } from './types.ts';
@@ -21,7 +21,7 @@ export function openHandoff(row: SessionRow, done: (result: HandedOff, label: st
 async function run(key: string, row: SessionRow, done: (result: HandedOff, label: string) => void): Promise<void> {
   const modal = openModal({ title: 'Start in…', subtitle: `${row.title ?? row.id.slice(0, 8)} · reading the session…`, icon: 'play' });
   fill(modal.body, h('p', { class: 'muted' }, 'Composing the note…'));
-  const close = button(['Close ', kbd('esc')], { onclick: () => modal.close() });
+  const close = button(['Close ', caps('Escape')], { onclick: () => modal.close() });
   let options: HandoffOptions;
   try {
     options = await api.handoffOptions(key, row.id);
@@ -70,8 +70,8 @@ async function run(key: string, row: SessionRow, done: (result: HandedOff, label
       go.focus({ preventScroll: true });
     }
   };
-  const go = button(['Start ', kbd('ctrl ⏎')], { class: 'primary', onclick: () => void start() });
-  fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), go);
+  const go = button(['Start ', caps('Ctrl+Enter')], { class: 'primary', onclick: () => void start() });
+  fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }), go);
   // Enter belongs to the note; ctrl+Enter starts from it.
   modal.root.onkeydown = (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); void start(); }

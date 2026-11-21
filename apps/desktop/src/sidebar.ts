@@ -10,6 +10,8 @@ import { folders } from './tree.ts';
 export interface SidebarActions {
   pickInstallation(key: string): void;
   pickFolder(cwd: string | null): void;
+  /** Enter on a row: on to the sessions. */
+  focusSessions(): void;
 }
 
 export function folderKey(cwd: string | null): string {
@@ -33,9 +35,9 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
   const selected = state.installation;
   const installationsBox = h('div', { class: 'pane', 'data-pane': 'installations' },
     h('div', { class: 'pane-body im-panel-body' },
-      listbox('Installations', standard.map(row), selected, actions.pickInstallation),
+      listbox('Installations', standard.map(row), selected, actions.pickInstallation, { onOpen: actions.focusSessions }),
       scanned.length ? h('p', { class: 'label' }, 'Found by scan') : null,
-      scanned.length ? listbox('Scanned installations', scanned.map(row), selected, actions.pickInstallation) : null,
+      scanned.length ? listbox('Scanned installations', scanned.map(row), selected, actions.pickInstallation, { onOpen: actions.focusSessions }) : null,
     ));
 
   const current = state.installations.find((item) => item.key === state.installation);
@@ -52,7 +54,7 @@ export function renderSidebar(root: HTMLElement, actions: SidebarActions): void 
       current?.error ? h('p', { class: 'note err' }, current.error) : null,
       listbox('Folders', folderRows, folderKey(state.folder), (id) => {
         actions.pickFolder(list.find((folder) => folderKey(folder.cwd) === id)?.cwd ?? null);
-      }),
+      }, { onOpen: actions.focusSessions }),
     ));
   fill(root, installationsBox, foldersBox);
   root.querySelectorAll('.list').forEach(reveal);

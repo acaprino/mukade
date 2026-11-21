@@ -74,7 +74,7 @@ export function renderSessions(root: HTMLElement, actions: SessionsActions): voi
       title: place.row.cwd ? `${place.row.title ?? place.row.id}\n${place.row.cwd}` : undefined,
       cells: cells(place, actions),
     }));
-    body.append(listbox('Sessions', rows, state.selected, actions.pick, actions.open));
+    body.append(listbox('Sessions', rows, state.selected, actions.pick, { onOpen: actions.open, onFold: actions.fold }));
   }
   reveal(root.querySelector('.list'));
 }

@@ -3,7 +3,7 @@
 
 import './detail.css';
 import { api, errorText } from './api.ts';
-import { button, fill, h, icon, kbd } from './dom.ts';
+import { button, fill, h, icon, caps } from './dom.ts';
 import { canStartIn } from './handoff.ts';
 import { currentInstallation, selectedRow, state } from './state.ts';
 import { ancestors, childrenText, kindText, mark } from './tree.ts';
@@ -99,12 +99,12 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   const unreadable = Boolean(row.unreadable);
   const actionsRow = h('div', { class: 'actions' },
     // One primary action: for a session that cannot be read it is Start in….
-    button(['Open transcript ', kbd('⏎')], { class: unreadable ? '' : 'primary', disabled: unreadable, onclick: () => actions.open() }),
-    button([icon('hop'), 'Hop ', kbd('h')], { disabled: unreadable, onclick: () => actions.hop() }),
-    button([icon('export'), 'Export ', kbd('e')], { disabled: unreadable, onclick: () => actions.exportTo(false) }),
+    button(['Open transcript ', caps('Enter')], { class: unreadable ? '' : 'primary', disabled: unreadable, onclick: () => actions.open() }),
+    button([icon('hop'), 'Hop ', caps('H')], { disabled: unreadable, onclick: () => actions.hop() }),
+    button([icon('export'), 'Export ', caps('E')], { disabled: unreadable, onclick: () => actions.exportTo(false) }),
     button('Save as…', { disabled: unreadable, title: 'Export to a file you choose', onclick: () => actions.exportTo(true) }),
-    button([icon('play'), 'Resume ', kbd('R')], { disabled: unreadable, onclick: () => actions.resume() }),
-    canStartIn(row) ? button([icon('play'), 'Start in… ', kbd('s')], { class: 'primary', title: 'Start another harness in this folder, with a note on what was done', onclick: () => actions.startIn() }) : null,
+    button([icon('play'), 'Resume ', caps('Shift+R')], { disabled: unreadable, onclick: () => actions.resume() }),
+    canStartIn(row) ? button([icon('play'), 'Start in… ', caps('S')], { class: 'primary', title: 'Start another harness in this folder, with a note on what was done', onclick: () => actions.startIn() }) : null,
   );
 
   // The git work in the session's folder: read when the row is selected, drawn from what is held

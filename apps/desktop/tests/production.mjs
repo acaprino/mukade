@@ -44,11 +44,14 @@ export async function checkProduction(browser) {
     await page.keyboard.press('Control+f');
     assert.equal(await page.locator('#search').evaluate(el => el === document.activeElement), true);
     const reads = await page.evaluate(() => window.testIpc.reads);
-    for (const [index, key] of ['F5', 'Control+r'].entries()) {
-      await page.keyboard.press(key);
-      await page.waitForFunction(expected => window.testIpc.reads === expected, reads + index + 1);
-    }
-    await page.locator('#detail').getByRole('button', { name: 'Hop h', exact: true }).click();
+    // Escape leaves the filter, then `r` reads the stores again; F5 and Ctrl+R are the browser's reload, which the guard refuses.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('r');
+    await page.waitForFunction(expected => window.testIpc.reads === expected, reads + 1);
+    for (const key of ['F5', 'Control+r']) await page.keyboard.press(key);
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => window.testIpc.reads), reads + 1, 'F5 and Ctrl+R read nothing');
+    await page.locator('#detail').getByRole('button', { name: 'Hop H', exact: true }).click();
     const summary = page.locator('details.more > summary');
     await summary.focus();
     await summary.press('Enter');

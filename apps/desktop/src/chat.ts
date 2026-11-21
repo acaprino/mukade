@@ -7,7 +7,8 @@
 
 import './chat.css';
 import { api, errorKind, errorText } from './api.ts';
-import { button, commandLine, fill, h, icon, kbd } from './dom.ts';
+import { claimKey, keyClaimed } from '@acaprino/imago/ui';
+import { button, caps, commandLine, fill, h, icon } from './dom.ts';
 import { listbox, reveal, stepIn } from './lists.ts';
 import { confirmModal, openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
@@ -134,6 +135,21 @@ export class ChatView {
       const room = this.current();
       if (key.key === 'Enter' && room) { key.preventDefault(); void this.join(room); }
     });
+    this.root.addEventListener('keydown', (event) => this.key(event));
+  }
+
+  /** ↑ ↓ j k move the room, the event or the member of the focused column, and Space plays the room back. The rooms'
+   *  own list answers its keys itself (lists.ts); a field keeps every key; a button keeps Space. */
+  private key(event: KeyboardEvent): void {
+    if (keyClaimed(event) || event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('input, textarea, select, [role="listbox"]')) return;
+    const step = ({ ArrowDown: 1, j: 1, ArrowUp: -1, k: -1 } as Record<string, number>)[event.key];
+    if (step !== undefined) this.move(step);
+    else if (event.key === ' ' && !target.closest('button, summary')) this.togglePlay();
+    else return;
+    event.preventDefault();
+    claimKey(event);
   }
 
   show(): void {
@@ -373,6 +389,9 @@ export class ChatView {
     this.draw();
   }
 
+  /** A room is open: the commands of a room (launch, play) are available. */
+  hasRoom(): boolean { return Boolean(this.current()); }
+
   focusFilter(): void {
     (this.focus === 'rooms' ? this.roomInput : this.textInput).focus();
   }
@@ -437,7 +456,7 @@ export class ChatView {
       h('span', { class: 'spring' }),
       this.error ? h('span', { class: 'err-text' }, this.error) : null,
       this.busy ? h('span', { class: 'muted' }, `${this.busy}…`) : null,
-      running ? button([icon('term'), 'Launch agent ', kbd('l')], {
+      running ? button([icon('term'), 'Launch agent ', caps('L')], {
         disabled: !current || current.closed_at !== null,
         title: current ? `Run an agent in ${current.name}, in a new terminal` : 'Pick a room first',
         onclick: () => this.launchDialog(),
@@ -482,7 +501,7 @@ export class ChatView {
           : button([icon('plus'), 'New room'], { onclick: () => this.newRoomDialog() }));
     return h('section', { class: `column im-panel${this.focus === 'rooms' ? ' focused' : ''}`, id: 'chat-rooms', 'aria-label': 'Rooms' },
       h('div', { class: 'column-head im-panel-header' }, h('h2', {}, 'Rooms'), h('small', {}, String(this.rooms.length)), h('span', { class: 'spring' }),
-        button([icon('plus'), 'New ', kbd('n')], { class: 'ghost', title: 'Open a new room', onclick: () => this.newRoomDialog() })),
+        button([icon('plus'), 'New ', caps('N')], { class: 'ghost', title: 'Open a new room', onclick: () => this.newRoomDialog() })),
       h('div', { class: 'column-tools' }, this.roomInput),
       h('div', { class: 'column-body im-panel-body' }, body));
   }
@@ -505,7 +524,7 @@ export class ChatView {
       current?.closed_at ? h('span', { class: 'tag im-chip' }, 'closed') : null,
       h('span', { class: 'spring' }),
       h('div', { class: 'seg im-seg views', role: 'group', 'aria-label': 'View' },
-        ...VIEWS.map((view, i) => button([icon(view), view[0].toUpperCase() + view.slice(1), kbd(String(i + 1))], {
+        ...VIEWS.map((view, i) => button([icon(view), view[0].toUpperCase() + view.slice(1), caps(String(i + 1))], {
           'aria-pressed': String(this.view === view), onclick: () => this.setView(view),
         }))),
       ...(current ? this.roomActions(current) : []));
@@ -665,7 +684,7 @@ export class ChatView {
         h('span', { class: 'spring' }),
         h('span', { class: 'muted' }, `as ${mine.name} · ${mine.role}`),
         button('Leave', { class: 'ghost', disabled: this.busy !== null, title: 'The window leaves the room', onclick: () => void this.leave(room) }),
-        button([icon('send'), sending ? 'Sending…' : 'Send ', sending ? null : kbd('ctrl ⏎')], { class: 'primary', disabled: this.busy !== null, onclick: () => void this.send() })));
+        button([icon('send'), sending ? 'Sending…' : 'Send ', sending ? null : caps('Ctrl+Enter')], { class: 'primary', disabled: this.busy !== null, onclick: () => void this.send() })));
   }
 
   private joinBlock(room: Room): HTMLElement {
@@ -841,7 +860,7 @@ export class ChatView {
         fill(note, h('span', { class: 'err-text', role: 'alert' }, errorText(error)));
       }
     };
-    const go = button(['Open the room ', kbd('⏎')], { class: 'primary', onclick: () => void run() });
+    const go = button(['Open the room ', caps('Enter')], { class: 'primary', onclick: () => void run() });
     const paint = (): void => {
       const name = input.value.trim();
       const refusal = name ? roomNameRefusal(name) : null;
@@ -856,7 +875,7 @@ export class ChatView {
     };
     input.addEventListener('input', paint);
     fill(modal.body, h('div', { class: 'col' }, h('div', { class: 'field im-field' }, h('label', { for: 'room-name' }, 'Name'), input), note));
-    fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }), go);
+    fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }), go);
     modal.root.onkeydown = (key) => { if (key.key === 'Enter' && key.target === input) { key.preventDefault(); void run(); } };
     paint();
   }
@@ -882,7 +901,7 @@ export class ChatView {
 
   // --- the service and launches -------------------------------------------------------------------
 
-  private async startService(): Promise<void> {
+  async startService(): Promise<void> {
     if (this.busy) return;
     this.busy = 'starting the service';
     this.draw();
@@ -897,7 +916,7 @@ export class ChatView {
     await this.poll(true);
   }
 
-  private async stopService(): Promise<void> {
+  async stopService(): Promise<void> {
     const open = this.rooms.filter((room) => room.closed_at === null);
     const members = open.reduce((sum, room) => sum + room.members, 0);
     const text = `${members} member${members === 1 ? '' : 's'} in ${open.length} open room${open.length === 1 ? '' : 's'} stop receiving until it starts again. Rooms and messages stay.`;
@@ -961,7 +980,7 @@ export class ChatView {
       }
     };
     draw();
-    fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', kbd('esc')], { onclick: () => modal.close() }),
+    fill(modal.foot, h('span', { class: 'spring' }), button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }),
       button([icon('term'), 'Launch'], { class: 'primary', onclick: () => void run() }));
   }
 }
