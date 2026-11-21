@@ -8,7 +8,7 @@
 import './chat.css';
 import { api, errorKind, errorText } from './api.ts';
 import { claimKey, iconHtml, keyClaimed } from '@acaprino/imago/ui';
-import { labelled, button, caps, chip, emptyState, choice as pickChoice, commandLine, field, fill, group, h, icon, inlineNote, rovingList, toggle, viewSwitch } from './dom.ts';
+import { labelled, button, caps, chip, emptyState, choice as pickChoice, commandLine, facts, field, fill, group, h, icon, inlineNote, rovingList, toggle, viewSwitch } from './dom.ts';
 import { listbox, reveal, stepIn } from './lists.ts';
 import { confirmModal, openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
