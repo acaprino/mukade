@@ -133,6 +133,12 @@ try {
     await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
     await page.keyboard.press('ArrowUp');
     await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
+    // A redraw keeps the control the person was on: a select stays focused (a stray Space must not start the hop).
+    await page.locator('#hop-shell').focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(() => document.activeElement?.id === 'hop-shell');
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() => document.activeElement?.id === 'hop-shell');
     // Enter belongs to the primary button: focus goes back to it (a radio's Enter starts no hop).
     await page.getByRole('button', { name: /^Hop to/ }).focus();
     await page.screenshot({ path: `${out}hop-${name}.png` });
