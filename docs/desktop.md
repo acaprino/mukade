@@ -51,6 +51,7 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 | Rust: listing, transcript and raw pages on fixture stores, export, a real hop into every writable harness, the receipt, chat replies, terminal commands | `cargo test -p mukade-desktop` |
 | No harness branch outside its adapter (the desktop crate included) | `cargo test --test architecture` |
 | TypeScript: tree and collapse, search, folders, marks, keys, transcript rows into entries, chat ledger, receipt commands, the lines of Work on disk | `npm test` |
+| Imago's design rules on the app's own CSS and markup | `npx imago-check` (also the first step of the `frontend` job) |
 | Smoke: every view in each look (Smooth, Oni), dark and light, on the mocked commands, Enter on Cancel never hops, the chat's three views, join and send, a new room, search everything, the chat filter survives a poll; screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
 
 ## The window
