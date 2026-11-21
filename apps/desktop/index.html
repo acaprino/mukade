@@ -81,7 +81,7 @@
           <button type="button" class="im-icon-btn im-sidebar-collapse" aria-label="Collapse sidebar" aria-controls="session-sidebar" data-im-label-expand="Expand sidebar" data-im-label-collapse="Collapse sidebar">⇔</button>
         </header>
         <div id="installations"></div>
-        <div class="resizer" id="resize-installations" role="separator" aria-orientation="vertical" aria-label="Resize the installations column" title="Drag to resize · double-click to reset"></div>
+        <span id="resize-installations" hidden></span>
       </aside>
       <div class="im-work">
         <nav class="im-status toolbar" aria-label="Views and commands">
@@ -91,7 +91,7 @@
         </nav>
         <section id="view-sessions" class="im-columns" aria-label="Sessions" data-focus="installations">
           <section id="sessions" class="im-panel im-content" tabindex="0" aria-label="Sessions of the installation"></section>
-          <div class="resizer" id="resize-sessions" role="separator" aria-orientation="vertical" aria-label="Resize the sessions column" title="Drag to resize · double-click to reset"></div>
+          <span id="resize-sessions" hidden></span>
           <section class="im-panel im-inspector" aria-label="Session"><div id="detail" tabindex="-1"></div></section>
           <button type="button" class="im-btn back-column" data-back aria-label="Back one column">‹ Back</button>
         </section>

@@ -1,9 +1,10 @@
 //! Mukade owns one window. Imago supplies its frame, glass, geometry and recovery policy.
 use imago_shell::{
     ProcessFailure, Recovery, RecoveryAction, Rect, Screen, SnapLayouts, WindowState, apply_theme,
-    clamp_to_screens, disable_browser_accelerators, glass_window_config, guard_navigation,
-    install_reload_menu, install_snap_layouts, load_state, parse_theme, recovery_action,
-    save_state, save_theme, saved_theme, state_to_save, watch_process_failures,
+    clamp_to_screens, disable_browser_accelerators, glass_window_config,
+    guard_navigation_with_scheme, install_reload_menu, install_snap_layouts, load_state,
+    parse_theme, recovery_action, save_state, save_theme, saved_theme, state_to_save,
+    watch_process_failures,
 };
 use std::sync::{
     Mutex,
@@ -182,26 +183,72 @@ fn failed(window: &WebviewWindow, failure: ProcessFailure, generation: u64) {
             if shell.rebuilding.swap(true, Ordering::SeqCst) {
                 return;
             }
+            // A delayed report for a previous window must never destroy its replacement.
+            if shell.generation.load(Ordering::SeqCst) != generation {
+                shell.rebuilding.store(false, Ordering::SeqCst);
+                return;
+            }
+            shell.generation.fetch_add(1, Ordering::SeqCst);
             remember(window);
             let result = window.destroy().and_then(|_| {
                 let deadline = Instant::now() + Duration::from_secs(5);
-                while app.get_webview_window("main").is_some() && Instant::now() < deadline {
+                while app.get_webview_window("main").is_some() {
+                    if Instant::now() >= deadline {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "The old Mukade window is still registered",
+                        )
+                        .into());
+                    }
                     std::thread::sleep(Duration::from_millis(25));
                 }
                 build_window(app)
             });
-            shell.rebuilding.store(false, Ordering::SeqCst);
-            if let Err(error) = result {
+            complete_rebuild(&shell.rebuilding, result, |error| {
+                // This callback runs off the UI thread. Keep the event loop and any native
+                // writer alive even if the last window was destroyed during rollback.
+                app.state::<crate::state::AppState>()
+                    .drain_writes_for_exit();
                 app.dialog()
-                    .message(format!("Could not restore the Mukade window: {error}"))
+                    .message(format!(
+                        "Could not restore the Mukade window: {error}. Mukade will close."
+                    ))
                     .blocking_show();
-                if app.get_webview_window("main").is_none() {
-                    app.exit(1);
-                }
-            }
+                app.exit(1);
+            });
         }
         RecoveryAction::Ignore => {}
     }
+}
+
+// Keep suppressing the runtime's automatic last-window exit throughout the fatal path.
+fn complete_rebuild(
+    rebuilding: &AtomicBool,
+    result: tauri::Result<()>,
+    exit: impl FnOnce(tauri::Error),
+) {
+    match result {
+        Ok(()) => rebuilding.store(false, Ordering::SeqCst),
+        Err(error) => exit(error),
+    }
+}
+
+// Once build() registers a hidden window, every failure up to and including show() must
+// either remove it or report why rollback also failed.
+fn finish_registered_window(
+    result: tauri::Result<()>,
+    rollback: impl FnOnce() -> tauri::Result<()>,
+) -> tauri::Result<()> {
+    if let Err(error) = result {
+        if let Err(cleanup) = rollback() {
+            return Err(std::io::Error::other(format!(
+                "{error}; removing the incomplete window also failed: {cleanup}"
+            ))
+            .into());
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 pub fn build_window(app: &AppHandle) -> tauri::Result<()> {
@@ -224,28 +271,47 @@ pub fn build_window(app: &AppHandle) -> tauri::Result<()> {
         .filter(|_| tauri::is_dev())
         .map(|url| url.origin().ascii_serialization());
     let origins: Vec<_> = dev.as_deref().into_iter().collect();
-    let window =
-        guard_navigation(WebviewWindowBuilder::from_config(app, &config)?, &origins).build()?;
-    if let Some(state) = load_state(&dir) {
-        restore(
-            &window,
-            state,
+    let window = guard_navigation_with_scheme(
+        WebviewWindowBuilder::from_config(app, &config)?,
+        &origins,
+        config.use_https_scheme,
+    )
+    .build()?;
+    let shell = app.state::<Desktop>();
+    let generation = shell.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let result = configure_and_show(
+        &window,
+        load_state(&dir),
+        (
             config.min_width.unwrap_or(500.0),
             config.min_height.unwrap_or(0.0),
-        )?;
+        ),
+        generation,
+    );
+    finish_registered_window(result, || {
+        shell.generation.fetch_add(1, Ordering::SeqCst);
+        *shell.overlay.lock().unwrap() = None;
+        window.destroy()
+    })
+}
+
+fn configure_and_show(
+    window: &WebviewWindow,
+    saved: Option<WindowState>,
+    minimum: (f64, f64),
+    generation: u64,
+) -> tauri::Result<()> {
+    if let Some(state) = saved {
+        restore(window, state, minimum.0, minimum.1)?;
     }
     if !tauri::is_dev() {
-        disable_browser_accelerators(&window)?;
+        disable_browser_accelerators(window)?;
     }
-    let shell = app.state::<Desktop>();
-    *shell.overlay.lock().unwrap() = Some(install_snap_layouts(&window)?);
-    let generation = shell.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    *window.state::<Desktop>().overlay.lock().unwrap() = Some(install_snap_layouts(window)?);
     let watched = window.clone();
-    watch_process_failures(&window, move |failure| {
-        failed(&watched, failure, generation)
-    })?;
+    watch_process_failures(window, move |failure| failed(&watched, failure, generation))?;
     let reloaded = window.clone();
-    install_reload_menu(&window, "Reload interface", move || {
+    install_reload_menu(window, "Reload interface", move || {
         if reloaded.state::<crate::state::AppState>().writes_running() == 0 {
             let _ = reloaded.reload();
         }
@@ -280,5 +346,60 @@ pub fn on_run_event(app: &AppHandle, event: RunEvent) {
         if app.state::<Desktop>().rebuilding.load(Ordering::SeqCst) {
             api.prevent_exit();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn failed_setup_removes_the_registered_window_and_exits() {
+        let registered = Cell::new(true);
+        let rebuilding = AtomicBool::new(true);
+        let exited = Cell::new(false);
+        let result = finish_registered_window(
+            Err(std::io::Error::other("injected show failure").into()),
+            || {
+                registered.set(false);
+                Ok(())
+            },
+        );
+        complete_rebuild(&rebuilding, result, |error| {
+            assert!(error.to_string().contains("injected show failure"));
+            assert!(!registered.get());
+            assert!(rebuilding.load(Ordering::SeqCst));
+            exited.set(true);
+        });
+        assert!(exited.get());
+    }
+
+    #[test]
+    fn a_failed_destroy_cannot_keep_an_incomplete_window_alive() {
+        let rebuilding = AtomicBool::new(true);
+        let exited = Cell::new(false);
+        let result = finish_registered_window(
+            Err(std::io::Error::other("injected setup failure").into()),
+            || Err(std::io::Error::other("injected destroy failure").into()),
+        );
+        complete_rebuild(&rebuilding, result, |error| {
+            let message = error.to_string();
+            assert!(message.contains("injected setup failure"));
+            assert!(message.contains("injected destroy failure"));
+            assert!(rebuilding.load(Ordering::SeqCst));
+            exited.set(true);
+        });
+        assert!(exited.get());
+    }
+
+    #[test]
+    fn a_fully_configured_and_shown_window_completes_recovery() {
+        let rebuilding = AtomicBool::new(true);
+        let result = finish_registered_window(Ok(()), || panic!("destroyed a usable window"));
+        complete_rebuild(&rebuilding, result, |_| {
+            panic!("exited with a usable window")
+        });
+        assert!(!rebuilding.load(Ordering::SeqCst));
     }
 }

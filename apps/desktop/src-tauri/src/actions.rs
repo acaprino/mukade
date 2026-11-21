@@ -11,6 +11,7 @@ use crate::state::AppState;
 use crate::view::{self, ReceiptView};
 use mukade::dest;
 use mukade::exe;
+use mukade::handoff;
 use mukade::hop::{
     Compaction, HopError, HopRequest, ImportOpts, KeepFrom, ResumePrompt, SessionRef, SourceFacts,
     SummarySource, WriteDetails,
@@ -21,6 +22,7 @@ use mukade::policy::ReasoningPolicy;
 use mukade::reader::SessionInfo;
 use mukade::summary::SummarizeOpts;
 use mukade::tools::Shell;
+use mukade::work::{Work, work_in};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -550,6 +552,162 @@ pub fn resume(state: &AppState, key: &str, id: &str) -> CmdResult<Resumed> {
     Ok(plan)
 }
 
+/// The folder of a session that has one: refused with the library's reason otherwise.
+fn folder_of(info: &SessionInfo) -> CmdResult<PathBuf> {
+    match handoff::refusal(info) {
+        Some(why) => Err(CmdError::refused(why)),
+        None => Ok(PathBuf::from(info.cwd.as_deref().unwrap_or_default())),
+    }
+}
+
+/// The git work in a listed session's folder, read-only. Unreadable sessions are the point of
+/// this, so it does not ask for a readable one.
+pub fn work(state: &AppState, key: &str, id: &str) -> CmdResult<Work> {
+    state.location(key)?;
+    let info = state.listed_session(key, id)?;
+    Ok(work_in(&folder_of(&info)?))
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HandoffOptions {
+    /// Why this session cannot be handed off; the other fields are then empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    /// The locations of a harness a handoff can start.
+    pub destinations: Vec<Destination>,
+    /// The composed note, for the person to edit.
+    pub note: String,
+    pub cwd: Option<String>,
+}
+
+/// The folder of the editable template, beside the executable.
+fn template_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join(handoff::FOLDER))
+}
+
+/// What a handoff offers for a listed session: its destinations and the note, or why not.
+pub fn handoff_options(state: &AppState, key: &str, id: &str) -> CmdResult<HandoffOptions> {
+    handoff_options_in(state, key, id, template_dir().as_deref())
+}
+
+/// [`handoff_options`] with the template folder stated.
+fn handoff_options_in(
+    state: &AppState,
+    key: &str,
+    id: &str,
+    templates: Option<&Path>,
+) -> CmdResult<HandoffOptions> {
+    let location = state.location(key)?;
+    let info = state.listed_session(key, id)?;
+    if let Some(why) = handoff::refusal(&info) {
+        return Ok(HandoffOptions {
+            refusal: Some(why),
+            destinations: Vec::new(),
+            note: String::new(),
+            cwd: None,
+        });
+    }
+    let folder = folder_of(&info)?;
+    let note = handoff::note(
+        &handoff::template(templates),
+        location.harness,
+        &info,
+        &work_in(&folder),
+    );
+    let starts = handoff::destinations();
+    let destinations = state
+        .locations()
+        .into_iter()
+        .filter(|candidate| starts.contains(&candidate.harness))
+        .map(|candidate| Destination {
+            key: candidate.key(),
+            label: candidate.label.clone(),
+            default_shell: None,
+            model: None,
+        })
+        .collect();
+    Ok(HandoffOptions {
+        refusal: None,
+        destinations,
+        note,
+        cwd: Some(folder.display().to_string()),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct HandedOff {
+    pub launched: bool,
+    /// The command the destination's harness runs, its first prompt pointing at the note.
+    pub command: Vec<String>,
+    pub note_path: String,
+    pub cwd: String,
+}
+
+/// What a handoff would do, after saving the note under `data`: the command and the destination
+/// it runs in.
+fn handoff_plan(
+    state: &AppState,
+    key: &str,
+    id: &str,
+    dest: &str,
+    note: &str,
+    data: Option<&Path>,
+) -> CmdResult<(HandedOff, Location)> {
+    let source = state.location(key)?;
+    let info = state.listed_session(key, id)?;
+    let folder = folder_of(&info)?;
+    if !folder.is_dir() {
+        return Err(CmdError::refused(format!(
+            "{} does not exist",
+            folder.display()
+        )));
+    }
+    let dest = state.location(dest)?;
+    if !handoff::destinations().contains(&dest.harness) {
+        return Err(CmdError::refused(format!(
+            "{} cannot start from a handoff note",
+            dest.label
+        )));
+    }
+    let data =
+        data.ok_or_else(|| CmdError::refused("no mukade-data folder beside the executable"))?;
+    let path = handoff::note_path(data, source.harness, &info.id);
+    handoff::save(note, &path)
+        .map_err(|error| CmdError::failed(format!("{}: {error}", path.display())))?;
+    let prompt = handoff::first_prompt(&path);
+    let command = mukade::catalog::interactive_start(dest.harness, &dest.engine(), &prompt)
+        .ok_or_else(|| {
+            CmdError::refused(format!("{} cannot start from a handoff note", dest.label))
+        })?;
+    Ok((
+        HandedOff {
+            launched: false,
+            command,
+            note_path: path.display().to_string(),
+            cwd: folder.display().to_string(),
+        },
+        dest,
+    ))
+}
+
+/// Saves `note` as edited, then opens `dest`'s harness on it in a terminal, in the session's
+/// folder.
+pub fn handoff(
+    state: &AppState,
+    key: &str,
+    id: &str,
+    dest: &str,
+    note: &str,
+) -> CmdResult<HandedOff> {
+    let (mut handed, dest) = handoff_plan(state, key, id, dest, note, data_dir().as_deref())?;
+    let env = crate::terminal::store_env(|command| dest.roots.apply_to(dest.harness, command));
+    crate::terminal::launch(&handed.command, Some(Path::new(&handed.cwd)), &env)
+        .map_err(CmdError::failed)?;
+    handed.launched = true;
+    Ok(handed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -765,6 +923,48 @@ mod tests {
             written.len(),
             registry.display()
         );
+        check_import_recovery(&state, &scratch);
+    }
+
+    /// Reuse the isolated stores and manifest directory from the fixture hop.
+    fn check_import_recovery(state: &AppState, scratch: &Scratch) {
+        use crate::state::{WriteKind, WriteOutcome};
+        let target = state.location("pi").unwrap();
+        let before = crate::sessions::list(&target).unwrap().len();
+        let file = scratch.join("import.json");
+        let path = file.to_str().unwrap();
+        export(state, "claude_code", CLAUDE_FIXTURE, Some(path)).unwrap();
+
+        // Hold the scheduled import until the replacement renderer has attempted to resubmit.
+        let mut scheduled = None;
+        let pending = state
+            .start_write(WriteKind::Import, |id| scheduled = Some(id))
+            .unwrap();
+        let replacement = state.clone();
+        assert_eq!(
+            replacement
+                .start_write(WriteKind::Import, |_| panic!("duplicate import"))
+                .unwrap(),
+            pending
+        );
+        let id = scheduled.expect("the first request scheduled a worker");
+        state.finish_write(id, import(state, path, "pi", None));
+        let completed = replacement.write_status().unwrap();
+        assert_eq!(completed.id, pending.id);
+        let WriteOutcome::Completed { receipt } = &completed.outcome else {
+            panic!("import did not complete: {completed:?}");
+        };
+        let sessions = crate::sessions::list(&target).unwrap();
+        assert_eq!(sessions.len(), before + 1);
+        assert!(sessions.iter().any(|row| row.id == receipt.dest_id));
+        assert_eq!(
+            replacement
+                .start_write(WriteKind::Hop, |_| panic!("unacknowledged import"))
+                .unwrap(),
+            completed
+        );
+        replacement.acknowledge_write(id);
+        assert!(state.write_status().is_none());
     }
 
     /// The records the registry files in `dir` and its folders hold (each file is a JSON list).
@@ -802,5 +1002,159 @@ mod tests {
         let error = hop(&state, &args).unwrap_err();
         assert_eq!(error.kind, "refused", "{}", error.message);
         assert!(error.message.contains("every branch"), "{}", error.message);
+    }
+
+    /// A state whose Codex location lists one session that cannot be read (its conversation lives
+    /// on a server), with `folder` as its project.
+    fn hosted(folder: Option<&Path>) -> AppState {
+        let state = AppState::new(StoreRoots::default());
+        state.set_listed(
+            "codex",
+            vec![SessionInfo {
+                id: "h1".into(),
+                title: Some("Port the parser".into()),
+                cwd: folder.map(|folder| folder.display().to_string()),
+                updated: Some("2026-11-01T10:00:00Z".into()),
+                unreadable: Some("its conversation lives on the ChatGPT servers".into()),
+                ..Default::default()
+            }],
+        );
+        state
+    }
+
+    /// A project folder in `scratch`, and the state that lists a hosted chat in it.
+    fn project(scratch: &Scratch) -> (PathBuf, AppState) {
+        let folder = scratch.join("project");
+        std::fs::create_dir_all(&folder).unwrap();
+        let state = hosted(Some(folder.as_path()));
+        (folder, state)
+    }
+
+    #[test]
+    fn the_work_of_an_unreadable_session_is_reported() {
+        let scratch = Scratch::new("work-hosted");
+        let (folder, state) = project(&scratch);
+        let found = work(&state, "codex", "h1").unwrap();
+        assert_eq!(found.folder, folder);
+        // Not a repository: nothing to list, and the reason is said.
+        assert!(found.repositories.is_empty());
+        let note = found.note.expect("a note");
+        assert!(note.contains("no git repository"), "{note}");
+    }
+
+    #[test]
+    fn the_work_of_a_session_without_a_folder_is_refused_with_the_reason() {
+        let state = hosted(None);
+        let error = work(&state, "codex", "h1").unwrap_err();
+        assert_eq!(error.kind, "refused");
+        assert!(error.message.contains("no folder"), "{}", error.message);
+        assert_eq!(work(&state, "codex", "nope").unwrap_err().kind, "not_found");
+    }
+
+    #[test]
+    fn the_handoff_offers_the_locations_of_claude_code_and_codex() {
+        let scratch = Scratch::new("handoff-options");
+        let (folder, state) = project(&scratch);
+        let options = handoff_options_in(&state, "codex", "h1", None).unwrap();
+        assert_eq!(options.refusal, None);
+        let keys: Vec<&str> = options
+            .destinations
+            .iter()
+            .map(|destination| destination.key.as_str())
+            .collect();
+        assert_eq!(keys, ["claude_code", "codex"]);
+        assert!(options.note.contains("Port the parser"), "{}", options.note);
+        assert_eq!(options.cwd, Some(folder.display().to_string()));
+    }
+
+    #[test]
+    fn a_session_without_a_folder_has_no_handoff_options_but_a_reason() {
+        let state = hosted(None);
+        let options = handoff_options_in(&state, "codex", "h1", None).unwrap();
+        assert!(
+            options
+                .refusal
+                .as_deref()
+                .is_some_and(|why| why.contains("no folder")),
+            "{options:?}"
+        );
+        assert!(options.destinations.is_empty());
+        assert!(options.note.is_empty());
+        assert_eq!(options.cwd, None);
+    }
+
+    #[test]
+    fn a_handoff_toward_a_harness_without_a_start_command_is_refused() {
+        let scratch = Scratch::new("handoff-pi");
+        let (_, state) = project(&scratch);
+        let data = scratch.join("data");
+        let error =
+            handoff_plan(&state, "codex", "h1", "pi", "note", Some(data.as_path())).unwrap_err();
+        assert_eq!(error.kind, "refused", "{}", error.message);
+        // Nothing was saved.
+        assert!(!data.exists());
+    }
+
+    #[test]
+    fn a_handoff_saves_the_edited_note_and_points_the_destination_at_it() {
+        let scratch = Scratch::new("handoff-plan");
+        let (folder, state) = project(&scratch);
+        let data = scratch.join("data");
+        let (handed, dest) = handoff_plan(
+            &state,
+            "codex",
+            "h1",
+            "claude_code",
+            "my edited note",
+            Some(data.as_path()),
+        )
+        .unwrap();
+        assert_eq!(dest.key(), "claude_code");
+        assert!(!handed.launched);
+        let saved = mukade::handoff::note_path(&data, mukade::model::HarnessId::Codex, "h1");
+        assert_eq!(handed.note_path, saved.display().to_string());
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), "my edited note");
+        assert_eq!(handed.cwd, folder.display().to_string());
+        assert_eq!(
+            handed.command.last().map(String::as_str),
+            Some(mukade::handoff::first_prompt(&saved).as_str())
+        );
+    }
+
+    #[test]
+    fn a_handoff_needs_the_folder_and_a_data_folder() {
+        let scratch = Scratch::new("handoff-needs");
+        let (_, state) = project(&scratch);
+        let data = scratch.join("data");
+        let error = handoff_plan(&state, "codex", "h1", "claude_code", "n", None).unwrap_err();
+        assert_eq!(error.kind, "refused", "{}", error.message);
+        let gone = hosted(Some(scratch.join("gone").as_path()));
+        let error = handoff_plan(
+            &gone,
+            "codex",
+            "h1",
+            "claude_code",
+            "n",
+            Some(data.as_path()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "refused");
+        assert!(
+            error.message.contains("does not exist"),
+            "{}",
+            error.message
+        );
+        let none = hosted(None);
+        let error = handoff_plan(
+            &none,
+            "codex",
+            "h1",
+            "claude_code",
+            "n",
+            Some(data.as_path()),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, "refused");
+        assert!(!data.exists());
     }
 }

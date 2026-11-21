@@ -33,6 +33,7 @@ run `index`; do not edit this block by hand.
 | ADR | Title | Governs | From task |
 |---|---|---|---|
 | [ADR-0003](<ADR-0003-local-mcp-chat.md>) | Shared local MCP chat service with a reusable library core | `src/bus/**`, `src/chat/**`, `src/cli/chat.rs`, `src/reader/origin.rs`, `mukade::bus`, `mukade::chat`, `mukade::reader::origin`, `local-mcp-chat` | `local-mcp-chat` |
+| [ADR-0005](<ADR-0005-hosted-chats-read-locally.md>) | Chats hosted by ChatGPT are read from the Codex app's local catalogue and listed as unreadable, and their work on disk is shown and handed off without their text | `src/reader/codex_hosted.rs`, `src/reader/codex.rs`, `src/work.rs`, `src/handoff.rs`, `assets/handoff-prompts/continue.md`, `src/catalog.rs`, `catalog/harnesses.json`, `src/cli.rs`, `apps/desktop/src-tauri/src/actions.rs`, `apps/desktop/src/work.ts`, `apps/desktop/src/handoff.ts`, `apps/desktop/src/detail.ts`, `mukade::reader`, `mukade::work`, `mukade::handoff`, `mukade::catalog`, `hosted-chats`, `work-on-disk`, `session-handoff` | `hosted-chats-phase1` |
 
 ## Superseded
 

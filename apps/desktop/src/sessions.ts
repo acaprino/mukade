@@ -7,13 +7,14 @@ import { fill, h, icon } from './dom.ts';
 import { listbox, reveal, type ListRow } from './lists.ts';
 import { currentInstallation, state } from './state.ts';
 import { mark, shortTime, visible, type Place } from './tree.ts';
+import { isHosted } from './work.ts';
 
 export interface SessionsActions {
   pick(id: string): void;
   open(id: string): void;
   fold(id: string): void;
-  focus(): void;
   reload(): void;
+  retry(key: string): void;
 }
 
 export function visiblePlaces(): Place[] {
@@ -35,7 +36,8 @@ function cells(place: Place, actions: SessionsActions): Node[] {
   if (children && !open) out.push(h('span', { class: 'num im-num' }, `${children} inside`));
   if (row.live) out.push(h('span', { class: 'tag im-chip live' }, 'live'));
   if (row.archived) out.push(h('span', { class: 'tag im-chip' }, 'archived'));
-  if (row.unreadable) out.push(h('span', { class: 'tag im-chip bad', title: row.unreadable }, 'unreadable'));
+  if (isHosted(row)) out.push(h('span', { class: 'tag im-chip', title: row.unreadable }, 'hosted'));
+  else if (row.unreadable) out.push(h('span', { class: 'tag im-chip bad', title: row.unreadable }, 'unreadable'));
   out.push(h('span', { class: 'time', title: row.updated ?? '' }, shortTime(row.updated)));
   if (depth) (out[0] as HTMLElement).style.marginLeft = `${Math.min(depth, 6) * 18}px`;
   return out;
@@ -51,11 +53,15 @@ export function renderSessions(root: HTMLElement, actions: SessionsActions): voi
   const body = h('div', { class: 'column-body im-panel-body' });
   fill(root, head, body);
   if (!installation) {
-    if (state.statusError) setPanelState(root, { kind: 'error', text: state.status, retry: { label: 'Reload stores', run: actions.reload } });
-    else if (state.job) setPanelState(root, { kind: 'loading', rows: 4 });
+    if (state.inventoryRead.kind === 'error') setPanelState(root, { kind: 'error', text: state.inventoryRead.message, retry: { label: 'Reload stores', run: actions.reload } });
+    else if (state.inventoryRead.kind === 'loading') setPanelState(root, { kind: 'loading', rows: 4 });
     else setPanelState(root, { kind: 'empty', text: 'No installations found.' });
   } else if (installation.error) {
     setPanelState(root, { kind: 'error', text: installation.error, retry: { label: 'Read the stores again', run: actions.reload } });
+  } else if (state.sessionsRead.kind === 'error') {
+    setPanelState(root, { kind: 'error', text: state.sessionsRead.message, retry: { label: 'Retry', run: () => actions.retry(installation.key) } });
+  } else if (state.sessionsRead.kind === 'loading') {
+    setPanelState(root, { kind: 'loading', rows: 4 });
   } else if (!places.length) {
     const text = state.query.trim() ? `No session matches “${state.query.trim()}”.`
       : `${installation.label} has no sessions${state.folder !== null ? ' in this folder' : ''}.`;
@@ -68,7 +74,7 @@ export function renderSessions(root: HTMLElement, actions: SessionsActions): voi
       title: place.row.cwd ? `${place.row.title ?? place.row.id}\n${place.row.cwd}` : undefined,
       cells: cells(place, actions),
     }));
-    body.append(listbox('Sessions', rows, state.selected, (id) => { actions.focus(); actions.pick(id); }, actions.open));
+    body.append(listbox('Sessions', rows, state.selected, actions.pick, actions.open));
   }
   reveal(root.querySelector('.list'));
 }

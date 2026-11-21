@@ -1,17 +1,17 @@
 // What the commands answer outside Tauri: `npm run dev` in a browser and the Playwright smoke
 // test. Made-up sessions shaped like real listings; nothing here touches a store.
 
-import type { ChatEvent, HopArgs, Installation, Member, Receipt, Room, RowView, SessionRow, TranscriptView } from './types.ts';
+import type { ChatEvent, HandedOff, HandoffOptions, HopArgs, Installation, Member, Receipt, Room, RowView, SessionRow, TranscriptView, Work, WriteOperation } from './types.ts';
 
 const now = Date.now();
 const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
 
 const installations: Installation[] = [
   { key: 'claude_code', harness: 'claude_code', label: 'Claude Code', scanned: false, destination: true, count: 0 },
-  { key: 'codex', harness: 'codex', label: 'Codex', scanned: false, destination: true, count: 0, error: 'state_5.sqlite: database is locked' },
+  { key: 'codex', harness: 'codex', label: 'Codex', scanned: false, destination: true, count: 0 },
   { key: 'opencode', harness: 'opencode', label: 'OpenCode', scanned: false, destination: true, count: 0 },
   { key: 'pi', harness: 'pi', label: 'Pi', scanned: false, destination: true, count: 0 },
-  { key: 'hermes', harness: 'hermes', label: 'Hermes', scanned: false, destination: true, count: 0 },
+  { key: 'hermes', harness: 'hermes', label: 'Hermes', scanned: false, destination: true, count: 0, error: 'state.db: database is locked' },
   { key: 'deepseek_harness', harness: 'deepseek_harness', label: 'DeepSeek Harness', scanned: false, destination: true, count: 0 },
 ];
 const JANURA: Installation = {
@@ -25,6 +25,9 @@ const row = (id: string, title: string, minutes: number, extra: Partial<SessionR
   id, title, cwd: project, updated: ago(minutes), archived: false, path: `C:\\Users\\me\\.claude\\projects\\C--work-mukade\\${id}.jsonl`, ...extra,
 });
 const main = '5f2c9a1e-8b47-4d02-9c3e-71a0de4416f2';
+// A chat of the ChatGPT desktop app's Codex: its conversation is on the servers, its work is in a folder.
+const HOSTED = '6b00c623-2d08-83eb-a3cc-df6dadef8474';
+const DAODAN_FOLDER = 'C:\\Users\\dev\\Documents\\ChatGPT\\Daodan';
 const sessions: Record<string, SessionRow[]> = {
   claude_code: [
     row(`${main}.a1`, 'Map the writers', 6, { parent: main, parent_kind: { kind: 'spawn', agent: 'Explore' } }),
@@ -41,11 +44,46 @@ const sessions: Record<string, SessionRow[]> = {
     row('7c1e04aa-d290-4f74-9081-b3c4e5f6a778', '', 60 * 76, { title: undefined, unreadable: 'the session file is gone', cwd: undefined }),
     row('8d2f15bb-e3a1-4085-a192-c4d5e6f7a889', 'Harness adapters: one answer per harness', 60 * 99),
   ],
+  codex: [row(HOSTED, 'Capire lo stack di Daodan', 60 * 30, {
+    cwd: DAODAN_FOLDER, path: 'state_5.sqlite#' + HOSTED,
+    unreadable: 'hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder',
+  })],
   opencode: [row('ses_3f1a9c', 'Release notes draft', 45, { cwd: 'C:\\work\\site', path: 'opencode.db#ses_3f1a9c' })],
   pi: [row('pi-2026-11-10', 'Pi compaction check', 60 * 48, { path: 'C:\\Users\\me\\.pi\\agent\\sessions\\pi-2026-11-10.jsonl' })],
   hermes: [],
   deepseek_harness: [row('dsh-41c2', 'Headless review', 60 * 30, { cwd: 'C:\\work\\site' })],
 };
+
+// The work in a session's folder: the three repositories of a hosted chat, one clean repository
+// for the project's own sessions, and nothing elsewhere.
+const worktree = (path: string, branch: string, uncommitted: number) => ({ path, branch, head: '41d916d', uncommitted, error: null });
+const repository = (name: string, branch: string, upstream: string | null, unpushed: number, uncommitted: number) => ({
+  path: `${DAODAN_FOLDER}\\${name}`, worktrees: [worktree(`${DAODAN_FOLDER}\\${name}`, branch, uncommitted)],
+  branches: [{ name: branch, upstream, ahead: upstream ? 0 : null, unpushed }], error: null,
+});
+const hostedWork: Work = {
+  folder: DAODAN_FOLDER, note: null,
+  repositories: [
+    repository('daodan', 'develop', 'origin/develop', 0, 1),
+    repository('imago', 'develop', 'origin/develop', 0, 0),
+    repository('stack-analyser', 'feature/stack-detection', null, 3, 133),
+  ],
+};
+function workOf(cwd: string | undefined): Work {
+  if (cwd === DAODAN_FOLDER) return hostedWork;
+  if (cwd === project) {
+    return { folder: project, note: null, repositories: [{ path: project, worktrees: [worktree(project, 'develop', 0)],
+      branches: [{ name: 'develop', upstream: 'origin/develop', ahead: 0, unpushed: 0 }], error: null }] };
+  }
+  return { folder: cwd ?? '', repositories: [], note: `no git repository in ${cwd}` };
+}
+const handoffNote = (row: SessionRow): string => `This continues a session that can no longer be used: "${row.title}" (Codex, id ${row.id}, last active ${row.updated}).
+Its conversation is not available here: ${row.unreadable}.
+
+Work it left in ${row.cwd}:
+${workOf(row.cwd).repositories.map((repo) => `- ${repo.path}: ${repo.worktrees[0].branch}, ${repo.worktrees[0].uncommitted} uncommitted`).join('\n')}
+
+Start by reading the state of these repositories. Do not push, discard or overwrite anything before asking.`;
 
 // The transcript as the backend sends it: one row per block, `index` the native entry.
 const r = (index: number, entry_id: string, role: RowView['role'], minutes: number, text: string, extra: Partial<RowView> = {}): RowView =>
@@ -237,6 +275,17 @@ const mockSandboxes: { harness: string; name: string; root: string; store: strin
 
 const delay = <T>(value: T, ms = 120) => new Promise<T>((resolve) => setTimeout(() => resolve(structuredClone(value)), ms));
 
+let write: WriteOperation | null = null;
+let writeSequence = 0;
+
+function startWrite(kind: WriteOperation['kind'], args: Pick<HopArgs, 'dest'>, duration: number): WriteOperation {
+  if (write) return write;
+  const operation = { id: ++writeSequence, kind, status: 'running' } as const;
+  write = operation;
+  setTimeout(() => { write = { ...operation, status: 'completed', receipt: receipt(args) }; }, duration);
+  return operation;
+}
+
 export async function answer(command: string, args: Record<string, unknown> = {}): Promise<unknown> {
   const key = String(args.installation ?? args.source ?? 'claude_code');
   const installation = installations.find((item) => item.key === key) ?? installations[0];
@@ -269,12 +318,33 @@ export async function answer(command: string, args: Record<string, unknown> = {}
         all_branches_supported: installation.harness === 'codex', live: source?.live,
       });
     }
-    case 'hop': return delay(receipt(args.args as HopArgs), 900);
-    case 'import': return delay(receipt({ dest: String(args.into) }), 700);
+    case 'write_status': return write;
+    case 'acknowledge_write':
+      if (write && write.id === args.id && write.status !== 'running') write = null;
+      return;
+    case 'hop': return startWrite('hop', args.args as HopArgs, 900);
+    case 'import': return startWrite('import', { dest: String(args.into) }, 700);
     case 'export': return delay({ path: String(args.to ?? `C:\\work\\mukade\\mukade-data\\exports\\claude_code-${args.id}.json`), messages: 42 });
     case 'resume': {
       if (installation.harness === 'deepseek_harness') return delay({ launched: false, refusal: `DeepSeek Harness has no terminal UI to open a session in; continue it with a task: dsh --profile headless --session-id ${args.id} "<task>"`, command: ['dsh', '--profile', 'headless', '--session-id', String(args.id), '<task>'] });
       return delay({ launched: true, command: ['claude', '--resume', String(args.id)], cwd: project });
+    }
+    case 'work': return delay(workOf(sessions[key]?.find((row) => row.id === args.id)?.cwd), 350);
+    case 'handoff_options': {
+      const source = sessions[key]?.find((row) => row.id === args.id);
+      if (!source?.cwd) return delay({ refusal: 'no folder: nothing to start a harness in', destinations: [], note: '', cwd: null } satisfies HandoffOptions);
+      return delay({
+        destinations: installations.filter((item) => item.harness === 'claude_code' || item.harness === 'codex').map((item) => ({ key: item.key, label: item.label })),
+        note: handoffNote(source), cwd: source.cwd,
+      } satisfies HandoffOptions, 250);
+    }
+    case 'handoff': {
+      const source = sessions[key]?.find((row) => row.id === args.id);
+      const dest = installations.find((item) => item.key === args.dest);
+      return delay({
+        launched: true, command: [dest?.harness === 'codex' ? 'codex' : 'claude', 'Read the note first.'],
+        note_path: `C:\\Users\\dev\\mukade-data\\handoffs\\${String(args.id).slice(0, 8)}.md`, cwd: source?.cwd ?? project,
+      } satisfies HandedOff, 300);
     }
     case 'pick': return delay(args.kind === 'folder' ? 'D:\\apps' : args.kind === 'save' ? `C:\\Users\\me\\Desktop\\${args.name}` : 'C:\\work\\mukade\\mukade-data\\exports\\claude_code-5f2c9a1e.json', 50);
     case 'chat_status': return delay(chatRunning ? { state: 'running', endpoint: 'http://127.0.0.1:47631/mcp', data_dir: 'C:\\work\\mukade\\mukade-data' } : { state: 'stopped', data_dir: 'C:\\work\\mukade\\mukade-data' }, 60);

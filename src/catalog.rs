@@ -45,6 +45,10 @@ pub struct Entry {
     /// The argv that opens the session interactively in the harness's own TUI.
     #[serde(default)]
     pub interactive_resume: Vec<String>,
+    /// The argv that starts a new interactive session with a first prompt; `{exe}` and `{prompt}`
+    /// are filled in by [`interactive_start`]. Empty: the form has not been verified.
+    #[serde(default)]
+    pub interactive_start: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,43 +334,55 @@ pub fn interactive_resume(
         .collect()
 }
 
+/// The command that starts a new interactive session with `prompt` as its first message. `None`
+/// for a harness whose form has not been verified.
+pub fn interactive_start(harness: HarnessId, exe: &str, prompt: &str) -> Option<Vec<String>> {
+    let template = &entry(harness).interactive_start;
+    if template.is_empty() {
+        return None;
+    }
+    Some(
+        template
+            .iter()
+            .map(|part| match part.as_str() {
+                "{exe}" => exe.to_string(),
+                "{prompt}" => prompt.to_string(),
+                other => other.to_string(),
+            })
+            .collect(),
+    )
+}
+
 /// Expand `{home}` and the data-directory tokens of a catalog path. A token the platform does not
 /// provide makes the whole location unknown (`None`), never a path with a literal `{token}` in it.
 pub fn expand(location: &str, vars: &Vars) -> Option<PathBuf> {
-    let mut out = location.to_string();
-    let mut replace = |token: &str, value: Option<&PathBuf>| -> Option<()> {
-        if !out.contains(token) {
-            return Some(());
-        }
-        let value = value?;
-        out = out.replace(token, &value.to_string_lossy());
-        Some(())
-    };
-    replace("{home}", vars.home.as_ref())?;
-    replace("{app_data}", vars.app_data.as_ref())?;
-    replace("{local_app_data}", vars.local_app_data.as_ref())?;
-    if out.contains("{xdg_data_home}") {
-        let data = vars.xdg_data_home.clone().or_else(|| {
-            vars.home
-                .as_ref()
-                .map(|home| home.join(".local").join("share"))
-        })?;
-        out = out.replace("{xdg_data_home}", &data.to_string_lossy());
+    // Only the catalog text is a template. Directory names may contain tokens themselves, or
+    // native filename bytes that cannot be represented by a Rust string.
+    let mut path = std::ffi::OsString::new();
+    let mut rest = location;
+    while let Some((literal, after_open)) = rest.split_once('{') {
+        path.push(literal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let (token, after_close) = after_open.split_once('}')?;
+        let directory = match token {
+            "home" => vars.home.clone(),
+            "app_data" => vars.app_data.clone(),
+            "local_app_data" => vars.local_app_data.clone(),
+            "xdg_data_home" => vars.xdg_data_home.clone().or_else(|| {
+                vars.home
+                    .as_ref()
+                    .map(|home| home.join(".local").join("share"))
+            }),
+            "xdg_config_home" => vars
+                .xdg_config_home
+                .clone()
+                .or_else(|| vars.home.as_ref().map(|home| home.join(".config"))),
+            _ => return None,
+        }?;
+        path.push(directory);
+        rest = after_close;
     }
-    if out.contains("{xdg_config_home}") {
-        let config = vars
-            .xdg_config_home
-            .clone()
-            .or_else(|| vars.home.as_ref().map(|home| home.join(".config")))?;
-        out = out.replace("{xdg_config_home}", &config.to_string_lossy());
-    }
-    if out.contains('{') {
-        return None;
-    }
-    // `/` is valid on every platform; a Windows display reads better with its own separator.
-    Some(PathBuf::from(
-        out.replace('/', std::path::MAIN_SEPARATOR_STR),
-    ))
+    path.push(rest.replace('/', std::path::MAIN_SEPARATOR_STR));
+    Some(path.into())
 }
 
 #[cfg(test)]
@@ -430,6 +446,19 @@ mod tests {
         );
         // An unknown token is not left in a path as text.
         assert!(expand("{nonesuch}/x", &unix).is_none());
+    }
+
+    #[test]
+    fn expanding_home_treats_token_names_in_the_directory_as_literal() {
+        let home = PathBuf::from("/profiles/{app_data}");
+        let vars = Vars {
+            home: Some(home.clone()),
+            ..vars()
+        };
+        assert_eq!(
+            store_default_with(HarnessId::Pi, &vars),
+            Some(home.join(".pi").join("agent"))
+        );
     }
 
     #[test]
@@ -532,5 +561,25 @@ mod tests {
             tail(HarnessId::DeepSeekHarness),
             ["--profile", "headless", "--session-id", "abc"]
         );
+    }
+
+    #[test]
+    fn claude_code_and_codex_start_with_a_prompt_and_no_other_harness_does() {
+        assert_eq!(
+            interactive_start(HarnessId::ClaudeCode, "claude", "p q"),
+            Some(vec!["claude".into(), "p q".into()])
+        );
+        assert_eq!(
+            interactive_start(HarnessId::Codex, "codex", "p"),
+            Some(vec!["codex".into(), "p".into()])
+        );
+        for other in [
+            HarnessId::OpenCode,
+            HarnessId::Pi,
+            HarnessId::Hermes,
+            HarnessId::DeepSeekHarness,
+        ] {
+            assert_eq!(interactive_start(other, "x", "p"), None);
+        }
     }
 }

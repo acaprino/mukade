@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build, preview } from 'vite';
+import { checkInventory } from './inventory.mjs';
 import { answer } from '../src/mock.ts';
+import { checkWriteRecovery, holdImports } from './write-recovery.mjs';
 
 export async function checkProduction(browser) {
   const outDir = await mkdtemp(join(tmpdir(), 'mukade-desktop-'));
@@ -15,9 +17,11 @@ export async function checkProduction(browser) {
   try {
     await build(options);
     server = await preview({ ...options, preview: { host: '127.0.0.1', port: 0, strictPort: false } });
-    await page.exposeFunction('mockCommand', answer);
+    await checkInventory(browser, server.resolvedUrls.local[0]);
+    const writes = holdImports(answer);
+    await page.exposeFunction('mockCommand', writes.invoke);
     await page.addInitScript(() => {
-      const state = window.testIpc = { imports: 0, reads: 0 };
+      const state = window.testIpc = { imports: 0, hops: 0, reads: 0 };
       let callback = 0;
       window.__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main', windowLabel: 'main' } },
@@ -25,12 +29,13 @@ export async function checkProduction(browser) {
         async invoke(command, args) {
           if (command === 'plugin:window|is_maximized') return false;
           if (command.startsWith('plugin:') || ['window_caption_maximize', 'set_window_theme'].includes(command)) return;
+          if (command === 'hop') state.hops++;
           if (command === 'installations') state.reads++;
-          if (command === 'import') {
-            state.imports++;
-            await new Promise((resolve, reject) => { state.finish = resolve; state.fail = reject; });
-          }
-          return window.mockCommand(command, args);
+          const result = await window.mockCommand(command, args);
+          if (command === 'import') state.imports++;
+          if (command === 'acknowledge_write') state.acknowledged = true;
+          if (command === 'write_status') state.checked = true;
+          return result;
         },
       };
     });
@@ -43,19 +48,42 @@ export async function checkProduction(browser) {
       await page.keyboard.press(key);
       await page.waitForFunction(expected => window.testIpc.reads === expected, reads + index + 1);
     }
+    await page.locator('#detail').getByRole('button', { name: 'Hop h', exact: true }).click();
+    const summary = page.locator('details.more > summary');
+    await summary.focus();
+    await summary.press('Enter');
+    assert.equal(await summary.evaluate(el => el.parentElement.open), true);
+    await summary.press('Tab');
+    assert.equal(await page.locator('#hop-model').evaluate(el => el === document.activeElement), true);
+    assert.equal(await page.evaluate(() => window.testIpc.hops), 0);
+    await page.keyboard.press('Escape');
+    for (const name of ['installations', 'sessions']) {
+      const divider = page.locator('#resize-' + name);
+      await page.waitForFunction(id => {
+        const handle = document.getElementById(id);
+        const pane = document.getElementById(handle.getAttribute('aria-controls'));
+        return Number(handle.getAttribute('aria-valuenow')) === Math.round(pane.getBoundingClientRect().width);
+      }, 'resize-' + name);
+      const initial = Number(await divider.getAttribute('aria-valuenow'));
+      await divider.press('ArrowRight');
+      assert.equal(Number(await divider.getAttribute('aria-valuenow')), initial + 8);
+      assert.equal(await page.evaluate(key => localStorage.getItem(key), 'mukade.width.' + name), (initial + 8) + 'px');
+      await divider.dblclick();
+      assert.equal(await page.evaluate(key => localStorage.getItem(key), 'mukade.width.' + name), null);
+    }
     await page.locator('#import').click();
     await page.getByRole('button', { name: 'Choose…' }).click();
     await page.waitForFunction(() => document.getElementById('import-path').value.endsWith('.json'));
     await page.locator('#import-path').fill('session.json');
     await page.keyboard.press('Enter');
     await page.keyboard.press('Enter');
-    assert.equal(await page.evaluate(() => window.testIpc.imports), 1);
-    await page.evaluate(() => window.testIpc.fail('temporary failure'));
+    await page.waitForFunction(() => window.testIpc.imports === 1);
+    assert.equal(writes.requests, 1);
+    writes.fail();
     await page.getByRole('button', { name: 'Try again' }).click();
     await page.keyboard.press('Enter');
-    assert.equal(await page.evaluate(() => window.testIpc.imports), 2);
-    await page.evaluate(() => window.testIpc.finish());
-    await page.getByRole('dialog', { name: 'Done', exact: true }).waitFor();
+    await page.waitForFunction(() => window.testIpc.imports === 2);
+    await checkWriteRecovery(page, writes);
   } finally {
     await page.close();
     await server?.close();

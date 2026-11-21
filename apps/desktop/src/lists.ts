@@ -13,7 +13,7 @@ export function listbox(label: string, rows: ListRow[], selected: string | null,
       class: `row im-row im-row--1 ${extra ?? ''}`.trim(), role: 'option', id: `opt-${cssId(label)}-${cssId(id)}`,
       'aria-selected': String(id === selected), 'data-id': id, title,
     }, ...cells);
-    item.addEventListener('mousedown', (event) => { event.preventDefault(); onPick(id); });
+    item.addEventListener('mousedown', (event) => { event.preventDefault(); list.focus({ preventScroll: true }); onPick(id); });
     if (onOpen) item.addEventListener('dblclick', () => onOpen(id));
     list.append(item);
   }

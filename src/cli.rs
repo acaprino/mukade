@@ -36,6 +36,8 @@ mukade dump  <harness> <session-id> [options]
 mukade dump  <harness> <session-id> --clip <bytes>      (a session of any size, long strings cut)
 mukade dump  <harness> <session-id> --stream            (every entry in full, one JSON line each)
 mukade overview <harness> <session-id>
+mukade work  <harness> <session-id> [--json]
+mukade handoff <harness> <session-id> <dest-harness> [--run]
 mukade document opencode <src-harness> <session-id> [options]
 mukade write <harness> <document.json> [options]
 mukade hop   <src-harness> <session-id> <dst-harness> [options]
@@ -50,6 +52,17 @@ executables are asked for `--version`.
 `overview` prints the listing's row for one session (the keys of a `list` row) read from the two
 ends of its file, never its conversation: its cost does not grow with the session. The id is the
 whole id a listing shows. A session that is not there, or an id that names several, is refused.
+
+`work` prints what git knows about the folder of a session, read-only: the repositories in it, and
+for each branch and worktree what exists nowhere else (commits on no remote, uncommitted paths).
+`--json` prints the same as one JSON object. A session with no folder is refused.
+
+`handoff` is for a session whose conversation cannot be read but whose folder holds its work. It
+writes a note (from the template handoff-prompts/continue.md beside the executable) to
+mukade-data/handoffs/, prints the note, a blank line, `note: <path>`, then the command that starts
+<dest-harness> with a first prompt that points at the note, as one JSON array. With `--run` it runs
+that command in the session's folder and exits with its status. Only a destination whose command is
+verified can be started (claude_code, codex).
 
 `dump --clip <bytes>` never refuses a session for its size. Every string longer than <bytes> (at
 least 1024) is cut to a prefix, and the document is printed with a `clipped` key that says what was
@@ -147,6 +160,8 @@ options:
   --root <dir>             the store directory to use, and to infer the harness from
   --dest-root <dir>        hop: the destination's store or installation folder
   --depth <n>              scan: how many folder levels to descend (default 8)
+  --json                   work: print the work as one JSON object
+  --run                    handoff: run the command in the session's folder
   --claude-exe <path>      the claude binary to spawn
   --codex-exe <path>       the codex binary to spawn
   --opencode-exe <path>    the opencode binary to spawn
@@ -248,6 +263,8 @@ pub fn run(args: &[String]) -> Result<()> {
             "--root" => flags.root = Some(next(rest, &mut i)?),
             "--dest-root" => flags.dest_root = Some(next(rest, &mut i)?),
             "--depth" => flags.depth = Some(next(rest, &mut i)?),
+            "--json" => flags.json = true,
+            "--run" => flags.run = true,
             other if exe_flag_harness(other).is_some() => {
                 let harness = exe_flag_harness(other).expect("checked by the guard");
                 let value = next(rest, &mut i)?;
@@ -296,6 +313,12 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     if flags.archived.is_some() && command != "list" {
         anyhow::bail!("--archived is supported only by list");
+    }
+    if flags.json && command != "work" {
+        anyhow::bail!("--json is supported only by work");
+    }
+    if flags.run && command != "handoff" {
+        anyhow::bail!("--run is supported only by handoff");
     }
     if flags.children && !matches!(command.as_str(), "list" | "dump" | "hop" | "write") {
         anyhow::bail!("--children is supported only by list, dump, hop and write");
@@ -577,6 +600,85 @@ pub fn run(args: &[String]) -> Result<()> {
                         .map_err(crate::hop::classify_read)?
                 )
             );
+        }
+        "work" => {
+            no_more(operands, 1)?;
+            anyhow::ensure!(
+                flags.from_file.is_none(),
+                "work reads a session of the store: it cannot go with --from-file"
+            );
+            let id = operands.first().context("work needs a session id")?;
+            let reader = crate::reader::for_harness(harness)?;
+            let info = reader
+                .overview(id, &roots)
+                .map_err(crate::hop::classify_read)?;
+            let folder = session_folder(&info)?;
+            let work = crate::work::work_in(&folder);
+            if flags.json {
+                println!("{}", serde_json::to_string(&work)?);
+            } else {
+                for line in crate::work::lines(&work) {
+                    println!("{line}");
+                }
+            }
+        }
+        "handoff" => {
+            no_more(operands, 2)?;
+            anyhow::ensure!(
+                flags.from_file.is_none(),
+                "handoff reads a session of the store: it cannot go with --from-file"
+            );
+            let id = operands.first().context("handoff needs a session id")?;
+            let dest: HarnessId = operands
+                .get(1)
+                .context("handoff needs a destination harness")?
+                .parse()?;
+            let destinations = crate::handoff::destinations();
+            if !destinations.contains(&dest) {
+                let verified: Vec<&str> = destinations.iter().map(|d| d.as_str()).collect();
+                return Err(anyhow::Error::new(HopError::Unsupported(format!(
+                    "{} cannot be started with a first prompt yet (verified: {})",
+                    dest.as_str(),
+                    verified.join(", ")
+                ))));
+            }
+            let data_dir = crate::portable::data_dir().ok_or_else(|| {
+                anyhow::Error::new(HopError::Unsupported(
+                    "no data folder for the note: set MUKADE_DATA_DIR to an absolute folder".into(),
+                ))
+            })?;
+            let reader = crate::reader::for_harness(harness)?;
+            let info = reader
+                .overview(id, &roots)
+                .map_err(crate::hop::classify_read)?;
+            let folder = session_folder(&info)?;
+            if flags.run && !folder.is_dir() {
+                return Err(anyhow::Error::new(HopError::NotFound(format!(
+                    "{} does not exist",
+                    folder.display()
+                ))));
+            }
+            let work = crate::work::work_in(&folder);
+            let template_dir = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join(crate::handoff::FOLDER)));
+            let template = crate::handoff::template(template_dir.as_deref());
+            let text = crate::handoff::note(&template, harness, &info, &work);
+            let note_file = crate::handoff::note_path(&data_dir, harness, &info.id);
+            crate::handoff::save(&text, &note_file)
+                .with_context(|| format!("write the note {}", note_file.display()))?;
+            let exe = crate::exe::resolve(dest, flags.exe_flag(dest).filter(|v| !v.is_empty()));
+            let prompt = crate::handoff::first_prompt(&note_file);
+            let command = crate::catalog::interactive_start(dest, &exe, &prompt)
+                .with_context(|| format!("no start command for {}", dest.as_str()))?;
+            println!("{}", text.trim_end());
+            println!();
+            println!("note: {}", note_file.display());
+            println!("{}", serde_json::to_string(&command)?);
+            if flags.run {
+                std::io::stdout().flush()?;
+                run_in(&folder, &command)?;
+            }
         }
         "dump" if flags.stream => {
             no_more(operands, 1)?;
@@ -1165,6 +1267,30 @@ fn open_output(path: Option<&str>) -> Result<Box<dyn std::io::Write>> {
     })
 }
 
+/// The folder a session worked in, or the refusal (exit 2) when it has none.
+fn session_folder(info: &crate::reader::SessionInfo) -> Result<std::path::PathBuf> {
+    match crate::handoff::refusal(info) {
+        Some(why) => Err(anyhow::Error::new(HopError::Unsupported(why))),
+        None => Ok(std::path::PathBuf::from(
+            info.cwd.as_deref().unwrap_or_default(),
+        )),
+    }
+}
+
+/// Run `command` in `folder` with this process's own input and output, and exit with its status.
+fn run_in(folder: &std::path::Path, command: &[String]) -> Result<()> {
+    let (program, args) = command.split_first().context("the command is empty")?;
+    let status = std::process::Command::new(crate::exe::spawnable(program))
+        .args(args)
+        .current_dir(folder)
+        .status()
+        .with_context(|| format!("start {program}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    std::process::exit(status.code().unwrap_or(1));
+}
+
 fn no_more(operands: &[&str], expected: usize) -> Result<()> {
     match operands.get(expected) {
         Some(extra) => anyhow::bail!("unexpected argument {extra}\n\n{USAGE}"),
@@ -1210,6 +1336,8 @@ struct Flags {
     root: Option<String>,
     dest_root: Option<String>,
     depth: Option<String>,
+    json: bool,
+    run: bool,
     /// The `--<harness>-exe` values, in [`HarnessId::ALL`] order.
     exes: [Option<String>; HarnessId::ALL.len()],
 }

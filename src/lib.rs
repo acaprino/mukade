@@ -20,6 +20,7 @@ pub mod cli;
 pub mod dest;
 pub mod detect;
 pub mod exe;
+pub mod handoff;
 pub mod harnesses;
 pub mod hop;
 pub mod intent;
@@ -40,6 +41,7 @@ pub mod summary;
 pub mod timing;
 pub mod tools;
 pub mod wire;
+pub mod work;
 pub mod writer;
 
 pub use hop::{HopError, HopRequest, Receipt, export, hop, hop_into, import, import_document};

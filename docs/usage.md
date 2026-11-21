@@ -22,6 +22,7 @@ continues it **as one of its own sessions**.
 | know which harness a folder belongs to | [`mukade detect <dir>`](#mukade-detect) |
 | find a session ID | [`mukade list <harness>`](#mukade-list) |
 | see one session's title, project and time without reading it | [`mukade overview <harness> <id>`](#mukade-overview) |
+| see the git work a session left in its folder, whose text I cannot read | [`mukade work <harness> <id>`](#mukade-work) |
 | read a session of any size | [`dump --clip` and `dump --stream`](#a-session-of-any-size) ([guide](reading-large-sessions.md)) |
 
 **Move**
@@ -30,6 +31,7 @@ continues it **as one of its own sessions**.
 |---|---|
 | continue a session in another harness | [`mukade hop <from> <id> <to>`](#mukade-hop) ([Quick start](#2-quick-start)) |
 | try a hop without touching the real store | [`hop` into a scratch store](#rehearse-first) |
+| prepare a note and the command that starts Claude Code or Codex CLI on the folder of a session I cannot read (`--run` starts it) | [`mukade handoff <harness> <id> <dest>`](#mukade-handoff) |
 | move a session to another machine or person | [`dump` there, `write` here](#move-a-session-to-another-machine) |
 | get OpenCode's import document, writing nothing | [`mukade document opencode …`](#mukade-document) |
 | run mukade on a machine I do not own | [copy the executable](#1-get-it) |
@@ -117,6 +119,8 @@ Always true:
 | `mukade detect <dir>` | which harness stores a folder holds | JSON |
 | `mukade list <harness> [options]` | the sessions, one per line | JSON lines |
 | `mukade overview <harness> <session-id>` | one session's listing row, from the two ends of its file | JSON |
+| `mukade work <harness> <session-id> [--json]` | the git work in the folder of a session, read-only | text, or JSON |
+| `mukade handoff <harness> <session-id> <dest-harness> [--run]` | a note on that work, and the command that starts a harness on it | text and a JSON array |
 | `mukade intents` | the editable summary prompts | JSON |
 | `mukade dump <harness> <session-id> [options]` | export a session as one harness-neutral document | JSON document |
 | `mukade dump <harness> <session-id> --clip <bytes>` | the document of a session of any size, long strings cut | JSON document |
@@ -143,6 +147,8 @@ Always true:
 | `--archived <true\|false>` | list | include (default) or leave out archived sessions |
 | `--depth <n>` | scan | folder levels to descend (default 8) |
 | `--output <path>` | dump | write the document to this file (UTF-8) instead of stdout |
+| `--json` | work | print the work as one JSON object |
+| `--run` | handoff | run the command in the session's folder |
 | `--manifest <path>` | write, hop | also save the manifest there |
 
 **What travels** ([section 5](#5-choose-what-travels))
@@ -172,7 +178,7 @@ Always true:
 | `--dest-agent <name>`, `--metadata-file <path>` | write, hop, document | OpenCode only: primary agent; JSON session metadata |
 | `--expect-sha256 <hash>` | hop | refuse when the source's fingerprint changed |
 | `--resume-prompt <text>` | write, hop | resume in the destination and keep its reply in the receipt |
-| `--claude-exe`, `--codex-exe`, `--opencode-exe`, `--pi-exe`, `--hermes-exe`, `--dsh-exe <path>` | write, hop, document, dump (summary) | the binary to spawn |
+| `--claude-exe`, `--codex-exe`, `--opencode-exe`, `--pi-exe`, `--hermes-exe`, `--dsh-exe <path>` | write, hop, document, dump (summary), handoff (the destination's) | the binary to spawn |
 
 ### `mukade harnesses`
 
@@ -300,6 +306,7 @@ A harness forgets transcripts long before it forgets sessions, so `list` reports
 | harness | an `unreadable` row is |
 |---|---|
 | Codex | a thread with a row in the home's newest `state_<n>.sqlite` whose rollout file is gone. `location` is the path the row records. Subagent and guardian threads are listed with `--children` only |
+| Codex, a chat hosted by ChatGPT | a chat the Codex desktop app lists whose conversation is on ChatGPT, when its project has a local folder: `cwd` is that folder, `location` is `sqlite/codex.db`, and `unreadable` is `hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder`. A hosted chat with no local folder is not listed. [`work`](#mukade-work) and [`handoff`](#mukade-handoff) work on it ([Codex page](harnesses/codex.md#chats-hosted-by-chatgpt)) |
 | Claude Code | a session `history.jsonl` still has prompts for, whose session file is gone (`location` is `history.jsonl`; `title` is its first prompt); or a running session that has not written its transcript yet |
 | OpenCode | a session in another `opencode*.db` beside the selected one (read it by selecting that file), or one only in the legacy `session` table, which OpenCode cannot export |
 
@@ -392,6 +399,121 @@ mukade overview claude_code c45db7bc-542c-4201-89de-b590c6fdb797
   for that id (a subagent's row, with `--children`, too).
 - It does not take `--from-file`. Claude Code, Codex and Pi read the one file; the other harnesses
   list their store and pick the row.
+
+### `mukade work`
+
+Prints what git knows about the folder of a session, **read-only**, whether or not the session can be
+read. It is for the work a session left that exists nowhere else: commits on no remote and paths not
+committed. It never reads the conversation and takes the id as `overview` does.
+
+```powershell
+$env:CODEX_HOME = Join-Path $HOME '.codex'
+mukade list codex | Select-String Daodan
+mukade work codex 6b00c623-2d08-83eb-a3cc-df6dadef8474
+```
+
+```text
+daodan: branch develop, upstream origin/develop, in sync, 1 uncommitted path
+imago: branch develop, upstream origin/develop, clean
+stack-analyser: branch feature/stack-detection, no upstream, 133 uncommitted paths
+(remote state as of the last fetch)
+```
+
+The id is the whole id a listing shows, here the Codex chat "Capire lo stack di Daodan", hosted by
+ChatGPT. The repositories and counts are those found on the author's machine on 2026-11-21 and the
+wording is what `work` prints, not a recorded run.
+
+- **Which repositories.** The session's folder when it is a git repository. When it is a subfolder of one,
+  that repository (its top level, as `git rev-parse --show-toplevel` prints it) and only that one. Else each
+  direct child of the folder that is one, by name, and at most the first 20: with more, the line
+  `only the first 20 of <N> repositories were read` comes first. A ChatGPT project folder is the last
+  case. Nothing deeper is searched.
+- **One line per repository**: `<name>: branch <branch>, upstream <upstream>` or `no upstream`, then what
+  it says: `in sync` (with uncommitted paths), `N commits ahead`, `N commits on no remote`,
+  `N uncommitted paths`, or `clean`. A detached head reads `detached at <commit>`. Another worktree or
+  branch with something to say gets its own line below, indented by two spaces.
+- **Commits on no remote** are the commits reachable from the branch and from no remote-tracking ref. They
+  are counted without an upstream, so a branch that never had one still shows its work. With an upstream
+  the commits ahead of it are shown too. **Uncommitted paths** are tracked changes and untracked files
+  in a worktree, ignored files left out.
+- **It never fetches.** What it says about a remote is as of the last fetch, and the last line says so. It
+  sets `GIT_OPTIONAL_LOCKS=0` and runs only `git rev-parse --show-toplevel`, `git worktree list`,
+  `git status`, `git for-each-ref` and `git rev-list --count`, each with a 10 second deadline: no command
+  that changes a repository. The folder comes from session data, so git is run with `core.fsmonitor` and
+  `core.untrackedCache` off and without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and similar
+  variables of the environment. This does not make an untrusted folder safe to read: a repository's own
+  filters (`filter.<name>.clean`) still run during `git status`, as in any `git status` there. The
+  commits ahead of an upstream come from `git for-each-ref` itself.
+- **A repository git refuses** prints `<name>: <what git said>` and the others still print. A linked
+  worktree that git cannot read prints `  <worktree>: <what git said>` below its repository, with its
+  count taken as 0, and the repository's other worktrees and its branches are kept. When there is
+  nothing to show the line is the reason: `<folder> does not exist`, `<folder> is not a folder`,
+  `no git repository in <folder>` or `git is not installed`.
+- `--json` prints the same as one JSON object: `folder`, `repositories` (each with `path`, `worktrees`
+  with `path`, `branch`, `head`, `uncommitted` and `error`, `branches` with `name`, `upstream`, `ahead` and
+  `unpushed`, and `error`) and `note`.
+- A session with no folder is refused (exit 2): `unsupported: this session has no folder on this machine:
+  there is nothing local to continue from`. It does not take `--from-file`.
+
+### `mukade handoff`
+
+Prepares a note on what a session left in its folder and the command that starts another harness there,
+for a session whose conversation cannot be read. It prints the note and the command. With `--run` it
+also starts the harness in the folder. It writes a **new** session in no harness: there is no history to
+write. The destination gets one first prompt that points at the note.
+
+```powershell
+mukade handoff codex 6b00c623-2d08-83eb-a3cc-df6dadef8474 claude_code
+```
+
+```text
+This continues a session that can no longer be used: "Capire lo stack di Daodan" (Codex CLI, id 6b00c623-2d08-83eb-a3cc-df6dadef8474, last active 2026-11-20T09:15:00.000+00:00).
+Its conversation is not available here: hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder.
+
+Work it left in C:\Users\<you>\Documents\ChatGPT\Daodan:
+- daodan: branch develop, upstream origin/develop, in sync, 1 uncommitted path
+- imago: branch develop, upstream origin/develop, clean
+- stack-analyser: branch feature/stack-detection, no upstream, 133 uncommitted paths
+(remote state as of the last fetch)
+
+Start by reading the state of these repositories. Do not push, discard or overwrite anything before asking.
+
+note: C:\tools\mukade\mukade-data\handoffs\codex-6b00c623-2d08-83eb-a3cc-df6dadef8474.md
+["claude","Read C:\\tools\\mukade\\mukade-data\\handoffs\\codex-6b00c623-2d08-83eb-a3cc-df6dadef8474.md and continue from it."]
+```
+
+The output is the note, a blank line, `note: <path>`, then the command as one JSON array line. Run the
+command from the session's folder, or add `--run`. The time and the work are illustrative, as above.
+
+- **The note** is made from the template `handoff-prompts/continue.md` beside the executable. The
+  default is built in and written there once, so you can edit it: a file that is empty is ignored and
+  never overwritten. Its tokens are `{title}`, `{harness}`, `{id}`, `{updated}`, `{reason}`, `{folder}`
+  and `{work}`. The note is saved even when the destination is not started.
+- **The note file** is `mukade-data/handoffs/<harness>-<id>.md`, where `<harness>` is the session's
+  harness and `<id>` its id with anything but letters, digits, `.`, `_` and `-` turned into `_`. It is in
+  mukade's data folder ([section 10](#10-where-its-files-go)), never in the project folder, and a second
+  run for the same session replaces it.
+- **The destinations** are the harnesses whose catalog entry has `interactive_start`: Claude Code and
+  Codex CLI today ([catalog](reference/harness-catalog.md#what-an-entry-holds)). Another harness is added
+  when its way of starting with a prompt has been seen to work. The destination's executable is resolved
+  as for a hop (`--claude-exe`, `--codex-exe`, then the variable, `PATH` and the catalog).
+- **The prompt is one line**, `Read <path> and continue from it.`, because a multi-line argument does not
+  survive `wt new-tab` and the `.cmd` launchers.
+- **`--run`** starts the command in the session's folder with this terminal's input and output, waits,
+  and exits with its status. The folder must exist (`not found: <folder> does not exist`, exit 2). Without
+  `--run` nothing is started.
+- **Refusals** exit 2 and are printed with the prefix the command line uses for them: a session with no
+  folder (`unsupported: …`, as for `work`), a destination that cannot be started this way
+  (`unsupported: pi cannot be started with a first prompt yet (verified: claude_code, codex)`), no data
+  folder (`unsupported: no data folder for the note: set MUKADE_DATA_DIR to an absolute folder`), a
+  session that is not there (`not found: …`). A destination name that is no harness at all exits 1, as
+  `hop` does. The destination is checked first, so a refused one writes nothing.
+- It does not take `--from-file`.
+
+**Not verified.** No run of `handoff` on a Windows build has been recorded: CI builds on Ubuntu and
+macOS. That the one-line prompt reaches the harness whole through Windows Terminal is not seen yet. The
+two commands have no tests of their own, only the library behind them ([`work`](#mukade-work), the note,
+the catalog field). The owner's live check settles these.
 
 ### `mukade intents`
 
@@ -1403,6 +1525,10 @@ Claude Code names a project's folder by its own rule (every character outside `[
 - Mukade reads `model_provider` from `$env:CODEX_HOME\config.toml` when available; `--model-provider`
   states it explicitly. Only the top-level `model_provider` key counts, not a profile's or a provider
   table's.
+- **Chats hosted by ChatGPT.** The desktop app also lists chats whose conversation lives on ChatGPT. Those
+  whose project has a local folder are listed `unreadable`: `dump` and `hop` refuse them (exit 2), and
+  [`work`](#mukade-work) and [`handoff`](#mukade-handoff) are how you get at what they left. Their text
+  is not read ([Codex page](harnesses/codex.md#chats-hosted-by-chatgpt)).
 
 **Threads of the Codex Desktop app (0.165).** The ID in a `codex://threads/<id>` link is the thread ID
 mukade takes: `mukade hop codex 01a181e2-4cd9-7c63-82b8-f75e3d6bb172 claude_code --cwd 'D:\Projects\daodan'`.
@@ -1580,6 +1706,8 @@ folder for a host; an invalid override is refused (exit 1) rather than redirecte
 | file | what for |
 |---|---|
 | `intent-prompts/*.md` | the editable summary prompts: `generic.md` is the default, every other file stem is an `--intent` name; copied on first start and never overwritten |
+| `handoff-prompts/continue.md` | the editable template of the [handoff](#mukade-handoff) note: written beside the executable the first time a handoff needs it, from the built-in default, and never overwritten |
+| `mukade-data/handoffs/<harness>-<id>.md` | the note a [handoff](#mukade-handoff) wrote for that session, replaced by the next one for it |
 | `mukade-data/cache/probes.json` | versions and OpenCode project IDs learned from harness binaries, keyed by the binary's path, size and modification time, so the next hop does not ask again |
 | `mukade-data/cache/claude-list-<hash>.json` | what `list claude_code` read from each session file (ID, title, cwd, time), keyed by path, size and modification time, so only changed files are read next time; one per Claude Code `projects/` folder, rewritten whole; a file modified in the last 2 seconds is never kept in it |
 | `mukade-data/registry/<harness>/source-<hash>.json` | the [hop registry](#the-hop-registry): each session written from that source session, where, and a fingerprint and the record ids of each block; at most 32 per source session; `MUKADE_REGISTRY=off` keeps nothing |
@@ -1651,6 +1779,15 @@ Every `hop` and `write` remembers what it wrote, under the session it came from,
 | Detection ambiguous or empty | name the harness explicitly; a newly created empty store has no layout to infer |
 | Cannot run the executable | verify the launcher path, runtime and permissions. A custom OpenCode source needs `MUKADE_OPENCODE_EXE`; a destination uses its flag or variable |
 | Codex version or OpenCode project/model missing | pass `--dest-version`, `--project-id`, `--model-provider`, `--model` |
+
+**Work and handoff**
+
+| symptom | cause and fix |
+|---|---|
+| "this session has no folder on this machine: there is nothing local to continue from" (exit 2) | the session's row has no folder, so there is nothing local to read or start on |
+| "<dest> cannot be started with a first prompt yet (verified: claude_code, codex)" (exit 2) | only a destination whose catalog entry has `interactive_start` is offered. Hop into the other harness instead, if the session can be read |
+| `no git repository in <folder>` where the work should be | the folder is inside no repository and its direct children hold no `.git`: a repository two levels down is not looked for |
+| a hosted chat is missing from `list codex` | its project has no local folder, or `sqlite/codex.db` or `state_<n>.sqlite` is missing, locked or laid out by another Codex version: nothing is listed from it, and the rest of the listing is as it was |
 
 **Writing**
 

@@ -204,6 +204,9 @@ fn local_machine_names() -> Vec<String> {
         for file in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
             names.extend(std::fs::read_to_string(file).ok());
         }
+        // GUI processes on macOS commonly have neither HOSTNAME nor /etc/hostname.
+        #[cfg(unix)]
+        names.extend(unix_hostname());
         names.extend(std::env::var("HOSTNAME").ok());
         names.extend(std::fs::read_to_string("/etc/hostname").ok());
     }
@@ -214,6 +217,20 @@ fn local_machine_names() -> Vec<String> {
         .collect();
     names.dedup();
     names
+}
+
+#[cfg(unix)]
+fn unix_hostname() -> Option<String> {
+    let mut buf = [0u8; 1024];
+    // The system writes at most buf.len() bytes. Reject a truncated, unterminated name.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return None;
+    }
+    std::ffi::CStr::from_bytes_until_nul(&buf)
+        .ok()?
+        .to_str()
+        .ok()
+        .map(str::to_owned)
 }
 
 /// This process's process-id namespace as Linux names it (`pid:[4026531836]`).
