@@ -183,6 +183,15 @@ try {
     await page.locator('#room-name').fill('smoke-room');
     await page.keyboard.press('Enter');
     await page.locator('#chat-rooms .row', { hasText: 'smoke-room' }).waitFor();
+    // The words of the destructive buttons name the object, and focus starts on Cancel.
+    await page.getByRole('button', { name: 'Close…' }).click();
+    await page.getByRole('button', { name: 'Close smoke-room', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete…' }).click();
+    await page.getByRole('button', { name: 'Delete smoke-room', exact: true }).waitFor();
+    if ((await page.evaluate(() => document.activeElement?.textContent?.trim())) !== 'Cancel') failures.push(`${name}: focus did not start on Cancel in the delete dialog`);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    const untitled = await page.evaluate(() => [...document.querySelectorAll('.im-icon-btn')].filter((one) => !one.title || one.title !== one.getAttribute('aria-label')).length);
+    if (untitled) failures.push(`${name}: ${untitled} icon buttons have no tooltip equal to their name`);
     // Search everything finds a member of another room.
     await page.keyboard.press('Control+Shift+f');
     await page.locator('#search-all').fill('codex');
@@ -197,6 +206,14 @@ try {
     await page.locator('.im-notice', { hasText: 'system scan done' }).first().waitFor();
     if (!(await page.locator('.im-status-text').innerText()).includes('system scan done')) failures.push(`${name}: the status row lost the scan result`);
     await page.locator('.install-row', { hasText: 'JanuraCode' }).waitFor();
+    // A kept folder is forgotten at once, and the notice's Undo keeps it again.
+    const forget = page.getByRole('button', { name: 'Forget folder' }).first();
+    if (await forget.count()) {
+      await forget.click();
+      await page.locator('.im-notice', { hasText: 'Forgot the folder' }).first().waitFor();
+      await page.locator('.im-notice').getByRole('button', { name: 'Undo' }).first().click();
+      await page.getByRole('button', { name: 'Forget folder' }).first().waitFor();
+    }
     await page.screenshot({ path: `${out}harnesses-${name}.png` });
     await page.keyboard.press('c');
     // What is being typed in the filter survives the 3 s poll.

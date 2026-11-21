@@ -4,11 +4,11 @@
 // with npm, with a store of its own.
 
 import './harnesses.css';
-import { loader, setPanelState } from '@acaprino/imago/ui';
+import { loader, notify, setPanelState } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { mark } from './chatviews.ts';
 import { button, caps, chip, facts, field, fill, group, h, icon, inlineNote } from './dom.ts';
-import { openModal } from './modal.ts';
+import { confirmModal, openModal } from './modal.ts';
 import type { HarnessView, Installation, Sandbox } from './types.ts';
 
 export interface HarnessesHooks {
@@ -94,7 +94,7 @@ export class HarnessesView {
       h('p', { class: 'label' }, `Folders and stores scanned · ${folders.length}`),
       folders.length
         ? h('ul', { class: 'plain' }, ...folders.map((dir) => h('li', {}, h('span', { class: 'mono grow' }, dir),
-          button('Forget', { class: 'ghost', title: 'Stop listing what this folder holds', onclick: () => void this.hooks.forgetFolder(dir) }))))
+          button('Forget folder', { class: 'ghost', title: 'Stop listing what this folder holds', onclick: () => void this.forgetFolder(dir) }))))
         : h('p', { class: 'hint muted pad-x' }, 'Scan this computer, or one folder, to find portable and custom installations.'));
     fill(this.root, head, h('div', { class: 'harness-body' }, cards, kept));
   }
@@ -130,13 +130,13 @@ export class HarnessesView {
               h('span', { class: 'num im-num' }, item.error ? 'error' : `${item.count} sessions`),
               item.count > 0 ? button('Show', { class: 'ghost', onclick: () => this.hooks.showInstallation(item.key) }) : null,
               sandbox ? button([icon('term'), 'Run'], { class: 'ghost', title: 'Open it in a terminal, in its sandbox', onclick: () => void this.runSandbox(sandbox) }) : null,
-              sandbox ? button('Forget', { class: 'ghost', title: 'Stop listing it; its folder stays', onclick: () => void this.forgetSandbox(sandbox) }) : null);
+              sandbox ? button('Forget sandbox…', { class: 'ghost', title: 'Stop listing it; its folder stays', onclick: () => void this.forgetSandbox(sandbox) }) : null);
           }),
           ...sandboxes.filter((one) => !others.some((item) => item.store === one.store)).map((sandbox) => h('div', { class: 'install-row' },
             h('span', { class: 'grow' }, h('b', {}, `sandbox ${sandbox.name}`), chip('sandbox'),
               h('span', { class: 'mono muted block' }, sandbox.root), h('span', { class: 'muted block' }, 'Its store appears at the first run.')),
             button([icon('term'), 'Run'], { class: 'ghost', onclick: () => void this.runSandbox(sandbox) }),
-            button('Forget', { class: 'ghost', onclick: () => void this.forgetSandbox(sandbox) }))))
+            button('Forget sandbox…', { class: 'ghost', onclick: () => void this.forgetSandbox(sandbox) }))))
         : null);
   }
 
@@ -246,7 +246,15 @@ export class HarnessesView {
     }
   }
 
+  /** A kept folder is forgotten at once, and the notice has Undo: it keeps the folder again. */
+  private async forgetFolder(dir: string): Promise<void> {
+    await this.hooks.forgetFolder(dir);
+    notify(document.getElementById('app')!, `Forgot the folder ${dir}`, { action: { label: 'Undo', run: () => void this.hooks.addFolders([dir]) } });
+  }
+
+  /** A sandbox cannot be listed again by the window: it asks, naming it and saying its folder stays. */
   private async forgetSandbox(sandbox: Sandbox): Promise<void> {
+    if (!(await confirmModal(`Forget the sandbox ${sandbox.name}`, `The window stops listing it. Its folder stays where it is: ${sandbox.root}. The window cannot list it again.`, `Forget ${sandbox.name}`))) return;
     try {
       await api.sandboxForget(sandbox.root);
       this.hooks.report(`sandbox ${sandbox.name} is no longer listed; its folder stays: ${sandbox.root}`);

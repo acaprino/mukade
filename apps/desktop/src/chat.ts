@@ -699,7 +699,7 @@ export class ChatView {
         this.composerNote,
         h('span', { class: 'spring' }),
         h('span', { class: 'muted' }, `as ${mine.name} · ${mine.role}`),
-        button('Leave', { class: 'ghost', disabled: this.busy !== null, title: 'The window leaves the room', onclick: () => void this.leave(room) }),
+        button('Leave the room', { class: 'ghost', disabled: this.busy !== null, title: 'The window leaves the room', onclick: () => void this.leave(room) }),
         button([icon('send'), sending ? 'Sending…' : 'Send ', sending ? null : caps('Ctrl+Enter')], { class: 'primary', disabled: this.busy !== null, onclick: () => void this.send() })));
   }
 
@@ -897,7 +897,7 @@ export class ChatView {
   }
 
   private async closeRoom(room: Room): Promise<void> {
-    if (!(await confirmModal(`Close ${room.name}`, 'Its members stop sending and receiving in it. Its history stays readable, and it can be reopened.', 'Close the room'))) return;
+    if (!(await confirmModal(`Close ${room.name}`, 'Its members stop sending and receiving in it. Its history stays readable, and it can be reopened.', `Close ${room.name}`))) return;
     await this.administer('closing', 'close', room);
   }
 
@@ -911,7 +911,7 @@ export class ChatView {
     try { fresh = (await this.allRooms()).find((one) => one.room_id === room.room_id); } catch (error) { this.hooks.report(errorText(error), true); return; }
     if (!fresh) { await this.poll(true); return; }
     const summary = `${fresh.members} member${fresh.members === 1 ? '' : 's'} and ${fresh.events} event${fresh.events === 1 ? '' : 's'} go with it, for good (revision ${fresh.revision}).`;
-    if (!(await confirmModal(`Delete ${fresh.name}`, summary, 'Delete for good'))) return;
+    if (!(await confirmModal(`Delete ${fresh.name}`, summary, `Delete ${fresh.name}`))) return;
     await this.administer('deleting', 'delete', fresh, { expected_revision: fresh.revision, confirm: true });
   }
 

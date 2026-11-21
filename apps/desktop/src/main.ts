@@ -920,7 +920,7 @@ function wire(): void {
     openImport(state.installations, state.installation, document, hooks);
   });
   onCloseBlocked(async () => {
-    if (await confirmModal('A hop is still running', 'Closing now stops the window while it writes. The destination may be left with a session the receipt never reports.', 'Close anyway')) void api.quit();
+    if (await confirmModal('A hop is still running', 'Closing now stops the window while it writes. The destination may be left with a session the receipt never reports.', 'Close the window')) void api.quit();
   });
 }
 
