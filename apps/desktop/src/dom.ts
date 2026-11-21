@@ -125,11 +125,14 @@ export function choice<T extends string>(label: string, values: readonly { value
 
 /** A choice of view: buttons with `aria-selected` in a tablist of `im-seg`. */
 export function viewSwitch<T extends string>(label: string, items: readonly { value: T; content: Child[] }[], current: T, onPick: (value: T) => void): HTMLElement {
-  return h('div', { class: 'im-seg', role: 'tablist', 'aria-label': label }, ...items.map((item) => {
-    const node = h('button', { type: 'button', role: 'tab', 'aria-selected': String(item.value === current), tabindex: item.value === current ? '0' : '-1' }, ...item.content);
+  const strip = h('div', { class: 'im-seg', role: 'tablist', 'aria-label': label }, ...items.map((item) => {
+    const node = h('button', { type: 'button', role: 'tab', 'aria-selected': String(item.value === current) }, ...item.content);
     node.addEventListener('click', () => onPick(item.value));
     return node;
   }));
+  // One tab stop (the selected tab) and the arrows between the tabs, as every tab strip.
+  roving(strip, { item: '[role="tab"]', orientation: 'horizontal', onSelect: (tab) => tab.click() });
+  return strip;
 }
 
 /** A toggle: a small button that is pressed or not (the kinds of events, a member, a recipient). */

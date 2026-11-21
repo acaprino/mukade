@@ -100,6 +100,10 @@ try {
     await page.locator('#reader .entry').first().waitFor();
     await page.waitForTimeout(300);
     if (!(await page.locator('#sessions').isVisible()) || !(await page.locator('#detail h3').isVisible())) failures.push(`${name}: the list or the detail is gone while reading`);
+    // A tab strip is one tab stop with the arrows inside: from Conversation, ArrowRight reaches Raw.
+    await page.getByRole('tab', { name: 'Conversation' }).focus();
+    await page.keyboard.press('ArrowRight');
+    if ((await page.evaluate(() => document.activeElement?.textContent?.trim())) !== 'Raw') failures.push(`${name}: ArrowRight did not reach the Raw tab`);
     await page.screenshot({ path: `${out}reader-${name}.png` });
     if (look === 'smooth' && scheme === 'dark') {
       // A live session is read again: the status row says so, and no notice does (a state, not a result).
