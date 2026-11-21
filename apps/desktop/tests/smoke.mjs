@@ -79,6 +79,29 @@ try {
     await page.getByText('Losses · 2').waitFor();
     await page.screenshot({ path: `${out}receipt-${name}.png` });
     await page.keyboard.press('Escape');
+    // A chat hosted by ChatGPT: its chip, the work it left in its folder, and starting another harness there.
+    await page.locator('[data-id="codex"]').click();
+    await page.locator('#sessions .row .tag', { hasText: 'hosted' }).waitFor();
+    await page.locator('#detail .work-repo').nth(2).waitFor();
+    const repositories = await page.locator('#detail .work-repo').allInnerTexts();
+    if (repositories.length !== 3) failures.push(`${name}: ${repositories.length} repositories in the work, not 3`);
+    if (!repositories.some((text) => text.includes('feature/stack-detection · no upstream · 3 commits on no remote · 133 uncommitted'))) failures.push(`${name}: the line of stack-analyser is missing`);
+    if (await page.locator('#detail .work .im-chip', { hasText: 'at risk' }).count() !== 2) failures.push(`${name}: two repositories should be at risk`);
+    await page.screenshot({ path: `${out}hosted-${name}.png` });
+    await page.getByRole('button', { name: /^Start in/ }).waitFor();
+    await page.locator('#sessions').focus();
+    await page.keyboard.press('s');
+    await page.locator('.im-form-dialog #handoff-note').waitFor();
+    if (!(await page.locator('#handoff-note').inputValue()).includes('Capire lo stack di Daodan')) failures.push(`${name}: the note does not name the session`);
+    await page.screenshot({ path: `${out}handoff-${name}.png` });
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    if (await page.locator('.im-form-dialog').count()) failures.push(`${name}: Escape did not close the handoff dialog`);
+    await page.getByRole('button', { name: /^Start in/ }).click();
+    await page.locator('.im-form-dialog #handoff-note').waitFor();
+    await page.locator('.im-form-dialog').getByRole('button', { name: /^Start/ }).click();
+    await page.locator('#status', { hasText: 'Started Claude Code in C:\\Users\\dev\\Documents\\ChatGPT\\Daodan; note saved to ' }).waitFor();
+    if (await page.locator('.im-form-dialog').count()) failures.push(`${name}: the handoff dialog stayed open after Start`);
     await page.keyboard.press('c');
     // The room in its three views: the graph (the first), the lanes, the feed.
     await page.locator('.graph-canvas svg .node').first().waitFor();
@@ -141,4 +164,4 @@ if (failures.length) {
   console.error(failures.join('\n'));
   process.exit(1);
 }
-console.log(`smoke ok: 40 screenshots in ${out}`);
+console.log(`smoke ok: screenshots in ${out}`);

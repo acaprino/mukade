@@ -11,6 +11,7 @@ import { ChatView } from './chat.ts';
 import { boundTo, chatIndex } from './chatindex.ts';
 import { inRoomsBox, renderDetail } from './detail.ts';
 import { button, commandLine, fill, h, kbd } from './dom.ts';
+import { canStartIn, openHandoff } from './handoff.ts';
 import { openHop, openImport, recoverWrite, segmented, type JobHooks } from './hop.ts';
 import { HINTS, actionFor, type Action } from './keys.ts';
 import { stepIn } from './lists.ts';
@@ -23,6 +24,7 @@ import { renderSessions, visiblePlaces } from './sessions.ts';
 import { folderKey, renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
 import { toTranscript } from './transcript.ts';
+import type { SessionRow } from './types.ts';
 import { ancestors, folders } from './tree.ts';
 import { initializeWindow, paintWindow } from './window.ts';
 
@@ -130,6 +132,7 @@ function drawDetail(): void {
     hop: () => startHop(),
     exportTo: (saveAs) => void exportSelected(saveAs),
     resume: () => { const row = selectedRow(); if (row && state.installation !== null) void resume(state.installation, row.id); },
+    startIn: () => { const row = selectedRow(); if (row) startIn(row); },
     pick: (id) => pickSession(id),
   });
   void drawInRooms();
@@ -460,6 +463,10 @@ function importDocument(): void {
   openImport(state.installations, state.installation, state.lastExport, hooks);
 }
 
+function startIn(row: SessionRow): void {
+  openHandoff(row, (result, label) => setStatus(`Started ${label} in ${result.cwd}; note saved to ${result.note_path}`));
+}
+
 async function resume(key: string, id: string): Promise<void> {
   setJob('opening a terminal…');
   try {
@@ -679,6 +686,7 @@ function act(action: Action, event: KeyboardEvent): boolean {
     case 'hop': startHop(); return true;
     case 'export': void exportSelected(false); return true;
     case 'resume': { const row = selectedRow(); if (row && state.installation !== null) void resume(state.installation, row.id); return true; }
+    case 'start': { const row = selectedRow(); if (row && canStartIn(row)) { startIn(row); return true; } return false; }
     case 'turns': if (state.reader) void toggleTurns(); return Boolean(state.reader);
     case 'top': if (state.reader) reader.top(); return Boolean(state.reader);
     case 'bottom': if (state.reader) reader.bottom(); return Boolean(state.reader);
@@ -694,7 +702,7 @@ function showHelp(): void {
   const modal = openModal({ title: 'Keys', subtitle: 'mouse works everywhere too' });
   const rows: [string, string][] = [
     ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['← →', 'previous / next column'], ['⏎', 'next column, or open the transcript'],
-    ['esc', 'close the reader or a dialog, or back one column'], ['h · e · i · R', 'hop · export · import · resume'], ['t', 'last turns ↔ all'],
+    ['esc', 'close the reader or a dialog, or back one column'], ['h · e · i · R · s', 'hop · export · import · resume · start in (a session that cannot be read)'], ['t', 'last turns ↔ all'],
     ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['ctrl+k', 'search everything'], ['c', 'chat ↔ sessions'], ['m', 'harnesses ↔ sessions'], ['space', 'fold a parent; in the chat, play the room'],
     ['1 2 3', 'chat: graph · lanes · feed'], ['n · l', 'chat: new room · launch an agent'], ['ctrl+⏎', 'chat: send'],
   ];
