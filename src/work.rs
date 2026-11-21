@@ -258,28 +258,32 @@ fn inspect(path: &Path) -> Result<Repository, GitError> {
             uncommitted,
         });
     }
+    // The full names are what the counts are made with: a short name turns into `heads/<name>`
+    // when a tag has the same one. The short upstream is for display only.
     let refs = git(
         path,
         &[
             "for-each-ref",
-            "--format=%(refname:short)%09%(upstream:short)",
+            "--format=%(refname)%09%(upstream)%09%(upstream:short)",
             "refs/heads",
         ],
     )?;
     let mut branches = Vec::new();
     for line in refs.lines() {
-        let (name, upstream) = line.split_once('\t').unwrap_or((line, ""));
+        let mut fields = line.splitn(3, '\t');
+        let full = fields.next().unwrap_or("");
+        let upstream_ref = fields.next().unwrap_or("");
+        let upstream_short = fields.next().unwrap_or("");
+        let name = full.strip_prefix("refs/heads/").unwrap_or(full);
         if name.is_empty() {
             continue;
         }
-        let upstream = (!upstream.is_empty()).then(|| upstream.to_string());
+        let upstream = (!upstream_short.is_empty()).then(|| upstream_short.to_string());
         // An upstream that is gone has no count: that is not an error of the repository.
-        let ahead = upstream.as_deref().and_then(|upstream| {
-            let range = format!("{upstream}..refs/heads/{name}");
-            rev_count(path, &[range.as_str(), "--"]).ok()
-        });
-        let branch_ref = format!("refs/heads/{name}");
-        let unpushed = rev_count(path, &[branch_ref.as_str(), "--not", "--remotes", "--"])?;
+        let ahead = (!upstream_ref.is_empty())
+            .then(|| rev_count(path, &[format!("{upstream_ref}..{full}").as_str(), "--"]).ok())
+            .flatten();
+        let unpushed = rev_count(path, &[full, "--not", "--remotes", "--"])?;
         branches.push(Branch {
             name: name.to_string(),
             upstream,
@@ -429,21 +433,31 @@ mod tests {
     use crate::detect::tests::scratch;
     use crate::scratch::Scratch;
 
-    fn skip() -> bool {
-        let missing = !Command::new("git")
-            .arg("--version")
-            .output()
-            .is_ok_and(|output| output.status.success());
-        if missing {
-            eprintln!("git is not installed: test skipped");
-        }
-        missing
+    /// How long a git command of a test may take: past it the test fails and names the command.
+    const TEST_GIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// An empty file that stands for the user's git configuration, so a test does not depend on
+    /// the machine's.
+    fn empty_config() -> &'static Path {
+        static CONFIG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        CONFIG.get_or_init(|| {
+            let path =
+                std::env::temp_dir().join(format!("mukade-work-gitconfig-{}", std::process::id()));
+            std::fs::write(&path, "").expect("write an empty git config");
+            path
+        })
     }
 
-    /// Run git in `dir` with a fixed identity, and fail the test when git fails.
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
+    /// A git command that reads no configuration of the machine and starts nothing in the
+    /// background.
+    fn test_git(dir: &Path) -> Command {
+        let mut command = Command::new("git");
+        command
             .current_dir(dir)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_EDITOR", "true")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", empty_config())
             .args([
                 "-c",
                 "user.name=t",
@@ -453,16 +467,48 @@ mod tests {
                 "init.defaultBranch=main",
                 "-c",
                 "commit.gpgsign=false",
-            ])
-            .args(args)
-            .output()
-            .expect("run git");
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).into_owned()
+                "-c",
+                "gc.auto=0",
+                "-c",
+                "maintenance.auto=false",
+            ]);
+        command
+    }
+
+    /// Whether the test is skipped because git is not installed.
+    fn skip() -> bool {
+        let mut command = Command::new("git");
+        command.arg("--version");
+        match crate::exe::run_within(&mut command, TEST_GIT_TIMEOUT) {
+            Err(_) => {
+                eprintln!("git is not installed: test skipped");
+                true
+            }
+            Ok(finished) => {
+                let status = finished
+                    .status
+                    .expect("`git --version` did not finish in time");
+                if !status.success() {
+                    eprintln!("git does not run: test skipped");
+                }
+                !status.success()
+            }
+        }
+    }
+
+    /// Run git in `dir` with a fixed identity; the test fails, naming the command and what git
+    /// said, when git fails or does not finish in time.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let mut command = test_git(dir);
+        command.args(args);
+        let finished = crate::exe::run_within(&mut command, TEST_GIT_TIMEOUT)
+            .unwrap_or_else(|error| panic!("git {args:?} could not run: {error}"));
+        let stderr = String::from_utf8_lossy(&finished.stderr).into_owned();
+        let Some(status) = finished.status else {
+            panic!("git {args:?} did not finish within 30 s; stderr: {stderr}");
+        };
+        assert!(status.success(), "git {args:?} failed ({status}): {stderr}");
+        String::from_utf8_lossy(&finished.stdout).into_owned()
     }
 
     /// Write `file` and commit it.
@@ -570,6 +616,29 @@ mod tests {
         let main = branch(repository, "main");
         assert_eq!(main.ahead, Some(1));
         assert_eq!(main.unpushed, 1);
+        assert!(repository.at_risk());
+    }
+
+    #[test]
+    fn a_branch_and_a_tag_with_the_same_name_do_not_hide_the_repository() {
+        if skip() {
+            return;
+        }
+        let (_dir, clone) = clone_of_origin("work-same-name");
+        // `git for-each-ref` shortens this branch to `heads/v1.0` once the tag exists.
+        git(&clone, &["checkout", "-q", "-b", "v1.0", "origin/main"]);
+        commit(&clone, "b.txt", "two\n");
+        git(&clone, &["tag", "v1.0", "main"]);
+        std::fs::write(clone.join("loose.txt"), "x").unwrap();
+        let work = work_in(&clone);
+        let repository = only(&work);
+        assert_eq!(repository.error, None);
+        let named = branch(repository, "v1.0");
+        assert_eq!(named.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(named.ahead, Some(1));
+        assert_eq!(named.unpushed, 1);
+        assert_eq!(repository.worktrees[0].branch.as_deref(), Some("v1.0"));
+        assert_eq!(repository.worktrees[0].uncommitted, 1);
         assert!(repository.at_risk());
     }
 
