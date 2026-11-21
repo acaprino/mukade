@@ -12,7 +12,8 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
 .mk-split { flex: 1 1 auto; }
 .mk-detail { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 #installations { flex: 1; min-height: 0; }
-#view-chat, #view-harnesses { flex-direction: row; padding: var(--im-s-2); }
+#view-harnesses { flex-direction: row; padding: var(--im-s-2); }
+#view-chat { padding: var(--im-s-2); }
 .column { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 .column-head small { color: var(--im-muted); }
 .column-head h2 { font: 600 1em var(--im-font-head); }

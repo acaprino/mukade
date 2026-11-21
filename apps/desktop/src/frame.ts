@@ -18,7 +18,9 @@ export const VIEWS: readonly { id: ViewId; label: string }[] = [
 export interface Frame {
   shell: HTMLElement;
   /** The sidebar: its count, and the body that holds the installations and the folders. */
-  sidebar: { count: HTMLElement; body: HTMLElement };
+  sidebar: { title: HTMLElement; count: HTMLElement; body: HTMLElement; rooms: HTMLElement };
+  /** The members and instructions of the open room, which the inspector shows in the chat. */
+  members: HTMLElement;
   /** The content region and the views inside it. */
   main: HTMLElement;
   views: { sessions: HTMLElement; reader: HTMLElement; chat: HTMLElement; harnesses: HTMLElement; sessionsView: HTMLElement };
@@ -87,6 +89,9 @@ export function writeFrame(shell: HTMLElement): Frame {
   body.removeAttribute('role');
   body.removeAttribute('aria-label');
   body.classList.remove('im-list');
+  // The chat's rooms stand in the same sidebar, in the place of the installations while the chat is shown.
+  const rooms = h('div', { id: 'chat-rooms', class: 'im-panel-body mk-rooms', hidden: true });
+  body.after(rooms);
   const count = need<HTMLElement>(sidebar, '.im-count');
   count.id = 'installation-count';
   const list = need<HTMLElement>(shell, '#sessions');
@@ -96,7 +101,8 @@ export function writeFrame(shell: HTMLElement): Frame {
   const detail = h('div', { id: 'detail', tabindex: '-1', class: 'mk-detail' });
   return {
     shell,
-    sidebar: { count, body },
+    sidebar: { title: need(sidebar, '.im-panel-title'), count, body, rooms },
+    members: h('div', { id: 'chat-members', class: 'mk-members', tabindex: '-1' }),
     main: need(shell, '#main'),
     views: {
       sessions: list, reader: need(shell, '#reader'), chat: need(shell, '#view-chat'), harnesses: need(shell, '#view-harnesses'),

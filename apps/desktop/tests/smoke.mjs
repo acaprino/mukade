@@ -193,6 +193,44 @@ try {
     await page.waitForTimeout(3400);
     const typed = await page.locator('#chat-filter').inputValue();
     if (typed !== 'sub') failures.push(`${name}: the chat filter lost what was typed (${JSON.stringify(typed)})`);
+    if (look === 'smooth' && scheme === 'dark') {
+      // The rooms are rows of the sidebar and the members are in the inspector; the rooms filter survives the poll too.
+      await expect(page, '#sidebar #chat-rooms .row', 'rooms in the sidebar');
+      await page.locator('#chat-room-filter').fill('hop');
+      await page.waitForTimeout(3400);
+      if (await page.locator('#chat-room-filter').inputValue() !== 'hop') failures.push(`${name}: the rooms filter lost what was typed`);
+      await page.locator('#chat-room-filter').fill('');
+      await page.locator('#chat-rooms .row', { hasText: 'hop-review' }).click();
+      await page.locator('.im-inspector #chat-members .member').first().waitFor();
+      // At 900 the members are a drawer: from the Members button, and from a node of the graph; Escape closes them.
+      await page.setViewportSize({ width: 900, height: 800 });
+      await page.waitForTimeout(300);
+      if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: the members are open at 900 before they were asked for`);
+      await page.getByRole('button', { name: 'Members', exact: true }).click();
+      await page.locator('#chat-members .member').first().waitFor();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: Escape did not close the members at 900`);
+      await page.getByRole('button', { name: /^Graph/ }).click();
+      await page.locator('.graph-canvas svg .node').first().click();
+      await page.locator('#chat-members .member').first().waitFor();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: Escape did not close the members opened from the graph`);
+      // At 520 the rooms open from the toggle of the title bar.
+      await page.setViewportSize({ width: 520, height: 650 });
+      await page.locator('.im-sidebar-toggle').click();
+      await expect(page, '#chat-rooms .row', 'rooms in the narrow drawer');
+      await page.keyboard.press('Escape');
+      await page.setViewportSize({ width: 1440, height: 900 });
+      // With the service stopped the content offers to start it and the sidebar is off; started again, the rooms are back.
+      await page.getByRole('button', { name: 'Stop service' }).click();
+      await page.getByRole('button', { name: 'Stop the service' }).click();
+      await page.getByRole('button', { name: 'Start the service' }).waitFor();
+      if (await page.locator('#sidebar').isVisible()) failures.push(`${name}: the sidebar stayed while the service is stopped`);
+      await page.getByRole('button', { name: 'Start the service' }).click();
+      await page.locator('#chat-rooms .row').first().waitFor({ timeout: 10000 });
+    }
     // The palette switches the look, and the choice is kept.
     const other = look === 'smooth' ? 'oni' : 'smooth';
     await page.keyboard.press('Escape');

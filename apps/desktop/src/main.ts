@@ -123,8 +123,18 @@ function drawSessions(): void {
 }
 
 function syncSidebar(): void {
-  const visible = state.view === 'sessions';
+  const rooms = state.view === 'chat';
+  const visible = state.view === 'sessions' || (rooms && chatRunning);
   const toggle = document.querySelector<HTMLButtonElement>('.im-sidebar-toggle')!;
+  // The sidebar is the sessions' installations and folders, or the chat's rooms; the toggle's name follows.
+  const name = rooms ? 'Rooms' : 'Installations and folders';
+  toggle.setAttribute('aria-label', name);
+  toggle.title = name;
+  $('sidebar').setAttribute('aria-label', name);
+  frame.sidebar.title.textContent = name;
+  frame.sidebar.count.textContent = String(rooms ? chatRooms : state.installations.length);
+  frame.sidebar.body.hidden = rooms;
+  frame.sidebar.rooms.hidden = !rooms;
   if (!visible && $('app').dataset.imSidebarOpen === 'true') toggle.click();
   $('app').dataset.imSidebar = visible ? 'on' : 'off';
   $('sidebar').hidden = !visible;
@@ -237,10 +247,39 @@ function searchEverything(): void {
   });
 }
 
+/** What the inspector holds in the view shown: the session's detail, or the chat's members while the service runs; harnesses: nothing. */
+function inspectorWants(): { element: HTMLElement; open: boolean } | null {
+  if (state.view === 'sessions') return { element: columns.detail, open: isDrawer() ? state.focus === 'detail' : !state.detailClosed };
+  if (state.view === 'chat' && chatRunning) return { element: frame.members, open: isDrawer() ? chatMembersOpen : true };
+  return null;
+}
+
+let inspectorShows: HTMLElement | null = null;
 function syncInspector(): void {
-  const visible = isDrawer() ? state.focus === 'detail' : !state.detailClosed;
-  if (visible && !sessionInspector.isOpen()) sessionInspector.open(columns.detail);
-  if (!visible && sessionInspector.isOpen()) sessionInspector.close();
+  const want = inspectorWants();
+  if (want?.open) {
+    if (!sessionInspector.isOpen() || inspectorShows !== want.element) { sessionInspector.open(want.element); inspectorShows = want.element; }
+  } else if (sessionInspector.isOpen()) {
+    sessionInspector.close();
+    inspectorShows = null;
+  }
+}
+
+let chatRunning = false;
+let chatRooms = 0;
+let chatMembersOpen = false;
+
+/** Members: under 1000 the inspector is a drawer opened from the room's Members button or from a member of the graph. */
+function showMembers(): void {
+  chatMembersOpen = true;
+  syncInspector();
+  (frame.members.querySelector<HTMLElement>('button, [tabindex="0"]') ?? frame.members).focus();
+}
+
+function closeMembers(): void {
+  chatMembersOpen = false;
+  syncInspector();
+  $('view-chat').focus();
 }
 
 /** The close button of the detail: a drawer goes away and the list takes the focus; the docked inspector stays closed until
@@ -587,6 +626,9 @@ async function scanFolder(): Promise<void> {
 // --- views and theme ----------------------------------------------------------------------------
 
 const chat = new ChatView($('view-chat'), {
+  regions: (running, rooms) => { chatRunning = running; chatRooms = rooms; syncSidebar(); syncInspector(); },
+  showMembers,
+  closeMembers,
   showSession: (harness, id) => {
     const installation = state.installations.find((item) => item.harness === harness && !item.scanned)
       ?? state.installations.find((item) => item.harness === harness);
@@ -595,7 +637,7 @@ const chat = new ChatView($('view-chat'), {
     return true;
   },
   report,
-});
+}, { rooms: frame.sidebar.rooms, members: frame.members });
 
 /** The folders and stores scanned and kept across restarts (Scan folder, the system scan). */
 const SCAN_KEY = 'mukade.scan';
@@ -635,6 +677,7 @@ function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
     || $('sidebar').contains(document.activeElement);
   state.view = view;
   syncSidebar();
+  syncInspector();
   if (leavingDrawer) setFocus('sessions');
   $('view-sessions').hidden = view !== 'sessions';
   $('view-chat').hidden = view !== 'chat';
@@ -829,6 +872,14 @@ function wire(): void {
   columns.sessions.addEventListener('focusin', () => setFocus('sessions'));
   columns.detail.addEventListener('focusin', () => setFocus('detail'));
   columns.reader.addEventListener('focusin', () => setFocus('reader'));
+  // Escape in the members: a drawer closes; the docked inspector stays and the focus goes back to the room.
+  frame.members.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing && !hasModal() && !keyClaimed(event)) {
+      event.preventDefault();
+      claimKey(event);
+      if (isDrawer()) closeMembers(); else $('view-chat').focus();
+    }
+  });
 
   const views = ['sessions', 'chat', 'harnesses'] as const;
   for (const spec of COMMANDS) registry.register({ id: spec.id, title: spec.title, keys: spec.keys, when: WHEN[spec.view], run: runnerOf(spec.id) });
@@ -864,7 +915,7 @@ function wire(): void {
   columns.detail.addEventListener('mousedown', () => { if (state.selected) setFocus('detail'); });
   mountSidebarWidth();
   // The layout follows the window: the inspector turns into a drawer under 1000, and the reader then replaces the list.
-  new ResizeObserver(() => { syncInspector(); layoutSessions(); }).observe(shell);
+  new ResizeObserver(() => requestAnimationFrame(() => { syncInspector(); layoutSessions(); })).observe(shell);
   // A document dropped on the window opens the import dialog with it.
   onFilesDropped((paths) => {
     if (modalOpen()) return;

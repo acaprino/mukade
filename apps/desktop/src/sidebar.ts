@@ -19,7 +19,6 @@ export function folderKey(cwd: string | null): string {
 }
 
 export function renderSidebar(root: HTMLElement, actions: SidebarActions): void {
-  document.getElementById('installation-count')!.textContent = String(state.installations.length);
   const standard = state.installations.filter((item) => !item.scanned);
   const scanned = state.installations.filter((item) => item.scanned);
   const row = (item: (typeof state.installations)[number]): ListRow => ({

@@ -3,10 +3,10 @@
 #view-chat { flex-direction: column; }
 .chat-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 34px; padding: 2px 2px 4px; }
 .chat-status button { min-height: 26px; }
-.chat-columns { flex: 1; min-height: 0; display: flex; gap: 8px; }
-#chat-rooms { flex: 0 0 var(--w-rooms, 280px); }
 #chat-messages { flex: 1 1 auto; }
-#chat-members { flex: 0 0 300px; }
+.mk-rooms { display: flex; flex-direction: column; min-block-size: 0; }
+.mk-rooms-body { flex: 1 1 auto; min-block-size: 0; overflow: auto; }
+.mk-members { display: flex; flex-direction: column; flex: 1; min-block-size: 0; min-inline-size: 0; overflow: hidden; }
 .chat-off { flex: 1; }
 .chat-off .empty button { margin-top: 10px; }
 .err-text { color: var(--im-err); }
@@ -196,9 +196,4 @@ button.small { min-height: 22px; padding: 0 7px; font-size: 11px; }
 .search-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--im-text); }
 .search-row[aria-selected='true'] { box-shadow: inset 2px 0 0 var(--im-accent-text); background: var(--im-hover); }
 
-@media (max-width: 999px) {
-  .chat-columns { flex-wrap: wrap; overflow: auto; }
-  #chat-rooms, #chat-members { flex: 1 1 240px; min-height: 260px; }
-  #chat-messages { flex: 1 1 100%; min-height: 520px; order: 3; }
-}
 @media (prefers-reduced-motion: reduce) { .node .plate { transition: none; } }

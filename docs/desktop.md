@@ -207,6 +207,9 @@ guard refuses: `r` reads the stores again); `←` `→` between columns (`F6`, `
   detail. Under 1000 the inspector is a drawer (its header has Close details, and Escape closes it) and the reader takes the list's place
   until Escape. Widths are dragged and kept per machine (`mukade.width.installations`, `mukade.width.sessions`); a double-click on a
   separator forgets its width. In the docked inspector Escape moves the focus back to the list or the reader and does not close it.
+- The chat takes the regions: the rooms in the sidebar (the toggle is named Rooms), the room in the content (its service line, header, tools, graph, lanes or feed, composer), the members and the instructions in the
+  inspector. Under 1000 the members are a drawer opened from the room's Members button or from a member of the graph (Escape closes it); under 620 the rooms open from the title bar's toggle. While the
+  service is not running the chat has no sidebar and no inspector and offers to start it.
 - Results and state: the result of something the person did (exported, hop done, scan done, joined, closed a room, launched) is a notice at
   the bottom (an error says "Error" and stays until dismissed) and also the status row's chip and text until the next one; a state (ready,
   turns shown, a live session read again) is the status row's text only; a running job is the footer's dot (info) and text; the counts stay in
