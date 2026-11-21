@@ -3,7 +3,7 @@
 
 import { loader, pathField } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
-import { button, caps, checkbox, choice as pickChoice, commandLine, copyButton, facts, field, fill, group, h, inlineNote, radios } from './dom.ts';
+import { labelled, button, caps, checkbox, choice as pickChoice, commandLine, copyButton, facts, field, fill, group, h, inlineNote, radios } from './dom.ts';
 import type { Modal } from './modal.ts';
 import { openWriteDialog, type WriteDialog } from './write-recovery.ts';
 import type { HopArgs, HopOptions, Installation, Receipt, WriteOperation } from './types.ts';
@@ -131,14 +131,14 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
       h('div', { class: 'mk-row-fields' },
         textField('hop-model', 'Destination model', choice.model, dest.model ?? 'the destination’s own', (value) => { choice.model = value; }),
         textField('hop-provider', 'Provider', choice.model_provider, 'the destination’s own', (value) => { choice.model_provider = value; })),
-      group('Unfinished turns',
+      labelled('Unfinished turns',
         segmented('Unfinished turns', ['keep', 'drop'], choice.interrupted ?? 'keep', (value) => { choice.interrupted = value; redraw(); })),
       noTools.element));
   more.addEventListener('toggle', () => { moreOpen = more.open; });
 
   const left = h('div', { class: 'mk-col' },
     destList,
-    group('Compaction',
+    labelled('Compaction',
       segmented('Compaction', options.compactions.filter((c) => !(choice.all_branches && c === 'summary')), choice.compaction, (value) => { choice.compaction = value; redraw(); }),
       h('span', { class: 'muted mono hint' }, COMPACTION_HELP[choice.compaction] ?? '')),
     summary ? h('div', { class: 'mk-row-fields' },
@@ -148,9 +148,9 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
     native ? h('div', { class: 'mk-row-fields' },
       textField('hop-context', 'Context window · tokens', choice.context_window ? String(choice.context_window) : '', 'of the destination’s model, e.g. 200000', (value) => { choice.context_window = count(value); }),
       textField('hop-max-output', 'Output limit · optional', choice.max_output_tokens ? String(choice.max_output_tokens) : '', 'tokens', (value) => { choice.max_output_tokens = count(value); })) : null,
-    options.subagents.length ? group(`Subagents · ${options.subagents.length} found`,
+    options.subagents.length ? labelled(`Subagents · ${options.subagents.length} found`,
       segmented('Subagents', ['carry', 'leave'], choice.children ? 'carry' : 'leave', (value) => { choice.children = value === 'carry'; redraw(); })) : null,
-    group('Reasoning',
+    labelled('Reasoning',
       segmented('Reasoning', ['drop_foreign', 'as_text', 'drop'], choice.reasoning, (value) => { choice.reasoning = value; redraw(); })),
     h('div', { class: 'mk-row-fields' },
       field('Destination shell', 'hop-shell', shell),

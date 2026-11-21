@@ -70,7 +70,7 @@ export class HarnessesView {
       h('h2', {}, 'Harnesses'),
       h('span', { class: 'muted' }, this.inventory
         ? `${this.inventory.filter((one) => one.status !== 'missing').length} of ${this.inventory.length} found · ${found} more installation${found === 1 ? '' : 's'}`
-        : this.reading ? 'looking…' : ''),
+        : this.reading ? loader(document, 'looking…') : ''),
       h('span', { class: 'spring' }),
       this.scan
         ? h('span', { class: 'scan-progress' }, loader(this.root.ownerDocument, `Scanning ${this.scan.root} · ${this.scan.done} of ${this.scan.total} folders · ${this.scan.found} found`))

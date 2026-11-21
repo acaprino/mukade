@@ -3,7 +3,7 @@
 // Tabs: Conversation, and Raw (the native records of one entry, pretty JSON).
 
 import './reader.css';
-import { claimKey, setPanelState } from '@acaprino/imago/ui';
+import { claimKey, loader, setPanelState } from '@acaprino/imago/ui';
 import { button, caps, choice, emptyState, fill, h, viewSwitch } from './dom.ts';
 import type { Block, EntryView, Transcript } from './types.ts';
 
@@ -105,7 +105,7 @@ export class Reader {
     if (!entryId && transcript.entries[0]) queueMicrotask(() => this.actions.showRaw(transcript.entries[0].id));
     return h('div', { class: 'raw' },
       h('div', { class: 'raw-head' }, h('label', { class: 'im-field-label', for: 'reader-raw-entry' }, 'Native records of'), Object.assign(select, { id: 'reader-raw-entry' })),
-      h('pre', { class: 'code raw-json' }, raw === null ? 'Reading…' : JSON.stringify(raw.length === 1 ? raw[0] : raw, null, 2)));
+      h('pre', { class: 'code raw-json' }, raw === null ? loader(document, 'Reading…') : JSON.stringify(raw.length === 1 ? raw[0] : raw, null, 2)));
   }
 
   /** Set while a live session read again is drawn: the reader stays where it is, and follows the

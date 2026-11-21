@@ -8,7 +8,7 @@
 import './chat.css';
 import { api, errorKind, errorText } from './api.ts';
 import { claimKey, iconHtml, keyClaimed } from '@acaprino/imago/ui';
-import { button, caps, chip, emptyState, choice as pickChoice, commandLine, field, fill, group, h, icon, inlineNote, rovingList, toggle, viewSwitch } from './dom.ts';
+import { labelled, button, caps, chip, emptyState, choice as pickChoice, commandLine, field, fill, group, h, icon, inlineNote, rovingList, toggle, viewSwitch } from './dom.ts';
 import { listbox, reveal, stepIn } from './lists.ts';
 import { confirmModal, openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
@@ -709,7 +709,7 @@ export class ChatView {
       h('p', { class: 'muted' }, 'To write here, the window joins the room as a member of its own; what it sends reaches the agents as yours.'),
       h('div', { class: 'join-line' },
         field('Name', 'chat-join-name', this.nameInput),
-        group('Role',
+        labelled('Role',
           pickOne('Role', [['peer', 'peer'], ['lead', 'lead']] as const, this.joinRole, (role) => { this.joinRole = role; this.draw(); })),
         button(this.busy === 'joining' ? 'Joining…' : 'Join', { class: 'primary', disabled: this.busy !== null, onclick: () => void this.join(room) })),
       this.joinNote);
@@ -970,8 +970,8 @@ export class ChatView {
     const draw = (): void => {
       paintPreview();
       fill(modal.body, h('div', { class: 'mk-col' },
-        group('Harness', pickOne('Harness', HARNESSES, choice.harness, (value) => { choice.harness = value; draw(); })),
-        group('Role', pickOne('Role', ROLES, choice.role, (value) => { choice.role = value; draw(); })),
+        labelled('Harness', pickOne('Harness', HARNESSES, choice.harness, (value) => { choice.harness = value; draw(); })),
+        labelled('Role', pickOne('Role', ROLES, choice.role, (value) => { choice.role = value; draw(); })),
         h('div', { class: 'mk-row-fields' },
           field('Listens · seconds between turns', 'launch-listen', listen),
           field('Folder', 'launch-folder', h('div', { class: 'mk-cmd' }, folder, browse))),

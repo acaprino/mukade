@@ -91,6 +91,11 @@ export function group(label: string, ...controls: Child[]): HTMLElement {
   return h('fieldset', { class: 'im-field' }, h('legend', { class: 'im-field-label' }, label), ...controls);
 }
 
+/** A visible label over a control that names itself (a segmented control has its own legend): the label is not read twice. */
+export function labelled(label: string, ...controls: Child[]): HTMLElement {
+  return h('div', { class: 'im-field' }, h('span', { class: 'im-field-label', 'aria-hidden': 'true' }, label), ...controls);
+}
+
 /** A checkbox with its text, in an option. Disabled by `disabled`, never by a class. */
 export function checkbox(label: Child, attrs: Attrs, onChange: (checked: boolean) => void, title?: string): { element: HTMLElement; input: HTMLInputElement } {
   const input = h('input', { type: 'checkbox', ...attrs }) as HTMLInputElement;

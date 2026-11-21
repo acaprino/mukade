@@ -124,7 +124,7 @@ try {
     await page.locator('.im-form-dialog .mk-plan').waitFor();
     // Fields: a visible label above each, "All branches" a checkbox, and the destinations radios the arrows walk (the focus follows the pick).
     const unlabelled = await page.evaluate(() => [...document.querySelectorAll('.im-form-dialog .im-field')]
-      .filter((one) => !one.querySelector(':scope > label.im-field-label, :scope > legend.im-field-label')).length);
+      .filter((one) => !one.querySelector(':scope > label.im-field-label, :scope > legend.im-field-label, :scope > span.im-field-label')).length);
     if (unlabelled) failures.push(`${name}: ${unlabelled} fields of the hop have no visible label`);
     await page.getByRole('checkbox', { name: /^All branches/ }).waitFor();
     const firstDestination = page.getByRole('radio').first();
@@ -146,6 +146,9 @@ try {
     await page.getByText('Losses · 2').waitFor();
     await page.screenshot({ path: `${out}receipt-${name}.png` });
     await page.keyboard.press('Escape');
+    // An unreadable session: its note is announced (role alert) and says why.
+    await page.locator('#sessions .row', { hasText: 'unreadable' }).first().click();
+    await page.locator('#detail .im-note[role="alert"]', { hasText: 'Cannot be read' }).waitFor();
     // A chat hosted by ChatGPT: its chip, the work it left in its folder, and starting another harness there.
     await page.locator('[data-id="codex"]').click();
     await page.locator('#sessions .row .im-chip', { hasText: 'hosted' }).waitFor();
@@ -202,12 +205,13 @@ try {
     await page.getByRole('button', { name: 'Delete smoke-room', exact: true }).waitFor();
     if ((await page.evaluate(() => document.activeElement?.textContent?.trim())) !== 'Cancel') failures.push(`${name}: focus did not start on Cancel in the delete dialog`);
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-    const untitled = await page.evaluate(() => [...document.querySelectorAll('.im-icon-btn')].filter((one) => !one.title || one.title !== one.getAttribute('aria-label')).length);
-    if (untitled) failures.push(`${name}: ${untitled} icon buttons have no tooltip equal to their name`);
+    const untitled = await page.evaluate(() => [...document.querySelectorAll('.im-icon-btn')].filter((one) => !one.title || !one.title.startsWith(one.getAttribute('aria-label'))).length);
+    if (untitled) failures.push(`${name}: ${untitled} icon buttons have no tooltip that starts with their name`);
     // Search everything finds a member of another room.
     await page.keyboard.press('Control+Shift+f');
     await page.locator('#search-all').fill('codex');
     await page.locator('.search-row').first().waitFor();
+    if (!(await page.getByRole('option').count())) failures.push(`${name}: the search results are not options of a listbox`);
     await page.screenshot({ path: `${out}search-${name}.png` });
     await page.keyboard.press('Escape');
     // The harnesses page: every harness, and a scan of the computer that finds a portable one.
@@ -220,7 +224,8 @@ try {
     await page.locator('.install-row', { hasText: 'JanuraCode' }).waitFor();
     // A kept folder is forgotten at once, and the notice's Undo keeps it again.
     const forget = page.getByRole('button', { name: 'Forget folder' }).first();
-    if (await forget.count()) {
+    {
+      await forget.waitFor();
       await forget.click();
       await page.locator('.im-notice', { hasText: 'Forgot the folder' }).first().waitFor();
       await page.locator('.im-notice').getByRole('button', { name: 'Undo' }).first().click();

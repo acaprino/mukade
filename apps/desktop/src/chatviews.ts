@@ -352,7 +352,7 @@ export function stripView(ctx: RoomContext, playing: boolean, controls: { play()
     }));
   });
   return h('div', { class: 'scrub', role: 'group', 'aria-label': 'Replay the room' },
-    iconButton(playing ? 'Pause' : 'Play from here', playing ? 'pause' : 'play', { onclick: () => controls.play() }),
+    iconButton(playing ? 'Pause' : 'Play from here', playing ? 'pause' : 'play', { title: `${playing ? 'Pause' : 'Play from here'} (Space)`, onclick: () => controls.play() }),
     iconButton('Previous event', 'prev', { disabled: at <= 0, onclick: () => controls.step(-1) }),
     iconButton('Next event', 'next', { disabled: at >= events.length - 1, onclick: () => controls.step(1) }),
     ticks,
