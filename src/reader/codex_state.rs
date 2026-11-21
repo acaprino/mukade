@@ -65,7 +65,7 @@ impl Catalogue {
 
 /// The newest `state_<n>.sqlite` under `home`: Codex bumps the number when it changes the layout,
 /// and leaves the older file behind.
-fn newest_database(home: &Path) -> Option<PathBuf> {
+pub(super) fn newest_database(home: &Path) -> Option<PathBuf> {
     std::fs::read_dir(home)
         .ok()?
         .flatten()
@@ -209,14 +209,14 @@ fn parent_links(db: &Connection) -> HashMap<String, String> {
     out
 }
 
-fn columns(db: &Connection, table: &str) -> rusqlite::Result<HashSet<String>> {
+pub(super) fn columns(db: &Connection, table: &str) -> rusqlite::Result<HashSet<String>> {
     let mut query = db.prepare(&format!("PRAGMA table_info(\"{table}\")"))?;
     let names = query.query_map([], |row| row.get::<_, String>(1))?;
     names.collect()
 }
 
 /// A column read as text whatever its declared type; `None` for NULL or a blob.
-fn text_at(row: &Row<'_>, index: usize) -> Option<String> {
+pub(super) fn text_at(row: &Row<'_>, index: usize) -> Option<String> {
     use rusqlite::types::ValueRef;
     match row.get_ref(index).ok()? {
         ValueRef::Text(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),

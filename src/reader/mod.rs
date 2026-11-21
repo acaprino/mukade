@@ -6,6 +6,7 @@ mod claude_history;
 mod claude_live;
 pub mod clip;
 pub mod codex;
+mod codex_hosted;
 mod codex_state;
 pub mod deepseek_harness;
 pub mod hermes;
