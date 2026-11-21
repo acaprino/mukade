@@ -7,6 +7,7 @@ import { fill, h, icon } from './dom.ts';
 import { listbox, reveal, type ListRow } from './lists.ts';
 import { currentInstallation, state } from './state.ts';
 import { mark, shortTime, visible, type Place } from './tree.ts';
+import { isHosted } from './work.ts';
 
 export interface SessionsActions {
   pick(id: string): void;
@@ -35,7 +36,7 @@ function cells(place: Place, actions: SessionsActions): Node[] {
   if (children && !open) out.push(h('span', { class: 'num im-num' }, `${children} inside`));
   if (row.live) out.push(h('span', { class: 'tag im-chip live' }, 'live'));
   if (row.archived) out.push(h('span', { class: 'tag im-chip' }, 'archived'));
-  if (row.unreadable?.startsWith('hosted by ChatGPT')) out.push(h('span', { class: 'tag im-chip', title: row.unreadable }, 'hosted'));
+  if (isHosted(row)) out.push(h('span', { class: 'tag im-chip', title: row.unreadable }, 'hosted'));
   else if (row.unreadable) out.push(h('span', { class: 'tag im-chip bad', title: row.unreadable }, 'unreadable'));
   out.push(h('span', { class: 'time', title: row.updated ?? '' }, shortTime(row.updated)));
   if (depth) (out[0] as HTMLElement).style.marginLeft = `${Math.min(depth, 6) * 18}px`;

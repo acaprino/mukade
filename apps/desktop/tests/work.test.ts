@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { atRisk, canStartIn, leaf, otherRows, repositoryLine } from '../src/work.ts';
-import type { Repository, SessionRow } from '../src/types.ts';
+import { atRisk, canStartIn, isHosted, leaf, makeWorkCache, otherRows, repositoryError, repositoryLine } from '../src/work.ts';
+import type { Repository, SessionRow, Work } from '../src/types.ts';
 
 const repo = (path: string, branch: string | null, uncommitted: number, branches: Repository['branches'], head = '41d916d'): Repository => ({
-  path, worktrees: [{ path, branch, head, uncommitted }], branches, error: null,
+  path, worktrees: [{ path, branch, head, uncommitted, error: null }], branches, error: null,
 });
 const daodan = repo('C:\\Users\\dev\\Documents\\ChatGPT\\Daodan\\daodan', 'develop', 1, [{ name: 'develop', upstream: 'origin/develop', ahead: 0, unpushed: 0 }]);
 const imago = repo('C:\\Users\\dev\\Documents\\ChatGPT\\Daodan\\imago', 'develop', 0, [{ name: 'develop', upstream: 'origin/develop', ahead: 0, unpushed: 0 }]);
@@ -42,9 +42,9 @@ test('other worktrees and branches at risk are listed in the same words', () => 
   const several: Repository = {
     path: '/work/app',
     worktrees: [
-      { path: '/work/app', branch: 'develop', head: 'aaaaaaa', uncommitted: 0 },
-      { path: '/work/app-fix', branch: 'fix/x', head: 'bbbbbbb', uncommitted: 2 },
-      { path: '/work/app-clean', branch: 'ok', head: 'ccccccc', uncommitted: 0 },
+      { path: '/work/app', branch: 'develop', head: 'aaaaaaa', uncommitted: 0, error: null },
+      { path: '/work/app-fix', branch: 'fix/x', head: 'bbbbbbb', uncommitted: 2, error: null },
+      { path: '/work/app-clean', branch: 'ok', head: 'ccccccc', uncommitted: 0, error: null },
     ],
     branches: [
       { name: 'develop', upstream: 'origin/develop', ahead: 0, unpushed: 0 },
@@ -74,4 +74,61 @@ test('only an unreadable row with a folder can be started elsewhere', () => {
   assert.equal(canStartIn(row({ unreadable: 'hosted by ChatGPT', cwd: 'C:\\work' })), true);
   assert.equal(canStartIn(row({ cwd: 'C:\\work' })), false);
   assert.equal(canStartIn(row({ unreadable: 'the session file is gone' })), false);
+});
+
+test('a hosted row is told by the start of its reason', () => {
+  const row = (extra: Partial<SessionRow>): SessionRow => ({ id: 'x', archived: false, path: 'x', ...extra });
+  assert.equal(isHosted(row({ unreadable: 'hosted by ChatGPT: the conversation is not on this machine' })), true);
+  assert.equal(isHosted(row({ unreadable: 'the session file is gone' })), false);
+  assert.equal(isHosted(row({})), false);
+});
+
+test('a worktree git could not read is a note row, and its repository is not called at risk by it', () => {
+  const broken: Repository = {
+    path: '/work/app',
+    worktrees: [
+      { path: '/work/app', branch: 'develop', head: 'aaaaaaa', uncommitted: 0, error: null },
+      { path: '/work/app-side', branch: 'side', head: 'bbbbbbb', uncommitted: 0, error: 'fatal: invalid gitfile format' },
+    ],
+    branches: [{ name: 'develop', upstream: 'origin/develop', ahead: 0, unpushed: 0 }, { name: 'side', upstream: null, ahead: null, unpushed: 0 }],
+    error: null,
+  };
+  assert.deepEqual(otherRows(broken), [
+    { kind: 'worktree', name: 'app-side', line: 'fatal: invalid gitfile format', title: '/work/app-side', error: true },
+  ]);
+  assert.equal(repositoryError(broken), null);
+  assert.equal(atRisk(broken), false);
+  // The main worktree's error is the repository's own line.
+  const main: Repository = { ...broken, worktrees: [{ ...broken.worktrees[0], error: 'fatal: nope' }] };
+  assert.equal(repositoryError(main), 'fatal: nope');
+  assert.equal(repositoryLine(main), 'fatal: nope');
+});
+
+const work = (folder: string): Work => ({ folder, repositories: [], note: null });
+
+test('the work of a folder is kept for 60 seconds', () => {
+  const cache = makeWorkCache();
+  const kept = work('/a');
+  cache.set('/a', kept, 1000);
+  assert.equal(cache.get('/a', 1000), kept);
+  assert.equal(cache.get('/a', 1000 + 60_000), kept);
+  assert.equal(cache.get('/a', 1000 + 60_001), undefined);
+  // An old entry is gone for good, and an unknown folder was never there.
+  assert.equal(cache.get('/a', 1000), undefined);
+  assert.equal(cache.get('/b', 1000), undefined);
+});
+
+test('the 21st folder evicts the oldest', () => {
+  const cache = makeWorkCache();
+  for (let i = 0; i < 20; i++) cache.set(`/f${i}`, work(`/f${i}`), 1000 + i);
+  assert.ok(cache.get('/f0', 2000));
+  cache.set('/f20', work('/f20'), 1100);
+  assert.equal(cache.get('/f0', 2000), undefined);
+  assert.ok(cache.get('/f1', 2000));
+  assert.ok(cache.get('/f20', 2000));
+  // Setting a folder again renews it: it is no longer the oldest.
+  cache.set('/f1', work('/f1'), 1200);
+  cache.set('/f21', work('/f21'), 1300);
+  assert.ok(cache.get('/f1', 2000));
+  assert.equal(cache.get('/f2', 2000), undefined);
 });

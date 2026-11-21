@@ -101,8 +101,10 @@ Checked on the owner's machine on 2026-11-21, read-only (Codex desktop 26.1117.4
    hosted chats and the rest of the Codex listing is what it was. It does not read
    `codex_schema_migrations`.
 3. **The work on disk is a read-only view of any session's folder.** `src/work.rs` takes a folder and
-   returns its repositories (the folder itself when it is one, else each direct child that is) with every
-   linked worktree, every local branch, its upstream, its commits on no remote and its uncommitted paths.
+   returns its repositories (the folder itself when it is one, the repository that holds it when it is a
+   subfolder, else each direct child that is, the first 20) with every
+   linked worktree (one that git cannot read keeps its own error and the rest is kept), every local
+   branch, its upstream, its commits on no remote and its uncommitted paths.
    It runs the installed `git` with a deadline, never fetches, and sets `GIT_OPTIONAL_LOCKS=0`. What it
    says about a remote is as of the last fetch, and it says so.
 4. **The handoff starts a new session without a transcript.** `src/handoff.rs` composes a note from the
@@ -138,7 +140,10 @@ Checked on the owner's machine on 2026-11-21, read-only (Codex desktop 26.1117.4
   a chat.
 - **INV-002**: `sqlite/codex.db`, `state_<n>.sqlite` and an export are opened read-only.
 - **INV-003**: the work view runs no git command that changes a repository or fetches, and sets
-  `GIT_OPTIONAL_LOCKS=0` on every one.
+  `GIT_OPTIONAL_LOCKS=0` on every one. It runs git with `core.fsmonitor` and `core.untrackedCache` off, so
+  the configuration of a repository found in session data cannot start a program or a daemon, and without
+  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR` and the other variables that make git
+  look somewhere other than the folder it is given.
 
 ## Examples
 
@@ -184,8 +189,10 @@ on the owner's machine:
   `missing_candidate`, no double listing, the refusal on read, and `reading_leaves_both_databases_byte_identical`
   (INV-002).
 - `src/work.rs`: repositories the test creates (clean, uncommitted, no upstream, ahead, detached, linked
-  worktree, a branch and a tag with one name, a folder that is itself a repository, no repository), and
-  `reading_changes_nothing` (INV-003).
+  worktree, a linked worktree git cannot read, a branch and a tag with one name, a gone upstream, a folder
+  that is itself a repository, a subfolder of one, no repository, more repositories than the cap), and
+  `reading_changes_nothing` and `a_repository_cannot_run_a_program_through_fsmonitor` (INV-003, the second
+  on Unix only).
 - `src/handoff.rs`, `src/catalog.rs`: the note, the template, the first prompt, the destinations, and
   `claude_code_and_codex_start_with_a_prompt_and_no_other_harness_does`.
 - `apps/desktop/src-tauri/src/actions.rs`: the work, the options and the handoff of an unreadable session.

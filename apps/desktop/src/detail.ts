@@ -9,7 +9,7 @@ import { currentInstallation, selectedRow, state } from './state.ts';
 import { ancestors, childrenText, kindText, mark } from './tree.ts';
 import type { RoomMember } from './chatindex.ts';
 import type { SessionRow, Work } from './types.ts';
-import { renderWork } from './work.ts';
+import { isHosted, renderWork, workCache } from './work.ts';
 
 export interface DetailActions {
   open(): void;
@@ -60,10 +60,18 @@ function drawWork(host: HTMLElement): void {
 function loadWork(key: string, row: SessionRow): void {
   if (workRead && workRead.key === key && workRead.id === row.id) return;
   const token = ++workToken;
+  const folder = row.cwd ?? '';
+  // A folder read a moment ago (by a session that shares it) is drawn at once, with no call.
+  const cached = workCache.get(folder, Date.now());
+  if (cached) {
+    workRead = { token, key, id: row.id, kind: 'ready', work: cached };
+    return;
+  }
   workRead = { token, key, id: row.id, kind: 'loading' };
   const settle = (next: { kind: 'ready'; work: Work } | { kind: 'error'; message: string }): void => {
     // The selection moved on: this answer is for a row no longer shown.
     if (workRead?.token !== token) return;
+    if (next.kind === 'ready') workCache.set(folder, next.work, Date.now());
     workRead = { token, key, id: row.id, ...next };
     if (workHost?.isConnected) drawWork(workHost);
   };
@@ -124,7 +132,9 @@ export function renderDetail(root: HTMLElement, actions: DetailActions): void {
   fill(root, head, h('div', { class: 'column-body im-panel-body' }, h('div', { class: 'pad' },
     h('h3', {}, row.title ?? row.id),
     actionsRow,
-    row.unreadable ? h('p', { class: 'note err' }, `Cannot be read: ${row.unreadable}`) : null,
+    row.unreadable ? (isHosted(row)
+      ? h('p', { class: 'note' }, 'Hosted by ChatGPT: the conversation is not on this machine; the work it left is in its folder')
+      : h('p', { class: 'note err' }, `Cannot be read: ${row.unreadable}`)) : null,
     kv([
       ['harness', installation.label],
       ['id', row.id],

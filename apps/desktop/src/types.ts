@@ -108,7 +108,7 @@ export interface Page<T> { items: T[]; next_cursor: string | null; high_water?: 
 
 // The work a session left on disk, and handing it to another harness (src-tauri/src/actions.rs).
 export interface Branch { name: string; upstream: string | null; ahead: number | null; unpushed: number }
-export interface Worktree { path: string; branch: string | null; head: string; uncommitted: number }
+export interface Worktree { path: string; branch: string | null; head: string; uncommitted: number; error: string | null }
 export interface Repository { path: string; worktrees: Worktree[]; branches: Branch[]; error: string | null }
 export interface Work { folder: string; repositories: Repository[]; note: string | null }
 export interface HandoffOptions { refusal?: string; destinations: Destination[]; note: string; cwd?: string | null }

@@ -86,6 +86,7 @@ try {
     const repositories = await page.locator('#detail .work-repo').allInnerTexts();
     if (repositories.length !== 3) failures.push(`${name}: ${repositories.length} repositories in the work, not 3`);
     if (!repositories.some((text) => text.includes('feature/stack-detection · no upstream · 3 commits on no remote · 133 uncommitted'))) failures.push(`${name}: the line of stack-analyser is missing`);
+    if (await page.locator('#detail .note:not(.err)', { hasText: 'Hosted by ChatGPT: the conversation is not on this machine' }).count() !== 1) failures.push(`${name}: the hosted note is missing or red`);
     if (await page.locator('#detail .work .im-chip', { hasText: 'at risk' }).count() !== 2) failures.push(`${name}: two repositories should be at risk`);
     await page.screenshot({ path: `${out}hosted-${name}.png` });
     await page.getByRole('button', { name: /^Start in/ }).waitFor();

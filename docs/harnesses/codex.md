@@ -10,7 +10,7 @@ with Codex's own model and compacts natively.
 | | |
 |---|---|
 | Read (`list`, `dump`) | ✅ CLI and Desktop rollouts, archived and paginated threads, threads that survive only as a `state_<n>.sqlite` row (listed `unreadable`); subagent and guardian threads with `list --children`. ⚠️ Chats the Desktop app hosts on ChatGPT, when their project has a local folder: listed `unreadable`, never read ([below](#chats-hosted-by-chatgpt)) |
-| Work on disk, handoff | ✅ `mukade work` and `mukade handoff` for any session with a folder, a hosted chat included; started in Claude Code or Codex CLI ([below](#chats-hosted-by-chatgpt)) |
+| Work on disk, handoff | ⚠️ `mukade work` and `mukade handoff` for any session with a folder, a hosted chat included; started in Claude Code or Codex CLI ([below](#chats-hosted-by-chatgpt)). Nothing has run on Windows, and the two CLI commands have no tests of their own, only the library behind them |
 | Write | ✅ a new rollout under `sessions/`; needs the destination's `cli_version` |
 | Hop as source | ✅ Desktop code-mode `exec` scripts split into calls (725 of 981 [50]); left out: encrypted summaries, encrypted messages between agents (counted), compressed rollouts; a fork is hopped as a self-contained copy; subagent threads travel only with `--children` |
 | Hop as destination | ⚠️ only shell calls become `exec_command`, those of the dialect Codex runs (PowerShell on Windows, POSIX elsewhere); the rest travels as text; no patch form; `hop --children` writes each subagent as a rollout of its own, unlinked (below) |
@@ -245,7 +245,7 @@ Mukade does not open `auth.json`, does not sign in and makes no request for a ch
 
 - `mukade work codex <id>`: the git work in the folder, read-only ([usage](../usage.md#mukade-work)).
 - `mukade handoff codex <id> claude_code`: a note about that work and the command that starts Claude Code
-  or Codex CLI on it ([usage](../usage.md#mukade-handoff)). The desktop app has both as "Work on disk" and
+  or Codex CLI on it (it starts it only with `--run`) ([usage](../usage.md#mukade-handoff)). The desktop app has both as "Work on disk" and
   "Start in…" ([desktop](../desktop.md#work-on-disk-and-start-in)).
 
 Both work for any session that has a folder. A Codex thread whose rollout is gone is the same case.

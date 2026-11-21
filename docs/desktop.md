@@ -86,30 +86,34 @@ Decision: [ADR-0005](adr/ADR-0005-hosted-chats-read-locally.md) (Proposed). Code
 [Chats hosted by ChatGPT](harnesses/codex.md#chats-hosted-by-chatgpt).
 
 **The chip `hosted`.** A session whose reason starts with `hosted by ChatGPT` shows a neutral `hosted`
-chip in the list, with the reason as its tooltip, in place of the red `unreadable`. The detail panel still
-says `Cannot be read: …`. Open transcript, Hop, Export, Save as… and Resume stay disabled, as for any
+chip in the list, with the reason as its tooltip, in place of the red `unreadable`. The detail panel shows a
+neutral note, `Hosted by ChatGPT: the conversation is not on this machine; the work it left is in its
+folder`, where another unreadable session shows the red `Cannot be read: …`. Open transcript, Hop, Export, Save as… and Resume stay disabled, as for any
 session that cannot be read. Its conversation is not read, and the text is not in this version at all.
 
 **Work on disk.** Any session with a folder has a "Work on disk" section in its detail panel: the folder's
-path and one row for each repository in it (the folder itself, or each direct child that is a git
-repository). It is the same read as [`mukade work`](usage.md#mukade-work) and runs the same git commands,
+path and one row for each repository in it (the folder itself, the repository that holds it when it is a
+subfolder, or else each direct child that is a git repository, the first 20 with a note when there are
+more). It is the same read as [`mukade work`](usage.md#mukade-work) and runs the same git commands,
 none of which changes a repository or fetches. A row is `<branch> · <upstream> · <state>`, with `no
 upstream` when there is none and a state of `clean`, `N commits on no remote`, `N ahead` or
 `N uncommitted`. A repository is marked `at risk` when it has uncommitted paths or commits on no remote:
 that is the work that exists only in this folder. Other worktrees and branches that hold such work are
-listed under it, and a repository git refuses shows what git said. What it says about a remote is as of
+listed under it, a repository git refuses shows what git said, and a worktree git cannot read shows what
+git said as a note row. What it says about a remote is as of
 the last fetch.
 
 - The read starts 200 ms after a row is selected and is dropped when the selection has moved on, so
   moving down the list does not run git on every row.
-- The result is kept while the same row stays selected. A commit made meanwhile shows after you select
-  another row and come back.
+- The result is kept for 60 seconds for each folder, for at most 20 folders (the oldest goes first).
+  Sessions that share a folder read it once, and a folder kept is drawn at once with no `Reading…` and no
+  call. A commit made meanwhile shows after 60 seconds, when you select another row and come back.
 
 **Start in….** For a session that cannot be read and has a folder, `Start in…` (key `s`) is the primary
 button. It opens a dialog with the destination (every installation of Claude Code and Codex CLI the
 window knows, the session's own included) and the note, composed from the same template as
 [`mukade handoff`](usage.md#mukade-handoff) (`handoff-prompts/continue.md` beside the executable) and
-editable before anything happens. A session with no folder shows the reason in place of the form.
+editable before anything happens. A session with no folder is not offered `Start in…` at all.
 
 `Start` (ctrl+⏎) saves the note you edited as `mukade-data/handoffs/<harness>-<id>.md`, never in the
 project folder, and opens the destination's command in a new terminal in the session's folder, with the

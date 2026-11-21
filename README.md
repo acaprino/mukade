@@ -25,7 +25,7 @@ Start a task in Claude Code, then pick it up in Pi, Codex, or another supported 
 - **Browse and resume** sessions from multiple harnesses in one desktop window.
 - **Export and import** sessions as JSON for backups or handoffs to another machine.
 - **Connect running agents** in a local MCP room so they can exchange messages and follow each other's work.
-- **Find the work of a chat you cannot read.** A chat the Codex desktop app hosts on ChatGPT is listed when its project has a local folder. `mukade work` shows what git holds there, and `mukade handoff` starts Claude Code or Codex CLI on it with a note. The conversation's text is not read yet.
+- **Find the work of a chat you cannot read.** A chat the Codex desktop app hosts on ChatGPT is listed when its project has a local folder. `mukade work` shows what git holds there, and `mukade handoff` prepares a note on it and the command that starts Claude Code or Codex CLI there (with `--run` it starts it). The conversation's text is not read yet.
 - **Embed the handoff** in your own tool through the Rust library.
 
 ## Quickstart

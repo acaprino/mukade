@@ -31,7 +31,7 @@ continues it **as one of its own sessions**.
 |---|---|
 | continue a session in another harness | [`mukade hop <from> <id> <to>`](#mukade-hop) ([Quick start](#2-quick-start)) |
 | try a hop without touching the real store | [`hop` into a scratch store](#rehearse-first) |
-| start Claude Code or Codex CLI on the folder of a session I cannot read | [`mukade handoff <harness> <id> <dest>`](#mukade-handoff) |
+| prepare a note and the command that starts Claude Code or Codex CLI on the folder of a session I cannot read (`--run` starts it) | [`mukade handoff <harness> <id> <dest>`](#mukade-handoff) |
 | move a session to another machine or person | [`dump` there, `write` here](#move-a-session-to-another-machine) |
 | get OpenCode's import document, writing nothing | [`mukade document opencode …`](#mukade-document) |
 | run mukade on a machine I do not own | [copy the executable](#1-get-it) |
@@ -423,8 +423,11 @@ The id is the whole id a listing shows, here the Codex chat "Capire lo stack di 
 ChatGPT. The repositories and counts are those found on the author's machine on 2026-11-21 and the
 wording is what `work` prints, not a recorded run.
 
-- **Which repositories.** The session's folder when it is a git repository, else each direct child of it
-  that is one, by name. A ChatGPT project folder is the second case. Nothing deeper is searched.
+- **Which repositories.** The session's folder when it is a git repository. When it is a subfolder of one,
+  that repository (its top level, as `git rev-parse --show-toplevel` prints it) and only that one. Else each
+  direct child of the folder that is one, by name, and at most the first 20: with more, the line
+  `only the first 20 of <N> repositories were read` comes first. A ChatGPT project folder is the last
+  case. Nothing deeper is searched.
 - **One line per repository**: `<name>: branch <branch>, upstream <upstream>` or `no upstream`, then what
   it says: `in sync` (with uncommitted paths), `N commits ahead`, `N commits on no remote`,
   `N uncommitted paths`, or `clean`. A detached head reads `detached at <commit>`. Another worktree or
@@ -434,22 +437,29 @@ wording is what `work` prints, not a recorded run.
   the commits ahead of it are shown too. **Uncommitted paths** are tracked changes and untracked files
   in a worktree, ignored files left out.
 - **It never fetches.** What it says about a remote is as of the last fetch, and the last line says so. It
-  sets `GIT_OPTIONAL_LOCKS=0` and runs only `git worktree list`, `git status`, `git for-each-ref` and
-  `git rev-list --count`, each with a 10 second deadline: no command that changes a repository.
-- **A repository git refuses** prints `<name>: <what git said>` and the others still print. When there is
+  sets `GIT_OPTIONAL_LOCKS=0` and runs only `git rev-parse --show-toplevel`, `git worktree list`,
+  `git status`, `git for-each-ref` and `git rev-list --count`, each with a 10 second deadline: no command
+  that changes a repository. The folder comes from session data, so git is run with `core.fsmonitor` and
+  `core.untrackedCache` off (a repository's own configuration cannot start a program or leave a daemon
+  running) and without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and similar variables of the
+  environment. The commits ahead of an upstream come from `git for-each-ref` itself.
+- **A repository git refuses** prints `<name>: <what git said>` and the others still print. A linked
+  worktree that git cannot read prints `  <worktree>: <what git said>` below its repository, with its
+  count taken as 0, and the repository's other worktrees and its branches are kept. When there is
   nothing to show the line is the reason: `<folder> does not exist`, `<folder> is not a folder`,
   `no git repository in <folder>` or `git is not installed`.
 - `--json` prints the same as one JSON object: `folder`, `repositories` (each with `path`, `worktrees`
-  with `path`, `branch`, `head` and `uncommitted`, `branches` with `name`, `upstream`, `ahead` and
+  with `path`, `branch`, `head`, `uncommitted` and `error`, `branches` with `name`, `upstream`, `ahead` and
   `unpushed`, and `error`) and `note`.
 - A session with no folder is refused (exit 2): `unsupported: this session has no folder on this machine:
   there is nothing local to continue from`. It does not take `--from-file`.
 
 ### `mukade handoff`
 
-Starts another harness on the folder of a session whose conversation cannot be read, with a note on
-what the session left. It writes a **new** session in no harness: there is no history to write. The
-destination is started with one first prompt that points at the note.
+Prepares a note on what a session left in its folder and the command that starts another harness there,
+for a session whose conversation cannot be read. It prints the note and the command. With `--run` it
+also starts the harness in the folder. It writes a **new** session in no harness: there is no history to
+write. The destination gets one first prompt that points at the note.
 
 ```powershell
 mukade handoff codex 6b00c623-2d08-83eb-a3cc-df6dadef8474 claude_code
@@ -1775,7 +1785,7 @@ Every `hop` and `write` remembers what it wrote, under the session it came from,
 |---|---|
 | "this session has no folder on this machine: there is nothing local to continue from" (exit 2) | the session's row has no folder, so there is nothing local to read or start on |
 | "<dest> cannot be started with a first prompt yet (verified: claude_code, codex)" (exit 2) | only a destination whose catalog entry has `interactive_start` is offered. Hop into the other harness instead, if the session can be read |
-| `no git repository in <folder>` where the work should be | the folder and its direct children hold no `.git`: a repository two levels down is not looked for |
+| `no git repository in <folder>` where the work should be | the folder is inside no repository and its direct children hold no `.git`: a repository two levels down is not looked for |
 | a hosted chat is missing from `list codex` | its project has no local folder, or `sqlite/codex.db` or `state_<n>.sqlite` is missing, locked or laid out by another Codex version: nothing is listed from it, and the rest of the listing is as it was |
 
 **Writing**

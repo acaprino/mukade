@@ -56,7 +56,7 @@ const sessions: Record<string, SessionRow[]> = {
 
 // The work in a session's folder: the three repositories of a hosted chat, one clean repository
 // for the project's own sessions, and nothing elsewhere.
-const worktree = (path: string, branch: string, uncommitted: number) => ({ path, branch, head: '41d916d', uncommitted });
+const worktree = (path: string, branch: string, uncommitted: number) => ({ path, branch, head: '41d916d', uncommitted, error: null });
 const repository = (name: string, branch: string, upstream: string | null, unpushed: number, uncommitted: number) => ({
   path: `${DAODAN_FOLDER}\\${name}`, worktrees: [worktree(`${DAODAN_FOLDER}\\${name}`, branch, uncommitted)],
   branches: [{ name: branch, upstream, ahead: upstream ? 0 : null, unpushed }], error: null,
