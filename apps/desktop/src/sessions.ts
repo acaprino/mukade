@@ -39,7 +39,7 @@ function cells(place: Place, actions: SessionsActions): Node[] {
   if (isHosted(row)) out.push(chip('hosted', '', row.unreadable));
   else if (row.unreadable) out.push(chip('unreadable', 'err', row.unreadable));
   out.push(h('span', { class: 'time', title: row.updated ?? '' }, shortTime(row.updated)));
-  if (depth) (out[0] as HTMLElement).style.marginLeft = `${Math.min(depth, 6) * 18}px`;
+  if (depth) { const indent = out[0] as HTMLElement; indent.classList.add('mk-indent'); indent.style.setProperty('--mk-depth', String(Math.min(depth, 6))); }
   return out;
 }
 

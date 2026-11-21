@@ -16,7 +16,6 @@
 .install-row .grow { flex: 1 1 220px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1) var(--im-s-1); }
 .install-row b { font-weight: 500; color: var(--im-text); }
 .install-row .block { flex-basis: 100%; font-size: var(--im-fs-meta); overflow-wrap: anywhere; }
-.install-row button { min-height: 24px; }
 .harness-folders ul.plain { list-style: none; margin: 0; padding: 0 0 var(--im-s-1); }
 .harness-folders li { display: flex; align-items: center; gap: var(--im-s-2); padding: var(--im-s-1) var(--im-s-3); }
 .harness-folders li .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: var(--im-fs-meta); }

@@ -10,3 +10,4 @@
 .row.untitled .grow { color: var(--im-muted); }
 .row mark { background: none; color: var(--im-accent-text); }
 .label { margin: 0; padding: var(--im-s-2) var(--im-s-3) var(--im-s-1); font: 500 var(--im-fs-micro) var(--im-font-head); letter-spacing: var(--im-track); text-transform: var(--im-case); color: var(--im-muted); }
+.mk-indent { margin-inline-start: calc(var(--mk-depth, 0) * var(--im-s-4)); }

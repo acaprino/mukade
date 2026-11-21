@@ -4,12 +4,10 @@
 .reader-spacer { position: relative; }
 .reader-content { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
 .reader-hidden { padding: var(--im-s-1) var(--im-s-3); border-bottom: 1px solid var(--im-line); background: var(--im-sheet); font: var(--im-fs-meta) var(--im-font-code); color: var(--im-muted); }
-button.link { min-height: 0; padding: 0; border: 0; color: var(--im-accent-text); font: inherit; }
-button.link:hover { background: none; text-decoration: underline; }
 .entry { display: flex; flex-wrap: wrap; gap: var(--im-s-1) var(--im-s-3); padding: var(--im-s-3) var(--im-s-3); border-bottom: 1px solid var(--im-line); }
 .entry .who { flex: 0 0 96px; display: flex; flex-direction: column; align-items: flex-start; gap: var(--im-s-1); font: 500 var(--im-fs-body) var(--im-font-head); text-transform: var(--im-case); }
 .entry .who time { color: var(--im-muted); font: var(--im-fs-micro) var(--im-font-code); }
-.entry .raw-link { min-height: 18px; padding: 0; margin-top: var(--im-s-1); font: var(--im-fs-micro) var(--im-font-code); opacity: 0; }
+.entry .raw-link { opacity: 0; }
 .entry:hover .raw-link, .entry .raw-link:focus-visible { opacity: 1; }
 .entry .what { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: var(--im-s-1); line-height: 1.6; }
 .entry .text { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -26,7 +24,6 @@ button.link:hover { background: none; text-decoration: underline; }
 .tool, .result { display: flex; flex-direction: column; }
 .tool-head { display: flex; align-items: center; gap: var(--im-s-2); min-height: 28px; padding: var(--im-s-1) var(--im-s-1) var(--im-s-1) var(--im-s-2); font: var(--im-fs-meta) var(--im-font-code); }
 .tool-head .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--im-text-2); }
-.tool-head button { min-height: 22px; font: var(--im-fs-micro) var(--im-font-code); }
 .tool .code, .result .code { border-width: 1px 0 0; max-height: none; }
 .result.failed { border-color: var(--im-err); }
 .code { margin: 0; padding: var(--im-s-2) var(--im-s-2); border: 1px solid var(--im-line); background: var(--im-field); font: var(--im-fs-meta)/1.5 var(--im-font-code); color: var(--im-text-2); white-space: pre-wrap; overflow-wrap: anywhere; }

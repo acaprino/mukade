@@ -282,7 +282,7 @@ export function graphView(ctx: RoomContext, options: GraphOptions): SVGElement {
     const dim = ctx.filter.members.length > 0 && !ctx.filter.members.includes(member.member_id);
     const state = left ? 'left' : member.member_id === ctx.mine ? 'you' : '';
     const plate = svg('g', {
-      class: ['node', left ? 'left' : '', dim ? 'dim' : '', options.open === member.member_id ? 'sel' : '', member.member_id === ctx.mine ? 'mine' : ''].filter(Boolean).join(' '),
+      class: ['node', left ? 'left' : '', dim ? 'dim' : '', member.member_id === ctx.mine ? 'mine' : ''].filter(Boolean).join(' '),
       transform: `translate(${place.x.toFixed(1)} ${place.y.toFixed(1)})`, tabindex: 0, role: 'button', 'aria-pressed': String(options.open === member.member_id),
       'aria-label': [member.name, member.role, member.harness, state].filter(Boolean).join(', '),
     },

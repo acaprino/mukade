@@ -3,4 +3,3 @@
 #installations .pane:first-child { flex: 0 0 auto; max-height: 58%; }
 #installations .pane:last-child { flex: 1 1 0; border-top: 1px solid var(--im-line); }
 .pane-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--im-line-strong) transparent; }
-.pane-body .note { margin: var(--im-s-2) var(--im-s-2); }

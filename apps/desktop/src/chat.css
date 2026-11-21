@@ -2,40 +2,29 @@
    and instructions. Geometry for the room graph, lanes and feed. */
 #view-chat { flex-direction: column; }
 .chat-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1) var(--im-s-3); min-height: 34px; padding: var(--im-s-1) var(--im-s-1) var(--im-s-1); }
-.chat-status button { min-height: 26px; }
 #chat-messages { flex: 1 1 auto; }
 .mk-rooms { display: flex; flex-direction: column; min-block-size: 0; }
 .mk-rooms-body { flex: 1 1 auto; min-block-size: 0; overflow: auto; }
 .mk-members { display: flex; flex-direction: column; flex: 1; min-block-size: 0; min-inline-size: 0; overflow: hidden; }
 .chat-off { flex: 1; }
-.chat-off .empty button { margin-top: var(--im-s-2); }
 .err-text { color: var(--im-err); }
 
 /* Free-form buttons in the chat: rows, chips, marks; not the uppercase command buttons. */
-.member-row .role, .member-row .state, .instruction .state { font: var(--im-fs-meta) var(--im-font-code); }
+.member-row .role, .member-row .state, .instructions .state { font: var(--im-fs-meta) var(--im-font-code); }
 
 .glyph { width: 16px; height: 16px; flex: none; color: var(--im-text-2); vertical-align: middle; }
 :root[data-im-theme='light'] .glyph, :root[data-im-theme='light'] .node .plate-mark { filter: drop-shadow(0 0 .6px var(--im-text)); }
 
 /* Rooms */
-.column-tools { padding: var(--im-s-1) var(--im-s-2); border-bottom: 1px solid var(--im-line); }
-.column-tools input { width: 100%; }
 .room-row { align-items: flex-start; padding-top: var(--im-s-2); padding-bottom: var(--im-s-2); }
 .room-row .grow { display: flex; flex-direction: column; gap: 1px; }
 .room-row .room-name, .room-row .room-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.column .empty button { margin-top: var(--im-s-2); }
 
 /* The room: head, filter, body, composer */
 .stage .column-head { flex-wrap: wrap; row-gap: var(--im-s-1); }
-.stage .column-head .seg button { min-height: 24px; padding: 0 var(--im-s-2); }
-.stage .column-head .seg kbd { margin-left: var(--im-s-1); }
-.stage .column-head > button { min-height: 24px; padding: 0 var(--im-s-2); }
 .stage-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1) var(--im-s-2); padding: var(--im-s-1) var(--im-s-2); border-bottom: 1px solid var(--im-line); }
 #chat-filter { flex: 0 1 220px; min-width: 120px; }
-.stage-tools .seg button { min-height: 24px; padding: 0 var(--im-s-2); font-size: var(--im-fs-micro); }
-.who-filter, .recipients { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1); }
 .stage-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.stage-body > .empty { flex: 1; }
 
 /* Feed */
 .feed { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--im-line-strong) transparent; outline: none; }
@@ -53,7 +42,6 @@
 .msg.sys { padding: var(--im-s-1) var(--im-s-3); font: var(--im-fs-meta) var(--im-font-code); color: var(--im-muted); align-items: center; }
 .msg.sys.k-done { color: var(--im-ok); }
 .msg.sys.k-blocked { color: var(--im-warn); }
-.msg.sys button.link { font: var(--im-fs-meta) var(--im-font-code); }
 .at { color: var(--im-accent-text); }
 .state { padding: 0 var(--im-s-1); border: 1px solid currentColor; font: var(--im-fs-micro)/var(--im-fs-title) var(--im-font-code); white-space: nowrap; color: var(--im-muted); }
 .state.st-done { color: var(--im-ok); }
@@ -80,12 +68,9 @@
 .wire.done { border-top: 1px dashed var(--im-ok); }
 .wire.blocked { border-top: 1px dashed var(--im-warn); }
 .wire.observe { border-top: 1px dotted var(--im-muted); }
-/* imago-check: allow literal-space — pixel geometry of the replay arrow: the offsets centre a 7px head on its line, they are not spacing */
-.wdot { position: absolute; top: 12px; width: 7px; height: 7px; margin: -4px 0 0 -4px; background: var(--im-accent-text); }
-/* imago-check: allow literal-space — pixel geometry of the replay arrow: the offsets centre a 7px head on its line, they are not spacing */
-.warw { position: absolute; top: 12px; width: 0; height: 0; border: 4px solid transparent; margin-top: -4px; }
-/* imago-check: allow literal-space — pixel geometry of the replay arrow: the offsets centre a 7px head on its line, they are not spacing */
-.warw.r { border-left: 7px solid var(--im-accent-text); border-right: 0; margin-left: -7px; }
+.wdot { position: absolute; top: var(--im-s-3); width: 7px; height: 7px; transform: translate(-50%, -50%); background: var(--im-accent-text); }
+.warw { position: absolute; top: var(--im-s-3); width: 0; height: 0; border: 4px solid transparent; transform: translateY(-50%); }
+.warw.r { border-left: 7px solid var(--im-accent-text); border-right: 0; transform: translate(-100%, -50%); }
 .warw.l { border-right: 7px solid var(--im-accent-text); border-left: 0; }
 .c-done.wdot { background: var(--im-ok); } .c-done.warw.r { border-left-color: var(--im-ok); } .c-done.warw.l { border-right-color: var(--im-ok); }
 .c-blocked.wdot { background: var(--im-warn); } .c-blocked.warw.r { border-left-color: var(--im-warn); } .c-blocked.warw.l { border-right-color: var(--im-warn); }
@@ -117,7 +102,7 @@
 .node .top { stroke: var(--im-line-strong); stroke-width: 3; }
 .node.mine .top { stroke: var(--im-accent-text); }
 .node:hover .plate { stroke: var(--im-accent-text); }
-.node.sel .plate { stroke: var(--im-accent-text); stroke-width: 2; fill: var(--im-hover); }
+.node[aria-pressed='true'] .plate { stroke: var(--im-accent-text); stroke-width: 2; fill: var(--im-hover); }
 .node:focus-visible .plate { stroke: var(--im-accent-hi); stroke-width: 3; }
 .node.dim { opacity: .28; }
 .node.left { opacity: .4; }
@@ -136,7 +121,6 @@
 .legend .l-over { border-top: 2px dashed var(--im-warn); }
 .legend .l-obs { border-top: 2px dotted var(--im-muted); }
 .scrub { display: flex; align-items: center; gap: var(--im-s-1); padding: var(--im-s-1) var(--im-s-3); border-top: 1px solid var(--im-line); background: var(--im-ground); }
-button.small { min-height: 22px; padding: 0 var(--im-s-2); font-size: var(--im-fs-micro); }
 .ticks { flex: 1; display: flex; align-items: center; gap: var(--im-s-1); min-width: 0; height: 28px; overflow-x: auto; scrollbar-width: none; }
 .tick { flex: 1 1 0; min-width: 4px; max-width: 28px; min-height: 0; height: 12px; padding: 0; border: 0; background-color: var(--im-line-strong); background-image: none; box-shadow: none; opacity: .6; }
 .tick.k-system { background-color: var(--im-line-strong); }
@@ -158,24 +142,22 @@ button.small { min-height: 22px; padding: 0 var(--im-s-2); font-size: var(--im-f
 .member-row .role { color: var(--im-muted); }
 .member-row .state { border: 0; padding: 0; }
 .member-row .state.left { color: var(--im-warn); }
-.member-row.open { background: var(--im-field); }
-.member .kv { padding: var(--im-s-1) var(--im-s-3) 0; }
+.member-row[aria-expanded='true'] { background: var(--im-selected); }
+.member dl { padding: var(--im-s-1) var(--im-s-3) 0; }
 .member .actions { padding: var(--im-s-2) var(--im-s-3) var(--im-s-2); }
 .instructions { display: flex; flex-direction: column; padding: 0 0 var(--im-s-2); }
-.instruction b { font-weight: 400; color: var(--im-text); }
+.instructions b { font-weight: 400; color: var(--im-text); }
 .pad-x { padding: var(--im-s-1) var(--im-s-3); margin: 0; }
 
 /* Composer */
 .composer { display: flex; flex-direction: column; gap: var(--im-s-1); padding: var(--im-s-2) var(--im-s-3); border-top: 1px solid var(--im-line-strong); background: var(--im-sheet); }
 .composer.closed { flex-direction: row; align-items: center; }
-.composer .lab { font: 500 var(--im-fs-micro) var(--im-font-head); letter-spacing: var(--im-track); text-transform: var(--im-case); color: var(--im-muted); }
 .composer textarea { width: 100%; min-height: 58px; max-height: 40vh; resize: vertical; font: var(--im-fs-body)/1.5 var(--im-font-code); }
 .composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-2); }
 .composer-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-2); min-width: 0; font: var(--im-fs-meta) var(--im-font-code); }
-.composer-note button { min-height: 22px; }
 .composer.join p { margin: 0; font-size: var(--im-fs-meta); }
 .join-line { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--im-s-2); }
-.join-line .field { flex: 0 1 220px; }
+.join-line > :not(button) { flex: 0 1 220px; }
 .join-line > button { margin-bottom: 0; }
 .field-note { min-height: 18px; font: var(--im-fs-meta) var(--im-font-code); display: flex; flex-wrap: wrap; align-items: center; gap: var(--im-s-1); }
 
