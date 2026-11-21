@@ -70,7 +70,10 @@ export async function checkProduction(browser) {
     await page.locator('#detail').getByRole('button', { name: /Open transcript/ }).click();
     await page.locator('#reader .entry').first().waitFor();
     assert.equal(await page.locator('[role="separator"]').count(), 2, 'one separator for the sidebar and one for the list');
-    for (const name of ['installations', 'sessions']) {
+    // The list's separator first: a resize of the sidebar changes the width of the split, and the split keeps its fraction, so its value
+    // moves with it (the package's behaviour). Each value is read once the layout has settled.
+    for (const name of ['sessions', 'installations']) {
+      await page.waitForTimeout(300);
       const divider = page.locator('#resize-' + name);
       await page.waitForFunction(id => {
         const handle = document.getElementById(id);
