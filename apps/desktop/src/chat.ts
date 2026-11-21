@@ -53,7 +53,7 @@ function pickOne<T extends string>(label: string, options: readonly (readonly [T
 export interface ChatHooks {
   /** Show a bound session in the sessions view; false when it is not listed. */
   showSession(harness: string, id: string): boolean;
-  status(text: string, error?: boolean): void;
+  report(text: string, error?: boolean): void;
 }
 
 export class ChatView {
@@ -242,10 +242,10 @@ export class ChatView {
     const room = this.rooms.find((one) => one.room_id === launch.room);
     if (room && room.members > launch.count) {
       this.launched = null;
-      this.hooks.status(`a launched agent joined ${room.name}`);
+      this.hooks.report(`a launched agent joined ${room.name}`);
     } else if (Date.now() - launch.at > 60_000) {
       this.launched = null;
-      this.hooks.status(`no member joined ${room?.name ?? 'the room'} within a minute; the command was: ${commandLine(launch.command)}`, true);
+      this.hooks.report(`no member joined ${room?.name ?? 'the room'} within a minute; the command was: ${commandLine(launch.command)}`, true);
     }
   }
 
@@ -754,8 +754,8 @@ export class ChatView {
   /** A room's administration: a failure goes to the status line, not to the composer. */
   private async administer(what: string, operation: string, room: Room, args: Record<string, unknown> = {}): Promise<boolean> {
     const done = await this.write(what, operation, { room_id: room.room_id, ...args });
-    if (done === null) { this.hooks.status(`${what} ${room.name} failed: ${this.writeError}`, true); this.writeError = null; }
-    else this.hooks.status(`${operation === 'close' ? 'closed' : operation === 'reopen' ? 'reopened' : 'deleted'} ${room.name}`);
+    if (done === null) { this.hooks.report(`${what} ${room.name} failed: ${this.writeError}`, true); this.writeError = null; }
+    else this.hooks.report(`${operation === 'close' ? 'closed' : operation === 'reopen' ? 'reopened' : 'deleted'} ${room.name}`);
     await this.poll(true);
     return done !== null;
   }
@@ -768,7 +768,7 @@ export class ChatView {
     if (joined) {
       this.mine[room.room_id] = { member_id: joined.member_id, handle: joined.member_handle, name: joined.name ?? this.joinName, role: joined.role ?? this.joinRole, at: Date.now() };
       save('mukade.chat.members', this.mine);
-      this.hooks.status(`the window joined ${room.name} as ${this.joinName}`);
+      this.hooks.report(`the window joined ${room.name} as ${this.joinName}`);
       this.focusComposer = true;
     }
     await this.poll(true);
@@ -781,7 +781,7 @@ export class ChatView {
     if (joined) {
       this.mine[room.room_id] = { ...mine, handle: joined.member_handle, at: Date.now() };
       save('mukade.chat.members', this.mine);
-      this.hooks.status(`the window rejoined ${room.name} as ${mine.name}, with a new handle`);
+      this.hooks.report(`the window rejoined ${room.name} as ${mine.name}, with a new handle`);
     }
     await this.poll(true);
   }
@@ -795,7 +795,7 @@ export class ChatView {
       delete this.mine[room.room_id];
       save('mukade.chat.members', this.mine);
       this.writeError = null;
-      this.hooks.status(`the window left ${room.name}`);
+      this.hooks.report(`the window left ${room.name}`);
     }
     await this.poll(true);
   }
@@ -850,7 +850,7 @@ export class ChatView {
         const opened = await api.chatWrite<{ room_id?: string }>('open', { request_id: requestId(), name });
         modal.lock(false);
         modal.close();
-        this.hooks.status(`opened ${name}`);
+        this.hooks.report(`opened ${name}`);
         await this.poll(true);
         const id = opened.room_id ?? roomNamed(this.rooms, name)?.room_id;
         if (id) this.pickRoom(id);
@@ -892,7 +892,7 @@ export class ChatView {
   /** Delete asks with the room's summary from the service, and deletes that revision only. */
   private async deleteRoom(room: Room): Promise<void> {
     let fresh: Room | undefined;
-    try { fresh = (await this.allRooms()).find((one) => one.room_id === room.room_id); } catch (error) { this.hooks.status(errorText(error), true); return; }
+    try { fresh = (await this.allRooms()).find((one) => one.room_id === room.room_id); } catch (error) { this.hooks.report(errorText(error), true); return; }
     if (!fresh) { await this.poll(true); return; }
     const summary = `${fresh.members} member${fresh.members === 1 ? '' : 's'} and ${fresh.events} event${fresh.events === 1 ? '' : 's'} go with it, for good (revision ${fresh.revision}).`;
     if (!(await confirmModal(`Delete ${fresh.name}`, summary, 'Delete for good'))) return;
@@ -907,9 +907,9 @@ export class ChatView {
     this.draw();
     try {
       await api.chatStart();
-      this.hooks.status('chat service started');
+      this.hooks.report('chat service started');
     } catch (error) {
-      this.hooks.status(`the chat service did not start: ${errorText(error)}`, true);
+      this.hooks.report(`the chat service did not start: ${errorText(error)}`, true);
     } finally {
       this.busy = null;
     }
@@ -925,9 +925,9 @@ export class ChatView {
     this.draw();
     try {
       await api.chatStop();
-      this.hooks.status('chat service stopped');
+      this.hooks.report('chat service stopped');
     } catch (error) {
-      this.hooks.status(`the chat service did not stop: ${errorText(error)}`, true);
+      this.hooks.report(`the chat service did not stop: ${errorText(error)}`, true);
     } finally {
       this.busy = null;
     }
@@ -973,7 +973,7 @@ export class ChatView {
         this.launched = { room: room.room_id, at: Date.now(), count: room.members, command };
         modal.lock(false);
         modal.close();
-        this.hooks.status(`launched ${HARNESSES.find(([key]) => key === choice.harness)?.[1]} into ${room.name}; it appears when it joins`);
+        this.hooks.report(`launched ${HARNESSES.find(([key]) => key === choice.harness)?.[1]} into ${room.name}; it appears when it joins`);
       } catch (error) {
         modal.lock(false);
         fill(note, h('span', { class: 'err-text', role: 'alert' }, errorText(error)));

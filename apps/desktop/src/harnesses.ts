@@ -22,7 +22,7 @@ export interface HarnessesHooks {
   reload(): Promise<void>;
   scanFolder(): void;
   showInstallation(key: string): void;
-  status(text: string, error?: boolean): void;
+  report(text: string, error?: boolean): void;
 }
 
 const STATUS_TEXT: Record<HarnessView['status'], string> = { installed: 'installed', configured: 'configured', missing: 'not found' };
@@ -147,7 +147,7 @@ export class HarnessesView {
     try {
       roots = await api.systemRoots();
     } catch (error) {
-      this.hooks.status(`the system scan could not start: ${errorText(error)}`, true);
+      this.hooks.report(`the system scan could not start: ${errorText(error)}`, true);
       return;
     }
     this.stop = false;
@@ -175,7 +175,7 @@ export class HarnessesView {
     this.draw();
     const fresh = [...stores].filter((store) => !this.hooks.folders().includes(store));
     if (fresh.length) await this.hooks.addFolders(fresh);
-    this.hooks.status(`system scan ${stopped ? 'stopped' : 'done'}: ${stores.size} installation${stores.size === 1 ? '' : 's'} outside the standard stores in ${done} folder${done === 1 ? '' : 's'}${fresh.length ? `, ${fresh.length} new` : ''}${truncated ? `; ${truncated} folder${truncated === 1 ? '' : 's'} too large to read whole` : ''}`);
+    this.hooks.report(`system scan ${stopped ? 'stopped' : 'done'}: ${stores.size} installation${stores.size === 1 ? '' : 's'} outside the standard stores in ${done} folder${done === 1 ? '' : 's'}${fresh.length ? `, ${fresh.length} new` : ''}${truncated ? `; ${truncated} folder${truncated === 1 ? '' : 's'} too large to read whole` : ''}`);
     this.draw();
   }
 
@@ -210,14 +210,14 @@ export class HarnessesView {
       this.draw();
       try {
         const made = await api.sandboxInstall(harness.id, label);
-        this.hooks.status(`${harness.display} installed in a sandbox: ${made.root}`);
+        this.hooks.report(`${harness.display} installed in a sandbox: ${made.root}`);
         if (modal.root.isConnected) modal.close();
         await this.refresh();
         await this.hooks.reload();
       } catch (error) {
         const text = errorText(error);
         if (modal.root.isConnected) fill(note, h('span', { class: 'err-text', role: 'alert' }, text));
-        this.hooks.status(`the sandbox install of ${harness.display} failed: ${text}`, true);
+        this.hooks.report(`the sandbox install of ${harness.display} failed: ${text}`, true);
       } finally {
         this.installing.delete(harness.id);
         this.draw();
@@ -231,29 +231,29 @@ export class HarnessesView {
     try {
       await api.installSystem(harness.id);
       close();
-      this.hooks.status(`the install of ${harness.display} runs in a new terminal; check again when it ends`);
+      this.hooks.report(`the install of ${harness.display} runs in a new terminal; check again when it ends`);
     } catch (error) {
-      this.hooks.status(`the install of ${harness.display} could not start: ${errorText(error)}`, true);
+      this.hooks.report(`the install of ${harness.display} could not start: ${errorText(error)}`, true);
     }
   }
 
   private async runSandbox(sandbox: Sandbox): Promise<void> {
     try {
       await api.sandboxRun(sandbox.root);
-      this.hooks.status(`sandbox ${sandbox.name} opened in a terminal`);
+      this.hooks.report(`sandbox ${sandbox.name} opened in a terminal`);
     } catch (error) {
-      this.hooks.status(errorText(error), true);
+      this.hooks.report(errorText(error), true);
     }
   }
 
   private async forgetSandbox(sandbox: Sandbox): Promise<void> {
     try {
       await api.sandboxForget(sandbox.root);
-      this.hooks.status(`sandbox ${sandbox.name} is no longer listed; its folder stays: ${sandbox.root}`);
+      this.hooks.report(`sandbox ${sandbox.name} is no longer listed; its folder stays: ${sandbox.root}`);
       await this.refresh();
       await this.hooks.reload();
     } catch (error) {
-      this.hooks.status(errorText(error), true);
+      this.hooks.report(errorText(error), true);
     }
   }
 }

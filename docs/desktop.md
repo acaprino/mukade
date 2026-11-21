@@ -207,6 +207,10 @@ guard refuses: `r` reads the stores again); `←` `→` between columns (`F6`, `
   detail. Under 1000 the inspector is a drawer (its header has Close details, and Escape closes it) and the reader takes the list's place
   until Escape. Widths are dragged and kept per machine (`mukade.width.installations`, `mukade.width.sessions`); a double-click on a
   separator forgets its width. In the docked inspector Escape moves the focus back to the list or the reader and does not close it.
+- Results and state: the result of something the person did (exported, hop done, scan done, joined, closed a room, launched) is a notice at
+  the bottom (an error says "Error" and stays until dismissed) and also the status row's chip and text until the next one; a state (ready,
+  turns shown, a live session read again) is the status row's text only; a running job is the footer's dot (info) and text; the counts stay in
+  the footer. A failed window button is a notice that names the action.
 - `tab` keeps moving the focus between controls, as every window does; `F6` and `shift+F6` move between the regions.
 - The plan in the hop dialog is drawn from the chosen options; the library has no dry run that
   states what a write would lose, so the losses are the receipt's.

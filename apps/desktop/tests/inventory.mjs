@@ -73,6 +73,12 @@ export async function checkInventory(browser, url) {
     await page.keyboard.press('r');
     const failure = page.locator('#sessions').getByRole('alert');
     await failure.filter({ hasText: 'Temporary session read failure' }).waitFor();
+    // The failure is also a notice that says "Error" and stays until it is dismissed (and the panel keeps its own error with Retry).
+    const notice = page.locator('.im-notice', { hasText: 'Temporary session read failure' }).first();
+    await notice.waitFor();
+    assert.match(await notice.innerText(), /^Error/);
+    await page.waitForTimeout(6500);
+    assert.equal(await notice.isVisible(), true, 'an error notice stays until it is dismissed');
     await mode('empty');
     await failure.getByRole('button', { name: 'Retry' }).click();
     await page.locator('#sessions [data-im-state-layer="empty"]').waitFor();
@@ -84,6 +90,8 @@ export async function checkInventory(browser, url) {
     await page.evaluate(() => window.inventoryTest.reject(new Error('Stale failure')));
     assert.equal(await failure.count(), 0);
     assert.ok(!(await page.locator('#status').innerText()).includes('Stale failure'));
+    assert.ok(!(await page.locator('.im-status-text').innerText()).includes('Stale failure'));
+    assert.equal(await page.locator('.im-notice', { hasText: 'Stale failure' }).count(), 0, 'a stale failure shows no notice');
 
     await mode('fail');
     await page.keyboard.press('r');

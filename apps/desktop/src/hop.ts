@@ -11,7 +11,10 @@ import type { HopArgs, HopOptions, Installation, Receipt, WriteOperation } from 
 export interface JobHooks {
   /** A job started (`label` for the status line) or ended. */
   job(label: string | null): void;
-  status(text: string, error?: boolean): void;
+  /** The result of something the person did: a notice (an error stays until dismissed), and the status row until the next one. */
+  report(text: string, error?: boolean): void;
+  /** A state of the window (ready, turns shown): the status row only. */
+  summary(text: string): void;
   /** Show a written session in the tree (its installation listed again first). */
   showSession(key: string, id: string): void;
   resumeIn(key: string, id: string): void;
@@ -47,7 +50,7 @@ export function segmented<T extends string>(label: string, values: readonly T[],
 
 export async function openHop(source: string, id: string, hooks: JobHooks): Promise<void> {
   if (!writeChecked) return;
-  const modal = openWriteDialog({ title: 'Hop', subtitle: 'reading the session…', icon: 'hop', wide: true }, message => hooks.status(message, true));
+  const modal = openWriteDialog({ title: 'Hop', subtitle: 'reading the session…', icon: 'hop', wide: true }, message => hooks.report(message, true));
   fill(modal.body, h('p', { class: 'muted' }, 'Looking at where it can go…'));
   let options: HopOptions;
   try {
@@ -205,7 +208,7 @@ export async function recoverWrite(hooks: JobHooks): Promise<void> {
     const current = await api.writeStatus();
     if (current) {
       const title = current.kind === 'import' ? 'Import' : 'Hop';
-      const modal = openWriteDialog({ title, icon: current.kind, wide: true }, message => hooks.status(message, true));
+      const modal = openWriteDialog({ title, icon: current.kind, wide: true }, message => hooks.report(message, true));
       modal.lock(true);
       const message = `${title} in progress…`;
       fill(modal.body, h('p', { class: 'note' }, message));
@@ -226,13 +229,13 @@ async function showWriteResult(modal: WriteDialog, start: WriteOperation | (() =
     kind = result.kind;
     if (result.status === 'failed') throw result.error;
     const receipt = result.receipt;
-    hooks.status(receipt.warning ? `${kind} written, with a warning: ${receipt.warning}` : `${kind} done → ${receipt.dest_label} · ${receipt.dest_id}`, Boolean(receipt.warning));
+    hooks.report(receipt.warning ? `${kind} written, with a warning: ${receipt.warning}` : `${kind} done → ${receipt.dest_label} · ${receipt.dest_id}`, Boolean(receipt.warning));
     modal.lock(false);
     showReceipt(modal, receipt, `${source ?? (kind === 'import' ? 'document' : 'session')} → ${receipt.dest_label}`, hooks);
     return true;
   } catch (error) {
     const reason = errorText(error);
-    hooks.status(`${kind} failed: ${reason}`, true);
+    hooks.report(`${kind} failed: ${reason}`, true);
     modal.lock(false);
     if (!retry) fill(modal.body, h('p', { class: 'note err' }, reason));
     fill(modal.foot, retry ? h('p', { class: 'note err grow' }, reason) : h('span', { class: 'spring' }),
@@ -287,7 +290,7 @@ export function showReceipt(modal: Modal, receipt: Receipt, subtitle: string, ho
 export function openImport(installations: Installation[], into: string | null, document: string | null, hooks: JobHooks): void {
   if (!writeChecked) return;
   const writable = installations.filter((item) => item.destination);
-  const modal = openWriteDialog({ title: 'Import', subtitle: 'a dump document into an installation', icon: 'import' }, message => hooks.status(message, true));
+  const modal = openWriteDialog({ title: 'Import', subtitle: 'a dump document into an installation', icon: 'import' }, message => hooks.report(message, true));
   const path = Object.assign(modal.body.ownerDocument.createElement('input'), { id: 'import-path', type: 'text', placeholder: 'C:\\…\\mukade-data\\exports\\<harness>-<id>.json', value: document ?? '' });
   const dest = h('select', { id: 'import-into' }) as HTMLSelectElement;
   for (const item of writable) dest.append(h('option', { value: item.key, selected: item.key === into }, item.label));
@@ -295,7 +298,7 @@ export function openImport(installations: Installation[], into: string | null, d
   const source = pathField(path, {
     buttonLabel: 'Choose…',
     choose: () => api.pick('open'),
-    onError: error => hooks.status(errorText(error), true),
+    onError: error => hooks.report(errorText(error), true),
   });
   fill(modal.body, h('div', { class: 'col' },
     h('div', { class: 'field im-field' }, h('label', { for: 'import-path' }, 'Document'), source),

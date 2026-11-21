@@ -101,6 +101,11 @@ try {
     await page.waitForTimeout(300);
     if (!(await page.locator('#sessions').isVisible()) || !(await page.locator('#detail h3').isVisible())) failures.push(`${name}: the list or the detail is gone while reading`);
     await page.screenshot({ path: `${out}reader-${name}.png` });
+    if (look === 'smooth' && scheme === 'dark') {
+      // A live session is read again: the status row says so, and no notice does (a state, not a result).
+      await page.locator('.im-status-text', { hasText: 'live: read again' }).waitFor({ timeout: 25000 });
+      if (await page.locator('.im-notice', { hasText: 'live: read again' }).count()) failures.push(`${name}: a live re-read showed a notice`);
+    }
     await page.keyboard.press('Escape');
     if (await page.locator('#reader').isVisible()) failures.push(`${name}: Escape did not close the reader`);
     if (await page.locator('#sessions [role="option"][aria-selected="true"]').getAttribute('data-id') !== selectedBefore) failures.push(`${name}: the selected session changed`);
@@ -177,6 +182,8 @@ try {
     await page.locator('.harness-card').first().waitFor();
     await page.getByRole('button', { name: 'Scan this computer' }).click();
     await page.locator('#status', { hasText: 'system scan done' }).waitFor({ timeout: 20000 });
+    await page.locator('.im-notice', { hasText: 'system scan done' }).first().waitFor();
+    if (!(await page.locator('.im-status-text').innerText()).includes('system scan done')) failures.push(`${name}: the status row lost the scan result`);
     await page.locator('.install-row', { hasText: 'JanuraCode' }).waitFor();
     await page.screenshot({ path: `${out}harnesses-${name}.png` });
     await page.keyboard.press('c');

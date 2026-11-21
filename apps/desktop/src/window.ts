@@ -10,10 +10,12 @@ export function paintWindow(look: Look, theme: ThemeChoice): void {
   });
 }
 
-export function initializeWindow(reportError: (error: unknown) => void): void {
+export function initializeWindow(fail: (text: string) => void): void {
   if (!inTauri) return;
   const bar = document.querySelector<HTMLElement>('.im-titlebar')!;
-  mountWindowControls(bar, tauriWindowApi((_what, error) => reportError(error)), { onError: (_action, error) => reportError(error) });
+  // A failed minimize, maximize, close, drag or zoom is a notice with the action named.
+  const onError = (action: string, error: unknown): void => fail(`${action} failed: ${String(error)}`);
+  mountWindowControls(bar, tauriWindowApi(onError), { onError });
   mountZoom(document, { apply: level => getCurrentWebview().setZoom(level), storageKey: 'mukade.zoom' });
   if (!import.meta.env.DEV) guardDesktop(document);
 }

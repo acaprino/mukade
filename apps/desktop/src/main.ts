@@ -3,7 +3,7 @@
 
 import '@acaprino/imago/css/imago.css';
 import { parseLook } from '@acaprino/imago/shell';
-import { claimKey, closeLayers, createRegistry, footerKeys, formatKeys, hasModal, inspector, keyCaps, keyClaimed, mountApp, openMenu, roving, sidebarResize, splitView } from '@acaprino/imago/ui';
+import { claimKey, closeLayers, notify, createRegistry, footerKeys, formatKeys, hasModal, inspector, keyCaps, keyClaimed, mountApp, openMenu, roving, sidebarResize, splitView } from '@acaprino/imago/ui';
 import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
@@ -40,7 +40,16 @@ let rawRecords: unknown[] | null = null;
 
 // --- status line --------------------------------------------------------------------------------
 
-function setStatus(text: string, error = false): void {
+/** A state of the window: the status row's text only. */
+function summary(text: string): void {
+  state.status = text;
+  state.statusError = false;
+  drawStatus();
+}
+
+/** The result of something the person did: a notice (an error stays until it is dismissed), then the status row until the next one. */
+function report(text: string, error = false): void {
+  notify($('app'), text, error ? { tone: 'err' } : {});
   state.status = text;
   state.statusError = error;
   drawStatus();
@@ -68,7 +77,8 @@ function drawStatus(): void {
 
 const hooks: JobHooks = {
   job: setJob,
-  status: setStatus,
+  report,
+  summary,
   showSession: (key, id) => void revealSession(key, id, true),
   resumeIn: (key, id) => void resume(key, id),
 };
@@ -290,7 +300,7 @@ async function loadInventory(): Promise<void> {
     const errors = list.installations.filter((item) => item.error).length;
     if (errors) notes.push(`${errors} store(s) could not be read`);
     setJob(null);
-    setStatus(notes.join(' · ') || 'ready');
+    summary(notes.join(' · ') || 'ready');
     const added = list.installations.find((item) => item.scanned && !before.has(item.key) && before.size > 0);
     const keep = list.installations.some((item) => item.key === state.installation);
     const first = added?.key ?? (keep ? state.installation! : list.installations.find((item) => item.count > 0)?.key ?? list.installations[0]?.key);
@@ -312,7 +322,7 @@ async function loadInventory(): Promise<void> {
     setJob(null);
     const message = `reading the stores failed: ${errorText(error)}`;
     state.inventoryRead = { kind: 'error', message };
-    setStatus(message, true);
+    report(message, true);
     drawSessions();
   }
 }
@@ -337,7 +347,7 @@ async function pickInstallation(key: string, keepSelection = false): Promise<boo
     if (ticket !== sessionListing) return false;
     state.rows = rows;
     state.sessionsRead = { kind: 'ready' };
-    if (state.statusError && state.status === previousError) setStatus('ready');
+    if (state.statusError && state.status === previousError) summary('ready');
     if (!rows.some(row => row.id === state.selected)) state.selected = visiblePlaces()[0]?.row.id ?? null;
     if (state.reader && state.reader.id !== state.selected) closeReader(false);
   } catch (error) {
@@ -347,7 +357,7 @@ async function pickInstallation(key: string, keepSelection = false): Promise<boo
     state.rows = [];
     state.selected = null;
     closeReader(false);
-    setStatus(message, true);
+    report(message, true);
   }
   if (!state.selected && state.focus === 'detail') setFocus('sessions');
   drawAll();
@@ -381,7 +391,7 @@ async function revealSession(key: string, id: string, reload: boolean): Promise<
   if (state.view !== 'sessions') switchView('sessions');
   if (reload) await loadInventory();
   if (!await pickInstallation(key)) return false;
-  if (!state.rows.some((row) => row.id === id)) { setStatus(`${id} is not listed in ${currentInstallation()?.label}`, true); return false; }
+  if (!state.rows.some((row) => row.id === id)) { report(`${id} is not listed in ${currentInstallation()?.label}`, true); return false; }
   state.folder = null;
   state.query = '';
   ($('search') as HTMLInputElement).value = '';
@@ -398,7 +408,7 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
   const row = selectedRow();
   const key = state.installation;
   if (!row || key === null) return;
-  if (row.unreadable) { setStatus(`${row.id} cannot be read: ${row.unreadable}`, true); return; }
+  if (row.unreadable) { report(`${row.id} cannot be read: ${row.unreadable}`, true); return; }
   const mine: NonNullable<typeof state.reader> = { key, id: row.id, transcript: null, turns, tab: 'conversation', rawEntry: null, error: null };
   state.reader = mine;
   rawRecords = null;
@@ -412,11 +422,11 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
     if (state.reader !== mine) return;
     mine.transcript = transcript;
     const shown = transcript.total_turns - transcript.hidden_turns;
-    setStatus(transcript.hidden_turns ? `showing the last ${shown} of ${transcript.total_turns} turns` : `${transcript.total_turns} turns`);
+    summary(transcript.hidden_turns ? `showing the last ${shown} of ${transcript.total_turns} turns` : `${transcript.total_turns} turns`);
   } catch (error) {
     if (state.reader !== mine) return;
     mine.error = errorText(error);
-    setStatus(`read failed: ${errorText(error)}`, true);
+    report(`read failed: ${errorText(error)}`, true);
   } finally {
     if (state.reader === mine) setJob(null);
   }
@@ -449,7 +459,7 @@ function watchLive(mine: NonNullable<typeof state.reader>): void {
       mine.transcript = transcript;
       reader.keepPlace = true;
       try { drawDetail(); } finally { reader.keepPlace = false; }
-      setStatus(`live: read again at ${new Date().toLocaleTimeString()}, ${transcript.total_turns} turns`);
+      summary(`live: read again at ${new Date().toLocaleTimeString()}, ${transcript.total_turns} turns`);
     } catch {
       // The next look tries again.
     } finally {
@@ -500,18 +510,18 @@ async function showRaw(entryId: string): Promise<void> {
 
 function startHop(): void {
   const row = selectedRow();
-  if (!row || state.installation === null) return void setStatus('no session selected', true);
-  if (row.unreadable) return void setStatus(`${row.id} cannot be read: ${row.unreadable}`, true);
+  if (!row || state.installation === null) return void report('no session selected', true);
+  if (row.unreadable) return void report(`${row.id} cannot be read: ${row.unreadable}`, true);
   void openHop(state.installation, row.id, hooks);
 }
 
 async function exportSelected(saveAs: boolean): Promise<void> {
   const row = selectedRow();
   const installation = currentInstallation();
-  if (!row || !installation) return void setStatus('no session selected', true);
+  if (!row || !installation) return void report('no session selected', true);
   let to: string | undefined;
   if (saveAs) {
-    const picked = await api.pick('save', `${installation.harness}-${row.id.replace(/[^A-Za-z0-9._-]/g, '_')}.json`).catch((error) => { setStatus(errorText(error), true); return null; });
+    const picked = await api.pick('save', `${installation.harness}-${row.id.replace(/[^A-Za-z0-9._-]/g, '_')}.json`).catch((error) => { report(errorText(error), true); return null; });
     if (!picked) return;
     to = picked;
   }
@@ -520,7 +530,7 @@ async function exportSelected(saveAs: boolean): Promise<void> {
     const exported = await api.export(installation.key, row.id, to);
     state.lastExport = exported.path;
     setJob(null);
-    setStatus(`exported ${exported.messages} messages → ${exported.path}`);
+    report(`exported ${exported.messages} messages → ${exported.path}`);
     const modal = openModal({ title: 'Exported', subtitle: `${exported.messages} messages`, icon: 'export' });
     fill(modal.body, h('div', { class: 'col' },
       h('dl', { class: 'kv' }, h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
@@ -530,7 +540,7 @@ async function exportSelected(saveAs: boolean): Promise<void> {
       button(['Close ', caps('Escape')], { class: 'primary', onclick: () => modal.close() }));
   } catch (error) {
     setJob(null);
-    setStatus(`export failed: ${errorText(error)}`, true);
+    report(`export failed: ${errorText(error)}`, true);
   }
 }
 
@@ -539,7 +549,7 @@ function importDocument(): void {
 }
 
 function startIn(row: SessionRow): void {
-  openHandoff(row, (result, label) => setStatus(`Started ${label} in ${result.cwd}; note saved to ${result.note_path}`));
+  openHandoff(row, (result, label) => report(`Started ${label} in ${result.cwd}; note saved to ${result.note_path}`));
 }
 
 async function resume(key: string, id: string): Promise<void> {
@@ -555,18 +565,18 @@ async function resume(key: string, id: string): Promise<void> {
         command ? h('div', { class: 'cmd' }, h('pre', { class: 'code' }, command)) : null));
       const copy = button('Copy the command', { class: 'primary', onclick: async () => { await navigator.clipboard.writeText(command || result.refusal!).catch(() => {}); copy.textContent = 'Copied'; } });
       fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }), copy);
-      setStatus('resume refused: no terminal UI');
+      report('resume refused: no terminal UI');
     } else {
-      setStatus(`resume → ${result.command.join(' ')}${result.cwd ? `  (in ${result.cwd})` : ''}`);
+      report(`resume → ${result.command.join(' ')}${result.cwd ? `  (in ${result.cwd})` : ''}`);
     }
   } catch (error) {
     setJob(null);
-    setStatus(`resume failed: ${errorText(error)}`, true);
+    report(`resume failed: ${errorText(error)}`, true);
   }
 }
 
 async function scanFolder(): Promise<void> {
-  const dir = await api.pick('folder').catch((error) => { setStatus(errorText(error), true); return null; });
+  const dir = await api.pick('folder').catch((error) => { report(errorText(error), true); return null; });
   if (!dir) return;
   if (!state.scan.includes(dir)) state.scan.push(dir);
   keepFolders();
@@ -584,7 +594,7 @@ const chat = new ChatView($('view-chat'), {
     void revealSession(installation.key, id, false);
     return true;
   },
-  status: setStatus,
+  report,
 });
 
 /** The folders and stores scanned and kept across restarts (Scan folder, the system scan). */
@@ -615,7 +625,7 @@ const harnesses = new HarnessesView($('view-harnesses'), {
   reload: async () => { await loadInventory(); harnesses.draw(); },
   scanFolder: () => void scanFolder(),
   showInstallation: (key) => { switchView('sessions'); focusColumn('sessions'); void pickInstallation(key); },
-  status: setStatus,
+  report,
 });
 
 function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
@@ -859,8 +869,8 @@ function wire(): void {
   onFilesDropped((paths) => {
     if (modalOpen()) return;
     const document = paths.find((path) => path.toLowerCase().endsWith('.json'));
-    if (!document) { setStatus('drop a mukade document (.json) to import it', true); return; }
-    if (state.job) { setStatus('a job is running: drop the document again when it ends', true); return; }
+    if (!document) { report('drop a mukade document (.json) to import it', true); return; }
+    if (state.job) { report('a job is running: drop the document again when it ends', true); return; }
     openImport(state.installations, state.installation, document, hooks);
   });
   onCloseBlocked(async () => {
@@ -871,7 +881,7 @@ function wire(): void {
 (async () => {
   applyLook();
   wire();
-  void initializeWindow((error) => setStatus(errorText(error), true));
+  void initializeWindow((text) => report(text, true));
   drawAll();
   try {
     const startup = await api.startup();
@@ -880,8 +890,8 @@ function wire(): void {
     startupScan = [...startup.scan];
     state.scan = [...new Set([...startup.scan, ...keptFolders()])];
   } catch (error) {
-    setStatus(errorText(error), true);
+    report(errorText(error), true);
   }
   await loadInventory();
-  await recoverWrite(hooks).catch(error => setStatus(errorText(error), true));
+  await recoverWrite(hooks).catch(error => report(errorText(error), true));
 })();
