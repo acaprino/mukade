@@ -98,9 +98,10 @@ export function checkbox(label: Child, attrs: Attrs, onChange: (checked: boolean
   return { input, element: h('label', { class: 'im-option', title }, input, label) };
 }
 
-/** The checked input of the choice named `key`, focused again: a choice redraws its window, so the focus is given back. */
-function refocus(key: string): void {
-  queueMicrotask(() => document.querySelector<HTMLElement>(`[data-mk-choice="${CSS.escape(key)}"] input:checked`)?.focus());
+/** The checked input of the choice named `key`, focused again: a choice redraws its window, so the focus is given back. The search is
+ *  in the layer (dialog) the choice was in, so a choice of the same name behind it is not taken. */
+function refocus(key: string, scope: ParentNode): void {
+  queueMicrotask(() => scope.querySelector<HTMLElement>(`[data-mk-choice="${CSS.escape(key)}"] input:checked`)?.focus());
 }
 
 /** Radios in a fieldset, each with its content (a destination and its shell, say). */
@@ -109,7 +110,7 @@ export function radios<T extends string>(label: string, items: readonly { value:
   const legend = h('legend', { class: 'im-field-label' }, label);
   const set = h('fieldset', { class: 'im-field', 'data-mk-choice': name }, legend, ...items.map((item) => {
     const input = h('input', { type: 'radio', name, value: item.value, checked: item.value === current }) as HTMLInputElement;
-    input.addEventListener('change', () => { if (input.checked) { onPick(item.value); refocus(name); } });
+    input.addEventListener('change', () => { if (input.checked) { const scope = set.closest('.im-dialog') ?? document; onPick(item.value); refocus(name, scope); } });
     return h('label', { class: 'im-option' }, input, ...item.content);
   }));
   return set;
@@ -117,8 +118,13 @@ export function radios<T extends string>(label: string, items: readonly { value:
 
 /** One choice among a few values, as the package's segmented control (radios in `im-seg`). */
 export function choice<T extends string>(label: string, values: readonly { value: T; label: string }[], current: T, onPick: (value: T) => void): HTMLElement {
-  const control = segmentedControl(document, { label, choices: values, value: current, onChange: (value) => { onPick(value as T); refocus(name); } });
   const name = `mk-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  const placed: { element?: HTMLElement } = {};
+  const control = segmentedControl(document, {
+    label, choices: values, value: current,
+    onChange: (value) => { const scope = placed.element?.closest('.im-dialog') ?? document; onPick(value as T); refocus(name, scope); },
+  });
+  placed.element = control.element;
   control.element.setAttribute('data-mk-choice', name);
   return control.element;
 }

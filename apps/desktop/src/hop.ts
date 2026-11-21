@@ -168,12 +168,17 @@ function drawHop(modal: Modal, options: HopOptions, choice: HopArgs, redraw: () 
     notTravelling.length ? inlineNote(`Will not travel: ${notTravelling.join('; ')}.`, 'warn') : null,
     inlineNote('What the destination cannot hold is listed as a loss in the receipt; no loss is silent.'),
     options.live ? inlineNote('The source session is live. The hop copies what is on disk now.') : null);
+  // A redraw replaces the whole body: the control the person was on (a checkbox, a select) is found again by its id; a choice
+  // (radios, segmented) gives its own focus back. Only the first draw starts on the primary action, which a stray Space would run.
   const focused = document.activeElement;
+  const wasInBody = focused instanceof HTMLElement && modal.body.contains(focused);
+  const focusedId = wasInBody ? (focused as HTMLElement).id : '';
   fill(modal.body, left, right);
   fill(modal.foot, h('span', { class: 'mono muted' }, 'A hop cannot be stopped once it starts.'), h('span', { class: 'spring' }),
     button(['Cancel ', caps('Escape')], { onclick: () => modal.close() }), go);
   // The first draw starts on the primary action; a redraw keeps the control the person was on.
-  if (!focused || !focused.isConnected || !modal.body.contains(focused)) go.focus({ preventScroll: true });
+  if (!wasInBody) go.focus({ preventScroll: true });
+  else if (focusedId) modal.body.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus({ preventScroll: true });
   modal.root.onkeydown = (event) => { if (submits(event) && !go.disabled) { event.preventDefault(); run(); } };
 }
 
