@@ -140,10 +140,11 @@ Checked on the owner's machine on 2026-11-21, read-only (Codex desktop 26.1117.4
   a chat.
 - **INV-002**: `sqlite/codex.db`, `state_<n>.sqlite` and an export are opened read-only.
 - **INV-003**: the work view runs no git command that changes a repository or fetches, and sets
-  `GIT_OPTIONAL_LOCKS=0` on every one. It runs git with `core.fsmonitor` and `core.untrackedCache` off, so
-  the configuration of a repository found in session data cannot start a program or a daemon, and without
-  `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR` and the other variables that make git
-  look somewhere other than the folder it is given.
+  `GIT_OPTIONAL_LOCKS=0` on every one. It runs git with `core.fsmonitor` and `core.untrackedCache` off, and
+  without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR` and the other variables that make
+  git look somewhere other than the folder it is given. This does not make an untrusted folder safe to
+  read: a repository's own filters (`filter.<name>.clean`) still run during `git status`, as they do for
+  any `git status` in that folder.
 
 ## Examples
 

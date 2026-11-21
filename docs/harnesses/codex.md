@@ -187,7 +187,8 @@ legacy sessions to "paginated thread history" [18]. Their on-disk form **[U]**.
 
 The Desktop app lists chats whose conversation lives on ChatGPT beside its local threads. They are
 not rollouts and have no row in `threads`. Mukade lists the ones that have a local folder, shows the
-work they left in it, and starts another harness on that work. It does **not** read their
+work they left in it, and prepares a handoff note and, from the desktop or with `--run`, starts another
+harness on that work. It does **not** read their
 conversation: the text is not on this machine, and reading ChatGPT's export (phase 2) is not built.
 Decision and invariants: [ADR-0005](../adr/ADR-0005-hosted-chats-read-locally.md) (Proposed). Design and
 the facts it rests on: [2026-11-21-chatgpt-hosted-chats-design.md](../superpowers/specs/2026-11-21-chatgpt-hosted-chats-design.md).

@@ -4,9 +4,10 @@
 //! exists nowhere else (commits on no remote, uncommitted paths). It runs the installed `git` and
 //! only reads: no fetch, no command that writes, and `GIT_OPTIONAL_LOCKS=0` so `git status` does
 //! not even refresh the index. The folder comes from session data, so git is also run with
-//! `core.fsmonitor` and `core.untrackedCache` off (a repository's own configuration cannot start a
-//! program or a daemon) and without the `GIT_DIR`-style variables of the environment. It names no
-//! harness.
+//! `core.fsmonitor` and `core.untrackedCache` off (no fsmonitor program or daemon is started and the
+//! untracked cache is not written) and without the `GIT_DIR`-style variables of the environment.
+//! This does not make an untrusted folder safe to read: a repository's own filters
+//! (`filter.<name>.clean`) still run during `git status`. It names no harness.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -180,8 +181,8 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
     command
         .arg("-C")
         .arg(dir)
-        // The repository's own configuration must not start a program (`core.fsmonitor=<command>`)
-        // or leave a daemon running (`core.fsmonitor=true`).
+        // No fsmonitor program (`core.fsmonitor=<command>`) or daemon (`core.fsmonitor=true`) is
+        // started, and the untracked cache is not written.
         .args([
             "-c",
             "core.fsmonitor=false",

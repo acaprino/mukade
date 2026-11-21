@@ -440,9 +440,10 @@ wording is what `work` prints, not a recorded run.
   sets `GIT_OPTIONAL_LOCKS=0` and runs only `git rev-parse --show-toplevel`, `git worktree list`,
   `git status`, `git for-each-ref` and `git rev-list --count`, each with a 10 second deadline: no command
   that changes a repository. The folder comes from session data, so git is run with `core.fsmonitor` and
-  `core.untrackedCache` off (a repository's own configuration cannot start a program or leave a daemon
-  running) and without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and similar variables of the
-  environment. The commits ahead of an upstream come from `git for-each-ref` itself.
+  `core.untrackedCache` off and without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and similar
+  variables of the environment. This does not make an untrusted folder safe to read: a repository's own
+  filters (`filter.<name>.clean`) still run during `git status`, as in any `git status` there. The
+  commits ahead of an upstream come from `git for-each-ref` itself.
 - **A repository git refuses** prints `<name>: <what git said>` and the others still print. A linked
   worktree that git cannot read prints `  <worktree>: <what git said>` below its repository, with its
   count taken as 0, and the repository's other worktrees and its branches are kept. When there is
