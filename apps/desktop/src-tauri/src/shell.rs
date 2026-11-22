@@ -1,10 +1,10 @@
 //! Mukade owns one window. Imago supplies its frame, glass, geometry and recovery policy.
 use imago_shell::{
     ProcessFailure, Recovery, RecoveryAction, Rect, Screen, SnapLayouts, WindowState, apply_theme,
-    clamp_to_screens, disable_browser_accelerators, glass_window_config,
+    clamp_to_screens, disable_browser_accelerators, drawn_by_page, glass_window_config,
     guard_navigation_with_scheme, install_reload_menu, install_snap_layouts, load_state,
     parse_theme, recovery_action, save_state, save_theme, saved_theme, state_to_save,
-    watch_process_failures,
+    trim_context_menu, watch_process_failures,
 };
 use std::sync::{
     Mutex,
@@ -28,9 +28,15 @@ pub struct Desktop {
 }
 
 #[tauri::command]
-pub fn set_window_theme(window: WebviewWindow, theme: String) -> Result<(), String> {
+pub fn set_window_theme(
+    window: WebviewWindow,
+    theme: String,
+    look: Option<String>,
+    resolved: Option<String>,
+) -> Result<(), String> {
     let theme = parse_theme(&theme).ok_or("Unknown window theme")?;
-    apply_theme(&window, theme).map_err(|e| e.to_string())?;
+    let (look, resolved) = drawn_by_page(theme, look.as_deref(), resolved.as_deref());
+    apply_theme(&window, theme, look, resolved).map_err(|e| e.to_string())?;
     let dir = window
         .app_handle()
         .path()
@@ -306,6 +312,7 @@ fn configure_and_show(
     }
     if !tauri::is_dev() {
         disable_browser_accelerators(window)?;
+        trim_context_menu(window)?;
     }
     *window.state::<Desktop>().overlay.lock().unwrap() = Some(install_snap_layouts(window)?);
     let watched = window.clone();

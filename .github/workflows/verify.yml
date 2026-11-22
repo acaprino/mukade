@@ -18,6 +18,7 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
+      - run: npx imago-check
       - run: npx playwright install --with-deps chromium
       - run: npm run build && npm test && npm run smoke
   native:

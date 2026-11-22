@@ -2,7 +2,7 @@
 
 import type { Installation, SessionRow, Transcript } from './types.ts';
 
-export type Column = 'installations' | 'folders' | 'sessions' | 'detail';
+export type Column = 'installations' | 'folders' | 'sessions' | 'reader' | 'detail';
 
 export interface ReaderState {
   key: string;
@@ -21,6 +21,8 @@ type ReadState = { kind: 'loading' | 'ready' } | { kind: 'error'; message: strin
 export interface State {
   view: 'sessions' | 'chat' | 'harnesses';
   focus: Column;
+  /** The docked inspector was closed by its button: it stays closed until another session is picked. */
+  detailClosed: boolean;
   installations: Installation[];
   installation: string | null;
   inventoryRead: ReadState;
@@ -45,6 +47,7 @@ export interface State {
 export const state: State = {
   view: 'sessions',
   focus: 'sessions',
+  detailClosed: false,
   installations: [],
   installation: null,
   inventoryRead: { kind: 'loading' },

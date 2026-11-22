@@ -51,6 +51,7 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 | Rust: listing, transcript and raw pages on fixture stores, export, a real hop into every writable harness, the receipt, chat replies, terminal commands | `cargo test -p mukade-desktop` |
 | No harness branch outside its adapter (the desktop crate included) | `cargo test --test architecture` |
 | TypeScript: tree and collapse, search, folders, marks, keys, transcript rows into entries, chat ledger, receipt commands, the lines of Work on disk | `npm test` |
+| Imago's design rules on the app's own CSS and markup | `npx imago-check` (also the first step of the `frontend` job) |
 | Smoke: every view in each look (Smooth, Oni), dark and light, on the mocked commands, Enter on Cancel never hops, the chat's three views, join and send, a new room, search everything, the chat filter survives a poll; screenshots in `apps/desktop/tests/out/` | `npm run smoke` |
 
 ## The window
@@ -61,13 +62,13 @@ On Linux the build needs WebKitGTK 4.1 and GTK 3 development packages (`libwebki
 | Folders | All, every folder with its count, Unknown |
 | Sessions | the tree: subagents (`↳ agent Explore`) and forks under their parent, newest first; `live`, `archived`, `unreadable`, and `hosted` for a chat ChatGPT hosts (below); a parent folds with space or its caret; the search box filters by title, id or folder and keeps a matching parent's children |
 | Session | harness, id, kind, parent (`not listed`), children `3 (2 subagents, 1 fork)`, folder, updated, archived, live, path, store and engine for a scanned installation; the lineage; Open, Hop, Export, Save as…, Resume. A session with a folder also has [Work on disk](#work-on-disk-and-start-in), and Start in… when it cannot be read |
-| Reader | the conversation in native order, opening at its end: user, assistant, reasoning, tool calls (input past 240 characters behind Show all), results, compactions; the last N turns or all; the Raw tab shows one entry's native records. Only the entries in sight are drawn. A live session is read again when its file changes (looked at every 3 s); the reader follows the end only when it was there |
+| Reader | beside the sessions list, the conversation in native order, opening at its end: user, assistant, reasoning, tool calls (input past 240 characters behind Show all), results, compactions; the last N turns or all; the Raw tab shows one entry's native records. Only the entries in sight are drawn. A live session is read again when its file changes (looked at every 3 s); the reader follows the end only when it was there |
 | Hop | destination, compaction (none, portable, summary with its intent, model and turns kept whole, native with the destination model's context window), subagents carry or leave, all branches (where the source keeps them), reasoning, destination shell (default: the destination's own), prompt, and under More options the destination's model and provider, unfinished turns keep or drop, and without tools; the plan before anything is written |
 | Receipt | new id, location, manifest path (saved under `mukade-data/manifests/`), interactive and headless resume with Copy, subagents written and whether each is linked, losses, the destination's reply; Show in sessions, Resume in terminal |
 | Import | a document (typed or chosen), the installation, an optional prompt; ends in the receipt |
 | Chat | through the running chat service, polled every 3 s ([design](superpowers/specs/2026-11-16-desktop-chat-redesign-design.md), layer A). Rooms with a filter, New room, Close, Reopen, Delete (the service's summary first). The room in three views of the same events with one selected event: Graph (a plate per member in join order around everyone, a line per pair and kind, wider with each event, the selected one with an arrow; a strip to pick, step and play the room back), Lanes (a column per member, a wire per event), Feed (recipients, the state of each instruction, a signal's instruction). One filter for the three: text, kinds, members. Members with role and state (`left`, or the last command: nothing is invented), their details, Mention, Show session; the instructions leads gave workers, waiting, blocked or done. To write, the window joins as a member of its own, peer or lead, marked as the host's: what it sends reaches the agents as the user's. Its handle is kept per room across restarts, recovered with Rejoin when the service calls it stale; the draft is kept per room. Start and Stop the service; Launch agent runs `mukade chat launch` in a new terminal, the command shown first |
-| Search | `ctrl+K` or Search: rooms and members by name, messages by text (the 20 most recent open rooms first), sessions of every installation by title, id or folder; a result opens its room, member, event or session |
-| Harnesses | the third tab (`m`): each harness with the binary the window runs and where it was found (a variable, `PATH`, the catalog's location), its version, its standard store and session count, and its other installations. Scan this computer reads your home, then every top-level folder of every drive (the system's own left out), one at a time through `mukade::detect` (8 levels, 100,000 folders each at most), with progress and Stop; what it finds outside the standard stores is kept. Scan folder is kept too; Forget drops a folder. Install runs the harness's own installer in a terminal (Hermes's script is not verified, so it has none), or installs it with npm into a sandbox: `mukade-data/sandboxes/<harness>-<name>` holds the package (`app`), a store of its own (`home`) and a launcher that sets the store's variables (OpenCode: the four XDG folders). A sandbox is recorded in `mukade-data/sandboxes.json`, listed as an installation (hops can land in it), opened in a terminal with Run, and Forget unlists it without deleting its folder |
+| Search | `ctrl+shift+F` or Search everything: rooms and members by name, messages by text (the 20 most recent open rooms first), sessions of every installation by title, id or folder; a result opens its room, member, event or session |
+| Harnesses | the third tab (`m`): each harness with the binary the window runs and where it was found (a variable, `PATH`, the catalog's location), its version, its standard store and session count, and its other installations. Scan this computer reads your home, then every top-level folder of every drive (the system's own left out), one at a time through `mukade::detect` (8 levels, 100,000 folders each at most), with progress and Stop; what it finds outside the standard stores is kept. Scan folder is kept too; Forget folder drops a folder at once, and the notice's Undo keeps it again. Install runs the harness's own installer in a terminal (Hermes's script is not verified, so it has none), or installs it with npm into a sandbox: `mukade-data/sandboxes/<harness>-<name>` holds the package (`app`), a store of its own (`home`) and a launcher that sets the store's variables (OpenCode: the four XDG folders). A sandbox is recorded in `mukade-data/sandboxes.json`, listed as an installation (hops can land in it), opened in a terminal with Run, and Forget sandbox… asks first, then unlists it without deleting its folder |
 | In rooms | under a session's details, the rooms where a member is bound to it; each opens the room at that member |
 
 Resume opens a new terminal window in the session's folder with the store's variables: Windows
@@ -127,8 +128,9 @@ whole through Windows Terminal is not seen yet. The owner's live check settles b
 
 ## Look and desktop behaviour
 
-Mukade uses the same Imago release for its web UI and native Tauri shell. Settings keeps the
-existing Smooth and ONI preferences. Smooth follows the system by default, and ONI starts dark.
+Mukade uses the same Imago release for its web UI and native Tauri shell. The look (Smooth, ONI) and the theme
+(follow Windows, light, dark) are picked from the palette (`ctrl+k`), and kept per look; there is no Settings view.
+Smooth follows the system by default, and ONI starts dark.
 The title bar contains the views, command palette and window controls. Sessions has a collapsible
 installations sidebar and a session inspector. Below 1000 px the inspector opens over the list,
 below 850 px the sidebar becomes a rail, and below 620 px the title bar opens the sidebar and Views menu.
@@ -140,7 +142,7 @@ Snap Layouts on the maximize button. The browser preview uses opaque surfaces.
 | Open, save, folder | OS dialogs | `tauri-plugin-dialog`, from the backend |
 | Hop, import, receipt, export, keys, close confirmation | surfaces inside the main window | they belong to it; long content scrolls and the actions stay in reach at the minimum window size |
 | Window close | refused while a hop or import runs, with a confirmation | `CloseRequested` in `main.rs`; covers the title bar's close button and Alt+F4 |
-| F5, ctrl+R | read the stores again (as `r`) | a page reload would drop the window's state mid-hop |
+| F5, ctrl+R | do nothing (the guard refuses the browser's reload) | a page reload would drop the window's state mid-hop; `r` reads the stores again |
 | ctrl+P, ctrl+S, ctrl+O, ctrl+U, ctrl+J, and devtools in a release build | do nothing | page commands a desktop window does not have; zoom (ctrl +/−) stays |
 | Context menu | the WebView's only where text is edited or selected | the page menu (Back, Reload, Print) has no meaning here |
 | Overscroll | no rubber-band on the window; each pane keeps its own scroll | `overscroll-behavior` |
@@ -162,37 +164,59 @@ whole application ends the lifetime of this in-memory record.
 
 ## Keys
 
-| key | does |
+Every key of the window is a command of one registry (`src/keys.ts` is the table, `main.ts` registers it, `mountApp` of Imago
+attaches it). The key caps on the buttons, the footer's key list, the Keys dialog (`?`) and the palette all come from it.
+
+| key | command |
 |---|---|
-| `↑` `↓`, `j` `k` | move in the focused list, scroll the reader |
-| `←` `→` | previous / next column |
-| `⏎` | next column, or open the transcript |
-| `esc` | close a dialog or the reader, or back one column |
-| `h` · `e` · `i` · `R` | hop · export · import · resume |
-| `s` | start another harness in the folder of an unreadable session (Start in…) |
-| `t` | last N turns ↔ all |
-| `g` `G`, PgUp PgDn | reader top / bottom, a page |
-| `o` · `r` | scan a folder · reload |
-| `/`, `ctrl+f` | filter the list (in the chat view, the focused column's) |
-| `ctrl+k` | search rooms, members, messages and sessions |
-| `ctrl+shift+k` | command palette |
-| `F6` / `shift+F6` | next / previous region |
-| `c` | chat ↔ sessions |
-| `m` | harnesses ↔ sessions |
-| `space` | fold the selected parent; in the chat, play the room back |
-| `1` `2` `3` | chat: graph · lanes · feed |
-| `n` · `l` | chat: new room · launch an agent |
-| `ctrl+⏎` | chat: send |
+| `ctrl+k` | the palette (every command by name, and the look and the theme: Smooth, ONI, follow Windows, light, dark) |
+| `ctrl+f` | filter the view: the sessions filter; in the chat the rooms filter (from the sidebar) or the messages filter; on Harnesses it opens Search everything |
+| `ctrl+shift+f` | search rooms, members, messages and sessions |
+| `c` · `m` | chat ↔ sessions · harnesses ↔ sessions |
+| `o` · `i` · `r` | scan a folder · import · reload the stores |
+| `h` · `e` · `shift+R` · `s` | with a session selected: hop · export · resume · start another harness in its folder (Start in…) |
+| `t` · `g` · `shift+G` | with the reader open: last N turns ↔ all · top · bottom |
+| `1` `2` `3` · `n` · `l` | in the chat: graph, lanes, feed · new room · launch an agent (in an open room) |
+| `esc` | the top layer; else leave a field, back in the chat, close the reader (Raw, then Conversation, then the list), one column |
+| `F6` / `shift+F6` | next / previous region (sidebar, content, inspector) |
 | `?` | the keys |
 
-Keys do nothing while a text field has the focus, except `esc` and `⏎`.
+Commands with no key, in the palette and on their buttons: Sessions, Open transcript, Export as…, Play the room back, Start the
+chat service, Stop the chat service.
+
+The focused list or the reader owns these, not the registry:
+
+| key | does |
+|---|---|
+| `↑` `↓`, `j` `k` | move in the focused list; scroll the reader; in the chat, the event or member |
+| `Home` `End`, `PgUp` `PgDn` | first, last, ten rows, in a list; a page in the reader |
+| `⏎` | open the transcript of the selected session; on a sidebar row, on to the sessions |
+| `space` | fold the selected parent; in the chat, play the room back |
+| `ctrl+⏎` | chat: send; in a dialog: the dialog's own button |
+
+Single letters do nothing while a text field has the focus, and no command runs while a dialog or the palette is open.
+
+Dropped with this move, and what replaces them: `/` (use `ctrl+f`); `F5` and `ctrl+R` (the browser's reload, which the desktop
+guard refuses: `r` reads the stores again); `←` `→` between columns (`F6`, `shift+F6` and `Tab`); `ctrl+shift+k` for the palette
+(it is `ctrl+k`, which was Search everything: that is now `ctrl+shift+f`); the Theme and Settings buttons and the Settings dialog
+(look and theme are five commands of the palette, the same in every Imago app).
 
 ## Where it differs from the specification
 
-- Installations and Folders share the first column (the spec draws four); the reader hides it to
-  take the room. Widths are dragged and kept per machine; a double-click resets one.
-- `tab` keeps moving the focus between controls, as every window does, instead of between columns
-  (`←` `→` do that): taking it away leaves the buttons out of reach without a mouse.
+- The window is Imago's one frame (`src/frame.ts` writes it): title bar with the mark and the view tabs, status row (last result, summary,
+  the version at its end), sidebar (Installations and Folders share it), content, inspector, action bar, footer. The Sessions view holds the
+  list and, while a transcript is open, the reader beside it (`splitView`); the inspector docked from 1000 up holds the selected session's
+  detail. Under 1000 the inspector is a drawer (its header has Close details, and Escape closes it) and the reader takes the list's place
+  until Escape. Widths are dragged and kept per machine (`mukade.width.installations`, `mukade.width.sessions`); a double-click on a
+  separator forgets its width. In the docked inspector Escape moves the focus back to the list or the reader and does not close it.
+- The chat takes the regions: the rooms in the sidebar (the toggle is named Rooms), the room in the content (its service line, header, tools, graph, lanes or feed, composer), the members and the instructions in the
+  inspector. Under 1000 the members are a drawer opened from the room's Members button or from a member of the graph (Escape closes it); under 620 the rooms open from the title bar's toggle. While the
+  service is not running the chat has no sidebar and no inspector and offers to start it.
+- Results and state: the result of something the person did (exported, hop done, scan done, joined, closed a room, launched) is a notice at
+  the bottom (an error says "Error" and stays until dismissed) and also the status row's chip and text until the next one; a state (ready,
+  turns shown, a live session read again) is the status row's text only; a running job is the footer's dot (info) and text; the counts stay in
+  the footer. A failed window button is a notice that names the action.
+- `tab` keeps moving the focus between controls, as every window does; `F6` and `shift+F6` move between the regions.
 - The plan in the hop dialog is drawn from the chosen options; the library has no dry run that
   states what a write would lose, so the losses are the receipt's.
 - `folders` is computed in the window from the listing rather than by a command of its own.

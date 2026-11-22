@@ -2,7 +2,8 @@
 // with one event selected in all three. Built with the DOM, never with innerHTML: a message's
 // text is always text.
 
-import { button, h, icon } from './dom.ts';
+import { claimKey } from '@acaprino/imago/ui';
+import { button, chip, h, icon, iconButton } from './dom.ts';
 import { shortTime } from './tree.ts';
 import {
   actorOf, groupOf, harnessKey, instructionOf, instructions, linesUpTo, passes, presentAt, recipientsOf, segments,
@@ -89,7 +90,7 @@ export function feedCard(event: ChatEvent, ctx: RoomContext, plain = false): HTM
     const instruction = event.kind === 'signal' ? instructionOf(event, ctx.events) : undefined;
     return h('div', { ...attrs, class: `msg sys k-${kind}` },
       h('span', {}, `${time(event)} · #${event.event_id} · ${describe(event, ctx)}`),
-      instruction ? button(`show #${instruction.event_id}`, { class: 'link', onclick: (click: Event) => { click.stopPropagation(); ctx.select(instruction.event_id); } }) : null);
+      instruction ? button(`show #${instruction.event_id}`, { class: 'im-btn--ghost im-btn--sm', onclick: (click: Event) => { click.stopPropagation(); ctx.select(instruction.event_id); } }) : null);
   }
   const member = ctx.members.find((one) => one.member_id === actorOf(event));
   const to = recipientsOf(event, ctx.members).map((id) => nameOf(id, ctx.members));
@@ -98,7 +99,7 @@ export function feedCard(event: ChatEvent, ctx: RoomContext, plain = false): HTM
   return h('article', { ...attrs, class: `msg${actorOf(event) === ctx.mine ? ' mine' : ''}` },
     h('div', { class: 'meta' },
       h('span', { class: 'who' }, mark(member?.harness ?? 'other'), actorName(event),
-        actorOf(event) === ctx.mine ? h('span', { class: 'tag im-chip' }, 'you') : host ? h('span', { class: 'tag im-chip', title: 'The host’s member: what it sends is the user’s' }, 'user') : null),
+        actorOf(event) === ctx.mine ? chip('you') : host ? chip('user', '', 'The host’s member: what it sends is the user’s') : null),
       h('span', {}, `${event.actor.type === 'member' ? `${event.actor.role ?? ''} · ` : ''}${time(event)} · #${event.event_id}`)),
     h('div', { class: 'body' },
       richText(String(event.payload.text ?? ''), ctx.members),
@@ -281,8 +282,8 @@ export function graphView(ctx: RoomContext, options: GraphOptions): SVGElement {
     const dim = ctx.filter.members.length > 0 && !ctx.filter.members.includes(member.member_id);
     const state = left ? 'left' : member.member_id === ctx.mine ? 'you' : '';
     const plate = svg('g', {
-      class: ['node', left ? 'left' : '', dim ? 'dim' : '', options.open === member.member_id ? 'sel' : '', member.member_id === ctx.mine ? 'mine' : ''].filter(Boolean).join(' '),
-      transform: `translate(${place.x.toFixed(1)} ${place.y.toFixed(1)})`, tabindex: 0, role: 'button',
+      class: ['node', left ? 'left' : '', dim ? 'dim' : '', member.member_id === ctx.mine ? 'mine' : ''].filter(Boolean).join(' '),
+      transform: `translate(${place.x.toFixed(1)} ${place.y.toFixed(1)})`, tabindex: 0, role: 'button', 'aria-pressed': String(options.open === member.member_id),
       'aria-label': [member.name, member.role, member.harness, state].filter(Boolean).join(', '),
     },
     svg('rect', { class: 'plate', x: -HALF.width, y: -HALF.height, width: HALF.width * 2, height: HALF.height * 2 }),
@@ -295,6 +296,27 @@ export function graphView(ctx: RoomContext, options: GraphOptions): SVGElement {
     plate.addEventListener('keydown', (key) => { if ((key as KeyboardEvent).key === 'Enter' || (key as KeyboardEvent).key === ' ') { key.preventDefault(); options.pickMember(member.member_id); } });
     root.append(plate);
   }
+  // The nodes are one tab stop, with the arrows between them. `roving` serves HTML elements only (it ignores the key of an SVG
+  // target), so the graph does it itself, on the same rules: the arrows and Home and End stop at the first and the last node.
+  const nodes = [...root.querySelectorAll<SVGGElement>('.node')];
+  const stop = nodes.find((node) => node.getAttribute('aria-pressed') === 'true') ?? nodes[0];
+  for (const node of nodes) node.setAttribute('tabindex', node === stop ? '0' : '-1');
+  root.addEventListener('focusin', (event) => {
+    const node = (event.target as Element).closest('.node');
+    if (node) for (const one of nodes) one.setAttribute('tabindex', one === node ? '0' : '-1');
+  });
+  root.addEventListener('keydown', (event) => {
+    const key = (event as KeyboardEvent).key;
+    const from = nodes.indexOf((event.target as Element).closest('.node') as SVGGElement);
+    if (from < 0 || (event as KeyboardEvent).altKey || (event as KeyboardEvent).ctrlKey || (event as KeyboardEvent).metaKey) return;
+    const next = key === 'ArrowRight' || key === 'ArrowDown' ? Math.min(nodes.length - 1, from + 1)
+      : key === 'ArrowLeft' || key === 'ArrowUp' ? Math.max(0, from - 1)
+      : key === 'Home' ? 0 : key === 'End' ? nodes.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    claimKey(event);
+    nodes[next].focus();
+  });
   return root;
 }
 
@@ -330,9 +352,9 @@ export function stripView(ctx: RoomContext, playing: boolean, controls: { play()
     }));
   });
   return h('div', { class: 'scrub', role: 'group', 'aria-label': 'Replay the room' },
-    button([icon(playing ? 'pause' : 'play')], { class: 'small', 'aria-label': playing ? 'Pause' : 'Play from here', title: 'space', onclick: () => controls.play() }),
-    button([icon('prev')], { class: 'small', 'aria-label': 'Previous event', disabled: at <= 0, onclick: () => controls.step(-1) }),
-    button([icon('next')], { class: 'small', 'aria-label': 'Next event', disabled: at >= events.length - 1, onclick: () => controls.step(1) }),
+    iconButton(playing ? 'Pause' : 'Play from here', playing ? 'pause' : 'play', { title: `${playing ? 'Pause' : 'Play from here'} (Space)`, onclick: () => controls.play() }),
+    iconButton('Previous event', 'prev', { disabled: at <= 0, onclick: () => controls.step(-1) }),
+    iconButton('Next event', 'next', { disabled: at >= events.length - 1, onclick: () => controls.step(1) }),
     ticks,
     h('span', { class: 'pos' }, events.length ? `${at + 1} / ${events.length}` : '0 / 0'));
 }

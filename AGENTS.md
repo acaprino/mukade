@@ -14,7 +14,11 @@
 - Never change the version or create release tags by hand: the workflow does it (`.github/release.json` lists
   the version files, `.github/scripts/release.mjs` writes them).
 
-For desktop UI work, read `node_modules/@acaprino/imago/docs/design-file.md` and the referenced components. Use Imago's controls, behaviours and tokens. Keep workflow-specific components in Mukade and build them from the shared tokens.
+Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
+Apply its tokens and confirmed design choices within the requested scope.
+Use the package's im- classes and --im- tokens. Build a control of your own from the tokens, never from literal colours or sizes.
+Report conflicts and keep unresolved choices explicit.
+Run npx imago-check before you say UI work is done.
 
 ## Rust is built and tested on GitHub only (the owner's absolute rule)
 

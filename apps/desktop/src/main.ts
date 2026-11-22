@@ -3,42 +3,53 @@
 
 import '@acaprino/imago/css/imago.css';
 import { parseLook } from '@acaprino/imago/shell';
-import { attachLayers, createRegistry, hasModal, inspector, openMenu, openPalette, regions, roving, sidebarCollapse, sidebarDrawer, topLayer } from '@acaprino/imago/ui';
-import { mountColumnSplitters } from './column-splitters.ts';
+import { claimKey, closeLayers, notify, createRegistry, footerKeys, formatKeys, hasModal, inspector, keyCaps, keyClaimed, mountApp, openMenu, roving, sidebarResize, splitView } from '@acaprino/imago/ui';
 import './styles.css';
 import { api, errorText, onCloseBlocked, onFilesDropped } from './api.ts';
 import { ChatView } from './chat.ts';
 import { boundTo, chatIndex } from './chatindex.ts';
 import { inRoomsBox, renderDetail } from './detail.ts';
-import { button, commandLine, fill, h, kbd } from './dom.ts';
+import { button, caps, commandLine, facts, fill, h, inlineNote } from './dom.ts';
 import { canStartIn, openHandoff } from './handoff.ts';
-import { openHop, openImport, recoverWrite, segmented, type JobHooks } from './hop.ts';
-import { HINTS, actionFor, type Action } from './keys.ts';
-import { stepIn } from './lists.ts';
-import { LOOK_KEY, THEMES, THEME_KEY, nextTheme, storedTheme, type Look, type Theme } from './look.ts';
-import { closeModal, confirmModal, modalOpen, openModal } from './modal.ts';
+import { openHop, openImport, recoverWrite, type JobHooks } from './hop.ts';
+import { VIEWS, writeFrame } from './frame.ts';
+import { COMMANDS, FOOTER, type Place } from './keys.ts';
+import { LOOK_KEY, THEME_KEY, storedTheme, type Look, type Theme } from './look.ts';
+import { confirmModal, modalOpen, openModal } from './modal.ts';
 import { Reader } from './reader.ts';
 import { HarnessesView } from './harnesses.ts';
 import { openSearch } from './search.ts';
 import { renderSessions, visiblePlaces } from './sessions.ts';
-import { folderKey, renderSidebar } from './sidebar.ts';
+import { renderSidebar } from './sidebar.ts';
 import { currentInstallation, selectedRow, state, type Column } from './state.ts';
 import { toTranscript } from './transcript.ts';
 import type { SessionRow } from './types.ts';
-import { ancestors, folders } from './tree.ts';
+import { ancestors } from './tree.ts';
 import { initializeWindow, paintWindow } from './window.ts';
 
 
 const $ = (id: string) => document.getElementById(id)!;
 const registry = createRegistry();
+const frame = writeFrame($('app'));
 const sessionInspector = inspector($('app'));
-const narrowSessions = matchMedia('(max-width: 999.98px)');
-const columns = { installations: $('installations'), sessions: $('sessions'), detail: $('detail') };
+const columns = { installations: frame.sidebar.body, sessions: frame.views.sessions, reader: frame.views.reader, detail: frame.detail };
+
+/** Under 1000 the inspector is a drawer over the content: its drawn position says so (the package owns the breakpoint). */
+const isDrawer = (): boolean => getComputedStyle($('app').querySelector<HTMLElement>('.im-inspector')!).position === 'absolute';
 let rawRecords: unknown[] | null = null;
 
 // --- status line --------------------------------------------------------------------------------
 
-function setStatus(text: string, error = false): void {
+/** A state of the window: the status row's text only. */
+function summary(text: string): void {
+  state.status = text;
+  state.statusError = false;
+  drawStatus();
+}
+
+/** The result of something the person did: a notice (an error stays until it is dismissed), then the status row until the next one. */
+function report(text: string, error = false): void {
+  notify($('app'), text, error ? { tone: 'err' } : {});
   state.status = text;
   state.statusError = error;
   drawStatus();
@@ -50,18 +61,24 @@ function setJob(label: string | null): void {
 }
 
 function drawStatus(): void {
-  const bar = $('statusbar');
-  bar.classList.toggle('busy', state.job !== null);
-  bar.classList.toggle('error', state.job === null && state.statusError);
-  $('status').textContent = state.job ?? state.status;
-  $('status-counts').textContent = state.counts;
-  const hints = state.view === 'chat' ? HINTS.chat : state.view === 'harnesses' ? HINTS.harnesses : state.reader ? HINTS.reader : HINTS.sessions;
-  fill($('status-right'), ...hints.map(([key, what]) => h('span', {}, h('b', {}, key), ` ${what}`)));
+  const failed = state.job === null && state.statusError;
+  const text = state.job ?? state.status;
+  frame.footer.text.textContent = text;
+  frame.footer.dot.dataset.imTone = state.job !== null ? 'info' : failed ? 'err' : 'ok';
+  frame.footer.counts.textContent = state.counts;
+  frame.status.chip.dataset.imTone = state.job !== null ? 'info' : failed ? 'err' : 'ok';
+  frame.status.chip.textContent = state.job !== null ? 'Working' : failed ? 'Error' : 'Ready';
+  frame.status.text.textContent = text;
+  const place = state.view === 'chat' ? 'chat' : state.view === 'harnesses' ? 'harnesses' : state.reader ? 'reader' : 'sessions';
+  const keys = footerKeys(document, registry, FOOTER[place]);
+  keys.id = 'status-right';
+  $('status-right').replaceWith(keys);
 }
 
 const hooks: JobHooks = {
   job: setJob,
-  status: setStatus,
+  report,
+  summary,
   showSession: (key, id) => void revealSession(key, id, true),
   resumeIn: (key, id) => void resume(key, id),
 };
@@ -81,6 +98,7 @@ function drawSidebar(): void {
   renderSidebar(columns.installations, {
     pickInstallation: (key) => void pickInstallation(key),
     pickFolder: (cwd) => pickFolder(cwd),
+    focusSessions: () => focusColumn('sessions'),
   });
   if (focused) {
     const lists = [...columns.installations.querySelectorAll<HTMLElement>('[role="listbox"]')];
@@ -92,7 +110,7 @@ function drawSidebar(): void {
 function drawSessions(): void {
   const hadFocus = columns.sessions.contains(document.activeElement);
   renderSessions(columns.sessions, {
-    pick: (id) => { pickSession(id); if (narrowSessions.matches) focusColumn('detail'); },
+    pick: (id) => { pickSession(id); if (isDrawer()) focusColumn('detail'); },
     reload: () => void loadInventory(),
     retry: (key) => void pickInstallation(key, true),
     open: (id) => { pickSession(id); void openReader(); },
@@ -105,29 +123,96 @@ function drawSessions(): void {
 }
 
 function syncSidebar(): void {
-  const visible = state.view === 'sessions' && !state.reader;
+  const rooms = state.view === 'chat';
+  const visible = state.view === 'sessions' || (rooms && chatRunning);
   const toggle = document.querySelector<HTMLButtonElement>('.im-sidebar-toggle')!;
+  // The sidebar is the sessions' installations and folders, or the chat's rooms; the toggle's name follows.
+  const name = rooms ? 'Rooms' : 'Installations and folders';
+  toggle.setAttribute('aria-label', name);
+  toggle.title = name;
+  $('sidebar').setAttribute('aria-label', name);
+  frame.sidebar.title.textContent = name;
+  frame.sidebar.count.textContent = String(rooms ? chatRooms : state.installations.length);
+  frame.sidebar.body.hidden = rooms;
+  frame.sidebar.rooms.hidden = !rooms;
   if (!visible && $('app').dataset.imSidebarOpen === 'true') toggle.click();
   $('app').dataset.imSidebar = visible ? 'on' : 'off';
-  $('session-sidebar').hidden = !visible;
+  $('sidebar').hidden = !visible;
   toggle.hidden = !visible;
+}
+
+// The list and the reader stand side by side in the content region (splitView, the width kept under mukade.width.sessions);
+// where the inspector is a drawer the window is narrow, and the reader takes the place of the list while it is open.
+const SESSIONS_WIDTH = 'mukade.width.sessions';
+let split: ReturnType<typeof splitView> | null = null;
+
+function storedWidth(key: string): number | null {
+  const stored = localStorage.getItem(key);
+  return stored && /^\d+(?:\.\d+)?px$/.test(stored) ? Number.parseFloat(stored) : null;
+}
+
+function unsplit(): void {
+  if (!split) return;
+  split.destroy();
+  split.element.replaceWith();
+  frame.views.sessionsView.append(frame.views.sessions, frame.views.reader);
+  split = null;
+}
+
+function mountSplit(fraction?: number): void {
+  const view = frame.views.sessionsView;
+  const width = view.clientWidth;
+  let saved: number | null = null;
+  try { saved = storedWidth(SESSIONS_WIDTH); } catch { /* the default fraction stands */ }
+  const start = fraction ?? (saved && width ? Math.min(0.8, Math.max(0.2, saved / width)) : 0.5);
+  split = splitView(frame.views.sessions, frame.views.reader, {
+    label: 'Resize the sessions list', fraction: start, minFirst: 180, minSecond: 240,
+    onCommit: () => {
+      try { localStorage.setItem(SESSIONS_WIDTH, `${Math.round(frame.views.sessions.getBoundingClientRect().width)}px`); } catch { /* the resize still applies */ }
+    },
+  });
+  split.element.classList.add('mk-split');
+  const handle = split.element.querySelector<HTMLElement>('[role="separator"]')!;
+  handle.id = 'resize-sessions';
+  handle.title = 'Drag or use arrow keys to resize · double-click to reset';
+  handle.addEventListener('dblclick', () => {
+    try { localStorage.removeItem(SESSIONS_WIDTH); } catch { /* the reset still applies */ }
+    unsplit();
+    mountSplit(0.5);
+    layoutSessions();
+  });
+  view.append(split.element);
+}
+
+function layoutSessions(): void {
+  const reading = state.reader !== null;
+  const drawer = isDrawer();
+  if (reading && !drawer) {
+    if (!split) mountSplit();
+    frame.views.sessions.hidden = false;
+    frame.views.reader.hidden = false;
+    return;
+  }
+  unsplit();
+  frame.views.sessions.hidden = reading;
+  frame.views.reader.hidden = !reading;
 }
 
 function drawDetail(): void {
   syncSidebar();
-  const view = $('view-sessions');
-  view.classList.toggle('reading', state.reader !== null);
-  view.classList.toggle('has-selection', state.selected !== null);
+  layoutSessions();
   if (state.reader) {
     const r = state.reader;
     reader.render(r.transcript, {
       tab: r.tab, turns: r.turns, defaultTurns: state.defaultTurns, title: r.transcript?.title ?? selectedRow()?.title ?? r.id,
       error: r.error, raw: rawRecords, rawEntry: r.rawEntry,
     });
-    if (!columns.detail.contains(reader.root)) fill(columns.detail, reader.root);
-    return;
+    if (!columns.reader.contains(reader.root)) fill(columns.reader, reader.root);
+  } else if (columns.reader.firstChild) {
+    columns.reader.replaceChildren();
   }
   renderDetail(columns.detail, {
+    close: () => closeDetail(),
     open: () => void openReader(),
     hop: () => startHop(),
     exportTo: (saveAs) => void exportSelected(saveAs),
@@ -144,7 +229,7 @@ async function drawInRooms(): Promise<void> {
   const ticket = ++roomsTicket;
   const row = selectedRow();
   const installation = currentInstallation();
-  if (!row || !installation || state.reader) return;
+  if (!row || !installation) return;
   const index = await chatIndex().catch(() => null);
   const pad = columns.detail.querySelector('.pad');
   if (ticket !== roomsTicket || !index || !pad) return;
@@ -162,20 +247,53 @@ function searchEverything(): void {
   });
 }
 
+/** What the inspector holds in the view shown: the session's detail, or the chat's members while the service runs; harnesses: nothing. */
+function inspectorWants(): { element: HTMLElement; open: boolean } | null {
+  if (state.view === 'sessions') return { element: columns.detail, open: isDrawer() ? state.focus === 'detail' : !state.detailClosed };
+  if (state.view === 'chat' && chatRunning) return { element: frame.members, open: isDrawer() ? chatMembersOpen : true };
+  return null;
+}
+
+let inspectorShows: HTMLElement | null = null;
 function syncInspector(): void {
-  const visible = !narrowSessions.matches || state.focus === 'detail' || Boolean(state.reader);
-  if (visible && !sessionInspector.isOpen()) sessionInspector.open(columns.detail);
-  if (!visible && sessionInspector.isOpen()) sessionInspector.close();
+  const want = inspectorWants();
+  if (want?.open) {
+    if (!sessionInspector.isOpen() || inspectorShows !== want.element) { sessionInspector.open(want.element); inspectorShows = want.element; }
+  } else if (sessionInspector.isOpen()) {
+    sessionInspector.close();
+    inspectorShows = null;
+  }
+}
+
+let chatRunning = false;
+let chatRooms = 0;
+let chatMembersOpen = false;
+
+/** Members: under 1000 the inspector is a drawer opened from the room's Members button or from a member of the graph. */
+function showMembers(): void {
+  chatMembersOpen = true;
+  syncInspector();
+  (frame.members.querySelector<HTMLElement>('button, [tabindex="0"]') ?? frame.members).focus();
+}
+
+function closeMembers(): void {
+  chatMembersOpen = false;
+  syncInspector();
+  $('view-chat').focus();
+}
+
+/** The close button of the detail: a drawer goes away and the list takes the focus; the docked inspector stays closed until
+ *  another session is picked. */
+function closeDetail(): void {
+  if (!isDrawer()) state.detailClosed = true;
+  state.focus = 'sessions';
+  syncInspector();
+  focusColumn('sessions');
+  drawFocus();
 }
 
 function drawFocus(): void {
   syncInspector();
-  const focused: Record<Column, HTMLElement> = { installations: columns.installations, folders: columns.installations, sessions: columns.sessions, detail: columns.detail };
-  for (const column of Object.values(columns)) column.classList.toggle('focused', column === focused[state.focus]);
-  for (const pane of columns.installations.querySelectorAll<HTMLElement>('[data-pane]')) {
-    pane.classList.toggle('focused', pane.dataset.pane === state.focus);
-  }
-  $('view-sessions').dataset.focus = state.focus === 'folders' ? 'installations' : state.focus;
 }
 
 function drawAll(): void {
@@ -216,7 +334,7 @@ async function loadInventory(): Promise<void> {
     const errors = list.installations.filter((item) => item.error).length;
     if (errors) notes.push(`${errors} store(s) could not be read`);
     setJob(null);
-    setStatus(notes.join(' · ') || 'ready');
+    summary(notes.join(' · ') || 'ready');
     const added = list.installations.find((item) => item.scanned && !before.has(item.key) && before.size > 0);
     const keep = list.installations.some((item) => item.key === state.installation);
     const first = added?.key ?? (keep ? state.installation! : list.installations.find((item) => item.count > 0)?.key ?? list.installations[0]?.key);
@@ -238,7 +356,7 @@ async function loadInventory(): Promise<void> {
     setJob(null);
     const message = `reading the stores failed: ${errorText(error)}`;
     state.inventoryRead = { kind: 'error', message };
-    setStatus(message, true);
+    report(message, true);
     drawSessions();
   }
 }
@@ -263,7 +381,7 @@ async function pickInstallation(key: string, keepSelection = false): Promise<boo
     if (ticket !== sessionListing) return false;
     state.rows = rows;
     state.sessionsRead = { kind: 'ready' };
-    if (state.statusError && state.status === previousError) setStatus('ready');
+    if (state.statusError && state.status === previousError) summary('ready');
     if (!rows.some(row => row.id === state.selected)) state.selected = visiblePlaces()[0]?.row.id ?? null;
     if (state.reader && state.reader.id !== state.selected) closeReader(false);
   } catch (error) {
@@ -273,7 +391,7 @@ async function pickInstallation(key: string, keepSelection = false): Promise<boo
     state.rows = [];
     state.selected = null;
     closeReader(false);
-    setStatus(message, true);
+    report(message, true);
   }
   if (!state.selected && state.focus === 'detail') setFocus('sessions');
   drawAll();
@@ -290,6 +408,7 @@ function pickFolder(cwd: string | null): void {
 
 function pickSession(id: string): void {
   if (state.selected === id && !state.reader) return;
+  state.detailClosed = false;
   state.selected = id;
   if (state.reader && state.reader.id !== id) closeReader(false);
   drawSessions();
@@ -306,7 +425,7 @@ async function revealSession(key: string, id: string, reload: boolean): Promise<
   if (state.view !== 'sessions') switchView('sessions');
   if (reload) await loadInventory();
   if (!await pickInstallation(key)) return false;
-  if (!state.rows.some((row) => row.id === id)) { setStatus(`${id} is not listed in ${currentInstallation()?.label}`, true); return false; }
+  if (!state.rows.some((row) => row.id === id)) { report(`${id} is not listed in ${currentInstallation()?.label}`, true); return false; }
   state.folder = null;
   state.query = '';
   ($('search') as HTMLInputElement).value = '';
@@ -323,11 +442,11 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
   const row = selectedRow();
   const key = state.installation;
   if (!row || key === null) return;
-  if (row.unreadable) { setStatus(`${row.id} cannot be read: ${row.unreadable}`, true); return; }
+  if (row.unreadable) { report(`${row.id} cannot be read: ${row.unreadable}`, true); return; }
   const mine: NonNullable<typeof state.reader> = { key, id: row.id, transcript: null, turns, tab: 'conversation', rawEntry: null, error: null };
   state.reader = mine;
   rawRecords = null;
-  state.focus = 'detail';
+  state.focus = 'reader';
   drawDetail();
   drawFocus();
   setJob(`reading ${row.title ?? row.id}…`);
@@ -337,11 +456,11 @@ async function openReader(turns = state.defaultTurns): Promise<void> {
     if (state.reader !== mine) return;
     mine.transcript = transcript;
     const shown = transcript.total_turns - transcript.hidden_turns;
-    setStatus(transcript.hidden_turns ? `showing the last ${shown} of ${transcript.total_turns} turns` : `${transcript.total_turns} turns`);
+    summary(transcript.hidden_turns ? `showing the last ${shown} of ${transcript.total_turns} turns` : `${transcript.total_turns} turns`);
   } catch (error) {
     if (state.reader !== mine) return;
     mine.error = errorText(error);
-    setStatus(`read failed: ${errorText(error)}`, true);
+    report(`read failed: ${errorText(error)}`, true);
   } finally {
     if (state.reader === mine) setJob(null);
   }
@@ -374,7 +493,7 @@ function watchLive(mine: NonNullable<typeof state.reader>): void {
       mine.transcript = transcript;
       reader.keepPlace = true;
       try { drawDetail(); } finally { reader.keepPlace = false; }
-      setStatus(`live: read again at ${new Date().toLocaleTimeString()}, ${transcript.total_turns} turns`);
+      summary(`live: read again at ${new Date().toLocaleTimeString()}, ${transcript.total_turns} turns`);
     } catch {
       // The next look tries again.
     } finally {
@@ -425,18 +544,18 @@ async function showRaw(entryId: string): Promise<void> {
 
 function startHop(): void {
   const row = selectedRow();
-  if (!row || state.installation === null) return void setStatus('no session selected', true);
-  if (row.unreadable) return void setStatus(`${row.id} cannot be read: ${row.unreadable}`, true);
+  if (!row || state.installation === null) return void report('no session selected', true);
+  if (row.unreadable) return void report(`${row.id} cannot be read: ${row.unreadable}`, true);
   void openHop(state.installation, row.id, hooks);
 }
 
 async function exportSelected(saveAs: boolean): Promise<void> {
   const row = selectedRow();
   const installation = currentInstallation();
-  if (!row || !installation) return void setStatus('no session selected', true);
+  if (!row || !installation) return void report('no session selected', true);
   let to: string | undefined;
   if (saveAs) {
-    const picked = await api.pick('save', `${installation.harness}-${row.id.replace(/[^A-Za-z0-9._-]/g, '_')}.json`).catch((error) => { setStatus(errorText(error), true); return null; });
+    const picked = await api.pick('save', `${installation.harness}-${row.id.replace(/[^A-Za-z0-9._-]/g, '_')}.json`).catch((error) => { report(errorText(error), true); return null; });
     if (!picked) return;
     to = picked;
   }
@@ -445,17 +564,17 @@ async function exportSelected(saveAs: boolean): Promise<void> {
     const exported = await api.export(installation.key, row.id, to);
     state.lastExport = exported.path;
     setJob(null);
-    setStatus(`exported ${exported.messages} messages → ${exported.path}`);
+    report(`exported ${exported.messages} messages → ${exported.path}`);
     const modal = openModal({ title: 'Exported', subtitle: `${exported.messages} messages`, icon: 'export' });
-    fill(modal.body, h('div', { class: 'col' },
-      h('dl', { class: 'kv' }, h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
-      h('p', { class: 'note' }, 'Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.')));
+    fill(modal.body, h('div', { class: 'mk-col' },
+      facts( h('dt', {}, 'document'), h('dd', {}, exported.path), h('dt', {}, 'messages'), h('dd', {}, String(exported.messages))),
+      inlineNote(['Import it into another installation with Import, or with ', h('code', {}, `mukade write <harness> "${exported.path}"`), '.'])));
     fill(modal.foot, h('span', { class: 'spring' }),
-      button(['Import it… ', kbd('i')], { onclick: () => { modal.close(); importDocument(); } }),
-      button(['Close ', kbd('esc')], { class: 'primary', onclick: () => modal.close() }));
+      button(['Import it… ', caps('I')], { onclick: () => { modal.close(); importDocument(); } }),
+      button(['Close ', caps('Escape')], { class: 'primary', onclick: () => modal.close() }));
   } catch (error) {
     setJob(null);
-    setStatus(`export failed: ${errorText(error)}`, true);
+    report(`export failed: ${errorText(error)}`, true);
   }
 }
 
@@ -464,7 +583,7 @@ function importDocument(): void {
 }
 
 function startIn(row: SessionRow): void {
-  openHandoff(row, (result, label) => setStatus(`Started ${label} in ${result.cwd}; note saved to ${result.note_path}`));
+  openHandoff(row, (result, label) => report(`Started ${label} in ${result.cwd}; note saved to ${result.note_path}`));
 }
 
 async function resume(key: string, id: string): Promise<void> {
@@ -476,22 +595,22 @@ async function resume(key: string, id: string): Promise<void> {
       const modal = openModal({ title: 'Resume', subtitle: 'this harness has no terminal UI', icon: 'play' });
       // The backend sends the command that continues it instead, as data.
       const command = commandLine(result.command);
-      fill(modal.body, h('div', { class: 'col' }, h('p', { class: 'note' }, result.refusal),
-        command ? h('div', { class: 'cmd' }, h('pre', { class: 'code' }, command)) : null));
+      fill(modal.body, h('div', { class: 'mk-col' }, inlineNote(result.refusal),
+        command ? h('div', { class: 'mk-cmd' }, h('pre', { class: 'code' }, command)) : null));
       const copy = button('Copy the command', { class: 'primary', onclick: async () => { await navigator.clipboard.writeText(command || result.refusal!).catch(() => {}); copy.textContent = 'Copied'; } });
-      fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { onclick: () => modal.close() }), copy);
-      setStatus('resume refused: no terminal UI');
+      fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }), copy);
+      report('resume refused: no terminal UI');
     } else {
-      setStatus(`resume → ${result.command.join(' ')}${result.cwd ? `  (in ${result.cwd})` : ''}`);
+      report(`resume → ${result.command.join(' ')}${result.cwd ? `  (in ${result.cwd})` : ''}`);
     }
   } catch (error) {
     setJob(null);
-    setStatus(`resume failed: ${errorText(error)}`, true);
+    report(`resume failed: ${errorText(error)}`, true);
   }
 }
 
 async function scanFolder(): Promise<void> {
-  const dir = await api.pick('folder').catch((error) => { setStatus(errorText(error), true); return null; });
+  const dir = await api.pick('folder').catch((error) => { report(errorText(error), true); return null; });
   if (!dir) return;
   if (!state.scan.includes(dir)) state.scan.push(dir);
   keepFolders();
@@ -502,6 +621,9 @@ async function scanFolder(): Promise<void> {
 // --- views and theme ----------------------------------------------------------------------------
 
 const chat = new ChatView($('view-chat'), {
+  regions: (running, rooms) => { chatRunning = running; chatRooms = rooms; syncSidebar(); syncInspector(); },
+  showMembers,
+  closeMembers,
   showSession: (harness, id) => {
     const installation = state.installations.find((item) => item.harness === harness && !item.scanned)
       ?? state.installations.find((item) => item.harness === harness);
@@ -509,8 +631,8 @@ const chat = new ChatView($('view-chat'), {
     void revealSession(installation.key, id, false);
     return true;
   },
-  status: setStatus,
-});
+  report,
+}, { rooms: frame.sidebar.rooms, members: frame.members });
 
 /** The folders and stores scanned and kept across restarts (Scan folder, the system scan). */
 const SCAN_KEY = 'mukade.scan';
@@ -540,30 +662,32 @@ const harnesses = new HarnessesView($('view-harnesses'), {
   reload: async () => { await loadInventory(); harnesses.draw(); },
   scanFolder: () => void scanFolder(),
   showInstallation: (key) => { switchView('sessions'); focusColumn('sessions'); void pickInstallation(key); },
-  status: setStatus,
+  report,
 });
 
 function switchView(view: 'sessions' | 'chat' | 'harnesses'): void {
   if (state.view === view) return;
   const leavingDrawer = $('app').dataset.imSidebarOpen === 'true';
   const moveFocus = leavingDrawer || $(`view-${state.view}`).contains(document.activeElement)
-    || $('session-sidebar').contains(document.activeElement);
+    || $('sidebar').contains(document.activeElement);
   state.view = view;
   syncSidebar();
+  syncInspector();
   if (leavingDrawer) setFocus('sessions');
   $('view-sessions').hidden = view !== 'sessions';
   $('view-chat').hidden = view !== 'chat';
   $('view-harnesses').hidden = view !== 'harnesses';
   if (view === 'harnesses') harnesses.show();
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.setAttribute('aria-selected', String(tab.dataset.view === view));
-  // The chat view has its own filter, on its messages; the harnesses page has none.
-  $('search').hidden = view !== 'sessions';
-  for (const content of [columns.sessions, $('view-chat'), $('view-harnesses')]) {
-    content.classList.toggle('im-content', content === (view === 'sessions' ? columns.sessions : $(`view-${view}`)));
+  for (const tab of document.querySelectorAll<HTMLElement>('.im-tab[data-id]')) {
+    const current = tab.dataset.id === view;
+    tab.setAttribute('aria-selected', String(current));
+    tab.tabIndex = current ? 0 : -1;
+    if (current) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
   }
+  frame.main.setAttribute('aria-label', VIEWS.find((one) => one.id === view)!.label);
   if (view === 'chat') chat.show(); else chat.hide();
   if (moveFocus) {
-    if (view === 'sessions') focusColumn(state.reader ? 'detail' : 'sessions');
+    if (view === 'sessions') focusColumn(state.reader ? 'reader' : 'sessions');
     else $(`view-${view}`).focus();
   }
   drawStatus();
@@ -575,54 +699,24 @@ let look: Look = parseLook(stored(LOOK_KEY));
 const themes: Record<Look, Theme> = { oni: storedTheme('oni', stored(THEME_KEY.oni)), smooth: storedTheme('smooth', stored(THEME_KEY.smooth)) };
 const systemLight = matchMedia('(prefers-color-scheme: light)');
 function applyLook(): void {
-  const theme = themes[look];
-  paintWindow(look, theme);
-  $('theme-name').textContent = theme[0].toUpperCase() + theme.slice(1);
-  $('theme').title = `Theme: ${theme}`;
+  paintWindow(look, themes[look]);
 }
 
-/** Settings: the look and its theme. Each pick applies and is kept at once. */
-function openSettings(): void {
-  const modal = openModal({ title: 'Settings', icon: 'settings' });
-  const draw = (): void => {
-    fill(modal.body, h('div', { class: 'col' },
-      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Look'),
-        segmented('Look', ['smooth', 'oni'], look, (value) => { look = value; keep(LOOK_KEY, look); applyLook(); draw(); }),
-        h('span', { class: 'muted hint' }, look === 'smooth' ? 'Clean and modern, the default.' : 'The look Mukade was born with.')),
-      h('div', { class: 'field im-field' }, h('span', { class: 'lab' }, 'Theme'),
-        segmented('Theme', THEMES[look], themes[look], (value) => { themes[look] = value; keep(THEME_KEY[look], value); applyLook(); draw(); }))));
-    // The pick keeps the keyboard: the redraw made a new button of it.
-    modal.body.querySelector<HTMLElement>('[aria-label="Look"] [aria-pressed="true"]')?.focus();
-  };
-  fill(modal.foot, h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { class: 'primary', onclick: () => modal.close() }));
-  draw();
-}
+/** The look and the theme are picked from the palette (`mountApp`'s `appearance`): Mukade keeps the choice, a theme for each look. */
+const appearance = {
+  get: () => ({ look, theme: themes[look] }),
+  set: (next: { look: Look; theme: Theme }): void => {
+    look = next.look;
+    themes[look] = next.theme;
+    keep(LOOK_KEY, look);
+    keep(THEME_KEY[look], themes[look]);
+    applyLook();
+  },
+};
 
 // --- keys ---------------------------------------------------------------------------------------
 
-function move(step: number): void {
-  if (state.focus === 'installations') {
-    const list = columns.installations.querySelector('[role="listbox"]:focus');
-    const ids = list ? Array.from(list.querySelectorAll<HTMLElement>('[role="option"]'), item => item.dataset.id!)
-      : state.installations.map(item => item.key);
-    const next = stepIn(ids, state.installation, step);
-    if (next !== null && next !== state.installation) void pickInstallation(next);
-  } else if (state.focus === 'folders') {
-    const list = folders(state.rows);
-    const next = stepIn(list.map((f) => folderKey(f.cwd)), folderKey(state.folder), step);
-    const folder = list.find((f) => folderKey(f.cwd) === next);
-    if (folder) pickFolder(folder.cwd);
-  } else if (state.focus === 'sessions') {
-    const next = stepIn(visiblePlaces().map((place) => place.row.id), state.selected, step);
-    if (next) pickSession(next);
-  } else if (state.reader) {
-    reader.scrollBy(step * 2);
-  } else {
-    columns.detail.querySelector('.column-body')?.scrollBy({ top: step * 40 });
-  }
-}
-
-const ORDER: Column[] = ['installations', 'folders', 'sessions', 'detail'];
+const ORDER: Column[] = ['installations', 'folders', 'sessions', 'reader', 'detail'];
 
 function focusColumn(column: Column): void {
   if (column === 'installations' || column === 'folders') {
@@ -633,128 +727,137 @@ function focusColumn(column: Column): void {
     list?.focus();
   } else {
     setFocus(column);
-    columns[column].focus();
+    // The list holds the focus (one tab stop, its own keys); the column itself when it has none (an empty state).
+    (column === 'sessions' ? columns.sessions.querySelector<HTMLElement>('[role="listbox"]') ?? columns.sessions
+      : column === 'reader' ? (state.reader ? reader.root.querySelector<HTMLElement>('.reader-scroll') ?? columns.reader : columns.sessions)
+      : columns[column]).focus();
   }
 }
 
 function column(step: number): void {
-  const index = ORDER.indexOf(state.focus);
-  const next = ORDER[Math.max(0, Math.min(ORDER.length - 1, index + step))];
+  const order = ORDER.filter((one) => one !== 'reader' || state.reader);
+  const index = order.indexOf(state.focus);
+  const next = order[Math.max(0, Math.min(order.length - 1, index + step))];
   if (next === 'detail' && !state.selected) return;
   focusColumn(next);
 }
 
-function act(action: Action, event: KeyboardEvent): boolean {
-  if (action === 'search') {
-    if (state.view === 'chat') chat.focusFilter(); else ($('search') as HTMLInputElement).focus();
-    return true;
-  }
-  if (action === 'searchAll') { if (!modalOpen()) searchEverything(); return true; }
-  if (action === 'back') {
-    if (closeModal()) return true;
-    if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) { (document.activeElement as HTMLElement).blur(); return true; }
-    if (state.view === 'chat') { chat.column(-1); return true; }
-    if (state.reader) { if (state.reader.tab === 'raw') { state.reader.tab = 'conversation'; drawDetail(); } else closeReader(); return true; }
-    column(-1);
-    return true;
-  }
-  if (modalOpen()) return false;
-  if (action === 'chat') { switchView(state.view === 'chat' ? 'sessions' : 'chat'); return true; }
-  if (action === 'harnesses') { switchView(state.view === 'harnesses' ? 'sessions' : 'harnesses'); return true; }
-  if (action === 'reload') { void loadInventory(); return true; }
-  if (action === 'scan') { void scanFolder(); return true; }
-  if (action === 'import') { importDocument(); return true; }
-  if (state.view === 'chat') {
-    if (action === 'down' || action === 'up') { chat.move(action === 'down' ? 1 : -1); return true; }
-    if (action === 'left' || action === 'right') { chat.column(action === 'right' ? 1 : -1); return true; }
-    if (action === 'graph' || action === 'lanes' || action === 'feed') { chat.setView(action); return true; }
-    if (action === 'fold') { chat.togglePlay(); return true; }
-    if (action === 'newRoom') { chat.newRoomDialog(); return true; }
-    if (action === 'launch') { chat.launchDialog(); return true; }
-    return false;
-  }
-  switch (action) {
-    case 'down': case 'up': move(action === 'down' ? 1 : -1); return true;
-    case 'left': if (!state.reader) column(-1); return !state.reader;
-    case 'right': if (!state.reader) column(1); return !state.reader;
-    case 'enter':
-      if (event.target instanceof HTMLInputElement && event.target.id === 'search') { focusColumn('sessions'); return true; }
-      if (state.focus === 'sessions' || state.focus === 'detail') { if (!state.reader) void openReader(); return true; }
-      column(1);
-      return true;
-    case 'fold': if (state.focus === 'sessions' && state.selected) { fold(state.selected); return true; } return false;
-    case 'hop': startHop(); return true;
-    case 'export': void exportSelected(false); return true;
-    case 'resume': { const row = selectedRow(); if (row && state.installation !== null) void resume(state.installation, row.id); return true; }
-    case 'start': { const row = selectedRow(); if (row && canStartIn(row)) { startIn(row); return true; } return false; }
-    case 'turns': if (state.reader) void toggleTurns(); return Boolean(state.reader);
-    case 'top': if (state.reader) reader.top(); return Boolean(state.reader);
-    case 'bottom': if (state.reader) reader.bottom(); return Boolean(state.reader);
-    case 'pageUp': case 'pageDown':
-      if (state.reader) reader.page(action === 'pageDown' ? 1 : -1); else move(action === 'pageDown' ? 10 : -10);
-      return true;
-    case 'help': showHelp(); return true;
-    default: return false;
-  }
+/** Escape, when no layer, field or list of the package answered it: leave the field, go back in the chat, in the reader (Raw,
+ *  then Conversation, then the list), or one column. */
+function back(): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) { active.blur(); return; }
+  if (state.view === 'chat') { chat.column(-1); return; }
+  if (state.reader) { if (state.reader.tab === 'raw') { state.reader.tab = 'conversation'; drawDetail(); } else closeReader(); return; }
+  column(-1);
+}
+
+/** Ctrl+F: the filter of the current view. The harnesses page has none: it opens the search of everything. */
+function filterView(): void {
+  if (state.view === 'chat') chat.focusFilter();
+  else if (state.view === 'harnesses') searchEverything();
+  else ($('search') as HTMLInputElement).focus();
 }
 
 function showHelp(): void {
   const modal = openModal({ title: 'Keys', subtitle: 'mouse works everywhere too' });
-  const rows: [string, string][] = [
-    ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['← →', 'previous / next column'], ['⏎', 'next column, or open the transcript'],
-    ['esc', 'close the reader or a dialog, or back one column'], ['h · e · i · R · s', 'hop · export · import · resume · start in (a session that cannot be read)'], ['t', 'last turns ↔ all'],
-    ['g G · PgUp PgDn', 'reader top · bottom · page'], ['o · r', 'scan a folder · reload'], ['/ · ctrl+f', 'filter'], ['ctrl+k', 'search everything'], ['c', 'chat ↔ sessions'], ['m', 'harnesses ↔ sessions'], ['space', 'fold a parent; in the chat, play the room'],
-    ['1 2 3', 'chat: graph · lanes · feed'], ['n · l', 'chat: new room · launch an agent'], ['ctrl+⏎', 'chat: send'],
+  const bound = registry.list().filter((command) => command.keys);
+  const lists: [string, string][] = [
+    ['↑ ↓ · j k', 'move in the focused list, scroll the reader'], ['Home · End · Page Up · Page Down', 'first · last · by ten in a list; page in the reader'],
+    ['Enter', 'open the transcript of the selected session'], ['Space', 'fold a parent session; in the chat, play the room'],
+    ['Esc', 'close the top layer, leave a field, close the reader, go back'], ['F6 · Shift+F6', 'next · previous region'], ['Ctrl+Enter', 'chat: send'],
   ];
-  fill(modal.body, h('dl', { class: 'kv keys' }, ...rows.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
+  fill(modal.body, facts(
+    ...bound.flatMap((command) => [h('dt', {}, formatKeys(command.keys!).join(' ')), h('dd', {}, command.title)]),
+    ...lists.flatMap(([key, what]) => [h('dt', {}, key), h('dd', {}, what)])));
 }
-
-/** The WebView's own page commands, which a desktop window does not have (tauri-native-desktop):
- *  F5 and ctrl+R would reload the page and drop the window's state mid-hop, so they read the
- *  stores again instead, as `r` does; ctrl+P would print the page. Zoom (ctrl +/−) stays. */
-function pageCommand(event: KeyboardEvent): boolean {
-  const ctrl = event.ctrlKey || event.metaKey;
-  const key = event.key.toLowerCase();
-  if (event.key === 'F5' || (ctrl && key === 'r')) {
-    if (!modalOpen()) void loadInventory();
-    return true;
-  }
-  if (ctrl && (key === 'p' || key === 's' || key === 'o' || key === 'u' || key === 'j')) return true;
-  if (!import.meta.env.DEV && (event.key === 'F12' || (ctrl && event.shiftKey && (key === 'i' || key === 'c')))) return true;
-  return false;
-}
-
-document.addEventListener('keydown', (event) => {
-  if (event.defaultPrevented || event.isComposing || topLayer()) return;
-  if (event.key === 'Escape' && $('app').dataset.imSidebarOpen === 'true') return;
-  if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element && event.target.closest('button, summary, [role="tab"]')) return;
-  const command = registry.match(event);
-  if (command) {
-    event.preventDefault();
-    void Promise.resolve(command.run()).catch(error => setStatus(errorText(error), true));
-    return;
-  }
-  if (pageCommand(event)) { event.preventDefault(); return; }
-  const target = event.target as HTMLElement;
-  const inField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
-  // Inside a dialog only Escape is the window's; its own controls take the rest.
-  if (modalOpen() && event.key !== 'Escape') return;
-  const action = actionFor(event, inField);
-  if (action && act(action, event)) event.preventDefault();
-});
 
 // --- start --------------------------------------------------------------------------------------
 
+const SIDEBAR_WIDTH = 'mukade.width.installations';
+let stopSidebarWidth: (() => void) | null = null;
+
+/** The sidebar is resized by Imago's separator; Mukade keeps the width (a saved "240px" reads as 240) and forgets it on a double click. */
+function mountSidebarWidth(): void {
+  const shell = $('app');
+  stopSidebarWidth?.();
+  let saved: number | undefined;
+  try { saved = storedWidth(SIDEBAR_WIDTH) ?? undefined; } catch { /* the token width stands */ }
+  if (saved !== undefined) shell.style.setProperty('--im-w-sidebar', `${saved}px`);
+  stopSidebarWidth = sidebarResize(shell, {
+    label: 'Resize the sidebar',
+    width: saved,
+    onChange: (width) => { try { localStorage.setItem(SIDEBAR_WIDTH, `${Math.round(width)}px`); } catch { /* the resize still applies */ } },
+  });
+  const handle = shell.querySelector<HTMLElement>('.im-sidebar-splitter')!;
+  handle.id = 'resize-installations';
+  handle.title = 'Drag or use arrow keys to resize · double-click to reset';
+  handle.addEventListener('dblclick', () => {
+    try { localStorage.removeItem(SIDEBAR_WIDTH); } catch { /* the reset still applies */ }
+    mountSidebarWidth();
+  });
+}
+
+/** Where each command is available (keys.ts says which place a command is for). */
+const WHEN: Record<Place, () => boolean> = {
+  always: () => true,
+  session: () => state.view === 'sessions' && Boolean(selectedRow()),
+  reader: () => state.view === 'sessions' && Boolean(state.reader),
+  chat: () => state.view === 'chat',
+  room: () => state.view === 'chat' && chat.hasRoom(),
+};
+
+function runnerOf(id: string): () => void | Promise<void> {
+  switch (id) {
+    case 'search-everything': return searchEverything;
+    case 'sessions': return () => switchView('sessions');
+    case 'chat': return () => switchView(state.view === 'chat' ? 'sessions' : 'chat');
+    case 'harnesses': return () => switchView(state.view === 'harnesses' ? 'sessions' : 'harnesses');
+    case 'scan': return scanFolder;
+    case 'import': return importDocument;
+    case 'reload': return loadInventory;
+    case 'hop': return startHop;
+    case 'export': return () => exportSelected(false);
+    case 'export-as': return () => exportSelected(true);
+    case 'resume': return () => { const row = selectedRow(); if (row && state.installation !== null) return resume(state.installation, row.id); };
+    case 'start-in': return () => { const row = selectedRow(); if (row && canStartIn(row)) startIn(row); };
+    case 'open-reader': return () => openReader();
+    case 'turns': return toggleTurns;
+    case 'reader-top': return () => reader.top();
+    case 'reader-bottom': return () => reader.bottom();
+    case 'chat-graph': return () => chat.setView('graph');
+    case 'chat-lanes': return () => chat.setView('lanes');
+    case 'chat-feed': return () => chat.setView('feed');
+    case 'new-room': return () => chat.newRoomDialog();
+    case 'launch': return () => chat.launchDialog();
+    case 'play': return () => chat.togglePlay();
+    case 'start-service': return () => chat.startService();
+    case 'stop-service': return () => chat.stopService();
+    case 'back': return back;
+    case 'keys': return showHelp;
+    default: throw new Error(`no runner for the command ${id}`);
+  }
+}
+
+/** The key caps of a button come from the registry: `data-command` names the command. */
+function drawCaps(): void {
+  for (const element of document.querySelectorAll<HTMLElement>('[data-command]')) {
+    element.querySelector(':scope > .im-keys, :scope > kbd')?.remove();
+    const keys = registry.get(element.dataset.command!)?.keys;
+    if (keys) element.append(keyCaps(document, keys));
+  }
+}
+
 function wire(): void {
   const shell = $('app');
-  attachLayers(shell);
-  regions(shell);
   roving(shell.querySelector<HTMLElement>('.im-tabs')!, { item: '[role="tab"]', orientation: 'horizontal', onSelect: tab => tab.click() });
-  narrowSessions.addEventListener('change', syncInspector);
+  // Escape in the detail: a drawer closes; the docked inspector stays and the focus goes back to the list. The detail's own
+  // handler runs before the inspector's, which closes on any Escape it finds unclaimed.
   columns.detail.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !event.isComposing && !topLayer()) {
+    if (event.key === 'Escape' && !event.isComposing && !hasModal() && !keyClaimed(event)) {
       event.preventDefault();
-      act('back', event);
+      claimKey(event);
+      if (isDrawer()) closeDetail(); else focusColumn(state.reader ? 'reader' : 'sessions');
     }
   });
   columns.installations.addEventListener('focusin', event => {
@@ -763,37 +866,35 @@ function wire(): void {
   });
   columns.sessions.addEventListener('focusin', () => setFocus('sessions'));
   columns.detail.addEventListener('focusin', () => setFocus('detail'));
-  sidebarDrawer(shell);
-  sidebarCollapse(shell, { collapsed: stored('mukade.sidebar.collapsed') === 'true', onChange: value => keep('mukade.sidebar.collapsed', String(value)) });
+  columns.reader.addEventListener('focusin', () => setFocus('reader'));
+  // Escape in the members: a drawer closes; the docked inspector stays and the focus goes back to the room.
+  frame.members.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.isComposing && !hasModal() && !keyClaimed(event)) {
+      event.preventDefault();
+      claimKey(event);
+      if (isDrawer()) closeMembers(); else $('view-chat').focus();
+    }
+  });
 
   const views = ['sessions', 'chat', 'harnesses'] as const;
-  for (const view of views) registry.register({ id: view, title: $(`tab-${view}`).textContent!.split(' ')[0].trim(), run: () => switchView(view) });
-  registry.register({ id: 'search', keys: 'Ctrl+K', title: 'Search rooms, messages and sessions', run: searchEverything });
-  registry.register({ id: 'scan', keys: 'O', title: 'Scan folder', run: scanFolder });
-  registry.register({ id: 'import', keys: 'I', title: 'Import document', run: importDocument });
-  registry.register({ id: 'reload', keys: 'R', title: 'Reload stores', run: loadInventory });
-  registry.register({ id: 'settings', title: 'Look and theme', run: openSettings });
-  registry.register({ id: 'keys', title: 'Keyboard shortcuts', run: showHelp });
-  const hasSession = () => state.view === 'sessions' && Boolean(selectedRow());
-  registry.register({ id: 'open-reader', title: 'Open transcript', when: hasSession, run: () => openReader() });
-  registry.register({ id: 'hop', title: 'Hop to another installation', keys: 'H', when: hasSession, run: startHop });
-  registry.register({ id: 'export', title: 'Export session', keys: 'E', when: hasSession, run: () => exportSelected(false) });
-  registry.register({ id: 'new-room', title: 'Create chat room', keys: 'N', when: () => state.view === 'chat', run: () => chat.newRoomDialog() });
-  const commands = () => { if (!hasModal()) openPalette(shell, registry); };
-  registry.register({ id: 'commands', title: 'Commands', keys: 'Ctrl+Shift+K', run: commands });
-  $('commands').addEventListener('click', commands);
+  for (const spec of COMMANDS) registry.register({ id: spec.id, title: spec.title, keys: spec.keys, when: WHEN[spec.view], run: runnerOf(spec.id) });
+  // Registered before mountApp, so the keys reach the registry before the guard refuses them to the browser.
+  mountApp(shell, registry, {
+    search: filterView,
+    labels: { palette: 'Commands', search: 'Search in this view' },
+    sidebar: { collapsed: stored('mukade.sidebar.collapsed') === 'true', onChange: value => keep('mukade.sidebar.collapsed', String(value)) },
+    appearance,
+  });
+  drawCaps();
+  const run = (id: string) => { if (!hasModal()) void registry.get(id)?.run(); };
+  $('commands').addEventListener('click', () => run('imago.palette'));
   $('views-menu').addEventListener('click', () => {
-    if (!hasModal()) openMenu($('views-menu'), views.map(view => ({ label: registry.get(view)!.title, run: () => switchView(view) })));
+    if (!hasModal()) openMenu($('views-menu'), views.map(view => ({ label: registry.get(view)!.title, checked: () => state.view === view, run: () => { switchView(view); closeLayers(['menu']); } })));
   });
-  for (const tab of document.querySelectorAll<HTMLElement>('[data-view]')) tab.addEventListener('click', () => { if (!hasModal()) void registry.get(tab.dataset.view!)?.run(); });
-  for (const [buttonId, commandId] of [['scan', 'scan'], ['import', 'import'], ['reload', 'reload'], ['settings', 'settings'], ['search-everything', 'search']]) {
-    $(buttonId).addEventListener('click', () => { if (!hasModal()) void registry.get(commandId)!.run(); });
+  for (const tab of document.querySelectorAll<HTMLElement>('.im-tab[data-id]')) tab.addEventListener('click', () => run(tab.dataset.id!));
+  for (const [buttonId, commandId] of [['scan', 'scan'], ['import', 'import'], ['reload', 'reload'], ['search-everything', 'search-everything']]) {
+    $(buttonId).addEventListener('click', () => run(commandId));
   }
-  $('theme').addEventListener('click', () => {
-    themes[look] = nextTheme(look, themes[look]);
-    keep(THEME_KEY[look], themes[look]);
-    applyLook();
-  });
   systemLight.addEventListener('change', applyLook);
   const search = $('search') as HTMLInputElement;
   search.addEventListener('input', () => {
@@ -804,27 +905,29 @@ function wire(): void {
     if (!state.reader) drawDetail();
   });
   search.addEventListener('focus', () => setFocus('sessions'));
+  search.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); focusColumn('sessions'); } });
   columns.sessions.addEventListener('mousedown', () => setFocus('sessions'), { capture: true });
   columns.detail.addEventListener('mousedown', () => { if (state.selected) setFocus('detail'); });
-  mountColumnSplitters(shell);
-  for (const back of document.querySelectorAll<HTMLElement>('[data-back]')) back.addEventListener('click', () => { if (state.reader) closeReader(); else focusColumn('sessions'); });
+  mountSidebarWidth();
+  // The layout follows the window: the inspector turns into a drawer under 1000, and the reader then replaces the list.
+  new ResizeObserver(() => requestAnimationFrame(() => { syncInspector(); layoutSessions(); })).observe(shell);
   // A document dropped on the window opens the import dialog with it.
   onFilesDropped((paths) => {
     if (modalOpen()) return;
     const document = paths.find((path) => path.toLowerCase().endsWith('.json'));
-    if (!document) { setStatus('drop a mukade document (.json) to import it', true); return; }
-    if (state.job) { setStatus('a job is running: drop the document again when it ends', true); return; }
+    if (!document) { report('drop a mukade document (.json) to import it', true); return; }
+    if (state.job) { report('a job is running: drop the document again when it ends', true); return; }
     openImport(state.installations, state.installation, document, hooks);
   });
   onCloseBlocked(async () => {
-    if (await confirmModal('A hop is still running', 'Closing now stops the window while it writes. The destination may be left with a session the receipt never reports.', 'Close anyway')) void api.quit();
+    if (await confirmModal('A hop is still running', 'Closing now stops the window while it writes. The destination may be left with a session the receipt never reports.', 'Close the window')) void api.quit();
   });
 }
 
 (async () => {
   applyLook();
   wire();
-  void initializeWindow((error) => setStatus(errorText(error), true));
+  void initializeWindow((text) => report(text, true));
   drawAll();
   try {
     const startup = await api.startup();
@@ -833,8 +936,8 @@ function wire(): void {
     startupScan = [...startup.scan];
     state.scan = [...new Set([...startup.scan, ...keptFolders()])];
   } catch (error) {
-    setStatus(errorText(error), true);
+    report(errorText(error), true);
   }
   await loadInventory();
-  await recoverWrite(hooks).catch(error => setStatus(errorText(error), true));
+  await recoverWrite(hooks).catch(error => report(errorText(error), true));
 })();

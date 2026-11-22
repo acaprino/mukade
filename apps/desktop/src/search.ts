@@ -2,11 +2,12 @@
 // or folder, in one list over the window. A result opens its place: the room, a member's details,
 // the room at that event in the feed, or the session in the tree.
 
+import { loader } from '@acaprino/imago/ui';
 import { api, errorText } from './api.ts';
 import { chatIndex } from './chatindex.ts';
 import { matches } from './chatmodel.ts';
 import { mark } from './chatviews.ts';
-import { button, fill, h, kbd } from './dom.ts';
+import { button, caps, choice, fill, h } from './dom.ts';
 import { openModal } from './modal.ts';
 import { shortTime } from './tree.ts';
 import type { Installation, SessionRow } from './types.ts';
@@ -41,8 +42,8 @@ export function openSearch(hooks: SearchHooks): void {
   // The sessions of every installation are read once per opening.
   listings = null;
 
-  const scopes = (): HTMLElement => h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Search in' },
-    ...SCOPES.map(([value, text]) => button(text, { 'aria-pressed': String(scope === value), onclick: () => { scope = value; void run(); drawTop(); } })));
+  const scopes = (): HTMLElement => choice('Search in', SCOPES.map(([value, text]) => ({ value, label: text })), scope,
+    (value) => { scope = value; void run(); drawTop(); });
   const top = h('div', { class: 'search-top' });
   const drawTop = () => fill(top, input, scopes());
 
@@ -51,10 +52,10 @@ export function openSearch(hooks: SearchHooks): void {
     let group = '';
     results.forEach((result, i) => {
       if (result.group !== group) { group = result.group; list.append(h('p', { class: 'label' }, group)); }
-      const row = button([h('span', { class: 'grow' }, ...result.label), h('span', { class: 'num im-num' }, result.detail)], {
-        class: 'search-row', role: 'option', 'aria-selected': String(i === active), id: `sr-${i}`,
+      const row = h('div', {
+        class: 'im-row search-row', role: 'option', 'aria-selected': String(i === active), id: `sr-${i}`,
         onclick: () => { modal.close(); result.open(); },
-      });
+      }, h('span', { class: 'im-row-text' }, h('span', { class: 'im-row-title' }, ...result.label)), h('span', { class: 'im-row-meta' }, result.detail));
       list.append(row);
     });
     if (results.length) list.setAttribute('aria-activedescendant', `sr-${active}`);
@@ -65,7 +66,7 @@ export function openSearch(hooks: SearchHooks): void {
     const mine = ++ticket;
     const query = input.value.trim();
     if (!query) { results = []; active = 0; paint(); fill(note, 'Type to search. ↑ ↓ to move, ⏎ to open.'); return; }
-    fill(note, 'Searching…');
+    fill(note, loader(document, 'Searching…'));
     const limit = scope === 'all' ? FEW : MANY;
     const found: Result[] = [];
     const errors: string[] = [];
@@ -141,7 +142,7 @@ export function openSearch(hooks: SearchHooks): void {
   };
   drawTop();
   fill(modal.body, h('div', { class: 'col search' }, top, note, list));
-  fill(modal.foot, h('span', { class: 'mono muted' }, '↑ ↓ move · ⏎ open'), h('span', { class: 'spring' }), button(['Close ', kbd('esc')], { onclick: () => modal.close() }));
+  fill(modal.foot, h('span', { class: 'mono muted' }, '↑ ↓ move · ⏎ open'), h('span', { class: 'spring' }), button(['Close ', caps('Escape')], { onclick: () => modal.close() }));
   void run();
   queueMicrotask(() => input.focus());
 }

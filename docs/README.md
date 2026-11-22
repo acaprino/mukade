@@ -67,6 +67,7 @@ Records of single runs, not guarantees for later versions, in [verification/](ve
 - [Linux 2026-11-11](verification/linux-2026-11-11.md): Claude Code `live` (a bug fixed), process-tree kill, suite green.
 - [Listing coverage](verification/listing-coverage-2026-11-08.md): sessions whose transcripts are gone (Codex `state_5.sqlite`, Claude Code `history.jsonl`, OpenCode's other databases), `live`, the cache.
 - [Codex code mode](verification/2026-11-11-codex-code-mode.md): the L10 census: 725 of 981 `exec` scripts read as calls.
+- [Hosted chats live](verification/2026-11-21-hosted-chats-live.md): the released v0.2.0 command line on Windows against a real ChatGPT-hosted chat: `list`, `work`, `handoff` (2026-11-21). The desktop app and the start of a harness are not checked yet.
 
 ## Archive
 

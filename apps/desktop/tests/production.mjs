@@ -44,20 +44,36 @@ export async function checkProduction(browser) {
     await page.keyboard.press('Control+f');
     assert.equal(await page.locator('#search').evaluate(el => el === document.activeElement), true);
     const reads = await page.evaluate(() => window.testIpc.reads);
-    for (const [index, key] of ['F5', 'Control+r'].entries()) {
-      await page.keyboard.press(key);
-      await page.waitForFunction(expected => window.testIpc.reads === expected, reads + index + 1);
-    }
-    await page.locator('#detail').getByRole('button', { name: 'Hop h', exact: true }).click();
-    const summary = page.locator('details.more > summary');
+    // Escape leaves the filter, then `r` reads the stores again; F5 and Ctrl+R are the browser's reload, which the guard refuses.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('r');
+    await page.waitForFunction(expected => window.testIpc.reads === expected, reads + 1);
+    for (const key of ['F5', 'Control+r']) await page.keyboard.press(key);
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => window.testIpc.reads), reads + 1, 'F5 and Ctrl+R read nothing');
+    await page.locator('#detail').getByRole('button', { name: 'Hop H', exact: true }).click();
+    const summary = page.locator('details.mk-more > summary');
     await summary.focus();
     await summary.press('Enter');
     assert.equal(await summary.evaluate(el => el.parentElement.open), true);
     await summary.press('Tab');
     assert.equal(await page.locator('#hop-model').evaluate(el => el === document.activeElement), true);
     assert.equal(await page.evaluate(() => window.testIpc.hops), 0);
+    // Enter on a radio or a checkbox is the control's own: it starts no hop (a write).
+    for (const target of [page.getByRole('radio').first(), page.locator('#hop-no-tools')]) {
+      await target.focus();
+      await target.press('Enter');
+    }
+    assert.equal(await page.evaluate(() => window.testIpc.hops), 0);
     await page.keyboard.press('Escape');
-    for (const name of ['installations', 'sessions']) {
+    // The reader beside the list: the list's separator (kept under mukade.width.sessions) exists only while it is open.
+    await page.locator('#detail').getByRole('button', { name: /Open transcript/ }).click();
+    await page.locator('#reader .entry').first().waitFor();
+    assert.equal(await page.locator('[role="separator"]').count(), 2, 'one separator for the sidebar and one for the list');
+    // The list's separator first: a resize of the sidebar changes the width of the split, and the split keeps its fraction, so its value
+    // moves with it (the package's behaviour). Each value is read once the layout has settled.
+    for (const name of ['sessions', 'installations']) {
+      await page.waitForTimeout(300);
       const divider = page.locator('#resize-' + name);
       await page.waitForFunction(id => {
         const handle = document.getElementById(id);

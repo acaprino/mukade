@@ -3,8 +3,8 @@
 // Tabs: Conversation, and Raw (the native records of one entry, pretty JSON).
 
 import './reader.css';
-import { setPanelState } from '@acaprino/imago/ui';
-import { button, fill, h, kbd } from './dom.ts';
+import { claimKey, loader, setPanelState } from '@acaprino/imago/ui';
+import { button, caps, choice, emptyState, fill, h, viewSwitch } from './dom.ts';
 import type { Block, EntryView, Transcript } from './types.ts';
 
 /** Tool input shown before "Show all" (spec F5). */
@@ -57,6 +57,7 @@ export class Reader {
     this.spacer = h('div', { class: 'reader-spacer' }, this.content);
     this.scroller = h('div', { class: 'reader-scroll', tabindex: '-1' }, this.spacer);
     this.root = h('div', { class: 'reader' });
+    this.root.addEventListener('keydown', (event) => this.key(event));
     this.scroller.addEventListener('scroll', () => this.schedule());
     this.observer = new ResizeObserver(() => this.measure());
     this.observer.observe(this.content);
@@ -67,15 +68,12 @@ export class Reader {
   render(transcript: Transcript | null, opts: { tab: 'conversation' | 'raw'; turns: number; defaultTurns: number; title: string; error: string | null; raw: unknown[] | null; rawEntry: string | null }): void {
     const turnsLabel = opts.defaultTurns > 0 ? `Last ${opts.defaultTurns} turns` : 'Last turns';
     const head = h('div', { class: 'column-head im-panel-header' },
-      button(['‹ Detail ', kbd('esc')], { class: 'ghost', 'aria-label': 'Back to the session detail', onclick: () => this.actions.back() }),
+      button(['‹ Sessions ', caps('Escape')], { class: 'ghost', 'aria-label': 'Back to the sessions list', onclick: () => this.actions.back() }),
       h('h2', { class: 'reader-title', title: opts.title }, opts.title),
       h('span', { class: 'spring' }),
-      h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'Reader tab' },
-        button('Conversation', { 'aria-pressed': String(opts.tab === 'conversation'), onclick: () => this.actions.setTab('conversation') }),
-        button('Raw', { 'aria-pressed': String(opts.tab === 'raw'), onclick: () => this.actions.setTab('raw') })),
-      h('div', { class: 'seg im-seg', role: 'group', 'aria-label': 'How much to show' },
-        button(turnsLabel, { 'aria-pressed': String(opts.turns !== 0), onclick: () => opts.turns === 0 && this.actions.toggleTurns() }),
-        button(['All ', kbd('t')], { 'aria-pressed': String(opts.turns === 0), onclick: () => opts.turns !== 0 && this.actions.toggleTurns() })));
+      viewSwitch('Reader tab', [{ value: 'conversation' as const, content: ['Conversation'] }, { value: 'raw' as const, content: ['Raw'] }], opts.tab, (tab) => this.actions.setTab(tab)),
+      choice('How much to show', [{ value: 'last', label: turnsLabel }, { value: 'all', label: 'All' }], opts.turns === 0 ? 'all' : 'last',
+        (value) => { if ((value === 'all') !== (opts.turns === 0)) this.actions.toggleTurns(); }));
     let body: Node;
     if (opts.error || !transcript) {
       fill(this.root, head, h('div', { class: 'im-panel-body' }));
@@ -92,7 +90,7 @@ export class Reader {
     }
     fill(this.root, head, transcript && transcript.hidden_turns > 0 && opts.tab === 'conversation'
       ? h('div', { class: 'reader-hidden' }, `${transcript.hidden_turns} earlier turn${transcript.hidden_turns === 1 ? '' : 's'} not shown · `,
-        button(['Show all ', kbd('t')], { class: 'link', onclick: () => this.actions.toggleTurns() }))
+        button(['Show all ', caps('T')], { class: 'im-btn--ghost im-btn--sm', onclick: () => this.actions.toggleTurns() }))
       : null, body);
     if (body === this.scroller) this.schedule();
   }
@@ -106,8 +104,8 @@ export class Reader {
     select.addEventListener('change', () => this.actions.showRaw(select.value));
     if (!entryId && transcript.entries[0]) queueMicrotask(() => this.actions.showRaw(transcript.entries[0].id));
     return h('div', { class: 'raw' },
-      h('div', { class: 'raw-head' }, h('label', { class: 'lab' }, 'Native records of'), select),
-      h('pre', { class: 'code raw-json' }, raw === null ? 'Reading…' : JSON.stringify(raw.length === 1 ? raw[0] : raw, null, 2)));
+      h('div', { class: 'raw-head' }, h('label', { class: 'im-field-label', for: 'reader-raw-entry' }, 'Native records of'), Object.assign(select, { id: 'reader-raw-entry' })),
+      h('pre', { class: 'code raw-json' }, raw === null ? loader(document, 'Reading…') : JSON.stringify(raw.length === 1 ? raw[0] : raw, null, 2)));
   }
 
   /** Set while a live session read again is drawn: the reader stays where it is, and follows the
@@ -153,7 +151,7 @@ export class Reader {
     this.first = first;
     this.content.style.transform = `translateY(${this.offsets[first]}px)`;
     fill(this.content, ...this.entries.slice(first, last).map((entry) => this.entryNode(entry)));
-    if (!this.entries.length) fill(this.content, h('div', { class: 'empty im-empty' }, h('p', {}, 'This session has no conversation entries.')));
+    if (!this.entries.length) fill(this.content, emptyState('', 'This session has no conversation entries.'));
   }
 
   /** Put the drawn entries' real heights in place of the guesses. */
@@ -180,7 +178,7 @@ export class Reader {
     const index = this.entries.indexOf(entry, this.first);
     const role = leadRole(entry);
     const blocks = entry.blocks.map((block, n) => this.blockNode(entry, block, n));
-    const raw = button('raw', { class: 'ghost raw-link', title: 'Show the native records of this entry', onclick: () => this.actions.showRaw(entry.id) });
+    const raw = button('raw', { class: 'ghost im-btn--sm raw-link', title: 'Show the native records of this entry', onclick: () => this.actions.showRaw(entry.id) });
     return h('article', { class: `entry kind-${entry.kind} role-${role}`, 'data-index': String(index) },
       h('div', { class: 'who' }, h('span', { class: `r-${role}` }, ROLE_LABEL[role]), h('time', { datetime: entry.time ?? '' }, timeOf(entry)), raw),
       h('div', { class: 'what' }, ...blocks));
@@ -217,6 +215,19 @@ export class Reader {
   }
 
   // Keys (spec §4.1).
+  /** ↑ ↓ j k and Page Up, Page Down scroll the transcript; a field keeps its keys, a button its Space and Enter. */
+  private key(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
+    if ((event.target as HTMLElement).closest('input, textarea, select')) return;
+    if (event.key === 'ArrowDown' || event.key === 'j') this.scrollBy(2);
+    else if (event.key === 'ArrowUp' || event.key === 'k') this.scrollBy(-2);
+    else if (event.key === 'PageDown') this.page(1);
+    else if (event.key === 'PageUp') this.page(-1);
+    else return;
+    event.preventDefault();
+    claimKey(event);
+  }
+
   scrollBy(lines: number): void { this.pinned = false; this.scroller.scrollTop += lines * 20; }
   page(direction: 1 | -1): void { this.pinned = false; this.scroller.scrollTop += direction * (this.scroller.clientHeight - 40); }
   top(): void { this.pinned = false; this.scroller.scrollTop = 0; }

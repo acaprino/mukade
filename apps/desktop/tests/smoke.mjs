@@ -34,63 +34,134 @@ try {
     const root = await page.evaluate(() => `${document.documentElement.dataset.imLook}-${document.documentElement.dataset.imTheme}`);
     if (root !== name) failures.push(`${name}: the root says ${root}`);
     if (look === 'smooth' && scheme === 'dark') {
-      await page.keyboard.press('Control+Shift+k');
-      await page.getByRole('combobox', { name: 'Type a command' }).fill('look and theme');
+      // The look and the theme are the palette's: ONI from Ctrl+K, kept, and back to Smooth.
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill('ONI look');
       await page.keyboard.press('Enter');
-      await page.getByRole('dialog', { name: 'Settings' }).waitFor();
-      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.documentElement.dataset.imLook === 'oni' && localStorage.getItem('mukade.look') === 'oni');
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill('Smooth look');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.documentElement.dataset.imLook === 'smooth' && localStorage.getItem('mukade.look') === 'smooth');
       await page.setViewportSize({ width: 520, height: 650 });
       await page.getByRole('button', { name: 'Views' }).click();
-      await page.getByRole('menuitem', { name: 'Chat' }).click();
+      await page.getByRole('menuitemradio', { name: 'Chat' }).click();
       await page.locator('#view-chat').waitFor();
       await page.getByRole('button', { name: 'Views' }).click();
-      await page.getByRole('menuitem', { name: 'Sessions' }).click();
+      await page.getByRole('menuitemradio', { name: 'Sessions' }).click();
       const sidebar = page.locator('.im-sidebar-toggle');
       const mainBounds = await page.locator('.im-work').boundingBox();
       await sidebar.click();
-      await expect(page, '#session-sidebar', 'narrow sidebar drawer');
+      await expect(page, '#sidebar', 'narrow sidebar drawer');
       assert.deepEqual(await page.locator('.im-work').boundingBox(), mainBounds, 'the drawer overlays the content');
       await page.keyboard.press('Escape');
       if (await sidebar.getAttribute('aria-expanded') !== 'false') failures.push('narrow sidebar did not close');
       await page.locator('#sessions .row').first().click();
       await expect(page, '#detail h3', 'narrow inspector');
-      await page.getByRole('button', { name: 'Back one column' }).click();
-      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close');
+      // At 520 the detail is a drawer: the close button of its header closes it, and so does Escape.
+      await page.getByRole('button', { name: 'Close details' }).click();
+      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close with its button');
+      await page.locator('#sessions .row').first().click();
+      await expect(page, '#detail h3', 'narrow inspector again');
+      await page.keyboard.press('Escape');
+      if (await page.locator('#detail').isVisible()) failures.push('narrow inspector did not close with Escape');
+      // At 520 Enter opens the reader in place of the list, and Escape goes back to it.
+      await page.getByRole('listbox', { name: 'Sessions' }).focus();
+      await page.keyboard.press('Enter');
+      await page.locator('#reader .entry').first().waitFor();
+      if (await page.locator('#sessions').isVisible()) failures.push('narrow: the list stayed beside the reader');
+      await page.keyboard.press('Escape');
+      await page.locator('#sessions .row').first().waitFor();
+      if (await page.locator('#reader').isVisible()) failures.push('narrow: the reader stayed after Escape');
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.locator('#sessions').focus();
     }
+    // The frame is the package's: the skip link first, one content region and one inspector, the mark, the version in the status row.
+    const frameFacts = await page.evaluate(() => ({
+      skip: document.getElementById('app').firstElementChild.className,
+      mains: document.querySelectorAll('.im-columns > main.im-content').length,
+      inspectors: document.querySelectorAll('.im-inspector').length,
+      mark: document.querySelector('.im-mark')?.textContent,
+      word: document.querySelector('.im-wordmark')?.textContent,
+      version: Boolean(document.querySelector('.im-status-end #version')),
+      windowButtons: document.querySelectorAll('.im-window-buttons').length,
+    }));
+    if (frameFacts.skip !== 'im-shell-skip-link' || frameFacts.mains !== 1 || frameFacts.inspectors !== 1 || frameFacts.mark !== 'M' || frameFacts.word !== 'Mukade'
+      || !frameFacts.version || frameFacts.windowButtons !== 0) failures.push(`${name}: the frame is not the canonical one ${JSON.stringify(frameFacts)}`);
+    await page.getByRole('listbox', { name: 'Sessions' }).focus();
+    // The list answers its own keys: End and Home move the selection, with the focus kept in the list.
+    await page.keyboard.press('End');
+    await page.waitForFunction(() => document.querySelector('#sessions [role="option"]:last-child')?.getAttribute('aria-selected') === 'true');
+    await page.keyboard.press('Home');
+    await page.waitForFunction(() => document.querySelector('#sessions [role="option"]')?.getAttribute('aria-selected') === 'true');
     await page.screenshot({ path: `${out}sessions-${name}.png` });
+    // Docked at 1440: Enter opens the reader beside the list, with the detail still docked; Escape goes back, the same session selected.
+    const selectedBefore = await page.locator('#sessions [role="option"][aria-selected="true"]').getAttribute('data-id');
     await page.keyboard.press('Enter');
-    await page.locator('.entry').first().waitFor();
+    await page.locator('#reader .entry').first().waitFor();
     await page.waitForTimeout(300);
+    if (!(await page.locator('#sessions').isVisible()) || !(await page.locator('#detail h3').isVisible())) failures.push(`${name}: the list or the detail is gone while reading`);
+    // A tab strip is one tab stop with the arrows inside: from Conversation, ArrowRight reaches Raw.
+    await page.getByRole('tab', { name: 'Conversation' }).focus();
+    await page.keyboard.press('ArrowRight');
+    if ((await page.evaluate(() => document.activeElement?.textContent?.trim())) !== 'Raw') failures.push(`${name}: ArrowRight did not reach the Raw tab`);
     await page.screenshot({ path: `${out}reader-${name}.png` });
+    if (look === 'smooth' && scheme === 'dark') {
+      // A live session is read again: the status row says so, and no notice does (a state, not a result).
+      await page.locator('.im-status-text', { hasText: 'live: read again' }).waitFor({ timeout: 25000 });
+      if (await page.locator('.im-notice', { hasText: 'live: read again' }).count()) failures.push(`${name}: a live re-read showed a notice`);
+    }
     await page.keyboard.press('Escape');
+    if (await page.locator('#reader').isVisible()) failures.push(`${name}: Escape did not close the reader`);
+    if (await page.locator('#sessions [role="option"][aria-selected="true"]').getAttribute('data-id') !== selectedBefore) failures.push(`${name}: the selected session changed`);
     // Enter on Cancel cancels: it never starts the hop (a write).
     await page.keyboard.press('h');
-    await page.locator('.im-form-dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .mk-plan').waitFor();
     await page.getByRole('button', { name: /^Cancel/ }).focus();
     await page.keyboard.press('Enter');
     await page.waitForTimeout(400);
     if (await page.locator('.im-form-dialog').count()) failures.push(`${name}: Enter on Cancel did not cancel the hop`);
     await page.keyboard.press('h');
-    await page.locator('.im-form-dialog .plan').waitFor();
+    await page.locator('.im-form-dialog .mk-plan').waitFor();
+    // Fields: a visible label above each, "All branches" a checkbox, and the destinations radios the arrows walk (the focus follows the pick).
+    const unlabelled = await page.evaluate(() => [...document.querySelectorAll('.im-form-dialog .im-field')]
+      .filter((one) => !one.querySelector(':scope > label.im-field-label, :scope > legend.im-field-label, :scope > span.im-field-label')).length);
+    if (unlabelled) failures.push(`${name}: ${unlabelled} fields of the hop have no visible label`);
+    await page.getByRole('checkbox', { name: /^All branches/ }).waitFor();
+    const firstDestination = page.getByRole('radio').first();
+    await firstDestination.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() => document.activeElement?.matches('input[type="radio"]:checked'));
+    // A redraw keeps the control the person was on: a select stays focused (a stray Space must not start the hop).
+    await page.locator('#hop-shell').focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(() => document.activeElement?.id === 'hop-shell');
+    await page.keyboard.press('ArrowUp');
+    await page.waitForFunction(() => document.activeElement?.id === 'hop-shell');
+    // Enter belongs to the primary button: focus goes back to it (a radio's Enter starts no hop).
+    await page.getByRole('button', { name: /^Hop to/ }).focus();
     await page.screenshot({ path: `${out}hop-${name}.png` });
     await page.keyboard.press('Enter');
     await page.getByText('Losses · 2').waitFor();
     await page.screenshot({ path: `${out}receipt-${name}.png` });
     await page.keyboard.press('Escape');
+    // An unreadable session: its note is announced (role alert) and says why.
+    await page.locator('#sessions .row', { hasText: 'unreadable' }).first().click();
+    await page.locator('#detail .im-note[role="alert"]', { hasText: 'Cannot be read' }).waitFor();
     // A chat hosted by ChatGPT: its chip, the work it left in its folder, and starting another harness there.
     await page.locator('[data-id="codex"]').click();
-    await page.locator('#sessions .row .tag', { hasText: 'hosted' }).waitFor();
+    await page.locator('#sessions .row .im-chip', { hasText: 'hosted' }).waitFor();
     await page.locator('#detail .work-repo').nth(2).waitFor();
     const repositories = await page.locator('#detail .work-repo').allInnerTexts();
     if (repositories.length !== 3) failures.push(`${name}: ${repositories.length} repositories in the work, not 3`);
     if (!repositories.some((text) => text.includes('feature/stack-detection · no upstream · 3 commits on no remote · 133 uncommitted'))) failures.push(`${name}: the line of stack-analyser is missing`);
-    if (await page.locator('#detail .note:not(.err)', { hasText: 'Hosted by ChatGPT: the conversation is not on this machine' }).count() !== 1) failures.push(`${name}: the hosted note is missing or red`);
+    if (await page.locator('#detail .im-note:not([data-im-tone="err"])', { hasText: 'Hosted by ChatGPT: the conversation is not on this machine' }).count() !== 1) failures.push(`${name}: the hosted note is missing or red`);
     if (await page.locator('#detail .work .im-chip', { hasText: 'at risk' }).count() !== 2) failures.push(`${name}: two repositories should be at risk`);
+    if (!(await page.locator('#detail dl.im-facts').count()) || await page.locator('#detail dl.kv').count()) failures.push(`${name}: the detail does not write its facts as im-facts`);
     await page.screenshot({ path: `${out}hosted-${name}.png` });
     await page.getByRole('button', { name: /^Start in/ }).waitFor();
-    await page.locator('#sessions').focus();
+    await page.getByRole('listbox', { name: 'Sessions' }).focus();
     await page.keyboard.press('s');
     await page.locator('.im-form-dialog #handoff-note').waitFor();
     if (!(await page.locator('#handoff-note').inputValue()).includes('Capire lo stack di Daodan')) failures.push(`${name}: the note does not name the session`);
@@ -127,10 +198,20 @@ try {
     await page.locator('#room-name').fill('smoke-room');
     await page.keyboard.press('Enter');
     await page.locator('#chat-rooms .row', { hasText: 'smoke-room' }).waitFor();
+    // The words of the destructive buttons name the object, and focus starts on Cancel.
+    await page.getByRole('button', { name: 'Close…' }).click();
+    await page.getByRole('button', { name: 'Close smoke-room', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete…' }).click();
+    await page.getByRole('button', { name: 'Delete smoke-room', exact: true }).waitFor();
+    if ((await page.evaluate(() => document.activeElement?.textContent?.trim())) !== 'Cancel') failures.push(`${name}: focus did not start on Cancel in the delete dialog`);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    const untitled = await page.evaluate(() => [...document.querySelectorAll('.im-icon-btn')].filter((one) => !one.title || !one.title.startsWith(one.getAttribute('aria-label'))).length);
+    if (untitled) failures.push(`${name}: ${untitled} icon buttons have no tooltip that starts with their name`);
     // Search everything finds a member of another room.
-    await page.keyboard.press('Control+k');
+    await page.keyboard.press('Control+Shift+f');
     await page.locator('#search-all').fill('codex');
     await page.locator('.search-row').first().waitFor();
+    if (!(await page.getByRole('option').count())) failures.push(`${name}: the search results are not options of a listbox`);
     await page.screenshot({ path: `${out}search-${name}.png` });
     await page.keyboard.press('Escape');
     // The harnesses page: every harness, and a scan of the computer that finds a portable one.
@@ -138,7 +219,18 @@ try {
     await page.locator('.harness-card').first().waitFor();
     await page.getByRole('button', { name: 'Scan this computer' }).click();
     await page.locator('#status', { hasText: 'system scan done' }).waitFor({ timeout: 20000 });
+    await page.locator('.im-notice', { hasText: 'system scan done' }).first().waitFor();
+    if (!(await page.locator('.im-status-text').innerText()).includes('system scan done')) failures.push(`${name}: the status row lost the scan result`);
     await page.locator('.install-row', { hasText: 'JanuraCode' }).waitFor();
+    // A kept folder is forgotten at once, and the notice's Undo keeps it again.
+    const forget = page.getByRole('button', { name: 'Forget folder' }).first();
+    {
+      await forget.waitFor();
+      await forget.click();
+      await page.locator('.im-notice', { hasText: 'Forgot the folder' }).first().waitFor();
+      await page.locator('.im-notice').getByRole('button', { name: 'Undo' }).first().click();
+      await page.getByRole('button', { name: 'Forget folder' }).first().waitFor();
+    }
     await page.screenshot({ path: `${out}harnesses-${name}.png` });
     await page.keyboard.press('c');
     // What is being typed in the filter survives the 3 s poll.
@@ -147,14 +239,62 @@ try {
     await page.waitForTimeout(3400);
     const typed = await page.locator('#chat-filter').inputValue();
     if (typed !== 'sub') failures.push(`${name}: the chat filter lost what was typed (${JSON.stringify(typed)})`);
-    // Settings switches the look, and the choice is kept.
-    await page.locator('#settings').click();
+    if (look === 'smooth' && scheme === 'dark') {
+      // The rooms are rows of the sidebar and the members are in the inspector; the rooms filter survives the poll too.
+      await expect(page, '#sidebar #chat-rooms .row', 'rooms in the sidebar');
+      await page.locator('#chat-room-filter').fill('hop');
+      await page.waitForTimeout(3400);
+      if (await page.locator('#chat-room-filter').inputValue() !== 'hop') failures.push(`${name}: the rooms filter lost what was typed`);
+      await page.locator('#chat-room-filter').fill('');
+      await page.locator('#chat-rooms .row', { hasText: 'hop-review' }).click();
+      await page.locator('.im-inspector #chat-members .member').first().waitFor();
+      // At 900 the members are a drawer: from the Members button, and from a node of the graph; Escape closes them.
+      await page.setViewportSize({ width: 900, height: 800 });
+      await page.waitForTimeout(300);
+      if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: the members are open at 900 before they were asked for`);
+      await page.getByRole('button', { name: 'Members', exact: true }).click();
+      await page.locator('#chat-members .member').first().waitFor();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: Escape did not close the members at 900`);
+      await page.getByRole('tab', { name: /^Graph/ }).click();
+      // The graph's nodes are one tab stop and the arrows move between them.
+      await page.locator('.graph-canvas svg .node').first().waitFor();
+      const stops = await page.locator('.graph-canvas svg .node[tabindex="0"]').count();
+      if (stops !== 1) failures.push(`${name}: the graph has ${stops} tab stops, not one`);
+      await page.locator('.graph-canvas svg .node').first().focus();
+      await page.keyboard.press('ArrowRight');
+      const at = await page.evaluate(() => [...document.querySelectorAll('.graph-canvas svg .node')].indexOf(document.activeElement));
+      if (at !== 1) failures.push(`${name}: ArrowRight did not move to the second node of the graph (${at})`);
+      await page.locator('.graph-canvas svg .node').first().click();
+      await page.locator('#chat-members .member').first().waitFor();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      if (await page.locator('#chat-members').isVisible()) failures.push(`${name}: Escape did not close the members opened from the graph`);
+      // At 520 the rooms open from the toggle of the title bar.
+      await page.setViewportSize({ width: 520, height: 650 });
+      await page.locator('.im-sidebar-toggle').click();
+      await expect(page, '#chat-rooms .row', 'rooms in the narrow drawer');
+      await page.keyboard.press('Escape');
+      await page.setViewportSize({ width: 1440, height: 900 });
+      // With the service stopped the content offers to start it and the sidebar is off; started again, the rooms are back.
+      await page.getByRole('button', { name: 'Stop service' }).click();
+      await page.getByRole('button', { name: 'Stop the service' }).click();
+      await page.getByRole('button', { name: 'Start the service' }).waitFor();
+      if (await page.locator('#sidebar').isVisible()) failures.push(`${name}: the sidebar stayed while the service is stopped`);
+      await page.getByRole('button', { name: 'Start the service' }).click();
+      await page.locator('#chat-rooms .row').first().waitFor({ timeout: 10000 });
+    }
+    // The palette switches the look, and the choice is kept.
     const other = look === 'smooth' ? 'oni' : 'smooth';
-    await page.locator('.im-form-dialog').getByRole('button', { name: other, exact: true }).click();
-    const kept = await page.evaluate(() => `${document.documentElement.dataset.imLook}/${localStorage.getItem('mukade.look')}`);
-    if (kept !== `${other}/${other}`) failures.push(`${name}: Settings did not switch to ${other} (${kept})`);
-    await page.locator('.im-form-dialog').getByRole('button', { name: look, exact: true }).click();
-    await page.screenshot({ path: `${out}settings-${name}.png` });
+    await page.keyboard.press('Escape');
+    for (const [to, title] of [[other, other === 'oni' ? 'ONI look' : 'Smooth look'], [look, look === 'oni' ? 'ONI look' : 'Smooth look']]) {
+      await page.keyboard.press('Control+k');
+      await page.getByRole('combobox', { name: 'Type a command' }).fill(title);
+      await page.keyboard.press('Enter');
+      const kept = await page.evaluate(() => `${document.documentElement.dataset.imLook}/${localStorage.getItem('mukade.look')}`);
+      if (kept !== `${to}/${to}`) failures.push(`${name}: the palette did not switch to ${to} (${kept})`);
+    }
     await page.close();
   }
 } finally {
