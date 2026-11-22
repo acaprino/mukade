@@ -1,6 +1,4 @@
 name: Verify desktop
-# One run per commit: develop is verified when it is pushed, and the pull request develop -> main (the same commit)
-# shows the checks of that run. A pull request into develop is another commit and is verified too.
 on:
   push:
     branches: [develop]
@@ -21,17 +19,22 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # The browser Playwright downloads is kept between runs: the install below still runs, adds the system
-      # libraries and downloads only what the restored folder lacks.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npx imago-check
+      - name: Restore the Playwright browser
+        id: playwright
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
       - run: npx playwright install --with-deps chromium
+      - name: Save the Playwright browser
+        if: steps.playwright.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
       - run: npm run build && npm test && npm run smoke
   native:
     strategy:
@@ -50,24 +53,28 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # The build of the dependencies (registry, git dependencies, target/) is restored from the last run and cargo
-      # compiles only what changed. The key carries the compiler: a cache made by another rustc is rebuilt whole
-      # and, being a hit on the same lock, would never be saved again. Saved once per key, by a run that succeeds.
-      - name: Cargo home and compiler
-        id: rust
+          cache-dependency-path: package-lock.json
+      - name: Cargo cache key
+        id: cargo-key
+        shell: bash
         run: |
-          echo "home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
-          echo "rustc=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          info=$(rustc -vV)
+          release=$(printf '%s\n' "$info" | sed -n 's/^release: //p')
+          commit=$(printf '%s\n' "$info" | sed -n 's/^commit-hash: \(.........\).*/\1/p')
+          lock=$(grep -E '^(source|checksum) = ' Cargo.lock | shasum -a 256 | cut -c1-20)
+          echo "toolchain=$release-$commit" >> "$GITHUB_OUTPUT"
+          echo "lock=$lock" >> "$GITHUB_OUTPUT"
+      - name: Restore the compiled Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ${{ steps.rust.outputs.home }}/registry/index
-            ${{ steps.rust.outputs.home }}/registry/cache
-            ${{ steps.rust.outputs.home }}/git/db
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-native-${{ steps.rust.outputs.rustc }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-cargo-native-${{ steps.cargo-key.outputs.toolchain }}-${{ steps.cargo-key.outputs.lock }}
           restore-keys: |
-            ${{ runner.os }}-cargo-native-${{ steps.rust.outputs.rustc }}-
+            ${{ runner.os }}-cargo-native-${{ steps.cargo-key.outputs.toolchain }}-
       - name: Install WebKitGTK and virtual display
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth
