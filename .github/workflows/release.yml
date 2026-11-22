@@ -72,6 +72,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
       PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+      CARGO_INCREMENTAL: '0'
     defaults:
       run:
         shell: pwsh
@@ -110,6 +111,30 @@ jobs:
             choco install innosetup -y --no-progress
             if ($LASTEXITCODE) { exit 1 }
           }
+
+      - name: Cargo cache key
+        id: cargo-key
+        run: |
+          $info = rustc -vV
+          if ($LASTEXITCODE) { exit 1 }
+          $release = ($info | Select-String '^release: (\S+)').Matches[0].Groups[1].Value
+          $commit = ($info | Select-String '^commit-hash: (\w{9})').Matches[0].Groups[1].Value
+          $pins = Select-String -Path Cargo.lock -Pattern '^(source|checksum) = ' | ForEach-Object Line
+          $lock = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($pins -join "`n"))).Substring(0, 20).ToLower()
+          "toolchain=$release-$commit" >> $env:GITHUB_OUTPUT
+          "lock=$lock" >> $env:GITHUB_OUTPUT
+
+      - name: Restore the compiled Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-release-${{ steps.cargo-key.outputs.toolchain }}-${{ steps.cargo-key.outputs.lock }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-${{ steps.cargo-key.outputs.toolchain }}-
 
       - name: Prepare and build
         run: |

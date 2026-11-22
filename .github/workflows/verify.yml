@@ -3,7 +3,8 @@ on:
   push:
     branches: [develop]
   pull_request:
-    branches: [main, develop]
+    branches: [develop]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -17,9 +18,23 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npx imago-check
+      - name: Restore the Playwright browser
+        id: browser
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
       - run: npx playwright install --with-deps chromium
+      - name: Save the Playwright browser
+        if: steps.browser.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.browser.outputs.cache-primary-key }}
       - run: npm run build && npm test && npm run smoke
   native:
     strategy:
@@ -37,6 +52,29 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Cargo cache key
+        id: cargo-key
+        shell: bash
+        run: |
+          info=$(rustc -vV)
+          release=$(printf '%s\n' "$info" | sed -n 's/^release: //p')
+          commit=$(printf '%s\n' "$info" | sed -n 's/^commit-hash: \(.........\).*/\1/p')
+          lock=$(grep -E '^(source|checksum) = ' Cargo.lock | shasum -a 256 | cut -c1-20)
+          echo "toolchain=$release-$commit" >> "$GITHUB_OUTPUT"
+          echo "lock=$lock" >> "$GITHUB_OUTPUT"
+      - name: Restore the compiled Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-native-${{ steps.cargo-key.outputs.toolchain }}-${{ steps.cargo-key.outputs.lock }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-native-${{ steps.cargo-key.outputs.toolchain }}-
       - name: Install WebKitGTK and virtual display
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth
