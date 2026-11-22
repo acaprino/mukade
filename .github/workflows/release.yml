@@ -72,6 +72,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
       PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+      CARGO_INCREMENTAL: '0'
     defaults:
       run:
         shell: pwsh
@@ -83,10 +84,35 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+          cache: npm
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
+
+      # The build of the dependencies (registry, git dependencies, target\) is kept between releases and cargo
+      # compiles only what changed. A run reads only the caches of its own branch and of the default branch, so
+      # the Verify caches (made on develop) are not visible here: this run restores and saves its own, and the
+      # first release after a change of the lock warms it. It comes before "Next version", which edits Cargo.lock.
+      # The key carries the compiler: a cache made by another rustc is rebuilt whole and, being a hit on the same
+      # lock, would never be saved again.
+      - name: Cargo home and compiler
+        id: rust
+        run: |
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+          "home=$cargoHome" >> $env:GITHUB_OUTPUT
+          "rustc=$((rustc --version).Split(' ')[1])" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.rust.outputs.home }}/registry/index
+            ${{ steps.rust.outputs.home }}/registry/cache
+            ${{ steps.rust.outputs.home }}/git/db
+            target
+          key: ${{ runner.os }}-cargo-release-${{ steps.rust.outputs.rustc }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-${{ steps.rust.outputs.rustc }}-
 
       - name: Next version
         id: version

@@ -1,9 +1,12 @@
 name: Verify desktop
+# One run per commit: develop is verified when it is pushed, and the pull request develop -> main (the same commit)
+# shows the checks of that run. A pull request into develop is another commit and is verified too.
 on:
   push:
     branches: [develop]
   pull_request:
-    branches: [main, develop]
+    branches: [develop]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -17,6 +20,15 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
+          cache: npm
+      # The browser Playwright downloads is kept between runs: the install below still runs, adds the system
+      # libraries and downloads only what the restored folder lacks.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
       - run: npm ci
       - run: npx imago-check
       - run: npx playwright install --with-deps chromium
@@ -37,6 +49,25 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
+          cache: npm
+      # The build of the dependencies (registry, git dependencies, target/) is restored from the last run and cargo
+      # compiles only what changed. The key carries the compiler: a cache made by another rustc is rebuilt whole
+      # and, being a hit on the same lock, would never be saved again. Saved once per key, by a run that succeeds.
+      - name: Cargo home and compiler
+        id: rust
+        run: |
+          echo "home=${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+          echo "rustc=$(rustc --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.rust.outputs.home }}/registry/index
+            ${{ steps.rust.outputs.home }}/registry/cache
+            ${{ steps.rust.outputs.home }}/git/db
+            target
+          key: ${{ runner.os }}-cargo-native-${{ steps.rust.outputs.rustc }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-native-${{ steps.rust.outputs.rustc }}-
       - name: Install WebKitGTK and virtual display
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth
