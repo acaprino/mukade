@@ -23,18 +23,18 @@ jobs:
       - run: npm ci
       - run: npx imago-check
       - name: Restore the Playwright browser
-        id: playwright
+        id: browser
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
       - run: npx playwright install --with-deps chromium
       - name: Save the Playwright browser
-        if: steps.playwright.outputs.cache-hit != 'true'
+        if: steps.browser.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('node_modules/playwright-core/package.json') }}
+          key: ${{ steps.browser.outputs.cache-primary-key }}
       - run: npm run build && npm test && npm run smoke
   native:
     strategy:
