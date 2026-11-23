@@ -15,9 +15,26 @@
 - Never change the version or create release tags by hand: the workflow does it (`.github/release.json` lists
   the version files, `.github/scripts/release.mjs` writes them).
 
+## One look for the whole suite (the owner's rule, 2026-11-23)
+
+Every app of the suite (Daodan, Xiox, Shinatama, Mukade, Muro and the others on Sigrid) has the same look and feel:
+the same surfaces, shadows, spacing, type and motion, and the same component for the same need. What is the app's own
+is its layout, which follows its functions, its accent and its icon.
+
+- The suite's design system is Sigrid (`acaprino/sigrid`). The UI uses only its components: it makes no component of
+  its own that draws (no stylesheet, no class, no primitive, no copy or restyling of a part of the design system); the
+  app's code composes the design system's components into screens and wires them to its data.
+- The app adapts to the design system, never the other way round. Sigrid changes only when a component or a primitive
+  that a function needs is really missing: it is then added to Sigrid, generic, for every app. The app's former look
+  is no reason to change Sigrid.
+- Until this app is ported from Imago to Sigrid, its UI uses only Imago's parts and adds none of its own; a part that
+  is missing is asked of Sigrid, and the app gets it with its port.
+
+## UI work (Imago)
+
 Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
 Apply its tokens and confirmed design choices within the requested scope.
-Use the package's im- classes and --im- tokens. Build a control of your own from the tokens, never from literal colours or sizes.
+Use the package's im- classes and --im- tokens; never build a control of your own ("One look for the whole suite").
 Report conflicts and keep unresolved choices explicit.
 Run npx imago-check before you say UI work is done.
 
