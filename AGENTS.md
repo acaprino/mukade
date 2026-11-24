@@ -27,8 +27,11 @@ is its layout, which follows its functions, its accent and its icon.
 - The app adapts to the design system, never the other way round. Sigrid changes only when a component or a primitive
   that a function needs is really missing: it is then added to Sigrid, generic, for every app. The app's former look
   is no reason to change Sigrid.
-- Until this app is ported from Imago to Sigrid, its UI uses only Imago's parts and adds none of its own; a part that
-  is missing is asked of Sigrid, and the app gets it with its port.
+- The base of the app is Imago, the suite's shell in Xiox's style (window, title bar, frame, commands, palette, theme,
+  notices), built with Sigrid; Sigrid gives the components. The app brings only its screens, made of Sigrid's
+  components, and has no shell, window, frame or look of its own. What is missing in the shell is added to Imago, what
+  is missing in a component is added to Sigrid. Until Imago's shell on Sigrid exists, the app keeps the shell and the
+  parts it has today (Imago's) and adds none of its own.
 
 ## UI work (Imago)
 
