@@ -2,6 +2,8 @@
 
 For UI work, apply the design file and inspect the project files it references.
 Run npx imago-check and npx --no sigrid-check apps/desktop/src before you say UI work is done.
+Every app of the suite has Sigrid's one look: use only the design system's components, never a component, class or
+stylesheet of your own; a missing part is added to Sigrid. See "One look for the whole suite" in AGENTS.md.
 
 @node_modules/@acaprino/imago/docs/design-file.md
 

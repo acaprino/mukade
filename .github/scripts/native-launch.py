@@ -1,4 +1,4 @@
-"""Run on a fresh macOS or Linux CI runner with its native window system available."""
+"""Run on a fresh Linux CI runner with its native window system available."""
 import os
 import subprocess
 import sys
@@ -6,8 +6,7 @@ import time
 from pathlib import Path
 
 binary = Path(sys.argv[1]).resolve()
-data = (Path.home() / 'Library/Application Support' if sys.platform == 'darwin'
-        else Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')))
+data = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
 marker = data / 'dev.mukade.desktop/window-theme'
 start = time.time()
 process = subprocess.Popen([binary], cwd=binary.parent)

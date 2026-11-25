@@ -15,6 +15,23 @@
 - Never change the version or create release tags by hand: the workflow does it (`.github/release.json` lists
   the version files, `.github/scripts/release.mjs` writes them).
 
+## One look for the whole suite (the owner's rule, 2026-11-23)
+
+Every app of the suite (Daodan, Xiox, Shinatama, Mukade, Muro and the others on Sigrid) has the same look and feel:
+the same surfaces, shadows, spacing, type and motion, and the same component for the same need. What is the app's own
+is its layout, which follows its functions, its accent and its icon.
+
+- The suite's design system is Sigrid (`acaprino/sigrid`). The UI uses only its components: it makes no component of
+  its own that draws (no stylesheet, no class, no primitive, no copy or restyling of a part of the design system); the
+  app's code composes the design system's components into screens and wires them to its data.
+- The app adapts to the design system, never the other way round. Sigrid changes only when a component or a primitive
+  that a function needs is really missing: it is then added to Sigrid, generic, for every app. The app's former look
+  is no reason to change Sigrid.
+- The base of the app is Imago, the suite's shell in Xiox's style (window, title bar, frame, commands, palette, theme,
+  notices), built with Sigrid; Sigrid gives the components. The app brings only its screens, made of Sigrid's
+  components, and has no shell, window, frame or look of its own. What is missing in the shell is added to Imago, what
+  is missing in a component is added to Sigrid. The app has no shell of its own: it stands on Imago.
+
 ## UI: Imago
 
 Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the files it references.
