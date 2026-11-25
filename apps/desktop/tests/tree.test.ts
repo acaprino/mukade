@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ancestors, arrange, byUpdated, childrenText, flatten, folders, inFolder, kindText, mark, search, shortTime, visible } from '../src/tree.ts';
+import { ancestors, arrange, branches, byUpdated, childrenText, flatten, folders, inFolder, kindText, mark, nest, openBranches, placed, foldedAfter, search, shortTime, visible } from '../src/tree.ts';
 import type { SessionRow } from '../src/types.ts';
 
 const row = (id: string, extra: Partial<SessionRow> = {}): SessionRow => ({ id, title: id, archived: false, path: `${id}.jsonl`, cwd: '/projects/a', ...extra });
@@ -82,4 +82,26 @@ test('short times: today, yesterday, a date', () => {
   assert.equal(shortTime(new Date(2026, 10, 3).toISOString(), now), 'Nov 3');
   assert.equal(shortTime(new Date(2025, 0, 3).toISOString(), now), 'Jan 3 2025');
   assert.equal(shortTime(undefined, now), '');
+});
+
+test('the tree the list draws: places nested by depth, the branches, and what folding does to them', () => {
+  const nodes = nest(placed(listing, null, ''));
+  assert.deepEqual(nodes.map((node) => node.place.row.id), ['main', 'stray']);
+  assert.deepEqual(nodes[0].children!.map((node) => node.place.row.id), ['helper', 'branch', 'far-fork']);
+  assert.equal(nodes[1].children, undefined);
+  assert.deepEqual(branches(nodes), ['main']);
+  assert.deepEqual(openBranches(nodes, new Set()), ['main']);
+  assert.deepEqual(openBranches(nodes, new Set(['main'])), []);
+});
+
+test('folding: a branch the tree no longer lists as open is folded; one that is not on screen keeps its fold', () => {
+  const nodes = nest(placed(listing, null, ''));
+  assert.deepEqual([...foldedAfter(nodes, [], new Set())], ['main']);
+  assert.deepEqual([...foldedAfter(nodes, ['main'], new Set(['main']))], []);
+  assert.deepEqual([...foldedAfter(nodes, ['main'], new Set(['elsewhere']))].sort(), ['elsewhere']);
+});
+
+test('a search keeps the parents of a match, nested under them, with no fold', () => {
+  const nodes = nest(placed(listing, null, 'branch'));
+  assert.deepEqual(nodes.map((node) => [node.place.row.id, node.children?.map((child) => child.place.row.id)]), [['main', ['branch']]]);
 });

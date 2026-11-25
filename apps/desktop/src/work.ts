@@ -1,7 +1,6 @@
 // What a session left in its folder: the git repositories there, the commits that exist on no
-// remote and the paths not committed. Pure lines, so tests/work.test.ts checks them; renderWork draws them.
+// remote and the paths not committed. Pure lines, so tests/work.test.ts checks them; screens/work.tsx draws them.
 
-import { chip, h, inlineNote } from './dom.ts';
 import type { Branch, Repository, SessionRow, Work, Worktree } from './types.ts';
 
 /** Only a session whose conversation cannot be read, but whose folder is known, is started elsewhere:
@@ -103,22 +102,4 @@ export function otherRows(repo: Repository): OtherRow[] {
     rows.push({ kind: 'branch', name: branch.name, line: `${branch.upstream ?? 'no upstream'} · ${state(branch, 0)}`, title: branch.name });
   }
   return rows;
-}
-
-const atRiskChip = (): HTMLElement => chip('at risk', 'warn', 'Work that exists only in this folder');
-
-export function renderWork(work: Work): HTMLElement {
-  const root = h('div', { class: 'work-body' }, h('p', { class: 'work-folder', title: work.folder }, work.folder));
-  if (work.note) root.append(inlineNote(work.note));
-  for (const repo of work.repositories) {
-    const item = h('div', { class: 'work-repo' },
-      h('div', { class: 'work-head' }, h('span', { class: 'work-name', title: repo.path }, leaf(repo.path)), atRisk(repo) ? atRiskChip() : null),
-      repositoryError(repo) ? inlineNote(repositoryError(repo)) : h('p', { class: 'work-line' }, repositoryLine(repo)));
-    for (const other of otherRows(repo)) {
-      const parts = [h('span', { class: 'work-kind' }, other.kind), ' ', h('b', {}, other.name), ' · ', other.line];
-      item.append(other.error ? Object.assign(inlineNote(parts, 'warn'), { title: other.title }) : h('p', { class: 'work-line work-other', title: other.title }, ...parts));
-    }
-    root.append(item);
-  }
-  return root;
 }

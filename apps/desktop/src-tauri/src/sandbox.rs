@@ -197,6 +197,21 @@ pub fn forget(root: &str) -> CmdResult<()> {
     save(&all)
 }
 
+/// List a forgotten sandbox again (the Undo of forgetting it). Its folder must still be there; a sandbox already listed at that
+/// folder is replaced, not doubled.
+pub fn restore(sandbox: Sandbox) -> CmdResult<()> {
+    if !Path::new(&sandbox.root).is_dir() {
+        return Err(CmdError::not_found(format!("no folder at {}", sandbox.root)));
+    }
+    if sandbox.harness.parse::<HarnessId>().is_err() {
+        return Err(CmdError::refused(format!("{} is not a harness", sandbox.harness)));
+    }
+    let mut all = list();
+    all.retain(|one| one.root != sandbox.root);
+    all.push(sandbox);
+    save(&all)
+}
+
 /// Open a sandbox's harness in a new terminal, in its folder.
 pub fn run(root: &str) -> CmdResult<Vec<String>> {
     let sandbox = list().into_iter().find(|sandbox| sandbox.root == root).ok_or_else(|| CmdError::not_found(format!("no sandbox at {root}")))?;
@@ -238,6 +253,27 @@ mod tests {
         for var in ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"] {
             assert!(opencode.contains(var), "{var}");
         }
+    }
+
+    fn record(harness: &str, root: &str) -> Sandbox {
+        Sandbox {
+            harness: harness.into(),
+            name: "try".into(),
+            root: root.into(),
+            store: format!("{root}/home"),
+            exe: format!("{root}/run"),
+            package: "x".into(),
+            created: "2026-11-25".into(),
+        }
+    }
+
+    #[test]
+    fn a_sandbox_whose_folder_is_gone_or_whose_harness_is_unknown_is_not_listed_again() {
+        let missing = restore(record("claude_code", "/nowhere/at/all/sandbox")).unwrap_err();
+        assert_eq!(missing.kind, "not_found", "{missing:?}");
+        let here = std::env::temp_dir();
+        let unknown = restore(record("emacs", &here.to_string_lossy())).unwrap_err();
+        assert_eq!(unknown.kind, "refused", "{unknown:?}");
     }
 
     #[test]

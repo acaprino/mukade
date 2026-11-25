@@ -508,6 +508,12 @@ pub async fn sandbox_forget(root: String) -> CmdResult<()> {
     blocking(move || sandbox::forget(&root)).await
 }
 
+/// The notice's Undo of «Forget sandbox»: the sandbox is listed again.
+#[tauri::command]
+pub async fn sandbox_restore(sandbox: sandbox::Sandbox) -> CmdResult<()> {
+    blocking(move || sandbox::restore(sandbox)).await
+}
+
 #[tauri::command]
 pub async fn sandbox_run(root: String) -> CmdResult<Vec<String>> {
     blocking(move || sandbox::run(&root)).await

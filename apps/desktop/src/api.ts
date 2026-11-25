@@ -80,6 +80,8 @@ export const api = {
   /** npm installs the harness into a sandbox of its own; answers when it is done. */
   sandboxInstall: (harness: string, name: string) => invoke<Sandbox>('sandbox_install', { harness, name }),
   sandboxForget: (root: string) => invoke<null>('sandbox_forget', { root }),
+  /** Lists a forgotten sandbox again (the notice's Undo); its folder must still be there. */
+  sandboxRestore: (sandbox: Sandbox) => invoke<null>('sandbox_restore', { sandbox }),
   sandboxRun: (root: string) => invoke<string[]>('sandbox_run', { root }),
   quit: () => invoke<void>('quit'),
 };

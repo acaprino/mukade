@@ -179,3 +179,8 @@ export const harnessKey = (harness: string): string => (harness === 'claude' || 
 /** Case-insensitive containment, for the searches. */
 export const matches = (text: string | null | undefined, query: string): boolean =>
   Boolean(text) && text!.toLowerCase().includes(query.trim().toLowerCase());
+
+/** A command line as one shell-ish line, each part quoted when it holds a space or a quote. */
+export function commandLine(argv: string[]): string {
+  return argv.map((part) => (/[\s"']/.test(part) || part === '' ? `"${part.replace(/"/g, '\\"')}"` : part)).join(' ');
+}

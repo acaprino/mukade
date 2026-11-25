@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "shell",
+  "description": "The commands of the imago-shell plugin, for the Mukade window: its theme, its glass, its maximize button, its first frame, its title and its taskbar button.",
+  "windows": ["main"],
+  "permissions": ["imago-shell:default"]
+}

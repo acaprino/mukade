@@ -39,12 +39,13 @@ export async function checkWriteRecovery(page, writes) {
   const recovered = page.getByRole('dialog', { name: 'Import', exact: true });
   assert.equal(writes.requests, 2); // One failed write and one explicit retry.
   await page.reload();
-  await recovered.getByText('Import in progress…', { exact: true }).waitFor();
+  await recovered.getByText('In progress…', { exact: true }).first().waitFor();
+  // The key of Import opens no second dialog over the one that waits, and the form is not there: the write is Rust's until it is told.
   await page.keyboard.press('Escape');
   await page.keyboard.press('i');
   await page.keyboard.press('Enter');
-  assert.equal(await recovered.getAttribute('aria-busy'), 'true');
-  assert.equal(await page.locator('#import-path').count(), 0);
+  await recovered.getByRole('progressbar').waitFor();
+  assert.equal(await recovered.getByRole('textbox', { name: 'Document' }).count(), 0);
   assert.equal(writes.requests, 2);
 
   writes.finish();
@@ -55,23 +56,26 @@ export async function checkWriteRecovery(page, writes) {
   assert.equal(writes.sessions, 1);
   assert.equal(writes.requests, 2);
   const acknowledged = page.waitForFunction(() => window.testIpc.acknowledged);
-  await done.getByRole('button', { name: 'Close', exact: true }).click();
+  acknowledged.catch(() => {}); // a failure before it is awaited must not hide itself as an unhandled rejection
+  await done.getByRole('button', { name: 'Close', exact: true }).first().click();
   await acknowledged;
   assert.equal(writes.current, null);
   await page.reload();
-  await page.locator('#sessions .row').first().waitFor();
+  await page.getByRole('tree', { name: 'Sessions' }).getByRole('treeitem').first().waitFor();
   await page.waitForFunction(() => window.testIpc.checked);
   assert.equal(await page.getByRole('dialog').count(), 0);
 
-  await page.locator('#import').click();
-  await page.locator('#import-path').fill('invalid.json');
-  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Import', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'Import', exact: true });
+  const path = form.getByRole('textbox', { name: 'Document' });
+  await path.fill('invalid.json');
+  await path.press('Enter');
   await page.waitForFunction(() => window.testIpc.imports === 1);
   writes.fail();
   await page.reload();
-  await recovered.getByText('temporary failure', { exact: true }).waitFor();
+  await recovered.getByText('temporary failure', { exact: false }).first().waitFor();
   assert.equal(writes.requests, 3);
   assert.equal(writes.sessions, 1);
-  await recovered.getByRole('button', { name: 'Close', exact: true }).click();
+  await recovered.getByRole('button', { name: 'Close', exact: true }).first().click();
   await page.waitForFunction(() => window.testIpc.acknowledged);
 }
