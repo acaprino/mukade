@@ -198,3 +198,55 @@ export function visible(rows: SessionRow[], folder: string | null, query: string
   const placed = arrange(byUpdated(inFolder(rows, folder)));
   return query.trim() ? search(placed, query) : flatten(placed, collapsed);
 }
+
+/** What the session list holds: the folder's rows, newest first, as a tree, filtered by the search; nothing folded (the tree folds). */
+export function placed(rows: SessionRow[], folder: string | null, query: string): Place[] {
+  const all = arrange(byUpdated(inFolder(rows, folder)));
+  return query.trim() ? search(all, query) : all;
+}
+
+/** A place with the places under it: the shape of the tree the list draws. A row with nothing under it is a leaf. */
+export interface Nested { place: Place; children?: Nested[] }
+
+/** `places` (as `arrange` and `search` leave them, parents before their children) nested by depth. */
+export function nest(places: Place[]): Nested[] {
+  const roots: Nested[] = [];
+  const stack: Nested[] = [];
+  for (const place of places) {
+    const node: Nested = { place };
+    while (stack.length > place.depth) stack.pop();
+    const parent = stack[stack.length - 1];
+    if (parent && stack.length === place.depth) (parent.children ??= []).push(node);
+    else roots.push(node);
+    stack.push(node);
+  }
+  return roots;
+}
+
+/** The ids of the rows that hold others (the branches), as `nest` has them. */
+export function branches(nodes: readonly Nested[]): string[] {
+  const out: string[] = [];
+  const walk = (list: readonly Nested[]) => {
+    for (const node of list) {
+      if (!node.children) continue;
+      out.push(node.place.row.id);
+      walk(node.children);
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+/** The branches the list shows open: every one that is not folded away. */
+export function openBranches(nodes: readonly Nested[], collapsed: ReadonlySet<string>): string[] {
+  return branches(nodes).filter((id) => !collapsed.has(id));
+}
+
+/** The folded set after the tree reports the branches that are open: a branch of the list that is not among them is folded. */
+export function foldedAfter(nodes: readonly Nested[], open: readonly string[], collapsed: ReadonlySet<string>): Set<string> {
+  const shown = new Set(branches(nodes));
+  const next = new Set([...collapsed].filter((id) => !shown.has(id)));
+  const keep = new Set(open);
+  for (const id of shown) if (!keep.has(id)) next.add(id);
+  return next;
+}

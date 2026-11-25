@@ -30,16 +30,27 @@ is its layout, which follows its functions, its accent and its icon.
 - The base of the app is Imago, the suite's shell in Xiox's style (window, title bar, frame, commands, palette, theme,
   notices), built with Sigrid; Sigrid gives the components. The app brings only its screens, made of Sigrid's
   components, and has no shell, window, frame or look of its own. What is missing in the shell is added to Imago, what
-  is missing in a component is added to Sigrid. Until Imago's shell on Sigrid exists, the app keeps the shell and the
-  parts it has today (Imago's) and adds none of its own.
+  is missing in a component is added to Sigrid. The app has no shell of its own: it stands on Imago.
 
-## UI work (Imago)
+## UI: Imago
 
-Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
-Apply its tokens and confirmed design choices within the requested scope.
-Use the package's im- classes and --im- tokens; never build a control of your own ("One look for the whole suite").
-Report conflicts and keep unresolved choices explicit.
-Run npx imago-check before you say UI work is done.
+Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the files it references.
+The frame is the shell's (AppWindow of @acaprino/imago). Lay out with Sigrid's parts: write no class, no style and no stylesheet,
+and no component that draws; a part Sigrid lacks is added to Sigrid (`node_modules/@acaprino/sigrid/AGENTS.md` and `DESIGN.md`, and its
+`agents/catalog.json` for the props).
+Apply its tokens and confirmed design choices within the requested scope. Report conflicts and keep unresolved choices explicit.
+Run npx imago-check and npx --no sigrid-check apps/desktop/src (the rule own-class is on, `sigrid-check.config.json`) before you say UI work is done.
+
+## Where the no-build rules apply (the owner, 2026-11-25)
+
+- The two rules below ("Rust is built and tested on GitHub only" and "Nothing is compiled on this machine") are for the
+  owner's own computer, where Codex, Claude Code or any other agent runs locally: nothing is compiled, built, linted or
+  tested there.
+- A cloud session (Claude Code on the web, or an agent in a container; its system prompt says it runs in a remote execution
+  environment) is not that machine. There an agent may install dependencies, compile, build, lint and run the tests
+  (`npm ci`, `tsc`, `vite build`, `npm test`, `cargo` where the platform allows it). What only Windows or the release can
+  prove (the native window, the installer) is still proved by GitHub Actions: push to `develop` and read the run.
+- When it is not clear which machine it is, treat it as the owner's computer and compile nothing.
 
 ## Rust is built and tested on GitHub only (the owner's absolute rule)
 
