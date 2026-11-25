@@ -21,6 +21,17 @@ Use the package's im- classes and --im- tokens. Build a control of your own from
 Report conflicts and keep unresolved choices explicit.
 Run npx imago-check before you say UI work is done.
 
+## Where the no-build rules apply (the owner, 2026-11-25)
+
+- The two rules below ("Rust is built and tested on GitHub only" and "Nothing is compiled on this machine") are for the
+  owner's own computer, where Codex, Claude Code or any other agent runs locally: nothing is compiled, built, linted or
+  tested there.
+- A cloud session (Claude Code on the web, or an agent in a container; its system prompt says it runs in a remote execution
+  environment) is not that machine. There an agent may install dependencies, compile, build, lint and run the tests
+  (`npm ci`, `tsc`, `vite build`, `npm test`, `cargo` where the platform allows it). What only Windows or the release can
+  prove (the native window, the installer) is still proved by GitHub Actions: push to `develop` and read the run.
+- When it is not clear which machine it is, treat it as the owner's computer and compile nothing.
+
 ## Rust is built and tested on GitHub only (the owner's absolute rule)
 
 - Never run `cargo` on this machine: no `cargo build`, `cargo test`, `cargo clippy`, `cargo check`, `cargo run`,
