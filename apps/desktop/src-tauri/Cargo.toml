@@ -1,6 +1,6 @@
 [package]
 name = "mukade-desktop"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 description = "Desktop app for the harness sessions manager: browse, hop, export, import, resume and read the chat"
 license = "Apache-2.0"
