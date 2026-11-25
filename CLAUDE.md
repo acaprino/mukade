@@ -1,7 +1,7 @@
 @AGENTS.md
 
 For UI work, apply the design file and inspect the project files it references.
-Run npx imago-check before you say UI work is done.
+Run npx imago-check and npx --no sigrid-check apps/desktop/src before you say UI work is done.
 
 @node_modules/@acaprino/imago/docs/design-file.md
 

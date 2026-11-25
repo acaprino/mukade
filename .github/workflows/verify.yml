@@ -21,7 +21,10 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
+      # Imago's check (the pins of the package and the crate, the icons, the agent files, the names the package removed, the parts the shell
+      # draws) and Sigrid's, with the rule own-class (sigrid-check.config.json): no class, style or stylesheet of the app's own.
       - run: npx imago-check
+      - run: npx --no sigrid-check apps/desktop/src
       - name: Restore the Playwright browser
         id: browser
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -15,11 +15,14 @@
 - Never change the version or create release tags by hand: the workflow does it (`.github/release.json` lists
   the version files, `.github/scripts/release.mjs` writes them).
 
-Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the component or style files it references.
-Apply its tokens and confirmed design choices within the requested scope.
-Use the package's im- classes and --im- tokens. Build a control of your own from the tokens, never from literal colours or sizes.
-Report conflicts and keep unresolved choices explicit.
-Run npx imago-check before you say UI work is done.
+## UI: Imago
+
+Before UI work, read node_modules/@acaprino/imago/docs/design-file.md and the files it references.
+The frame is the shell's (AppWindow of @acaprino/imago). Lay out with Sigrid's parts: write no class, no style and no stylesheet,
+and no component that draws; a part Sigrid lacks is added to Sigrid (`node_modules/@acaprino/sigrid/AGENTS.md` and `DESIGN.md`, and its
+`agents/catalog.json` for the props).
+Apply its tokens and confirmed design choices within the requested scope. Report conflicts and keep unresolved choices explicit.
+Run npx imago-check and npx --no sigrid-check apps/desktop/src (the rule own-class is on, `sigrid-check.config.json`) before you say UI work is done.
 
 ## Where the no-build rules apply (the owner, 2026-11-25)
 

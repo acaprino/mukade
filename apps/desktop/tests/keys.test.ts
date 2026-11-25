@@ -1,24 +1,19 @@
+// The table of the window's own keys (src/keys.ts). The commands themselves are Sigrid's `useCommand` (src/screens/commands.tsx);
+// how Sigrid runs a key is its own test, and the browser proves the two together (smoke.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRegistry } from '@acaprino/imago/ui';
 import { COMMANDS, FOOTER } from '../src/keys.ts';
 
-const key = (name: string, flags: { ctrl?: boolean; shift?: boolean; alt?: boolean } = {}) =>
-  ({ key: name, ctrlKey: Boolean(flags.ctrl), shiftKey: Boolean(flags.shift), altKey: Boolean(flags.alt), metaKey: false });
-
-function loaded() {
-  const registry = createRegistry();
-  for (const command of COMMANDS) registry.register({ id: command.id, title: command.title, keys: command.keys, run: () => {} });
-  return registry;
-}
-
-test('every command of the table registers into a real registry, with no id and no key twice', () => {
-  const registry = loaded();
-  assert.equal(registry.list().length, COMMANDS.length);
+test('no id and no key twice', () => {
   assert.equal(new Set(COMMANDS.map((command) => command.id)).size, COMMANDS.length);
+  // One key may serve two places (J and K scroll the reader and step the chat), never two commands of one place or of «always».
+  const keys = COMMANDS.flatMap((command) => (command.keys ? [`${command.view === 'always' ? '' : command.view}|${command.keys.toLowerCase()}`] : []));
+  assert.equal(new Set(keys).size, keys.length);
+  const always = new Set(COMMANDS.filter((command) => command.view === 'always' && command.keys).map((command) => command.keys!.toLowerCase()));
+  for (const command of COMMANDS) if (command.view !== 'always' && command.keys) assert.ok(!always.has(command.keys.toLowerCase()), command.id);
 });
 
-test('no command binds Enter, Space, F6, Ctrl+K or Ctrl+F: those are the lists, the regions and mountApp', () => {
+test('no command binds Enter, Space, F6, Ctrl+K or Ctrl+F: those are the lists, the regions and the shell', () => {
   for (const { keys } of COMMANDS) {
     if (!keys) continue;
     assert.doesNotMatch(keys, /(^|\+)(Enter|Space| )$/i, keys);
@@ -28,42 +23,24 @@ test('no command binds Enter, Space, F6, Ctrl+K or Ctrl+F: those are the lists, 
   }
 });
 
-test('each key of the design reaches its command', () => {
-  const registry = loaded();
-  const cases: [ReturnType<typeof key>, string][] = [
-    [key('c'), 'chat'], [key('m'), 'harnesses'], [key('o'), 'scan'], [key('i'), 'import'], [key('r'), 'reload'],
-    [key('h'), 'hop'], [key('e'), 'export'], [key('R', { shift: true }), 'resume'], [key('s'), 'start-in'],
-    [key('t'), 'turns'], [key('g'), 'reader-top'], [key('G', { shift: true }), 'reader-bottom'],
-    [key('1'), 'chat-graph'], [key('2'), 'chat-lanes'], [key('3'), 'chat-feed'], [key('n'), 'new-room'], [key('l'), 'launch'],
-    [key('?', { shift: true }), 'keys'], [key('F', { ctrl: true, shift: true }), 'search-everything'], [key('Escape'), 'back'],
+test('each key of the design is on its command', () => {
+  const keyOf = (id: string) => COMMANDS.find((command) => command.id === id)?.keys;
+  const wanted: [string, string][] = [
+    ['chat', 'C'], ['harnesses', 'M'], ['scan', 'O'], ['import', 'I'], ['reload', 'R'], ['hop', 'H'], ['export', 'E'], ['resume', 'Shift+R'],
+    ['start-in', 'S'], ['turns', 'T'], ['reader-top', 'G'], ['reader-bottom', 'Shift+G'], ['reader-down', 'J'], ['reader-up', 'K'], ['chat-next', 'J'], ['chat-prev', 'K'], ['details', 'D'], ['chat-feed', '1'], ['chat-graph', '2'],
+    ['new-room', 'N'], ['launch', 'L'], ['keys', 'Shift+?'], ['search-everything', 'Ctrl+Shift+F'], ['back', 'Escape'],
   ];
-  for (const [event, id] of cases) assert.equal(registry.match(event)?.id, id, `${event.key} → ${id}`);
+  for (const [id, keys] of wanted) assert.equal(keyOf(id), keys, id);
 });
 
 test('R and Shift+R, G and Shift+G are different commands', () => {
-  const registry = loaded();
-  assert.equal(registry.match(key('r'))?.id, 'reload');
-  assert.equal(registry.match(key('R', { shift: true }))?.id, 'resume');
-  assert.equal(registry.match(key('g'))?.id, 'reader-top');
-  assert.equal(registry.match(key('G', { shift: true }))?.id, 'reader-bottom');
+  const keys = COMMANDS.map((command) => command.keys);
+  for (const pair of [['R', 'Shift+R'], ['G', 'Shift+G']]) for (const one of pair) assert.ok(keys.includes(one), one);
 });
 
-test('dropped keys run nothing: the slash, F5, Ctrl+R, the arrows, Ctrl+Shift+K', () => {
-  const registry = loaded();
-  for (const event of [key('/'), key('F5'), key('r', { ctrl: true }), key('ArrowLeft'), key('ArrowRight'), key('k', { ctrl: true, shift: true })]) {
-    assert.equal(registry.match(event), undefined, event.key);
-  }
-});
-
-test('in a text field a letter belongs to the field; Escape and Ctrl chords still run', () => {
-  const registry = loaded();
-  const field = { tagName: 'INPUT' };
-  assert.equal(registry.match({ ...key('h'), target: field }), undefined);
-  assert.equal(registry.match({ ...key('Escape'), target: field })?.id, 'back');
-  assert.equal(registry.match({ ...key('F', { ctrl: true, shift: true }), target: field })?.id, 'search-everything');
-});
-
-test('every id of the footer is in the table or is one of mountApp', () => {
-  const ids = new Set([...COMMANDS.map((command) => command.id), 'imago.palette', 'imago.search']);
+test('every place of a command is one the window knows, and every id of the foot is in the table', () => {
+  const places = new Set(['always', 'session', 'reader', 'chat', 'room']);
+  for (const command of COMMANDS) assert.ok(places.has(command.view), command.id);
+  const ids = new Set(COMMANDS.map((command) => command.id));
   for (const [place, list] of Object.entries(FOOTER)) for (const id of list) assert.ok(ids.has(id), `${place}: ${id}`);
 });

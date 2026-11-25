@@ -8,6 +8,12 @@ Its step numbers are in brackets below.
 
 ---
 
+## ✅ Done on 2026-11-25
+
+| what | before | now |
+|---|---|---|
+| The desktop on Imago 1.2 and Sigrid 6.10 ([desktop guide](docs/desktop.md#look-and-desktop-behaviour)) | vanilla TypeScript, HTML strings and nine stylesheets of its own (317 lines) on Imago 0.4.1, with two looks (Smooth, ONI) | React on Sigrid's parts inside Imago's `AppWindow`, no class, style or stylesheet of its own, the suite's one look; the window is `imago-shell`'s plugin. The sessions are Sigrid's `Tree` beside the transcript in a resizable `SplitPane`; Close room, Forget folder and Forget sandbox are done at once with Undo; Settings are a dialog of the palette; the chat's Lanes view was tried on `GraphCanvas` and dropped |
+
 ## ✅ Done on 2026-11-19
 
 | what | before | now |

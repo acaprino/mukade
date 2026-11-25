@@ -387,6 +387,7 @@ export async function answer(command: string, args: Record<string, unknown> = {}
       return delay(made, 1500);
     }
     case 'sandbox_forget': mockSandboxes.splice(mockSandboxes.findIndex((one) => one.root === args.root), 1); return delay(null);
+    case 'sandbox_restore': mockSandboxes.push(args.sandbox as (typeof mockSandboxes)[number]); return delay(null);
     case 'sandbox_run': return delay(['run']);
     case 'quit': return undefined;
     default: throw { kind: 'failed', message: `no mock for ${command}` };

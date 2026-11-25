@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { eventLine, mergeEvents } from '../src/chatmodel.ts';
-import { commandLine } from '../src/dom.ts';
+import { commandLine, eventLine, mergeEvents } from '../src/chatmodel.ts';
 import type { ChatEvent } from '../src/types.ts';
 
 const event = (id: string, kind: string, payload: Record<string, unknown> = {}, recipients: string[] = []): ChatEvent => ({
