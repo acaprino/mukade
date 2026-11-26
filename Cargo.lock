@@ -1608,8 +1608,8 @@ dependencies = [
 
 [[package]]
 name = "imago-shell"
-version = "1.2.0"
-source = "git+https://github.com/acaprino/imago?tag=v1.2.0#2b98f026db09acb3ef9413d338cdde235521dbf9"
+version = "1.4.1"
+source = "git+https://github.com/acaprino/imago?tag=v1.4.1#4d3b8ad71852b8f9a0f4afcca11e24ee3f76aa71"
 dependencies = [
  "serde",
  "serde_json",
