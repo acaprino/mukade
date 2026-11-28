@@ -18,7 +18,7 @@ mukade reads and writes its sessions: list, dump, hop in and out, resume, a summ
 | **Notable gaps** | ⚠️ sessions moved with `--session-dir`, `PI_CODING_AGENT_SESSION_DIR` or `sessionDir` are not found; written `usage` counters are zero; no system message is written |
 | **Not supported** | ❌ Oh My Pi (`omp`), a different project (see Install and locate) |
 | **mukade name** | `pi` (`mukade list pi`, `mukade dump pi <id>`, `mukade hop <src> <id> pi …`) [32] |
-| **Versions** | readers and writers built against 1.2.0; mukade-written sessions also run live against 1.4.0, npm's `latest` on 2026-10-28 ([verification](../verification/pi-session-and-reasoning-verification.md)). Page updated 2026-11-11; Pi facts read 2026-10-28 and 2026-11-01 |
+| **Versions** | **1.7.0** (npm, `--ignore-scripts`): every other harness's fixture hopped in and read back by `pi --export`, and Pi's fixture hopped out to the other five, all passing, no model ([live runner, 2026-11-28](../verification/2026-11-28-live-runner.md)); readers and writers built against 1.2.0; mukade-written sessions also run live against 1.4.0, npm's `latest` on 2026-10-28 ([verification](../verification/pi-session-and-reasoning-verification.md)). Page updated 2026-11-11; Pi facts read 2026-10-28 and 2026-11-01 |
 
 ## Quick start
 

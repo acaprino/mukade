@@ -17,7 +17,7 @@ Anthropic's agentic coding tool: it reads a codebase, edits files, runs commands
 | Subagents | ✅ read as sessions of their own; `hop --children` carries them (below); written into the destination's `subagents/` folder **[U]** whether Claude Code shows a written one |
 | Notable gaps | a hop of a fork writes a self-contained copy, not a linked fork; no archived flag; macOS `live` cannot tell a reused pid **[U]** |
 
-**Versions checked.** Page updated 2026-11-12.
+**Versions checked.** Page updated 2026-11-12. **2.1.332** (npm): every other harness's fixture hopped in, read back, and resumed by `claude -p --resume` against a local mock, and Claude Code's fixture hopped into the other five, all passing ([live runner, 2026-11-28](../verification/2026-11-28-live-runner.md)).
 
 | Version | Checked on it |
 |---|---|

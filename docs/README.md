@@ -12,6 +12,7 @@ New here: the [project README](../README.md), then the [usage guide](usage.md).
 | [Desktop app](desktop.md) | you want the window: browse, read, hop, export, import, resume, chat |
 | [Open points](../next.md) | you want the status board: done, to verify, known limits |
 | [Windows checklist](verification/windows-checklist.md) | you settle an open check: steps, pass criterion |
+| [Live tests](live-tests.md) | you check mukade against real installs of the six harnesses, or a harness update: `node tests/live/run.mjs` |
 
 ## Harness pages
 
@@ -51,6 +52,7 @@ Records of single runs, not guarantees for later versions, in [verification/](ve
 
 **Hops and reasoning:**
 
+- [The live runner, first runs](verification/2026-11-28-live-runner.md): all 36 pairs and four chat launches against pinned installs, no model (2026-11-28).
 - [Live hops and provider reasoning](verification/live-hops-and-provider-reasoning.md): Claude Code, Codex, OpenCode (2026-10-28).
 - [Codex encrypted reasoning live](verification/codex-encrypted-reasoning-live.md): Codex → Codex (2026-11-04), with negative control.
 - [Pi session and reasoning](verification/pi-session-and-reasoning-verification.md): mock import, real signed reasoning.

@@ -43,9 +43,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04]
+        # Windows too: releases are Windows-only, and its cfg(windows) code and tests compile nowhere else before main.
+        os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 55
+    # The first Windows run builds tauri and every test binary with no cache.
+    timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -64,7 +66,7 @@ jobs:
           info=$(rustc -vV)
           release=$(printf '%s\n' "$info" | sed -n 's/^release: //p')
           commit=$(printf '%s\n' "$info" | sed -n 's/^commit-hash: \(.........\).*/\1/p')
-          lock=$(grep -E '^(source|checksum) = ' Cargo.lock | shasum -a 256 | cut -c1-20)
+          lock=$(grep -E '^(source|checksum) = ' Cargo.lock | sha256sum | cut -c1-20)
           echo "toolchain=$release-$commit" >> "$GITHUB_OUTPUT"
           echo "lock=$lock" >> "$GITHUB_OUTPUT"
       - name: Restore the compiled Rust dependencies
@@ -81,13 +83,29 @@ jobs:
       - name: Install WebKitGTK and virtual display
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth
+      - name: Point embed-resource at the Windows SDK's rc.exe
+        # build-release.bat's :find_rc: the SDK's own lookup can name an rc.exe that is not there.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $rc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.*\x64\rc.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if ($rc) { "RC_x86_64_pc_windows_msvc=$($rc.FullName)" >> $env:GITHUB_ENV; Write-Host "rc.exe: $($rc.FullName)" }
       - run: npm ci && npm run build
       - name: Add readiness probe to the CI frontend
+        shell: bash
         run: |
           cp apps/desktop/tests/native-launch.mjs apps/desktop/dist/native-launch.js
           node --input-type=module -e "import fs from 'node:fs'; const p='apps/desktop/dist/index.html'; fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace('</body>','<script type=module src=./native-launch.js></script></body>'))"
       - run: cargo test --locked -p mukade-desktop
-      - run: cargo test --locked -p mukade --lib --test chat_connect
+      # Every test of the library and the CLI: the unit tests, all of tests/ and the doc tests. The live ones are #[ignore].
+      - run: cargo test --locked --no-fail-fast -p mukade
+      # The command line the tests above built, for local tests that drive a prebuilt mukade (gh run download).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mukade-${{ runner.os }}
+          path: target/debug/mukade${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 14
       - run: cargo build --locked -p mukade-desktop --features custom-protocol
       - name: Start embedded Linux frontend
         if: runner.os == 'Linux'

@@ -1,12 +1,20 @@
 # Next: open points
 
-**Status on 2026-11-19.** What is done, then what is open, by what it needs (Windows, model calls,
+**Status on 2026-11-28.** What is done, then what is open, by what it needs (Windows, model calls,
 code, a key, macOS), then the known limits. Unverified facts are marked **[U]** here and in the docs.
 
 **The step-by-step for every open check:** [docs/verification/windows-checklist.md](docs/verification/windows-checklist.md).
 Its step numbers are in brackets below.
 
 ---
+
+## ✅ Done on 2026-11-28
+
+| what | before | now |
+|---|---|---|
+| Live tests ([guide](docs/live-tests.md), [record](docs/verification/2026-11-28-live-runner.md), [design](docs/superpowers/specs/2026-11-28-live-tests-and-harness-parity-design.md)) | each harness checked by a one-off run for one version, by hand in the real stores | `node tests/live/run.mjs` installs the pinned harnesses into `.live/`, each with its own store, takes the mukade CI built, hops every pair, reads each back and has each destination open it (model-free where it can, else against a local mock); a matrix and a report. Two runs on Linux, the second from fresh installs after a review of the runner (its sweep stops only what it started, Ctrl-C stops the run, a failed seed fails it, the installs' caches stay in `.live/cache/`, no `GIT_*` of the shell): 36 of 36 pairs and 4 of 4 chat launches pass each time; Hermes and DeepSeek Harness chat not checked (no adapter). Not yet run on Windows **[U]** [19] |
+| The whole Rust suite in CI | Verify ran the unit tests and one of the 56 files in `tests/`; nothing compiled `cfg(windows)` code before a release | `cargo test --locked --no-fail-fast -p mukade` on `ubuntu-24.04` and `windows-latest`, every push to `develop`; the `mukade` it built is an artifact (`mukade-Linux`, `mukade-Windows`, 14 days), the one the live runner takes. The first Windows run found chat files an elevated administrator's token owns (fixed) |
+| Imago 1.5.0, Sigrid 6.21.2 | Imago 1.4.1, Sigrid 6.15.1 | the package and `imago-shell` at `v1.5.0`. Sigrid 6.20.0 to 6.21.1, where overlays moved to Ark UI, failed the smoke test twice: Escape no longer closed the members drawer with the focus outside it (Ark marks a declined Esc handled, and the command layer skipped it), and a notice told under a modal window was hidden from assistive technology. Both fixed in Sigrid ([acaprino/sigrid#80](https://github.com/acaprino/sigrid/pull/80), 6.21.2). The Hop form holds Enter on a native check box or radio too |
 
 ## ✅ Done on 2026-11-25
 
@@ -80,9 +88,15 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
    `cargo test --workspace --no-fail-fast` **1105 passed, 0 failed**, 5 ignored (1116 after the fixes of the same day) (CLI, TUI, desktop
    `mukade-ui`); `npm test` 16 / 16; `mukade harnesses` lists all six ([record](docs/verification/windows-2026-11-12.md)). Left: `build.bat`
    built `mukade.exe` and `mukade-tui.exe`, its `mukade-ui` link failed while another session built
-   the same `target` (`LNK1181`); rerun it alone.
+   the same `target` (`LNK1181`); rerun it alone. Since 2026-11-28 CI runs the whole suite on `windows-latest` on
+   every push to `develop`.
 2. ✅ **TUI export / import** [1]: `e` exports, `i` imports into Pi, Pi opens it (2026-11-12, driven in a pseudo-console).
 3. ✅ **Windows timeout still kills the tree** [2]: `summary failed` after 4.2 s, no child left (2026-11-12).
+
+**The live runner**
+
+- **The live runner on Windows** [19] [U]: `node tests/live/run.mjs`, 36 pairs and the chat launches; its `.cmd`
+  launchers, `taskkill`, the PowerShell process list and the `gh run download` of mukade have run nowhere yet.
 
 **Codex**
 
@@ -121,7 +135,8 @@ Records: [Linux](docs/verification/linux-2026-11-11.md) ·
 16. **Hermes resumes a written session with a model** [16] [U]: `hermes --resume <id>` on a session `hop`
     imported, with the free OpenRouter route; the import and the read-back are verified, the answer is not.
 17. **dsh resumes a written session and the model calls a tool** [17] [U]: the live resume answered a plain
-    prompt; a task that makes it read a file settles the converted tool history.
+    prompt, and on 2026-11-28 dsh 0.2.2-rc.5 resumed all six harnesses' hops against a mock that answers text
+    ([record](docs/verification/2026-11-28-live-runner.md)); a task that makes it read a file settles the converted tool history.
 
 ## 🔵 Needs code (next)
 

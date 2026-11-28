@@ -17,7 +17,7 @@ with Codex's own model and compacts natively.
 | Resume | ✅ `codex exec resume <id>` (receipt) or `codex resume <id>`; live-verified on 0.166.0 [48] |
 | Summary by its own model | ⚠️ `--compaction summary` runs `codex exec fork … --ephemeral`; checked against a mock only **[U]** [27] |
 | Native compaction | ✅ `--compaction native` appends a `compacted` record; live-verified 2026-11-04 [19 §4.4] |
-| Versions | researched and readers verified on 0.164.0; writers live-tested on the installed 0.166.0 [48][49]; CLI 0.165.0 (published 2026-10-27) never exercised [17]; Desktop rollouts read up to 0.164.0-alpha.11.1 [21], 0.165.0-alpha.1.2 [26], 0.167.0 / 0.167.0-alpha.3.2 / 0.167.1 [50] |
+| Versions | **0.172.0** (npm): every other harness's fixture hopped in, read back, and resumed by `codex exec resume` against a local mock provider, and Codex's fixture hopped out to the other five, all passing ([live runner, 2026-11-28](../verification/2026-11-28-live-runner.md)); researched and readers verified on 0.164.0; writers live-tested on the installed 0.166.0 [48][49]; CLI 0.165.0 (published 2026-10-27) never exercised [17]; Desktop rollouts read up to 0.164.0-alpha.11.1 [21], 0.165.0-alpha.1.2 [26], 0.167.0 / 0.167.0-alpha.3.2 / 0.167.1 [50] |
 
 `[n]` = an entry in [Sources](#sources). **[U]** = not verified. Repository paths are relative to
 the repository root. Page updated 2026-11-21.

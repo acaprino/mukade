@@ -20,7 +20,7 @@ Evidence: `[n]` = source n in [Sources](#sources); `[S n]` = Hermes source at ta
 | **Notable gaps** | ⚠️ a written session has no model and no tool result of its own; its folder is kept only when it exists here; Hermes may leave the session untitled |
 | **Not supported** | ❌ a named profile is another installation: pass its folder as `--root` / `HERMES_HOME` |
 | **mukade name** | `hermes` (`mukade list hermes`, `mukade hop <src> <id> hermes`) [33] |
-| **Versions** | v0.23.1 (schema 33) read and written live on 2026-11-12 [35][36]; v0.22.5 (schema 32) by source only [34] |
+| **Versions** | v0.23.1 (schema 33) read and written live on 2026-11-12 [35][36]; **v0.23.5** (the tag, `uv sync --frozen` on Python 3.14): every other harness's fixture imported and read back by `hermes sessions export`, and a `state.db` seeded from the fixture hopped out to the other five, all passing, no model ([live runner, 2026-11-28](../verification/2026-11-28-live-runner.md)); v0.22.5 (schema 32) by source only [34] |
 
 ## Quick start
 

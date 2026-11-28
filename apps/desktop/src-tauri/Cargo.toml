@@ -20,7 +20,7 @@ tauri-build = { version = "=2.7.4", features = [] }
 mukade = { path = "../../.." }
 # The window the apps of the suite share, as a Tauri plugin: its material and theme, glass, Snap Layouts, the guard, WebView2 recovery,
 # its place, the title and the taskbar. The tag is the one @acaprino/imago has in package.json; the crate pins tauri to 2.12.5.
-imago-shell = { git = "https://github.com/acaprino/imago", tag = "v1.4.1" }
+imago-shell = { git = "https://github.com/acaprino/imago", tag = "v1.5.0" }
 tauri = { version = "=2.12.5", features = [] }
 tauri-plugin-dialog = "=2.8.4"
 serde = { version = "1", features = ["derive"] }
