@@ -19,6 +19,9 @@ it never writes OpenCode's SQLite database itself [1][10][27].
 | Gaps | ⚠️ sibling `opencode*.db` and legacy rows listed, not read; signed reasoning dropped unless `--dest-protocol` names the protocol |
 
 **Versions** (harness facts as of 2026-11-01; mukade facts checked against the code on 2026-11-12):
+- **2.4.2: hopped live** ([live runner, 2026-11-28](../verification/2026-11-28-live-runner.md)): the fixture imported by `session import --standalone` and hopped out to
+  the other five; every other harness's fixture hopped in, listed by `session list` in its project and read
+  back by `session export`, all passing, no model.
 - **2.1.4: verified** [1]: reader, writer, probes, on-disk facts.
 - **2.2.5: installed now** [39], newest release, published 2026-10-30 [47]. Only the native-compaction
   hop (2026-11-04) [56] and the listing check (2026-11-08) [55] ran on it.

@@ -227,6 +227,14 @@ list missed are marked (added).
 Edit its adapter files (`src/harnesses/<harness>.rs` and its reader, writer and detector) and its
 catalog entry. Nothing else branches on it.
 
+## The live runner's table
+
+`tests/live/harnesses.json` tells the [live runner](live-tests.md) how to keep each harness in a folder of its
+own: the variables it sets, the store, the package. `tests/live_table.rs` checks it against the adapters: `env`,
+`store.path`, `store.folders`, the package and `ignore_scripts` must equal each adapter's `sandbox_install`, and
+`store.env` the catalog's store variable. A harness with no npm sandbox (Hermes) sets its store variable only. A
+change to a harness's sandbox is made in both places, or the test fails.
+
 ## The architecture test
 
 `tests/architecture.rs`, `no_harness_branch_outside_its_adapter`:

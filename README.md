@@ -76,7 +76,7 @@ All six adapters can list and export sessions, and can act as both the source an
 | <img src="docs/assets/branding/harnesses/hermes.png" width="24" alt=""> **[Hermes Agent](docs/harnesses/hermes-agent.md)** | `hermes` | Read and write · imported tool history travels as text | CLI |
 | <img src="docs/assets/branding/harnesses/deepseek.svg" width="24" alt=""> **[DeepSeek Harness](docs/harnesses/deepseek-harness.md)** | `deepseek_harness` | Read and write · native `dsh` session logs | CLI |
 
-Hermes import and readback were [verified on v0.23.1](docs/verification/2026-11-12-hermes-writer-live.md). A DeepSeek session was imported and resumed with [`dsh` 0.2.2-rc.1](docs/verification/2026-11-12-dsh-writer-live.md). Source-model summaries and destination-native compaction are available for Claude Code, Codex, OpenCode, and Pi. The Codex summary path was tested against a mock provider. [Compaction options](docs/usage.md#5-choose-what-travels) · [Summary verification](docs/verification/source-model-summary-live.md)
+Every pair of the six, at the versions out on 2026-11-28 (Claude Code 2.1.332, Codex 0.172.0, OpenCode 2.4.2, Pi 1.7.0, Hermes 0.23.5, DeepSeek Harness 0.2.2-rc.5), was hopped, read back and opened by the destination itself, each in a store of its own and without a model: [live tests](docs/live-tests.md) · [record](docs/verification/2026-11-28-live-runner.md). Hermes import and readback were [verified on v0.23.1](docs/verification/2026-11-12-hermes-writer-live.md). A DeepSeek session was imported and resumed with [`dsh` 0.2.2-rc.1](docs/verification/2026-11-12-dsh-writer-live.md). Source-model summaries and destination-native compaction are available for Claude Code, Codex, OpenCode, and Pi. The Codex summary path was tested against a mock provider. [Compaction options](docs/usage.md#5-choose-what-travels) · [Summary verification](docs/verification/source-model-summary-live.md)
 
 ## What travels with a session
 
@@ -174,6 +174,14 @@ Open a [GitHub issue](https://github.com/acaprino/mukade/issues) with the harnes
 ```sh
 cargo test --locked --workspace
 ```
+
+Against real installs of the six harnesses, each in a folder of its own (`.live/`, gitignored), without touching your stores or calling a model:
+
+```sh
+node tests/live/run.mjs
+```
+
+[Live tests](docs/live-tests.md): what it installs, how each destination is checked, the options.
 
 [Technical documentation](docs/README.md#technical-reference) · [Verification records](docs/README.md#verification-records)
 

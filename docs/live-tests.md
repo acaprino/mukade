@@ -158,4 +158,5 @@ is one short prompt and costs that.
   `env`, `store` and package with each adapter's `sandbox_install`, and `store.env` with
   `catalog/harnesses.json`. Change an adapter's sandbox and the table together.
 - The runner is not run in CI: it installs about 4 GB of harnesses and may need keys.
-- Records of runs: [2026-11-28](verification/2026-11-28-live-runner.md).
+- Records of runs: [2026-11-28](verification/2026-11-28-live-runner.md). The first run on Windows is step 19 of the
+  [Windows checklist](verification/windows-checklist.md#19-the-live-runner-on-windows-20-min-most-of-it-the-installs-).

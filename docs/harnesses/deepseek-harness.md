@@ -19,7 +19,7 @@ Labels: `[n]` = a source in [Sources](#sources). **[S]** = read in upstream sour
 | **Subagents** | ⚠️ read: a log whose header has `parentSession` and `origin: "subagent"` is a child (`--children`), `isSeeded` marks one that inherits context, a fork is `kind: fork`. Written: `hop --children` writes each child as a session of its own, unlinked |
 | **Notable gaps** | ⚠️ no image is written (dsh keeps an attachment-store reference); no `web_search` call is translated; a resume that makes a tool call is not exercised live |
 | **mukade name** | `deepseek_harness` (`mukade list deepseek_harness`, `mukade hop <src> <id> deepseek_harness`); binary `dsh` [34] |
-| **Versions** | 0.2.2-rc.1 (npm) read, written and resumed live on 2026-11-12 [36]; the format facts come from `dsh-v0.2.2-rc.2` source [35] |
+| **Versions** | 0.2.2-rc.1 (npm) read, written and resumed live on 2026-11-12 [36]; **0.2.2-rc.5** (npm): every other harness's fixture hopped in and resumed by `dsh --profile headless --session-id` against a local mock, and dsh's fixture hopped out to the other five, all passing ([live runner, 2026-11-28](../verification/2026-11-28-live-runner.md)); the format facts come from `dsh-v0.2.2-rc.2` source [35] |
 
 ## Quick start
 

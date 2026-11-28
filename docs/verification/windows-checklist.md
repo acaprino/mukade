@@ -458,6 +458,29 @@ cd 'C:\work\my-project'; claude --resume NEW_SESSION_ID     # send nothing; open
 
 ---
 
+## 19. The live runner on Windows (20 min, most of it the installs) 🟢
+
+**Needs:** Node 22.13 or later, npm, git, [uv](https://docs.astral.sh/uv/), `gh` logged in; about 4 GB free.
+
+**Do**, in the repository:
+
+```powershell
+node tests/live/run.mjs
+```
+
+**Pass if:**
+
+- [ ] every harness installs, and the line `mukade: Verify run <id> of acaprino/mukade` names a green run;
+- [ ] the matrix is 36 × `pass`, no `SETUP FAIL` line, the four chat launches `pass`;
+- [ ] afterwards no `opencode.exe`, `node.exe` or `python.exe` from `.live\` is left running (Task Manager,
+      command line column).
+
+**Write down:** the last lines it printed, and the report it names (`.live\reports\<time>.md`).
+
+**Clean up:** `node tests/live/run.mjs --clean` (4 GB).
+
+---
+
 ## When you are done
 
 Send back the ticked list and the "Write down" values. Each passed block becomes a dated line in

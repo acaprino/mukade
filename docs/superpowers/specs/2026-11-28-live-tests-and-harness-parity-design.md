@@ -1,6 +1,8 @@
 # Local live tests and complete harness support
 
 Status: agreed with the owner on 2026-11-28 (decisions 1–9 of the review hand-over). Built slice by slice.
+Slice 1, the runner, built on 2026-11-28: [guide](../../live-tests.md), [record](../../verification/2026-11-28-live-runner.md)
+(36 of 36 pairs; the chat of Hermes and DeepSeek Harness not checked, no adapter). Next: the review's fixes 2–6.
 
 ## Problem Statement
 

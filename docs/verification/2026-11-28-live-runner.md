@@ -104,7 +104,7 @@ already exists`); the installs and every harness process now start without the s
 ## Not covered by this run
 
 - Windows, where the owner runs it: the `.cmd` launchers, `taskkill` and the PowerShell process sweep are written
-  for it and not yet run there.
+  for it and not yet run there ([Windows checklist, step 19](windows-checklist.md#19-the-live-runner-on-windows-20-min-most-of-it-the-installs-)).
 - The default path that fetches mukade with `gh run download`, and `--release`: this container's `gh` is limited
   to searches.
 - `--latest` and `--models` (no keys here).
