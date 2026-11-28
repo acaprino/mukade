@@ -1,0 +1,77 @@
+{
+  "schema": "mukade.live-harnesses/1",
+  "description": "The harnesses the live runner (tests/live/run.mjs) installs, at the versions pinned here, and how each one is kept inside its own folder. `env` and `store` are relative to the harness's home in the run folder; they must equal the adapter's sandbox description (src/harnesses/<id>.rs, `sandbox_install`), and `store.env` the store variable of catalog/harnesses.json: tests/live_table.rs checks both. `latest` with --latest is looked up, never written here.",
+  "harnesses": [
+    {
+      "id": "claude_code",
+      "display": "Claude Code",
+      "install": { "kind": "npm", "package": "@anthropic-ai/claude-code", "version": "2.1.332", "ignore_scripts": false },
+      "bin": "claude",
+      "exe_flag": "--claude-exe",
+      "env": { "CLAUDE_CONFIG_DIR": ".claude" },
+      "store": { "env": "CLAUDE_CONFIG_DIR", "path": ".claude", "folders": ["projects"] }
+    },
+    {
+      "id": "codex",
+      "display": "Codex CLI",
+      "install": { "kind": "npm", "package": "@openai/codex", "version": "0.172.0", "ignore_scripts": false },
+      "bin": "codex",
+      "exe_flag": "--codex-exe",
+      "env": { "CODEX_HOME": ".codex" },
+      "store": { "env": "CODEX_HOME", "path": ".codex", "folders": ["sessions"] }
+    },
+    {
+      "id": "opencode",
+      "display": "OpenCode",
+      "install": { "kind": "npm", "package": "@opencode/cli", "version": "2.4.2", "ignore_scripts": false },
+      "bin": "opencode",
+      "exe_flag": "--opencode-exe",
+      "env": { "XDG_DATA_HOME": "share", "XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state", "XDG_CACHE_HOME": "cache" },
+      "store": { "env": "OPENCODE_DB", "path": "share/opencode/opencode.db", "folders": [] }
+    },
+    {
+      "id": "pi",
+      "display": "Pi",
+      "install": { "kind": "npm", "package": "@earendil-works/pi-coding-agent", "version": "1.7.0", "ignore_scripts": true },
+      "bin": "pi",
+      "exe_flag": "--pi-exe",
+      "env": { "PI_CODING_AGENT_DIR": ".pi/agent" },
+      "store": { "env": "PI_CODING_AGENT_DIR", "path": ".pi/agent", "folders": ["sessions"] }
+    },
+    {
+      "id": "hermes",
+      "display": "Hermes Agent",
+      "install": {
+        "kind": "uv-git",
+        "repository": "https://github.com/NousResearch/hermes-agent",
+        "version": "0.23.5",
+        "tag": "v0.23.5",
+        "tag_pattern": "^v\\d{1,3}\\.\\d+\\.\\d+$",
+        "python": "3.14",
+        "note": "PyPI carries an older Hermes, and its build refuses a wheel: the tag is cloned and its uv.lock installed into a virtual environment of its own (uv sync --frozen --no-dev). `tag_pattern` picks the release tags: the repository also carries date tags (v2026.9.24)."
+      },
+      "bin": "hermes",
+      "exe_flag": "--hermes-exe",
+      "env": { "HERMES_HOME": ".hermes" },
+      "store": { "env": "HERMES_HOME", "path": ".hermes", "folders": [] }
+    },
+    {
+      "id": "deepseek_harness",
+      "display": "DeepSeek Harness",
+      "install": { "kind": "npm", "package": "@deepseek-ai/dsh", "version": "0.2.2-rc.5", "ignore_scripts": false },
+      "bin": "dsh",
+      "exe_flag": "--dsh-exe",
+      "env": { "DSH_HOME": ".dsh" },
+      "store": { "env": "DSH_HOME", "path": ".dsh", "folders": [] }
+    }
+  ],
+  "real_models": {
+    "description": "With --models only: the provider each destination resumes against, and the key it reads from the runner's environment. A check whose key is not set is reported as not checked.",
+    "claude_code": { "key_env": "ANTHROPIC_API_KEY", "model": "claude-haiku-5-5" },
+    "codex": { "key_env": "OPENAI_API_KEY", "provider": "openai", "model": null },
+    "opencode": { "key_env": "OPENROUTER_API_KEY", "provider": "openrouter", "model": "anthropic/claude-haiku-5.5" },
+    "pi": { "key_env": "OPENROUTER_API_KEY", "provider": "openrouter", "model": "anthropic/claude-haiku-5.5" },
+    "hermes": { "key_env": "OPENROUTER_API_KEY", "provider": "openrouter", "model": "anthropic/claude-haiku-5.5" },
+    "deepseek_harness": { "key_env": "OPENROUTER_API_KEY", "provider": "openrouter", "model": "anthropic/claude-haiku-5.5" }
+  }
+}

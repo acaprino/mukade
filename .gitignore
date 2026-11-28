@@ -9,3 +9,4 @@
 /apps/desktop/src-tauri/gen
 /apps/desktop/tests/out
 /release
+/.live

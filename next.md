@@ -8,6 +8,12 @@ Its step numbers are in brackets below.
 
 ---
 
+## ✅ Done on 2026-11-28
+
+| what | before | now |
+|---|---|---|
+| Live tests ([guide](docs/live-tests.md), [record](docs/verification/2026-11-28-live-runner.md), [design](docs/superpowers/specs/2026-11-28-live-tests-and-harness-parity-design.md)) | each harness checked by a one-off run for one version, by hand in the real stores | `node tests/live/run.mjs` installs the pinned harnesses into `.live/`, each with its own store, takes the mukade CI built, hops every pair, reads each back and has each destination open it (model-free where it can, else against a local mock); a matrix and a report. First run: 36 of 36 pairs and 4 of 4 chat launches pass; Hermes and DeepSeek Harness chat not checked (no adapter). Not yet run on Windows **[U]** |
+
 ## ✅ Done on 2026-11-25
 
 | what | before | now |
