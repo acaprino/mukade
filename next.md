@@ -14,7 +14,7 @@ Its step numbers are in brackets below.
 |---|---|---|
 | Live tests ([guide](docs/live-tests.md), [record](docs/verification/2026-11-28-live-runner.md), [design](docs/superpowers/specs/2026-11-28-live-tests-and-harness-parity-design.md)) | each harness checked by a one-off run for one version, by hand in the real stores | `node tests/live/run.mjs` installs the pinned harnesses into `.live/`, each with its own store, takes the mukade CI built, hops every pair, reads each back and has each destination open it (model-free where it can, else against a local mock); a matrix and a report. Two runs on Linux, the second from fresh installs after a review of the runner (its sweep stops only what it started, Ctrl-C stops the run, a failed seed fails it, the installs' caches stay in `.live/cache/`, no `GIT_*` of the shell): 36 of 36 pairs and 4 of 4 chat launches pass each time; Hermes and DeepSeek Harness chat not checked (no adapter). Not yet run on Windows **[U]** [19] |
 | The whole Rust suite in CI | Verify ran the unit tests and one of the 56 files in `tests/`; nothing compiled `cfg(windows)` code before a release | `cargo test --locked --no-fail-fast -p mukade` on `ubuntu-24.04` and `windows-latest`, every push to `develop`; the `mukade` it built is an artifact (`mukade-Linux`, `mukade-Windows`, 14 days), the one the live runner takes. The first Windows run found chat files an elevated administrator's token owns (fixed) |
-| Imago 1.5.0, Sigrid 6.19.0 | Imago 1.4.1, Sigrid 6.15.1 | the package and `imago-shell` at `v1.5.0`; Sigrid at 6.19.0, the last release before its overlays moved to Ark UI (6.20.0 to 6.21.1 fail the smoke test in two places: see Known limits). The Hop form holds Enter on a native check box or radio too |
+| Imago 1.5.0, Sigrid 6.21.2 | Imago 1.4.1, Sigrid 6.15.1 | the package and `imago-shell` at `v1.5.0`. Sigrid 6.20.0 to 6.21.1, where overlays moved to Ark UI, failed the smoke test twice: Escape no longer closed the members drawer with the focus outside it (Ark marks a declined Esc handled, and the command layer skipped it), and a notice told under a modal window was hidden from assistive technology. Both fixed in Sigrid ([acaprino/sigrid#80](https://github.com/acaprino/sigrid/pull/80), 6.21.2). The Hop form holds Enter on a native check box or radio too |
 
 ## ✅ Done on 2026-11-25
 
@@ -242,12 +242,6 @@ Not bugs. Each is stated in the docs where it applies.
   and `native` are refused. One live import was left untitled by Hermes, the cause is not known.
 - **DeepSeek Harness** ([page](docs/harnesses/deepseek-harness.md)): no terminal UI, so the TUI cannot resume
   it; no image is written; `--compaction summary` and `native` are refused; format 4 only.
-
-**Sigrid 6.20 and later** (waiting on Sigrid): the desktop stays on Sigrid 6.19.0. From 6.20.0, where overlays
-moved to Ark UI, the smoke test fails twice: Escape no longer closes the members drawer with the focus outside it
-(the drawer turns Ark's Escape off, Ark still calls `preventDefault` on the key, and Sigrid's command layer skips
-every app command for a prevented key), and a hop's receipt is no longer told in a notice. Both are fixed in
-Sigrid, then the pin moves.
 
 **Small review points still open** (harmless, low priority)
 
