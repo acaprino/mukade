@@ -98,7 +98,7 @@ jobs:
           node --input-type=module -e "import fs from 'node:fs'; const p='apps/desktop/dist/index.html'; fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace('</body>','<script type=module src=./native-launch.js></script></body>'))"
       - run: cargo test --locked -p mukade-desktop
       # Every test of the library and the CLI: the unit tests, all of tests/ and the doc tests. The live ones are #[ignore].
-      - run: cargo test --locked -p mukade
+      - run: cargo test --locked --no-fail-fast -p mukade
       # The command line the tests above built, for local tests that drive a prebuilt mukade (gh run download).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

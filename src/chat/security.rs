@@ -217,16 +217,19 @@ mod platform {
         }
     }
     fn token() -> io::Result<Vec<usize>> {
+        token_info(TokenUser)
+    }
+    fn token_info(class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<usize>> {
         unsafe {
             let mut h: HANDLE = null_mut();
             win(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut h))?;
             let _h = OwnedHandle::from_raw_handle(h);
             let mut n = 0;
-            GetTokenInformation(h, TokenUser, null_mut(), 0, &mut n);
+            GetTokenInformation(h, class, null_mut(), 0, &mut n);
             let mut b = vec![0usize; (n as usize).div_ceil(size_of::<usize>())];
             win(GetTokenInformation(
                 h,
-                TokenUser,
+                class,
                 b.as_mut_ptr().cast(),
                 n,
                 &mut n,
@@ -316,7 +319,12 @@ mod platform {
             let _desc = Local(desc);
             let b = token()?;
             let sid = (*b.as_ptr().cast::<TOKEN_USER>()).User.Sid;
-            if owner.is_null() || EqualSid(owner, sid) == 0 {
+            // An elevated administrator's new files belong to the token's default owner, which
+            // Windows Server (a CI runner) sets to BUILTIN\Administrators rather than the user.
+            let o = token_info(TokenOwner)?;
+            let default_owner = (*o.as_ptr().cast::<TOKEN_OWNER>()).Owner;
+            if owner.is_null() || (EqualSid(owner, sid) == 0 && EqualSid(owner, default_owner) == 0)
+            {
                 return Err(refused());
             }
             if !private {
