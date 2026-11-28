@@ -11,10 +11,11 @@
 // mock model (mock-model.mjs). It prints a matrix of pass, fail and not checked per pair, and saves
 // the same as `.live/reports/<stamp>.json` and `.md`.
 //
-// Nothing outside `.live/` is written, apart from the chat scenarios' data folder in the system's
-// temporary folder (chat refuses one inside a checkout), removed when they end. Every process runs
-// with HOME, the store variables and the XDG folders inside the run folder, without API keys. No
-// model is called unless --models is given.
+// Nothing outside `.live/` is written (npm's and uv's caches, and the Python uv installs, are in
+// `.live/cache/`), apart from the chat scenarios' data folder in the system's temporary folder (chat
+// refuses one inside a checkout), removed when they end. Every process runs with HOME, the store
+// variables and the XDG folders inside the run folder, without API keys. No model is called unless
+// --models is given.
 //
 // Node only: no package beyond Node itself. npm installs the npm harnesses; Hermes needs git and uv.
 import { spawn, spawnSync } from 'node:child_process';
@@ -82,19 +83,31 @@ function winQuote(arg) {
   return /[\s"&|<>^()%!,;=]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
 }
 
-/** Stop a process and everything it started. */
-function killTree(pid) {
+/**
+ * Stop a process. `group`: the process leads a group of its own (every child `run` starts on POSIX),
+ * and the whole group goes with it; a process found by `sweep` is stopped alone.
+ */
+function killTree(pid, { group = false } = {}) {
   if (!pid) return;
   if (IS_WIN) {
     spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true });
-  } else {
+  } else if (group) {
     try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch {} }
+  } else {
+    try { process.kill(pid, 'SIGKILL'); } catch {}
   }
 }
 
+/** The children `run` has started and not seen exit: stopped when the runner is interrupted. */
+const RUNNING = new Set();
+
+/** How long `run` waits for a child's output to close after it exited (or was stopped). */
+const DRAIN_MS = 5_000;
+
 /**
  * Run a command with stdin closed (or fed `input`), its output captured, and a deadline that stops
- * its whole process tree. Never throws: a command that cannot start answers code -1.
+ * its whole process tree. Never throws: a command that cannot start answers code -1. It resolves at
+ * the latest DRAIN_MS after the child exits, even when a process it started keeps the output open.
  */
 function run(cmd, args, { env = process.env, cwd = REPO, timeout = 120_000, input = null } = {}) {
   return new Promise((resolve) => {
@@ -116,63 +129,134 @@ function run(cmd, args, { env = process.env, cwd = REPO, timeout = 120_000, inpu
       resolve({ code: -1, stdout: '', stderr: String(error), timedOut: false, ms: 0 });
       return;
     }
+    RUNNING.add(child);
     const out = [];
     const err = [];
     child.stdout.on('data', (c) => out.push(c));
     child.stderr.on('data', (c) => err.push(c));
     if (input != null) child.stdin.end(input);
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; killTree(child.pid); }, timeout);
     let spawnError = null;
-    child.on('error', (error) => { spawnError = error; });
-    child.on('close', (code, signal) => {
+    let exitCode = null;
+    let exitSignal = null;
+    let drain = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
+      clearTimeout(drain);
+      RUNNING.delete(child);
+      child.stdout.destroy();
+      child.stderr.destroy();
       resolve({
-        code: spawnError ? -1 : (code ?? (signal ? 128 : -1)),
+        code: spawnError ? -1 : (exitCode ?? (exitSignal ? 128 : -1)),
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8') + (spawnError ? String(spawnError) : ''),
         timedOut,
         ms: Date.now() - started,
       });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child.pid, { group: true });
+      drain ??= setTimeout(finish, DRAIN_MS);
+    }, timeout);
+    child.on('error', (error) => { spawnError = error; finish(); });
+    child.on('exit', (code, signal) => {
+      exitCode = code;
+      exitSignal = signal;
+      // A process the child started may hold its output open: do not wait for it for ever.
+      drain ??= setTimeout(finish, DRAIN_MS);
+    });
+    child.on('close', (code, signal) => {
+      exitCode ??= code;
+      exitSignal ??= signal;
+      finish();
     });
   });
 }
 
-/** The processes whose command line or executable lies under `root`, this runner and its parents aside. */
-function processesUnder(root) {
-  const mine = new Set([process.pid, process.ppid]);
-  const found = [];
+/** `p` is `root` or lies below it, compared as the platform compares paths. */
+function under(p, root) {
+  if (!p) return false;
+  const norm = (x) => {
+    const n = path.normalize(IS_WIN ? x.replace(/\//g, '\\') : x);
+    return IS_WIN ? n.toLowerCase() : n;
+  };
+  const a = norm(p);
+  const b = norm(root).replace(/[\\/]+$/, '');
+  return a === b || a.startsWith(b + path.sep);
+}
+
+/** The first two words of a command line (the program, and a script it runs), quotes removed. */
+function leadingWords(cmdline) {
+  const words = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while (words.length < 2 && (m = re.exec(cmdline))) words.push(m[1] ?? m[2]);
+  return words;
+}
+
+/** Every process: pid, parent, executable, command line, and (Linux) HOME from its environment. */
+function processTable() {
+  const rows = [];
   if (process.platform === 'linux') {
     for (const entry of fs.readdirSync('/proc')) {
       if (!/^\d+$/.test(entry)) continue;
       const pid = Number(entry);
-      if (mine.has(pid)) continue;
-      let cmdline = '';
-      let exe = '';
-      try { cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' '); } catch {}
-      try { exe = fs.readlinkSync(`/proc/${pid}/exe`); } catch {}
-      if (cmdline.includes(root) || exe.startsWith(root)) found.push({ pid, cmd: cmdline.slice(0, 160) });
+      const row = { pid, ppid: 0, exe: '', argv: [], home: '' };
+      try { row.ppid = Number(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\)\s+\S+\s+/, '').split(' ')[0]); } catch {}
+      try { row.argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch {}
+      try { row.exe = fs.readlinkSync(`/proc/${pid}/exe`); } catch {}
+      try { row.home = (fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').find((v) => v.startsWith('HOME=')) ?? '').slice(5); } catch {}
+      rows.push(row);
     }
   } else if (IS_WIN) {
-    const script = `Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine -and $_.CommandLine.Contains('${root.replace(/'/g, "''")}')) -or ($_.ExecutablePath -and $_.ExecutablePath.StartsWith('${root.replace(/'/g, "''")}')) } | ForEach-Object { "$($_.ProcessId)\`t$($_.CommandLine)" }`;
-    const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
-    for (const line of (res.stdout || '').split(/\r?\n/)) {
-      const [pid, cmd = ''] = line.split('\t');
-      if (/^\d+$/.test(pid) && !mine.has(Number(pid))) found.push({ pid: Number(pid), cmd: cmd.slice(0, 160) });
+    // $PID: the PowerShell answering is not one of the runner's processes.
+    const script = 'Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
+    const res = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    let list = [];
+    try { list = JSON.parse(res.stdout || '[]'); } catch {}
+    for (const p of Array.isArray(list) ? list : [list]) {
+      rows.push({ pid: p.ProcessId, ppid: p.ParentProcessId, exe: p.ExecutablePath ?? '', argv: leadingWords(p.CommandLine ?? ''), home: '' });
     }
   } else {
-    const res = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' });
+    const res = spawnSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' });
     for (const line of (res.stdout || '').split('\n')) {
-      const m = line.trim().match(/^(\d+)\s+(.*)$/);
-      if (m && m[2].includes(root) && !mine.has(Number(m[1]))) found.push({ pid: Number(m[1]), cmd: m[2].slice(0, 160) });
+      const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+      if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), exe: '', argv: leadingWords(m[3]), home: '' });
     }
   }
-  return found;
+  return rows;
 }
 
-/** Stop every process left running under `root`; returns what was stopped. */
-function sweep(root) {
-  const left = processesUnder(root);
+/**
+ * The processes the runner left: those whose program, or the script it runs, lies under one of
+ * `programs` (the installs and mukade), and (Linux) those whose HOME lies under one of `homes`
+ * (every process a run starts has its HOME in the run folder). The runner and its ancestors are
+ * never in it, nor a process that only names such a path (an editor, a shell that started the run).
+ */
+function leftovers({ programs, homes = [] }) {
+  const rows = processTable();
+  const parent = new Map(rows.map((r) => [r.pid, r.ppid]));
+  const mine = new Set([process.pid]);
+  for (let pid = process.ppid; pid && !mine.has(pid); pid = parent.get(pid) ?? 0) mine.add(pid);
+  return rows
+    .filter((r) => !mine.has(r.pid))
+    .filter((r) => [r.exe, ...r.argv.slice(0, 2)].some((p) => programs.some((root) => under(p, root))) || homes.some((root) => under(r.home, root)))
+    .map((r) => ({ pid: r.pid, cmd: r.argv.join(' ').slice(0, 160) }));
+}
+
+/** What the runner may have left running anywhere under `.live/`. */
+const LIVE_PROCESSES = () => ({
+  programs: [path.join(LIVE, 'harnesses'), path.join(LIVE, 'mukade')],
+  homes: [path.join(LIVE, 'runs')],
+});
+
+/** Stop every process `leftovers` names; returns what was stopped. */
+function sweep(scope = LIVE_PROCESSES()) {
+  const left = leftovers(scope);
   for (const p of left) killTree(p.pid);
   return left;
 }
@@ -185,15 +269,26 @@ const short = (s, n = 400) => (s ?? '').toString().replace(/\s+/g, ' ').trim().s
 const exists = (p) => fs.existsSync(p);
 const mkdir = (p) => fs.mkdirSync(p, { recursive: true });
 
-/** The last JSON object a command printed on stdout. */
+/**
+ * The last JSON value a command printed on stdout: the whole output, else the last line that
+ * parses, else the last object that starts a line (pretty-printed output after other text).
+ */
 function lastJson(text) {
   const t = (text ?? '').trim();
   try { return JSON.parse(t); } catch {}
-  const lines = t.split(/\r?\n/).reverse();
-  for (const line of lines) { try { return JSON.parse(line); } catch {} }
-  const start = t.indexOf('{');
-  if (start >= 0) { try { return JSON.parse(t.slice(start)); } catch {} }
+  const lines = t.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{') && !line.startsWith('[')) continue;
+    try { return JSON.parse(line); } catch {}
+    try { return JSON.parse(lines.slice(i).join('\n')); } catch {}
+  }
   return null;
+}
+
+/** Every JSON line of a command's stdout that parses, in order. */
+function jsonLines(text) {
+  return (text ?? '').split(/\r?\n/).map((l) => { try { return JSON.parse(l); } catch { return undefined; } }).filter((v) => v && typeof v === 'object');
 }
 
 /** dsh's encodeSegment and projectKey (src/writer/deepseek_harness.rs). */
@@ -241,14 +336,23 @@ function firstUserText(doc) {
   return null;
 }
 
-/** Whether `snippet` appears, JSON-escaped or not, in a logged request body. */
+/** Every string a request body holds, whitespace folded: the text a harness sent its model. */
+function bodyText(value, out = []) {
+  if (typeof value === 'string') out.push(value.replace(/\s+/g, ' '));
+  else if (Array.isArray(value)) for (const v of value) bodyText(v, out);
+  else if (value && typeof value === 'object') for (const v of Object.values(value)) bodyText(v, out);
+  return out;
+}
+
+/**
+ * Whether a logged request carries the start of `snippet` as one run of text (its first 40
+ * characters, or all of it when shorter): the history was sent, not words that a system prompt
+ * happens to share with it.
+ */
 function bodyCarries(entries, snippet) {
   if (!snippet) return false;
-  const words = snippet.split(' ').filter(Boolean).slice(0, 4);
-  return entries.some((e) => {
-    const text = JSON.stringify(e.body ?? {}).replace(/\\\\/g, '\\').replace(/\\n|\\r|\\t/g, ' ').replace(/\s+/g, ' ');
-    return words.every((w) => text.includes(w.replace(/\\/g, '\\')));
-  });
+  const head = snippet.slice(0, 40).trim();
+  return entries.some((e) => bodyText(e.body).some((text) => text.includes(head)));
 }
 
 // ------------------------------------------------------------------------------------- installs
@@ -262,13 +366,29 @@ function hermesPython(dir) {
 }
 const NPM = IS_WIN ? 'npm.cmd' : 'npm';
 
+/** The shell's environment without its GIT_* variables (a GIT_DIR would point git at another repository). */
+function withoutGit(env) {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')));
+}
+
+/** The environment of npm, git and uv for the installs: their caches, and uv's Pythons, inside .live/. */
+function installEnv(extra = {}) {
+  return {
+    ...withoutGit(process.env),
+    npm_config_cache: path.join(LIVE, 'cache', 'npm'),
+    UV_CACHE_DIR: path.join(LIVE, 'cache', 'uv'),
+    UV_PYTHON_INSTALL_DIR: path.join(LIVE, 'cache', 'uv-python'),
+    ...extra,
+  };
+}
+
 /** The newest released version of a harness. */
 async function newestVersion(h) {
   if (h.install.kind === 'npm') {
-    const res = await run(NPM, ['view', h.install.package, 'version'], { timeout: 60_000 });
+    const res = await run(NPM, ['view', h.install.package, 'version'], { env: installEnv(), timeout: 60_000 });
     return res.code === 0 ? res.stdout.trim().split(/\s+/).pop() : null;
   }
-  const res = await run('git', ['ls-remote', '--tags', '--refs', h.install.repository], { timeout: 60_000 });
+  const res = await run('git', ['ls-remote', '--tags', '--refs', h.install.repository], { env: installEnv(), timeout: 60_000 });
   if (res.code !== 0) return null;
   const pattern = new RegExp(h.install.tag_pattern ?? '^v\\d+\\.\\d+\\.\\d+$');
   const tags = res.stdout.split('\n').map((l) => l.split('refs/tags/')[1]?.trim()).filter((t) => t && pattern.test(t));
@@ -291,16 +411,16 @@ async function install(h, version) {
     const args = ['install', '--prefix', dir, '--no-audit', '--no-fund', '--loglevel=error'];
     if (h.install.ignore_scripts) args.push('--ignore-scripts');
     args.push(`${h.install.package}@${version}`);
-    res = await run(NPM, args, { timeout: 20 * 60_000 });
+    res = await run(NPM, args, { env: installEnv(), timeout: 20 * 60_000 });
     fs.writeFileSync(logFile, res.stdout + res.stderr);
   } else if (h.install.kind === 'uv-git') {
     const tag = version === h.install.version ? h.install.tag : `v${version}`;
-    res = await run('git', ['clone', '--quiet', '--depth', '1', '--branch', tag, h.install.repository, path.join(dir, 'src')], { timeout: 20 * 60_000 });
+    res = await run('git', ['clone', '--quiet', '--depth', '1', '--branch', tag, h.install.repository, path.join(dir, 'src')], { env: installEnv(), timeout: 20 * 60_000 });
     let text = res.stdout + res.stderr;
     if (res.code === 0) {
       res = await run('uv', ['sync', '--frozen', '--no-dev', '--python', h.install.python], {
         cwd: path.join(dir, 'src'),
-        env: { ...process.env, UV_PROJECT_ENVIRONMENT: path.join(dir, 'venv') },
+        env: installEnv({ UV_PROJECT_ENVIRONMENT: path.join(dir, 'venv') }),
         timeout: 30 * 60_000,
       });
       text += res.stdout + res.stderr;
@@ -392,7 +512,8 @@ const STORE_VARS = HARNESSES.map((h) => h.store.env);
 const EXE_VARS = Object.fromEntries(CATALOG.harnesses.map((c) => [c.id, c.binary.env]));
 const KEY_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY',
   'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY', 'GROQ_API_KEY', 'NOUS_API_KEY'];
-const STRIP_PREFIXES = ['CLAUDE_CODE_', 'CLAUDECODE', 'CODEX_', 'OPENCODE', 'PI_', 'HERMES_', 'DSH_', 'MUKADE_', 'XDG_', 'ANTHROPIC_', 'OPENAI_'];
+// GIT_: a harness runs git in the work folder, which a GIT_DIR of the shell would turn into another repository.
+const STRIP_PREFIXES = ['CLAUDE_CODE_', 'CLAUDECODE', 'CODEX_', 'OPENCODE', 'PI_', 'HERMES_', 'DSH_', 'MUKADE_', 'XDG_', 'ANTHROPIC_', 'OPENAI_', 'GIT_'];
 
 /**
  * The environment every harness and mukade process of a run starts from: the shell's, without
@@ -678,9 +799,10 @@ async function nativeOpen(ctx, h, home, id, location, sentinel, out) {
     }
     case 'hermes': {
       const res = await run(ctx.bins.hermes, ['sessions', 'export', '-', '--session-id', id, '--format', 'jsonl'], { env, cwd: ctx.work, timeout: 120_000 });
-      const doc = lastJson(res.stdout.trim().split(/\r?\n/)[0]);
-      if (res.code !== 0 || !doc) return step(FAIL, `hermes sessions export exit ${res.code}: ${short(res.stderr || res.stdout)}`);
-      if (doc.id !== id) return step(FAIL, `hermes sessions export answered ${doc.id}`);
+      const rows = jsonLines(res.stdout);
+      const doc = rows.find((r) => r.id === id);
+      if (res.code !== 0 || !rows.length) return step(FAIL, `hermes sessions export exit ${res.code}: ${short(res.stderr || res.stdout)}`);
+      if (!doc) return step(FAIL, `hermes sessions export answered ${rows.map((r) => r.id).join(', ')}, not ${id}`);
       const messages = (doc.messages ?? []).length;
       return messages ? step(PASS, `hermes sessions export: ${messages} messages`) : step(FAIL, 'hermes exports no message');
     }
@@ -697,12 +819,16 @@ async function opencodeProject(ctx, home) {
   const res = await run(ctx.bins.opencode, ['session', 'list', '--standalone'], { env, cwd: ctx.work, timeout: 120_000 });
   if (res.code !== 0) throw new Error(`opencode session list exit ${res.code}: ${short(res.stderr)}`);
   let sqlite;
-  try { sqlite = await import('node:sqlite'); } catch { throw new Error('node:sqlite is needed to read OpenCode\'s project id (Node 22.5 or later)'); }
+  try { sqlite = await import('node:sqlite'); } catch { throw new Error('node:sqlite is needed to read OpenCode\'s project id (Node 22.13 or later)'); }
   const db = new sqlite.DatabaseSync(storeRoot(h, home), { readOnly: true });
   try {
     const rows = db.prepare('select id, worktree from project').all();
-    const work = fs.realpathSync(ctx.work);
-    const row = rows.find((r) => { try { return fs.realpathSync(r.worktree) === work; } catch { return false; } });
+    const canonical = (p) => {
+      const real = fs.realpathSync.native(p);
+      return IS_WIN ? real.replace(/\//g, '\\').toLowerCase() : real;
+    };
+    const work = canonical(ctx.work);
+    const row = rows.find((r) => { try { return canonical(r.worktree) === work; } catch { return false; } });
     if (!row) throw new Error(`OpenCode recorded no project for ${work} (${rows.map((r) => r.worktree).join(', ') || 'none'})`);
     return row.id;
   } finally {
@@ -778,7 +904,9 @@ async function chatScenarios(ctx) {
   try {
     const started = await mukade(ctx, ['chat', 'start'], { env: chatEnv(), timeout: 60_000 });
     if (started.code !== 0) {
-      for (const h of HARNESSES) results.push({ harness: h.id, ...step(FAIL, `chat start exit ${started.code}: ${short(started.stderr || started.stdout)}`) });
+      // The service failed, not the harnesses: one failure, and no harness was checked.
+      results.push({ harness: 'service', ...step(FAIL, `chat start exit ${started.code}: ${short(started.stderr || started.stdout)}`) });
+      for (const h of HARNESSES) results.push({ harness: h.id, ...step(NC, 'the chat service did not start') });
       return results;
     }
     for (const h of HARNESSES) {
@@ -788,10 +916,17 @@ async function chatScenarios(ctx) {
       const opened = lastJson((await mukade(ctx, ['chat', 'open', '--name', room], { env, timeout: 60_000 })).stdout);
       const roomId = opened?.room_id;
       if (!roomId) { results.push({ harness: h.id, ...step(FAIL, 'chat open answered no room_id') }); continue; }
-      const host = lastJson((await mukade(ctx, ['chat', 'join', '--room-id', roomId, '--harness', 'host', '--role', 'peer', '--host'], { env, timeout: 60_000 })).stdout);
+      const joining = await mukade(ctx, ['chat', 'join', '--room-id', roomId, '--harness', 'host', '--role', 'peer', '--host'], { env, timeout: 60_000 });
+      const host = lastJson(joining.stdout);
+      if (joining.code !== 0 || !host?.member_handle) {
+        results.push({ harness: h.id, ...step(FAIL, `the host member could not join (exit ${joining.code}): ${short(joining.stderr || joining.stdout, 300)}`) });
+        continue;
+      }
       const ping = `LIVE-PING-${h.id}`;
-      if (host?.member_handle) {
-        await mukade(ctx, ['chat', 'send', '--room-id', roomId, '--member-handle', host.member_handle, '--text', ping], { env, timeout: 60_000 });
+      const sending = await mukade(ctx, ['chat', 'send', '--room-id', roomId, '--member-handle', host.member_handle, '--text', ping], { env, timeout: 60_000 });
+      if (sending.code !== 0) {
+        results.push({ harness: h.id, ...step(FAIL, `the host member could not write to the room (exit ${sending.code}): ${short(sending.stderr || sending.stdout, 300)}`) });
+        continue;
       }
       if (h.id === 'codex') {
         const trust = await mukade(ctx, ['chat', 'trust', 'codex'], { env, timeout: 120_000 });
@@ -826,7 +961,7 @@ async function chatScenarios(ctx) {
     }
   } finally {
     await mukade(ctx, ['chat', 'stop'], { env: chatEnv(), timeout: 60_000 });
-    sweep(dataDir);
+    sweep(); // the launched instances and the chat service: mukade and the harnesses run from .live/
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
   return results;
@@ -866,6 +1001,10 @@ function markdown(report) {
     out.push('', '## Chat', '', '| harness | result | detail |', '|---|---|---|');
     for (const c of report.chat) out.push(`| ${c.harness} | ${c.status} | ${c.detail.replace(/\|/g, '\\|')} |`);
   }
+  if (report.setupFailures?.length) {
+    out.push('', '## Setup failures', '', 'Each one fails the run: what it names was not tested.', '');
+    for (const f of report.setupFailures) out.push(`- ${f}`);
+  }
   if (report.seeds) {
     out.push('', '## Sources', '');
     for (const [id, s] of Object.entries(report.seeds)) out.push(`- ${id}: ${s.ok ? `seeded \`${s.id}\`` : `not seeded: ${s.why}`}`);
@@ -876,17 +1015,22 @@ function markdown(report) {
 
 // ------------------------------------------------------------------------------------- main
 
+/** The pid of a live run holding `.live/run.lock`, or null. */
+function lockHolder() {
+  let pid;
+  try { pid = Number(fs.readFileSync(path.join(LIVE, 'run.lock'), 'utf8')); } catch { return null; }
+  if (!pid || pid === process.pid) return null;
+  try { process.kill(pid, 0); return pid; } catch (error) { return error.code === 'EPERM' ? pid : null; }
+}
+
 function acquireLock() {
   mkdir(LIVE);
+  const holder = lockHolder();
+  if (holder) throw new Error(`another live run (pid ${holder}) is using ${LIVE}`);
   const lock = path.join(LIVE, 'run.lock');
-  try {
-    const pid = Number(fs.readFileSync(lock, 'utf8'));
-    if (pid && pid !== process.pid) {
-      try { process.kill(pid, 0); throw new Error(`another live run (pid ${pid}) is using ${LIVE}`); } catch (error) { if (error.code !== 'ESRCH' && error.code !== 'EPERM') throw error; if (error.code === 'EPERM') throw new Error(`another live run (pid ${pid}) is using ${LIVE}`); }
-    }
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  fs.writeFileSync(lock, String(process.pid));
-  return () => { try { fs.rmSync(lock); } catch {} };
+  fs.rmSync(lock, { force: true }); // a stale lock: its run is gone
+  fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+  return () => { try { if (Number(fs.readFileSync(lock, 'utf8')) === process.pid) fs.rmSync(lock); } catch {} };
 }
 
 function pick(list, label) {
@@ -907,14 +1051,35 @@ async function main() {
   });
   if (opts.help) { log(USAGE); return 0; }
   if (opts.clean) {
-    const stopped = exists(LIVE) ? sweep(LIVE) : [];
+    const holder = lockHolder();
+    if (holder) throw new Error(`a live run (pid ${holder}) is using ${LIVE}: stop it first, then clean`);
+    const stopped = exists(LIVE) ? sweep() : [];
     fs.rmSync(LIVE, { recursive: true, force: true });
     log(`removed ${LIVE}${stopped.length ? `; stopped ${stopped.length} processes it left running` : ''}`);
     return 0;
   }
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 13)) {
+    throw new Error(`Node ${process.versions.node}: the runner needs Node 22.13 or later (node:sqlite without a flag), 24 recommended`);
+  }
   const sources = pick(opts.from, '--from');
   const dests = pick(opts.to, '--to');
   const release = acquireLock();
+  // Ctrl-C, or a stop: the children run in process groups of their own and would outlive the runner.
+  let stopping = false;
+  const onSignal = (signal) => {
+    if (stopping) return;
+    stopping = true;
+    console.error(`\nlive: ${signal}: stopping what this run started`);
+    for (const child of RUNNING) killTree(child.pid, { group: true });
+    sweep();
+    release();
+    process.exit(130);
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+  // What kept the run from testing what it was asked to: each one fails the run.
+  const setupFailures = [];
   try {
     // Installs.
     log('harnesses:');
@@ -923,12 +1088,13 @@ async function main() {
     const bins = {};
     for (const h of HARNESSES) {
       const newest = opts.latest ? await newestVersion(h) : null;
+      if (opts.latest && !newest) setupFailures.push(`${h.id}: the newest version could not be looked up; the pinned ${h.install.version} was tested instead`);
       const version = opts.latest && newest ? newest : h.install.version;
       note(`  ${h.id.padEnd(18)} ${version.padEnd(12)} `);
       const inst = await install(h, version);
       installs[h.id] = inst;
       bins[h.id] = inst.bin;
-      versions.push({ id: h.id, pinned: h.install.version, newest, version });
+      versions.push({ id: h.id, pinned: h.install.version, newest: opts.latest && !newest ? 'lookup failed' : newest, version });
       note(`${inst.fresh ? 'installed' : 'ready'}\n`);
     }
     const mk = await resolveMukade(opts);
@@ -946,7 +1112,14 @@ async function main() {
     for (const d of [ctx.home, ctx.work, ctx.dataDir, path.join(runDir, 'out')]) mkdir(d);
     fs.writeFileSync(ctx.mockLog, '');
     // The work folder is a repository of its own, so OpenCode files the sessions under a project of their own.
-    const git = (args) => run('git', ['-c', 'user.name=mukade-live', '-c', 'user.email=live@localhost', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.work, env: { ...process.env, HOME: ctx.home } });
+    // No GIT_* of the shell (a GIT_DIR would point it at another repository), and git never looks
+    // above the run folder, so a failed init cannot commit into the checkout around .live/.
+    const gitEnv = withoutGit(process.env);
+    Object.assign(gitEnv, { HOME: ctx.home, USERPROFILE: ctx.home, GIT_CEILING_DIRECTORIES: runDir, GIT_CONFIG_NOSYSTEM: '1' });
+    const git = async (args) => {
+      const res = await run('git', ['-c', 'user.name=mukade-live', '-c', 'user.email=live@localhost', '-c', 'commit.gpgsign=false', ...args], { cwd: ctx.work, env: gitEnv });
+      if (res.code !== 0) throw new Error(`git ${args[0]} in ${ctx.work} failed (exit ${res.code}): ${short(res.stderr || res.stdout, 300)}`);
+    };
     await git(['init', '-q']);
     await git(['commit', '-q', '--allow-empty', '-m', 'mukade live run']);
     ctx.mock = await startMock(ctx.mockLog);
@@ -957,7 +1130,7 @@ async function main() {
       versions.find((v) => v.id === h.id).installed = short((res.stdout || res.stderr).split(/\r?\n/).find((l) => /\d+\.\d+/.test(l)) ?? '', 80) || null;
     }
 
-    const report = { started: stamp, platform: `${process.platform} ${os.release()}`, node: process.versions.node, models: ctx.models, mukade: mk, versions, sources, dests, pairs: [], chat: [], seeds: {} };
+    const report = { started: stamp, platform: `${process.platform} ${os.release()}`, node: process.versions.node, models: ctx.models, mukade: mk, versions, sources, dests, pairs: [], chat: [], seeds: {}, setupFailures };
     try {
       log('sources:');
       for (const id of sources) {
@@ -969,6 +1142,7 @@ async function main() {
           ctx.sources[id] = { ok: true, id: await seed(ctx, h, home) };
         } catch (error) {
           ctx.sources[id] = { ok: false, why: error.message };
+          setupFailures.push(`${id}: the source store could not be seeded, so its hops were not checked: ${error.message}`);
         }
         report.seeds[id] = ctx.sources[id];
         log(`  ${id.padEnd(18)} ${ctx.sources[id].ok ? 'seeded' : `NOT SEEDED: ${ctx.sources[id].why}`}`);
@@ -978,7 +1152,12 @@ async function main() {
         prepareHome(ctx, BY_ID[id], ctx.homes.dst[id]);
       }
       if (dests.includes('opencode')) {
-        try { ctx.opencodeProject = await opencodeProject(ctx, ctx.homes.dst.opencode); } catch (error) { ctx.opencodeProjectWhy = error.message; }
+        try {
+          ctx.opencodeProject = await opencodeProject(ctx, ctx.homes.dst.opencode);
+        } catch (error) {
+          ctx.opencodeProjectWhy = error.message;
+          setupFailures.push(`opencode: no project id for the work folder, so the hops into OpenCode were not checked: ${error.message}`);
+        }
       }
 
       log('hops:');
@@ -1000,7 +1179,7 @@ async function main() {
         await run(bins.hermes, ['gateway', 'stop'], { env: { ...baseEnv(ctx), ...homeEnv(BY_ID.hermes, home) }, timeout: 60_000 });
       }
       await ctx.mock.close();
-      report.leftover = sweep(LIVE);
+      report.leftover = sweep();
     }
 
     // The report.
@@ -1010,6 +1189,7 @@ async function main() {
       log(`\n${r.source} → ${r.dest}: FAIL`);
       for (const k of ['hop', 'read', 'native', 'real']) if (r[k]?.status === FAIL) log(`  ${k}: ${r[k].detail}`);
     }
+    for (const f of setupFailures) log(`\nSETUP FAIL ${f}`);
     if (report.chat.length) {
       log('\nchat:');
       for (const c of report.chat) log(`  ${c.harness.padEnd(18)} ${c.status.padEnd(12)} ${c.detail}`);
@@ -1021,8 +1201,9 @@ async function main() {
     fs.copyFileSync(path.join(reports, `${stamp}.md`), path.join(runDir, 'report.md'));
     const counts = [PASS, FAIL, NC].map((s) => `${report.pairs.filter((r) => overall(r) === s).length} ${s}`).join(', ');
     log(`\n${report.pairs.length} pairs: ${counts}\nreport: ${path.join(reports, `${stamp}.md`)}`);
+    if (setupFailures.length) log(`${setupFailures.length} setup failures: the run did not test all it was asked to`);
     const chatFailed = report.chat.some((c) => c.status === FAIL);
-    return failed.length || chatFailed ? 1 : 0;
+    return failed.length || chatFailed || setupFailures.length ? 1 : 0;
   } finally {
     release();
   }

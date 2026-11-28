@@ -80,6 +80,27 @@ carrying the fixture's first prompt. The runner reports such a pair as fail.
   `--project-id`.
 - **Disk:** the six installs take about 4 GB (OpenCode 1.1 GB, DeepSeek Harness 1.3 GB).
 
+## Second run, after the review fixes
+
+The runner after a review of its first version: the mock answers JSON unless a request asks for a stream; the
+first-prompt check looks for the prompt's first 40 characters as one run of text in the request; the sweep stops
+only processes whose program lies under `.live/harnesses` or `.live/mukade`, or whose `HOME` is in a run folder;
+Ctrl-C stops what the run started; a seed or project failure fails the run; the installs keep npm's and uv's
+caches, and uv's Python, in `.live/cache/`; git runs without the shell's `GIT_*`.
+
+| check | result |
+|---|---|
+| every install from nothing, mukade of Verify run [46144343376](https://github.com/acaprino/mukade/actions/runs/46144343376) (`e4c117e`) by `--run-id` | 36 of 36 pairs, 4 of 4 chat launches, exit 0 |
+| run with `GIT_DIR` and `GIT_WORK_TREE` pointing at the mukade checkout | the work folder got its own commit; the checkout's history and index unchanged |
+| Hermes's Python | `.live/cache/uv-python/cpython-3.14.6`; nothing new under `~/.local/share/uv` |
+| what the harnesses asked the mock | 23 requests, every one with `stream: true` (Messages 14, Responses 7, Chat 2) |
+| `tail -f <checkout>/.live/reports/decoy.md` left running in another shell | alive after the run, after `--clean` and after Ctrl-C |
+| `--clean` while a run holds the lock | refused, exit 2 |
+| Ctrl-C during the hops into Hermes | `live: SIGINT: stopping what this run started`, exit 130: the hop, Hermes's import and its detached gateway stopped, the lock removed, nothing left running |
+
+A first try of the `GIT_DIR` run found that the installs' `git clone` inherited it too (`fatal: working tree …
+already exists`); the installs and every harness process now start without the shell's `GIT_*`.
+
 ## Not covered by this run
 
 - Windows, where the owner runs it: the `.cmd` launchers, `taskkill` and the PowerShell process sweep are written

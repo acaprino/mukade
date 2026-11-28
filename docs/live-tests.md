@@ -16,7 +16,7 @@ runner checks what that suite cannot: the harness versions out today, as install
 
 | what | why |
 |---|---|
-| Node.js 22.5 or later (24 recommended) | the runner, the mock model, and OpenCode's project id (`node:sqlite`) |
+| Node.js 22.13 or later (24 recommended) | the runner, the mock model, and OpenCode's project id (`node:sqlite`) |
 | npm | installs Claude Code, Codex, OpenCode, Pi and DeepSeek Harness |
 | git and [uv](https://docs.astral.sh/uv/) | install Hermes Agent from its tag (PyPI carries an older Hermes, and its build refuses a wheel) |
 | `gh`, logged in | fetches the `mukade` the latest green Verify run of `develop` built; not needed with `--mukade` |
@@ -81,14 +81,18 @@ chat:
 
 - **pass**: the hop, the read-back and the destination's own open all passed.
 - **fail**: one of them failed; the lines under the matrix say which, and why.
-- **not checked**: a step could not run: the source could not be seeded, a chat adapter does not exist, or a
-  check needs a real model and `--models` did not get its key. A check that did not run is never a pass.
+- **not checked**: a step could not run: the source could not be seeded, OpenCode gave the work folder no
+  project, a chat adapter does not exist, or a check needs a real model and `--models` did not get its key. A
+  check that did not run is never a pass.
+- **SETUP FAIL**: what kept the run from testing what it was asked to: a source that could not be seeded, no
+  OpenCode project, or (`--latest`) a newest version that could not be looked up, so the pin was tested instead.
+  Each one fails the run, even when every pair that ran passed.
 
 The same is saved as `.live/reports/<time>.md` and `.json`, and in the run folder as `report.md`. Each pair keeps
 its receipt, manifest and the commands' output in `.live/runs/<time>/out/<src>--<dst>/`.
 
-The exit code is 0 when nothing failed, 1 when a pair or a chat scenario failed, 2 when the runner itself could
-not run (an install, the mukade download).
+The exit code is 0 when nothing failed, 1 when a pair, a chat scenario or the setup failed, 2 when the runner
+itself could not run (an install, the mukade download, a Node older than 22.13), 130 when it was interrupted.
 
 ## Options
 
@@ -102,7 +106,7 @@ not run (an install, the mukade download).
 | `--from <ids>`, `--to <ids>` | only these sources, only these destinations (comma-separated harness ids) |
 | `--no-chat` | leave out the chat scenarios |
 | `--install-only` | install and fetch, run nothing |
-| `--clean` | stop anything the runner left running and delete `.live/` |
+| `--clean` | stop anything the runner left running and delete `.live/`; refused while a run is going |
 
 ```bash
 node tests/live/run.mjs --latest
@@ -135,7 +139,14 @@ is one short prompt and costs that.
 - Every store, configuration file and session the harnesses write is under `.live/runs/<time>/`. Every harness
   process starts with `HOME` there, without the shell's store variables, settings variables or keys.
 - OpenCode runs with `--standalone` everywhere: never your background service.
-- One run at a time: a second runner refuses while the first holds `.live/run.lock`.
+- One run at a time: a second runner, and `--clean`, refuse while the first holds `.live/run.lock`.
+- Ctrl-C stops the run and what it started (exit 130). At the end of every run the runner stops what is left:
+  Hermes's gateway (`hermes gateway stop`), then every process whose program lies under `.live/harnesses` or
+  `.live/mukade`, or (Linux) whose `HOME` is in a run folder. A process that only names a path there, an editor
+  or the shell that started the run, is left alone.
+- The installs keep their caches in `.live/cache/` (npm's cache, uv's cache, and the Python uv installs for
+  Hermes), so they write nothing in your profile either. The chat scenarios' data folder is the one thing
+  outside `.live/`, in the system's temporary folder, removed when they end.
 - The harnesses may still reach the network on their own (an update notice, a model catalog): the runner turns off
   what it knows how to (`DISABLE_AUTOUPDATER`, `PI_OFFLINE`, `HERMES_DISABLE_LAZY_INSTALLS`, …), it does not cut the
   network.

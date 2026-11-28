@@ -13,7 +13,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 
 /** The messages or input items a request carries, whatever the API. */
-function messageCount(path, body) {
+function messageCount(body) {
   if (Array.isArray(body?.messages)) return body.messages.length;
   if (Array.isArray(body?.input)) return body.input.length;
   if (typeof body?.input === 'string') return 1;
@@ -39,7 +39,8 @@ function anthropic(res, body, text) {
     id: 'msg_mock', type: 'message', role: 'assistant', model: body.model ?? 'mock-model',
     content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 },
   };
-  if (body.stream === false) {
+  // Both APIs answer in one JSON object unless the request asks for a stream.
+  if (body.stream !== true) {
     return json(res, 200, { ...message, content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } });
   }
   sse(res, [
@@ -56,7 +57,7 @@ function responses(res, body, text) {
   const item = { type: 'message', role: 'assistant', id: 'msg_mock', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] };
   const usage = { input_tokens: 10, input_tokens_details: { cached_tokens: 0 }, output_tokens: 5, output_tokens_details: { reasoning_tokens: 0 }, total_tokens: 15 };
   const response = { id: 'resp_mock', object: 'response', status: 'completed', model: body.model ?? 'mock-model', output: [item], usage };
-  if (body.stream === false) return json(res, 200, response);
+  if (body.stream !== true) return json(res, 200, response);
   sse(res, [
     ['response.created', { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } }],
     ['response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } }],
@@ -96,7 +97,7 @@ export function startMock(logFile) {
         if (path.endsWith('/models')) return json(res, 200, { object: 'list', data: [{ id: 'mock-model', object: 'model', created: 0, owned_by: 'mock' }] });
         return json(res, 404, { error: { type: 'not_found', message: 'mock' } });
       }
-      const text = `MOCK-REPLY ${messageCount(path, body)} messages`;
+      const text = `MOCK-REPLY ${messageCount(body)} messages`;
       if (path.endsWith('/messages')) return anthropic(res, body, text);
       if (path.endsWith('/responses')) return responses(res, body, text);
       if (path.endsWith('/chat/completions')) return chat(res, body, text);
