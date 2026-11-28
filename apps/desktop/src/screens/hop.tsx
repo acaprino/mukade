@@ -29,12 +29,15 @@ type Phase =
 
 /**
  * Enter on a check box or a radio is the control's own and starts nothing: a hop is a write, and only its own button, or Enter in a
- * one-line field, begins it. Base UI gives Enter on those controls the form's submission; this takes it away in the capture phase.
+ * one-line field, begins it. The browser gives Enter on those controls the form's submission (Sigrid's, on Ark UI, are native inputs
+ * under the hood, with no role attribute); this takes it away in the capture phase.
  */
 function holdEnter(event: React.KeyboardEvent<HTMLFormElement>): void {
   const target = event.target;
   if (event.key !== 'Enter' || !(target instanceof HTMLElement)) return;
-  if (['checkbox', 'radio', 'switch'].includes(target.getAttribute('role') ?? '')) { event.preventDefault(); event.stopPropagation(); }
+  const own = ['checkbox', 'radio', 'switch'].includes(target.getAttribute('role') ?? '')
+    || (target instanceof HTMLInputElement && ['checkbox', 'radio'].includes(target.type));
+  if (own) { event.preventDefault(); event.stopPropagation(); }
 }
 
 /** A whole number of at least 1, or nothing. */
